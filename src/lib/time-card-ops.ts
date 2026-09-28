@@ -45,13 +45,21 @@ export const JOB_COMPLETION_TIME_CLOSED_REASON = "Closed because the job was com
 /** Audit reason written when Start job opens RUNNING JOB TimeEntry. */
 export const JOB_START_TIME_STARTED_REASON = "Started because the job was started.";
 
+/** Audit reason written when the assigned worker stops RUNNING JOB time. */
+export const JOB_STOP_TIME_CLOSED_REASON = "Stopped job time from the field app.";
+
 const COMPLETED_JOB_CLOCK_IN_ERROR = "This job is completed. Job time cannot be started.";
 const APPROVED_WEEK_COMPLETION_ERROR =
   "This job cannot be completed while approved job time is still running. Reopen the timesheet week first.";
+const APPROVED_WEEK_STOP_ERROR =
+  "Job time cannot be stopped while that timesheet week is approved. Reopen the timesheet week first.";
 const MISSING_COMPLETION_ACTOR_ERROR = "That job could not be completed.";
 const MISSING_START_ACTOR_ERROR = "That job could not be started.";
+const MISSING_STOP_ACTOR_ERROR = "That job time could not be stopped.";
 const COMPLETION_CLOCK_ORDER_ERROR =
   "Job time cannot be closed because the completion time is not after the clock-in start.";
+const STOP_CLOCK_ORDER_ERROR =
+  "Job time cannot be stopped because the stop time is not after the clock-in start.";
 const AUTOMATIC_CLOCK_TRANSITION_REASON = "Closed automatically when a new activity started.";
 
 type TenantJobRow = {
@@ -902,12 +910,25 @@ export type ClosedJobTimeEntry = {
   endedAt: Date;
 };
 
+type CloseLockedJobRunningTimeInput = CloseRunningJobTimeForCompletionInput & {
+  /** When set, only that worker's RUNNING JOB entries are closed. */
+  membershipId?: string;
+  reason?: string;
+  approvedWeekError?: string;
+  clockOrderError?: string;
+  missingActorError?: string;
+};
+
 async function closeLockedJobRunningTime(
   db: Db,
   job: Pick<TenantJobRow, "id" | "businessId">,
-  input: CloseRunningJobTimeForCompletionInput,
+  input: CloseLockedJobRunningTimeInput,
 ): Promise<ClosedJobTimeEntry[]> {
   const endedAt = input.endedAt ?? new Date();
+  const approvedWeekError = input.approvedWeekError ?? APPROVED_WEEK_COMPLETION_ERROR;
+  const clockOrderError = input.clockOrderError ?? COMPLETION_CLOCK_ORDER_ERROR;
+  const missingActorError = input.missingActorError ?? MISSING_COMPLETION_ACTOR_ERROR;
+  const reason = input.reason ?? JOB_COMPLETION_TIME_CLOSED_REASON;
   const running = await db.timeEntry.findMany({
     where: {
       businessId: job.businessId,
@@ -915,6 +936,7 @@ async function closeLockedJobRunningTime(
       activityType: "JOB",
       status: "RUNNING",
       endedAt: null,
+      ...(input.membershipId ? { membershipId: input.membershipId } : {}),
     },
     orderBy: { startedAt: "asc" },
   });
@@ -922,26 +944,26 @@ async function closeLockedJobRunningTime(
     return [];
   }
   if (!input.actorMembershipId) {
-    throw new TimeCardError(MISSING_COMPLETION_ACTOR_ERROR);
+    throw new TimeCardError(missingActorError);
   }
   await loadMembershipInBusiness(db, job.businessId, input.actorMembershipId);
 
   const closed: ClosedJobTimeEntry[] = [];
   for (const entry of running) {
     if (!canEditTimeEntry(entry.status)) {
-      throw new TimeCardError(APPROVED_WEEK_COMPLETION_ERROR);
+      throw new TimeCardError(approvedWeekError);
     }
     try {
       await assertWeekEditable(db, job.businessId, entry.membershipId, entry.startedAt);
       await assertWeekEditable(db, job.businessId, entry.membershipId, endedAt);
     } catch (error) {
       if (isTimeCardError(error)) {
-        throw new TimeCardError(APPROVED_WEEK_COMPLETION_ERROR);
+        throw new TimeCardError(approvedWeekError);
       }
       throw error;
     }
     if (endedAt <= entry.startedAt) {
-      throw new TimeCardError(COMPLETION_CLOCK_ORDER_ERROR);
+      throw new TimeCardError(clockOrderError);
     }
 
     const previous = toAuditSnapshot(entry);
@@ -953,6 +975,7 @@ async function closeLockedJobRunningTime(
         activityType: "JOB",
         status: "RUNNING",
         endedAt: null,
+        ...(input.membershipId ? { membershipId: input.membershipId } : {}),
       },
       data: {
         endedAt,
@@ -975,7 +998,7 @@ async function closeLockedJobRunningTime(
       timeEntryId: next.id,
       actorMembershipId: input.actorMembershipId,
       action: "UPDATE",
-      reason: JOB_COMPLETION_TIME_CLOSED_REASON,
+      reason,
       previous,
       next: toAuditSnapshot(next),
     });
@@ -1312,6 +1335,88 @@ export async function startJobWithRunningTimeSafety(
   } catch (error) {
     if (isTimeCardError(error) || error instanceof ForbiddenError) {
       return { ok: false, error: timeCardErrorMessage(error, MISSING_START_ACTOR_ERROR) };
+    }
+    throw error;
+  }
+}
+
+export type StopRunningAssignedJobTimeInput = {
+  businessId: string;
+  jobId: string;
+  /** Trusted server-derived membership that is writing the audit row. */
+  actorMembershipId?: string | null;
+  /** Worker whose RUNNING JOB time is stopped. Defaults to the actor. */
+  membershipId?: string;
+  endedAt?: Date;
+};
+
+export type StopRunningAssignedJobTimeResult =
+  | {
+      ok: true;
+      alreadyStopped: boolean;
+      jobStatus: string;
+      customerId: string | null;
+      closed: ClosedJobTimeEntry[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Stop writes for an already-open transaction. Closes the actor's (or
+ * named worker's) RUNNING JOB time on one tenant-owned Job. Job.status
+ * is left unchanged — this is not completion.
+ *
+ * Returns `{ ok: false }` only when the Job is missing. TimeCardError
+ * from an approved week still throws so the surrounding transaction
+ * rolls back and the RUNNING entry stays open.
+ */
+export async function stopRunningAssignedJobTimeInTransaction(
+  tx: Db,
+  input: StopRunningAssignedJobTimeInput,
+): Promise<StopRunningAssignedJobTimeResult> {
+  const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+  if (!job) {
+    return { ok: false, error: MISSING_STOP_ACTOR_ERROR };
+  }
+  if (!input.actorMembershipId) {
+    throw new TimeCardError(MISSING_STOP_ACTOR_ERROR);
+  }
+
+  const closed = await closeLockedJobRunningTime(tx, job, {
+    businessId: job.businessId,
+    jobId: job.id,
+    actorMembershipId: input.actorMembershipId,
+    membershipId: input.membershipId ?? input.actorMembershipId,
+    endedAt: input.endedAt,
+    reason: JOB_STOP_TIME_CLOSED_REASON,
+    approvedWeekError: APPROVED_WEEK_STOP_ERROR,
+    clockOrderError: STOP_CLOCK_ORDER_ERROR,
+    missingActorError: MISSING_STOP_ACTOR_ERROR,
+  });
+
+  return {
+    ok: true,
+    alreadyStopped: closed.length === 0,
+    jobStatus: job.status,
+    customerId: job.customerId,
+    closed,
+  };
+}
+
+/**
+ * Canonical stop write: lock the tenant-owned Job, close matching
+ * RUNNING JOB time for the actor, and leave Job.status unchanged.
+ * TRAVEL / MATERIAL_PICKUP / BREAK / OTHER and other workers' time
+ * stay untouched.
+ */
+export async function stopRunningAssignedJobTime(
+  db: PrismaClient,
+  input: StopRunningAssignedJobTimeInput,
+): Promise<StopRunningAssignedJobTimeResult> {
+  try {
+    return await db.$transaction((tx) => stopRunningAssignedJobTimeInTransaction(tx, input));
+  } catch (error) {
+    if (isTimeCardError(error) || error instanceof ForbiddenError) {
+      return { ok: false, error: timeCardErrorMessage(error, MISSING_STOP_ACTOR_ERROR) };
     }
     throw error;
   }

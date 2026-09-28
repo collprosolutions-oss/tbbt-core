@@ -31,7 +31,12 @@ import { START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
-import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
+import {
+  TIME_ACTIVITY_LABELS,
+  formatDurationClock,
+  isTimeActivityType,
+  sumHours,
+} from "@/lib/time-cards";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
 import type { StorageProvider } from "@/lib/business-storage/types";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
@@ -129,12 +134,22 @@ export type NativeJobStartAction = {
   reason: string | null;
 };
 
+export type NativeJobStopTimeAction = {
+  available: boolean;
+  reason: string | null;
+};
+
 export type NativeJobRunningTime = {
   running: boolean;
+  recorded: boolean;
   activityType: string | null;
   activityLabel: string | null;
   startedAt: string | null;
   startedAtLabel: string | null;
+  endedAt: string | null;
+  endedAtLabel: string | null;
+  hours: number | null;
+  hoursLabel: string | null;
 };
 
 export type NativeJobPhotoStage = "BEFORE" | "DURING" | "AFTER";
@@ -202,6 +217,7 @@ export type NativeJobDetail = NativeJobSummary & {
   };
   startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
+  stopTimeAction: NativeJobStopTimeAction;
   runningTime: NativeJobRunningTime;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
@@ -304,11 +320,23 @@ export function nativeStartAction(
 export function idleNativeJobRunningTime(): NativeJobRunningTime {
   return {
     running: false,
+    recorded: false,
     activityType: null,
     activityLabel: null,
     startedAt: null,
     startedAtLabel: null,
+    endedAt: null,
+    endedAtLabel: null,
+    hours: null,
+    hoursLabel: null,
   };
+}
+
+export function nativeStopTimeAction(running: boolean): NativeJobStopTimeAction {
+  if (running) {
+    return { available: true, reason: null };
+  }
+  return { available: false, reason: null };
 }
 
 export async function loadNativeJobRunningTime(
@@ -317,29 +345,63 @@ export async function loadNativeJobRunningTime(
   jobId: string,
   timeZone: string,
 ): Promise<NativeJobRunningTime> {
-  const running = await db.timeEntry.findFirst({
-    where: {
-      businessId: field.businessId,
-      membershipId: field.membershipId,
-      jobId,
-      activityType: "JOB",
-      status: "RUNNING",
+  const [running, recordedRows] = await Promise.all([
+    db.timeEntry.findFirst({
+      where: {
+        businessId: field.businessId,
+        membershipId: field.membershipId,
+        jobId,
+        activityType: "JOB",
+        status: "RUNNING",
+        endedAt: null,
+      },
+      select: { startedAt: true, activityType: true },
+      orderBy: { startedAt: "desc" },
+    }),
+    db.timeEntry.findMany({
+      where: {
+        businessId: field.businessId,
+        membershipId: field.membershipId,
+        jobId,
+        activityType: "JOB",
+        endedAt: { not: null },
+      },
+      select: { startedAt: true, endedAt: true, activityType: true },
+      orderBy: [{ endedAt: "desc" }, { startedAt: "desc" }],
+    }),
+  ]);
+  if (running) {
+    const activityType = isTimeActivityType(running.activityType) ? running.activityType : "JOB";
+    return {
+      running: true,
+      recorded: false,
+      activityType,
+      activityLabel: TIME_ACTIVITY_LABELS[activityType],
+      startedAt: running.startedAt.toISOString(),
+      startedAtLabel: formatDateTime(running.startedAt, timeZone),
       endedAt: null,
-    },
-    select: { startedAt: true, activityType: true },
-    orderBy: { startedAt: "desc" },
-  });
-  if (!running) {
-    return idleNativeJobRunningTime();
+      endedAtLabel: null,
+      hours: null,
+      hoursLabel: null,
+    };
   }
-  const activityType = isTimeActivityType(running.activityType) ? running.activityType : "JOB";
-  return {
-    running: true,
-    activityType,
-    activityLabel: TIME_ACTIVITY_LABELS[activityType],
-    startedAt: running.startedAt.toISOString(),
-    startedAtLabel: formatDateTime(running.startedAt, timeZone),
-  };
+  const latest = recordedRows[0];
+  if (latest?.endedAt) {
+    const hours = sumHours(recordedRows);
+    return {
+      running: false,
+      recorded: true,
+      activityType: "JOB",
+      activityLabel: TIME_ACTIVITY_LABELS.JOB,
+      startedAt: latest.startedAt.toISOString(),
+      startedAtLabel: formatDateTime(latest.startedAt, timeZone),
+      endedAt: latest.endedAt.toISOString(),
+      endedAtLabel: formatDateTime(latest.endedAt, timeZone),
+      hours,
+      hoursLabel: formatDurationClock(hours),
+    };
+  }
+  return idleNativeJobRunningTime();
 }
 
 export type NativeAssignedJobPage = {
@@ -475,6 +537,7 @@ export async function loadNativeAssignedJob(
   const confirmationLabel = appointmentConfirmationLabel(
     effectiveAppointmentConfirmationStatus(job),
   );
+  const runningTime = await loadNativeJobRunningTime(db, access, job.id, timeZone);
 
   return {
     ...toNativeJobSummary(job, timeZone),
@@ -486,7 +549,8 @@ export async function loadNativeAssignedJob(
     scope: fieldSafeScope(job),
     startAction: nativeStartAction(job.status, job),
     completeAction: nativeCompleteAction(job.status),
-    runningTime: await loadNativeJobRunningTime(db, access, job.id, timeZone),
+    stopTimeAction: nativeStopTimeAction(runningTime.running),
+    runningTime,
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     visit: await loadNativeAssignedJobVisit(db, access, job),
   };

@@ -47,13 +47,16 @@ const {
   nativeAssignedJobWhere,
   nativeCompleteAction,
   nativeStartAction,
+  nativeStopTimeAction,
   nativeTodayTruncatedNotice,
 } = await import("@/lib/native-field");
 const {
   completeNativeAssignedJob,
   startNativeAssignedJob,
+  stopNativeAssignedJobRunningTime,
   NATIVE_JOB_NOT_AVAILABLE,
 } = await import("@/lib/native-field-ops");
+const { JOB_STOP_TIME_CLOSED_REASON } = await import("@/lib/time-card-ops");
 const { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT } = await import(
   "@/lib/appointment-confirmation"
 );
@@ -185,6 +188,7 @@ const todayRouteSrc = readRepo("src/app/api/native/v1/today/route.ts");
 const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
 const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
 const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.ts");
+const stopTimeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/stop-time/route.ts");
 const visitRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/visit/route.ts");
 const checklistRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/checklist/route.ts");
 const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
@@ -201,6 +205,7 @@ check(
     jobRouteSrc.includes("readBearerToken") &&
     completeRouteSrc.includes("readBearerToken") &&
     startRouteSrc.includes("readBearerToken") &&
+    stopTimeRouteSrc.includes("readBearerToken") &&
     visitRouteSrc.includes("readBearerToken") &&
     checklistRouteSrc.includes("readBearerToken") &&
     photoAuthorizeRouteSrc.includes("readBearerToken") &&
@@ -212,6 +217,7 @@ check(
     !jobRouteSrc.includes("cookies(") &&
     !completeRouteSrc.includes("cookies(") &&
     !startRouteSrc.includes("cookies(") &&
+    !stopTimeRouteSrc.includes("cookies(") &&
     !visitRouteSrc.includes("cookies(") &&
     !checklistRouteSrc.includes("cookies(") &&
     !photoAuthorizeRouteSrc.includes("cookies(") &&
@@ -241,6 +247,18 @@ check(
     timeCardOpsSrc.includes("evaluateStartJob") &&
     timeCardOpsSrc.includes("JOB_START_TIME_STARTED_REASON") &&
     startRouteSrc.includes("startNativeAssignedJob") &&
+    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+);
+check(
+  "Stop job time reuses assigned-job scope and the canonical time-card write",
+  completeOpsSrc.includes("stopNativeAssignedJobRunningTime") &&
+    completeOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
+    completeOpsSrc.includes("lockTenantOwnedJob") &&
+    completeOpsSrc.includes("assignedMembershipId") &&
+    completeOpsSrc.includes("afterInitialRead") &&
+    timeCardOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
+    timeCardOpsSrc.includes("JOB_STOP_TIME_CLOSED_REASON") &&
+    stopTimeRouteSrc.includes("stopNativeAssignedJobRunningTime") &&
     !completeOpsSrc.includes("completeJobAndSendInvoice"),
 );
 check(
@@ -285,6 +303,13 @@ check(
       appointmentConfirmationStatus: "AWAITING_CUSTOMER",
       appointmentConfirmedForProposalId: null,
     }).reason === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+);
+check(
+  "nativeStopTimeAction follows the caller's running JOB time, not Job.status",
+  nativeStopTimeAction(true).available === true &&
+    nativeStopTimeAction(true).reason === null &&
+    nativeStopTimeAction(false).available === false &&
+    nativeStopTimeAction(false).reason === null,
 );
 check(
   "Native session POST caps JSON and uses a durable throttle, not process memory",
@@ -335,8 +360,11 @@ check(
     nativeAppSrc.includes("/api/native/v1/jobs/") &&
     nativeAppSrc.includes("/complete") &&
     nativeAppSrc.includes("/start") &&
+    nativeAppSrc.includes("/stop-time") &&
     nativeAppSrc.includes("Complete job") &&
     nativeAppSrc.includes("Start job") &&
+    nativeAppSrc.includes("Stop job time") &&
+    nativeAppSrc.includes("Recorded job time") &&
     nativeAppSrc.includes("Record visit completed") &&
     nativeAppSrc.includes("/visit") &&
     nativeAppSrc.includes("/checklist") &&
@@ -873,7 +901,9 @@ try {
     "Scheduled assigned job advertises Start job and idle running time",
     detail?.startAction.available === true &&
       detail?.startAction.reason === null &&
+      detail?.stopTimeAction.available === false &&
       detail?.runningTime.running === false &&
+      detail?.runningTime.recorded === false &&
       detail?.runningTime.startedAt === null,
   );
   check(
@@ -1727,6 +1757,549 @@ try {
       betaStartAfterWrites?.status === "SCHEDULED",
   );
 
+  console.log("\nSTOP TIME — assigned-worker write, isolation, races, duplicates, rollback");
+  async function createStopJob(input) {
+    const customer =
+      input.customerId
+        ? { id: input.customerId }
+        : await prisma.customer.create({
+            data: {
+              businessId: input.businessId,
+              name: input.customerName,
+              phone: "555-0103",
+            },
+          });
+    return prisma.job.create({
+      data: {
+        businessId: input.businessId,
+        customerId: customer.id,
+        assignedMembershipId: input.assignedMembershipId,
+        projectToken: randomUUID(),
+        status: input.status ?? "IN_PROGRESS",
+        scheduledAt: new Date(),
+      },
+    });
+  }
+
+  async function createRunningJobTime(input) {
+    return prisma.timeEntry.create({
+      data: {
+        businessId: input.businessId,
+        membershipId: input.membershipId,
+        jobId: input.jobId,
+        activityType: input.activityType ?? "JOB",
+        status: "RUNNING",
+        startedAt: input.startedAt ?? new Date(Date.now() - 90_000),
+        source: "CLOCK",
+      },
+    });
+  }
+
+  const stopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const stopStartedAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const stopTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: memberMembership.id,
+    jobId: stopJob.id,
+    startedAt: stopStartedAt,
+  });
+  const otherStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: otherMembership.id,
+    customerName: "Other Stop Canary",
+  });
+  const otherStopTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: otherMembership.id,
+    jobId: otherStopJob.id,
+  });
+  const betaStopJob = await createStopJob({
+    businessId: businessB.id,
+    assignedMembershipId: betaMembership.id,
+    customerName: "Beta Stop Canary",
+  });
+  const betaStopTime = await createRunningJobTime({
+    businessId: businessB.id,
+    membershipId: betaMembership.id,
+    jobId: betaStopJob.id,
+  });
+  const leftoverStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const leftoverOtherTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: otherMembership.id,
+    jobId: leftoverStopJob.id,
+  });
+  const travelStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const travelStopTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: memberMembership.id,
+    jobId: travelStopJob.id,
+    activityType: "TRAVEL",
+  });
+  const raceStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const raceStopTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: memberMembership.id,
+    jobId: raceStopJob.id,
+  });
+  const rollbackStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const rollbackStopStartedAt = new Date(Date.now() - 60_000);
+  const rollbackStopTime = await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: memberMembership.id,
+    jobId: rollbackStopJob.id,
+    startedAt: rollbackStopStartedAt,
+  });
+  const duplicateStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  await createRunningJobTime({
+    businessId: businessA.id,
+    membershipId: memberMembership.id,
+    jobId: duplicateStopJob.id,
+  });
+  const idleStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMembership.id,
+    customerId: customerA.id,
+  });
+  const blockedStopJob = await createStopJob({
+    businessId: blockedBusiness.id,
+    assignedMembershipId: blockedMembership.id,
+    customerName: "Blocked Stop Canary",
+  });
+  await createRunningJobTime({
+    businessId: blockedBusiness.id,
+    membershipId: blockedMembership.id,
+    jobId: blockedStopJob.id,
+  });
+
+  const unauthorizedStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    otherStopJob.id,
+  );
+  const unassignedStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    unassignedJob.id,
+  );
+  const crossTenantStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    betaStopJob.id,
+  );
+  check(
+    "Assigned worker cannot stop time on another member's job",
+    unauthorizedStop.ok === false &&
+      unauthorizedStop.status === 404 &&
+      unauthorizedStop.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Assigned worker cannot stop time on an unassigned job",
+    unassignedStop.ok === false && unassignedStop.status === 404,
+  );
+  check(
+    "Assigned worker cannot stop time on a cross-tenant job",
+    crossTenantStop.ok === false &&
+      crossTenantStop.status === 404 &&
+      crossTenantStop.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+
+  const stolenStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    otherAccess.access,
+    stopJob.id,
+  );
+  const stopJobAfterSteal = await prisma.job.findFirst({
+    where: { id: stopJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const stolenStopTime = await prisma.timeEntry.findFirst({
+    where: { id: stopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true },
+  });
+  check(
+    "Other MEMBER cannot stop time on a job assigned to someone else",
+    stolenStop.ok === false &&
+      stolenStop.status === 404 &&
+      stopJobAfterSteal?.status === "IN_PROGRESS" &&
+      stopJobAfterSteal?.assignedMembershipId === memberMembership.id &&
+      stolenStopTime?.status === "RUNNING" &&
+      stolenStopTime?.endedAt === null,
+  );
+
+  const betaStealStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    betaAccess.access,
+    stopJob.id,
+  );
+  const alphaAfterBetaStopSteal = await prisma.job.findFirst({
+    where: { id: stopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaAfterAlphaStopAttempt = await prisma.timeEntry.findFirst({
+    where: { id: betaStopTime.id, businessId: businessB.id },
+    select: { status: true, endedAt: true },
+  });
+  check(
+    "Cross-tenant stop leaves both jobs and time unchanged",
+    betaStealStop.ok === false &&
+      betaStealStop.status === 404 &&
+      alphaAfterBetaStopSteal?.status === "IN_PROGRESS" &&
+      betaAfterAlphaStopAttempt?.status === "RUNNING" &&
+      betaAfterAlphaStopAttempt?.endedAt === null,
+  );
+
+  const leftoverStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    leftoverStopJob.id,
+  );
+  const leftoverAfter = await prisma.timeEntry.findFirst({
+    where: { id: leftoverOtherTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const leftoverJobAfter = await prisma.job.findFirst({
+    where: { id: leftoverStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Stop job time does not close another worker's leftover RUNNING JOB time",
+    leftoverStop.ok === true &&
+      leftoverStop.alreadyStopped === true &&
+      leftoverJobAfter?.status === "IN_PROGRESS" &&
+      leftoverAfter?.status === "RUNNING" &&
+      leftoverAfter?.endedAt === null &&
+      leftoverAfter?.membershipId === otherMembership.id,
+  );
+
+  const travelStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    travelStopJob.id,
+  );
+  const travelAfter = await prisma.timeEntry.findFirst({
+    where: { id: travelStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, activityType: true },
+  });
+  const travelJobAfter = await prisma.job.findFirst({
+    where: { id: travelStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Stop job time leaves TRAVEL running and does not complete the Job",
+    travelStop.ok === true &&
+      travelStop.alreadyStopped === true &&
+      travelJobAfter?.status === "IN_PROGRESS" &&
+      travelAfter?.activityType === "TRAVEL" &&
+      travelAfter?.status === "RUNNING" &&
+      travelAfter?.endedAt === null,
+  );
+
+  const blockedStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    blockedAccess.access,
+    blockedStopJob.id,
+  );
+  const blockedStopAfter = await prisma.job.findFirst({
+    where: { id: blockedStopJob.id, businessId: blockedBusiness.id },
+    select: { status: true },
+  });
+  check(
+    "Stop job time requires an operating SaaS entitlement",
+    blockedStop.ok === false &&
+      blockedStop.status === 403 &&
+      blockedStop.error === SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE &&
+      blockedStopAfter?.status === "IN_PROGRESS",
+  );
+
+  const raceStopEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: raceStopJob.id,
+    },
+  });
+  const raceStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    raceStopJob.id,
+    {
+      afterInitialRead: async () => {
+        await prisma.job.update({
+          where: { id: raceStopJob.id },
+          data: { assignedMembershipId: otherMembership.id },
+        });
+      },
+    },
+  );
+  const raceStopJobAfter = await prisma.job.findFirst({
+    where: { id: raceStopJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const raceStopTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: raceStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const raceStopEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: raceStopJob.id,
+    },
+  });
+  check(
+    "Assignment change after the initial read refuses Stop job time",
+    raceStop.ok === false &&
+      raceStop.status === 404 &&
+      raceStop.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Reassigned Job after the initial read leaves Job, running time, and events unchanged",
+    raceStopJobAfter?.status === "IN_PROGRESS" &&
+      raceStopJobAfter?.assignedMembershipId === otherMembership.id &&
+      raceStopTimeAfter?.status === "RUNNING" &&
+      raceStopTimeAfter?.endedAt === null &&
+      raceStopTimeAfter?.membershipId === memberMembership.id &&
+      raceStopEventsAfter === raceStopEventsBefore &&
+      raceStopEventsAfter === 0,
+  );
+
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      weekStartedAt: weekRange(rollbackStopStartedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMembership.id,
+    },
+  });
+  const rollbackStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    rollbackStopJob.id,
+  );
+  const rollbackStopJobAfter = await prisma.job.findFirst({
+    where: { id: rollbackStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const rollbackStopTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: rollbackStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true },
+  });
+  check(
+    "Approved timesheet week refuses Stop job time",
+    rollbackStop.ok === false &&
+      rollbackStop.status === 409 &&
+      /approved/i.test(rollbackStop.error ?? ""),
+  );
+  check(
+    "Failed Stop job time rolls back Job status and leaves time running",
+    rollbackStopJobAfter?.status === "IN_PROGRESS" &&
+      rollbackStopTimeAfter?.status === "RUNNING" &&
+      rollbackStopTimeAfter?.endedAt === null,
+  );
+
+  await prisma.timesheetWeek.deleteMany({
+    where: {
+      businessId: businessA.id,
+      membershipId: memberMembership.id,
+      status: "APPROVED",
+    },
+  });
+
+  const stopEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: stopJob.id,
+    },
+  });
+  const firstStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    stopJob.id,
+  );
+  const reloadedStop = await loadNativeAssignedJob(prisma, memberAccess.access, stopJob.id);
+  const stopJobPersisted = await prisma.job.findFirst({
+    where: { id: stopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const stopTimePersisted = await prisma.timeEntry.findFirst({
+    where: { id: stopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, startedAt: true, activityType: true },
+  });
+  const stopAdjustment = await prisma.timeEntryAdjustment.findFirst({
+    where: { timeEntryId: stopTime.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+    select: { action: true },
+  });
+  const stopEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: stopJob.id,
+    },
+  });
+  check(
+    "Assigned worker can stop their own RUNNING JOB time without completing the Job",
+    firstStop.ok === true &&
+      firstStop.alreadyStopped === false &&
+      firstStop.job.status === "IN_PROGRESS" &&
+      firstStop.job.completeAction.available === true &&
+      firstStop.job.stopTimeAction.available === false &&
+      firstStop.job.runningTime.running === false &&
+      firstStop.job.runningTime.recorded === true &&
+      firstStop.job.runningTime.activityType === "JOB" &&
+      firstStop.job.runningTime.hours != null &&
+      firstStop.job.runningTime.hours > 0 &&
+      firstStop.job.runningTime.hoursLabel != null &&
+      firstStop.job.runningTime.endedAt != null &&
+      stopJobPersisted?.status === "IN_PROGRESS" &&
+      stopTimePersisted?.status === "READY" &&
+      stopTimePersisted?.activityType === "JOB" &&
+      stopTimePersisted?.endedAt != null &&
+      stopTimePersisted?.startedAt.getTime() === stopStartedAt.getTime() &&
+      stopAdjustment?.action === "UPDATE" &&
+      stopEventsAfter === stopEventsBefore,
+  );
+  check(
+    "Reload after Stop job time shows IN_PROGRESS and recorded time",
+    reloadedStop?.status === "IN_PROGRESS" &&
+      reloadedStop?.runningTime.running === false &&
+      reloadedStop?.runningTime.recorded === true &&
+      reloadedStop?.runningTime.activityType === "JOB" &&
+      reloadedStop?.runningTime.endedAt === stopTimePersisted?.endedAt?.toISOString() &&
+      reloadedStop?.runningTime.startedAt === stopTimePersisted?.startedAt.toISOString() &&
+      reloadedStop?.completeAction.available === true &&
+      reloadedStop?.stopTimeAction.available === false,
+  );
+
+  const repeatStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    stopJob.id,
+  );
+  const repeatStopTimeCount = await prisma.timeEntry.count({
+    where: {
+      jobId: stopJob.id,
+      businessId: businessA.id,
+      activityType: "JOB",
+    },
+  });
+  const repeatStopReady = await prisma.timeEntry.findFirst({
+    where: { id: stopTime.id, businessId: businessA.id },
+    select: { endedAt: true, status: true },
+  });
+  const repeatStopAdjustments = await prisma.timeEntryAdjustment.count({
+    where: { timeEntryId: stopTime.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+  });
+  check(
+    "Duplicate Stop job time on already-stopped time is a successful no-op",
+    repeatStop.ok === true &&
+      repeatStop.alreadyStopped === true &&
+      repeatStop.job.status === "IN_PROGRESS" &&
+      repeatStop.job.runningTime.running === false &&
+      repeatStop.job.runningTime.recorded === true &&
+      repeatStopTimeCount === 1 &&
+      repeatStopReady?.status === "READY" &&
+      repeatStopReady?.endedAt?.getTime() === stopTimePersisted?.endedAt?.getTime() &&
+      repeatStopAdjustments === 1,
+  );
+
+  const idleStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    memberAccess.access,
+    idleStopJob.id,
+  );
+  const idleStopJobAfter = await prisma.job.findFirst({
+    where: { id: idleStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check(
+    "Stop job time with no running JOB entry is a successful no-op",
+    idleStop.ok === true &&
+      idleStop.alreadyStopped === true &&
+      idleStop.job.status === "IN_PROGRESS" &&
+      idleStopJobAfter?.status === "IN_PROGRESS",
+  );
+
+  const [stopDupA, stopDupB] = await Promise.all([
+    stopNativeAssignedJobRunningTime(prisma, memberAccess.access, duplicateStopJob.id),
+    stopNativeAssignedJobRunningTime(prisma, memberAccess.access, duplicateStopJob.id),
+  ]);
+  const duplicateStopAfter = await prisma.job.findFirst({
+    where: { id: duplicateStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const duplicateStopTimeRows = await prisma.timeEntry.findMany({
+    where: {
+      jobId: duplicateStopJob.id,
+      businessId: businessA.id,
+      activityType: "JOB",
+    },
+    select: { status: true, endedAt: true },
+  });
+  check(
+    "Concurrent Stop job time requests both succeed and leave one READY JOB entry",
+    stopDupA.ok === true &&
+      stopDupB.ok === true &&
+      [stopDupA.alreadyStopped, stopDupB.alreadyStopped].filter(Boolean).length <= 1 &&
+      duplicateStopAfter?.status === "IN_PROGRESS" &&
+      duplicateStopTimeRows.length === 1 &&
+      duplicateStopTimeRows[0]?.status === "READY" &&
+      duplicateStopTimeRows[0]?.endedAt != null,
+  );
+
+  const otherStopAfterWrites = await prisma.timeEntry.findFirst({
+    where: { id: otherStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true },
+  });
+  const betaStopAfterWrites = await prisma.timeEntry.findFirst({
+    where: { id: betaStopTime.id, businessId: businessB.id },
+    select: { status: true, endedAt: true },
+  });
+  const otherStopJobAfterWrites = await prisma.job.findFirst({
+    where: { id: otherStopJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const betaStopJobAfterWrites = await prisma.job.findFirst({
+    where: { id: betaStopJob.id, businessId: businessB.id },
+    select: { status: true },
+  });
+  check(
+    "Stop job time writes stay on the assigned job and never complete other jobs",
+    otherStopAfterWrites?.status === "RUNNING" &&
+      otherStopAfterWrites?.endedAt === null &&
+      betaStopAfterWrites?.status === "RUNNING" &&
+      betaStopAfterWrites?.endedAt === null &&
+      otherStopJobAfterWrites?.status === "IN_PROGRESS" &&
+      betaStopJobAfterWrites?.status === "IN_PROGRESS",
+  );
+
   const revoked = await revokeNativeSession(prisma, memberSignIn.token);
   const afterRevoke = await resolveNativeFieldAccess(prisma, { token: memberSignIn.token });
   check("Sign-out revokes the hashed session", revoked === true);
@@ -1762,7 +2335,7 @@ try {
     throw new Error(`Native field check failed (${failures} case(s)).`);
   }
   console.log(
-    "\nNative field API check passed: Bearer session, assigned-job isolation, Start job, and Complete job safeguards held.",
+    "\nNative field API check passed: Bearer session, assigned-job isolation, Start job, Stop job time, and Complete job safeguards held.",
   );
 } finally {
   await prisma.$disconnect();
