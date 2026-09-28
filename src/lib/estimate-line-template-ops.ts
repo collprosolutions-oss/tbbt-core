@@ -6,7 +6,7 @@
  * template for future applications only — they never rewrite LineItem
  * rows on estimates that already used the template. It never writes
  * ServiceCatalogItem prices, SENT/APPROVED estimates, invoices,
- * payments, or jobs.
+ * payments, or jobs. This file never writes ServiceCatalogItem.
  *
  * Apply claims the estimate with the same updateMany-WHERE-DRAFT lock
  * sendEstimate uses, then inserts lines. Create+apply share one
