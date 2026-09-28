@@ -2,10 +2,11 @@
  * OWNER persistence for immutable tenant intake snapshots.
  *
  * Tenant scope always comes from BusinessAccess. Browser-supplied
- * businessId is ignored. ADMIN/MEMBER cannot publish or restore. Public
- * hire forms read only the current BusinessTrade pointer, never drafts.
- * Restore moves that pointer to an older immutable snapshot and never
- * updates snapshot rows or historical ServiceRequest records.
+ * businessId is ignored. ADMIN/MEMBER cannot publish or restore. Drafts
+ * never reach public hire forms. Restore moves BusinessTrade.publishedIntakeSnapshotId
+ * only. A published website uses the exact snapshot IDs captured at
+ * website publish, not this live pointer. Historical ServiceRequest rows
+ * keep the version they froze.
  */
 
 import { Prisma, type PrismaClient } from "@prisma/client";
@@ -347,41 +348,113 @@ export async function loadPublishedIntakeOverlay(
   return current.status === "ready" ? current.overlay : null;
 }
 
-/**
- * Resolve the exact tenant snapshot a public form displayed.
- * Browser-supplied businessId is ignored — callers pass the slug-resolved
- * business and the server-resolved trade. A referenced id that is missing,
- * cross-tenant, wrong-trade, or invalid fails closed. Omitting an id while
- * this business/trade has a published snapshot fails with a refresh-form
- * response instead of saving against platform intake.
- */
-export async function resolveReferencedTenantIntakeSnapshot(
+export type WebsitePublishedIntakeRef = {
+  captured: boolean;
+  tenantIntake: { snapshotId: string; versionNumber: number } | null;
+};
+
+async function loadExactPublishedIntakeOverlay(
   db: PublicSnapshotDb,
-  input: { businessId: string; tradeCode: string; snapshotId?: string | null },
-): Promise<
-  { ok: true; overlay: PublishedIntakeOverlay | null } | { ok: false; refresh?: boolean }
-> {
-  const referenced = readReferencedTenantIntakeSnapshotId(input.snapshotId);
-  if (!referenced.provided) {
-    const current = await readCurrentPublishedIntake(db, input.businessId, input.tradeCode);
-    if (current.status === "none") return { ok: true, overlay: null };
-    return { ok: false, refresh: true };
+  input: { businessId: string; tradeCode: string; snapshotId: string; versionNumber?: number },
+): Promise<PublishedIntakeOverlay | null> {
+  if (!input.snapshotId || !isConfiguredTrade(input.tradeCode) || !db.tenantIntakeSnapshot) {
+    return null;
   }
-  if (!referenced.snapshotId || !isConfiguredTrade(input.tradeCode)) return { ok: false };
-  if (!db.tenantIntakeSnapshot) return { ok: false };
   const row = await db.tenantIntakeSnapshot.findFirst({
     where: {
-      id: referenced.snapshotId,
+      id: input.snapshotId,
       businessId: input.businessId,
       tradeCode: input.tradeCode,
     },
     select: { id: true, versionNumber: true, snapshotJson: true, publishedAt: true },
   });
-  if (!row) return { ok: false };
+  if (!row) return null;
+  if (input.versionNumber != null && input.versionNumber >= 1 && row.versionNumber !== input.versionNumber) {
+    return null;
+  }
   const overlay = publishedOverlayFromRow(row);
-  if (!overlay || overlay.document.tradeCode !== input.tradeCode) return { ok: false };
-  if (overlay.baseSchema.tradeCode !== input.tradeCode) return { ok: false };
+  if (!overlay || overlay.document.tradeCode !== input.tradeCode) return null;
+  if (overlay.baseSchema.tradeCode !== input.tradeCode) return null;
+  return overlay;
+}
+
+/**
+ * Resolve the exact tenant snapshot a public form displayed.
+ * Browser-supplied businessId is ignored — callers pass the slug-resolved
+ * business and the server-resolved trade. A referenced id that is missing,
+ * cross-tenant, wrong-trade, or invalid fails closed. Omitting an id while
+ * the published website captured an overlay, or while a compatibility site
+ * has a current pointer, fails with a refresh-form response instead of
+ * saving against platform intake. Already-opened forms may still submit
+ * the snapshot they displayed after a later website publish or restore.
+ */
+export async function resolveReferencedTenantIntakeSnapshot(
+  db: PublicSnapshotDb,
+  input: {
+    businessId: string;
+    tradeCode: string;
+    snapshotId?: string | null;
+    websiteIntake?: WebsitePublishedIntakeRef | null;
+  },
+): Promise<
+  { ok: true; overlay: PublishedIntakeOverlay | null } | { ok: false; refresh?: boolean }
+> {
+  const referenced = readReferencedTenantIntakeSnapshotId(input.snapshotId);
+  if (!referenced.provided) {
+    if (input.websiteIntake?.captured) {
+      if (input.websiteIntake.tenantIntake) return { ok: false, refresh: true };
+      return { ok: true, overlay: null };
+    }
+    const current = await readCurrentPublishedIntake(db, input.businessId, input.tradeCode);
+    if (current.status === "none") return { ok: true, overlay: null };
+    return { ok: false, refresh: true };
+  }
+  if (!referenced.snapshotId || !isConfiguredTrade(input.tradeCode)) return { ok: false };
+  const overlay = await loadExactPublishedIntakeOverlay(db, {
+    businessId: input.businessId,
+    tradeCode: input.tradeCode,
+    snapshotId: referenced.snapshotId,
+  });
+  if (!overlay) return { ok: false };
   return { ok: true, overlay };
+}
+
+export async function loadPublishedIntakeOverlaysForWebsiteSnapshot(
+  db: Db,
+  businessId: string,
+  trades: Array<{
+    code: string;
+    tenantIntake: { snapshotId: string; versionNumber: number } | null;
+    tenantIntakeCaptured: boolean;
+  }>,
+): Promise<{ ok: true; overlays: Record<string, PublishedIntakeOverlay> } | { ok: false }> {
+  const overlays: Record<string, PublishedIntakeOverlay> = {};
+  const legacyCodes: string[] = [];
+  for (const trade of trades) {
+    if (!isConfiguredTrade(trade.code)) continue;
+    if (trade.tenantIntakeCaptured !== true) {
+      legacyCodes.push(trade.code);
+      continue;
+    }
+    if (trade.tenantIntake == null) continue;
+    if (!trade.tenantIntake.snapshotId || trade.tenantIntake.versionNumber < 1) {
+      return { ok: false };
+    }
+    const overlay = await loadExactPublishedIntakeOverlay(db, {
+      businessId,
+      tradeCode: trade.code,
+      snapshotId: trade.tenantIntake.snapshotId,
+      versionNumber: trade.tenantIntake.versionNumber,
+    });
+    if (!overlay) return { ok: false };
+    overlays[trade.code] = overlay;
+  }
+  if (legacyCodes.length > 0) {
+    const legacy = await loadPublishedIntakeOverlaysByTrade(db, businessId, legacyCodes);
+    if (!legacy.ok) return { ok: false };
+    Object.assign(overlays, legacy.overlays);
+  }
+  return { ok: true, overlays };
 }
 
 export async function loadPublishedIntakeOverlaysByTrade(

@@ -19,6 +19,7 @@ import {
   currentIntakeSchema,
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
+import { readCurrentPublishedIntake } from "@/lib/intake-snapshot-ops";
 import { catalogAsksWorkAreaIntake } from "@/lib/work-area-intake";
 import {
   WEBSITE_SNAPSHOT_SCHEMA_VERSION,
@@ -271,20 +272,36 @@ export async function buildWebsiteSnapshot(
       publicWebsite: safeHttpUrl(business.publicWebsite),
       publicServiceAreaLabel: business.publicServiceAreaLabel,
     },
-    trades: publicTrades.map((row) => {
-      const projection = publicIntakeSchemaProjection(currentIntakeSchema(row.code));
-      return {
-        code: row.code,
-        label: row.label,
-        customerFacingLabel: row.label,
-        intake: {
-          key: projection.key,
-          version: projection.version,
-          title: projection.title,
-          fields: projection.fields,
-        },
-      };
-    }),
+    trades: await Promise.all(
+      publicTrades.map(async (row) => {
+        const projection = publicIntakeSchemaProjection(currentIntakeSchema(row.code));
+        const currentIntake = await readCurrentPublishedIntake(db, access.businessId, row.code);
+        if (currentIntake.status === "unavailable") {
+          throw new WebsitePublishError(
+            `The published intake snapshot for ${tradeLabel(row.code)} is missing or unusable.`,
+          );
+        }
+        return {
+          code: row.code,
+          label: row.label,
+          customerFacingLabel: row.label,
+          intake: {
+            key: projection.key,
+            version: projection.version,
+            title: projection.title,
+            fields: projection.fields,
+          },
+          tenantIntake:
+            currentIntake.status === "ready"
+              ? {
+                  snapshotId: currentIntake.overlay.snapshotId,
+                  versionNumber: currentIntake.overlay.versionNumber,
+                }
+              : null,
+          tenantIntakeCaptured: true,
+        };
+      }),
+    ),
     services,
     about: { copy: aboutCopy },
     home: {

@@ -250,6 +250,7 @@ check(
   "Public page fails closed when the current snapshot pointer is unusable",
   read("src/app/r/[slug]/page.tsx").includes("publishedIntake.ok") &&
     read("src/app/r/[slug]/page.tsx").includes("PUBLIC_INTAKE_REFRESH_FORM") &&
+    read("src/app/r/[slug]/page.tsx").includes("loadPublicWebsiteIntakeOverlays") &&
     read("src/lib/intake-snapshot-ops.ts").includes("return { ok: false }"),
 );
 check(

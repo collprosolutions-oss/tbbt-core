@@ -105,6 +105,7 @@ export function WebsitePublishPanel({
         {currentVersion
           ? `Current published version: ${currentVersion}.`
           : "This site still uses the live compatibility path until the first publish."}{" "}
+        Publishing captures the current intake snapshot for each trade. The live site keeps those exact versions until you publish again.{" "}
         {hasUnpublishedChanges ? "There are unpublished draft changes." : "Draft matches the current publish."}
       </p>
       {publishState.error || rollbackState.error || seoState.error || galleryState.error || localState.error ? (

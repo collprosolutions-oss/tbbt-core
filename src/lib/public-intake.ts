@@ -49,7 +49,10 @@ import {
 import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
 import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops";
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
-import { snapshotIntakeSchemaForTrade } from "@/lib/website-engine/public";
+import {
+  snapshotIntakeSchemaForTrade,
+  snapshotTenantIntakeStateForTrade,
+} from "@/lib/website-engine/public";
 import {
   parseRecurrenceCadence,
   serviceIntentFromFrequency,
@@ -125,9 +128,11 @@ export type PublicIntakeInput = {
   /**
    * Exact TenantIntakeSnapshot displayed when the public form loaded.
    * Server-resolved against the slug business and request trade. A missing
-   * or invalid reference fails closed. If this business/trade has a
-   * published snapshot, omitting the id fails with a refresh-form response
-   * instead of saving against platform intake.
+   * or invalid reference fails closed. If the published website captured
+   * an overlay for this trade — or a compatibility site has a current
+   * pointer — omitting the id fails with a refresh-form response instead
+   * of saving against platform intake. Already-opened forms may still
+   * submit the snapshot they displayed after a later website publish.
    */
   tenantIntakeSnapshotId?: string | null;
 };
@@ -654,6 +659,9 @@ async function createPublicServiceRequestInner(
     businessId: business.id,
     tradeCode: requestTradeCode,
     snapshotId: input.tenantIntakeSnapshotId,
+    websiteIntake: publishedSnapshot
+      ? snapshotTenantIntakeStateForTrade(publishedSnapshot, requestTradeCode)
+      : null,
   });
   if (!referencedIntake.ok) {
     return {

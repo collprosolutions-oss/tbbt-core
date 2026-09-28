@@ -2,6 +2,7 @@ export {
   WEBSITE_SNAPSHOT_SCHEMA_VERSION,
   parseWebsiteSnapshot,
   serializeWebsiteSnapshot,
+  publishedTradeTenantIntakeState,
   WebsiteSnapshotError,
   type PublishedWebsiteSnapshot,
 } from "@/lib/website-engine/snapshot";
@@ -15,11 +16,14 @@ export {
 } from "@/lib/website-engine/publish";
 export {
   loadPublicWebsiteView,
+  loadPublicWebsiteIntakeOverlays,
+  loadWebsiteSnapshotIntakeOverlays,
   publicServiceFromView,
   publicLocalPageFromView,
   snapshotToImageRows,
   snapshotIntakeSchemasByTrade,
   snapshotIntakeSchemaForTrade,
+  snapshotTenantIntakeStateForTrade,
   missingWebsiteEngineSchema,
 } from "@/lib/website-engine/public";
 export {

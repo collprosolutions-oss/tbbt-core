@@ -11,7 +11,12 @@ import {
 import { groupPublicCatalog, type PublicBusiness, type PublicCatalogItem } from "@/lib/public-site";
 import { resolvePublishedAboutCopy } from "@/lib/website-story";
 import {
+  loadPublishedIntakeOverlaysByTrade,
+  loadPublishedIntakeOverlaysForWebsiteSnapshot,
+} from "@/lib/intake-snapshot-ops";
+import {
   parseWebsiteSnapshot,
+  publishedTradeTenantIntakeState,
   type PublishedTrade,
   type PublishedWebsiteSnapshot,
 } from "@/lib/website-engine/snapshot";
@@ -67,6 +72,35 @@ export function snapshotIntakeSchemasByTrade(
       .filter((trade) => isConfiguredTrade(trade.code))
       .map((trade) => [trade.code, snapshotTradeProjection(trade)]),
   );
+}
+
+export function snapshotTenantIntakeStateForTrade(
+  snapshot: PublishedWebsiteSnapshot,
+  tradeCode: string,
+) {
+  const trade = snapshot.trades.find((row) => row.code === tradeCode);
+  return trade ? publishedTradeTenantIntakeState(trade) : { captured: false, tenantIntake: null };
+}
+
+export async function loadWebsiteSnapshotIntakeOverlays(
+  db: Db,
+  businessId: string,
+  snapshot: PublishedWebsiteSnapshot,
+) {
+  if (snapshot.business.id !== businessId) return { ok: false as const };
+  return loadPublishedIntakeOverlaysForWebsiteSnapshot(db, businessId, snapshot.trades);
+}
+
+export async function loadPublicWebsiteIntakeOverlays(
+  db: Db,
+  view: Pick<PublicWebsiteView, "source" | "snapshot">,
+  businessId: string,
+  tradeCodes: string[],
+) {
+  if (view.snapshot) {
+    return loadWebsiteSnapshotIntakeOverlays(db, businessId, view.snapshot);
+  }
+  return loadPublishedIntakeOverlaysByTrade(db, businessId, tradeCodes);
 }
 
 export function snapshotIntakeSchemaForTrade(

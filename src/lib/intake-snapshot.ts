@@ -2,10 +2,12 @@
  * Immutable tenant intake snapshots.
  *
  * OWNER-reviewed publishes copy a validated condition draft into a
- * versioned snapshot. Public hire forms read only the current pointer.
- * New ServiceRequest rows freeze that version. Historical Cleaning V1/V2,
- * Handyman V1, and existing requests resolve from their own recorded
- * schema key/version/JSON — never from a later publish.
+ * versioned snapshot. Compatibility hire forms read the current
+ * BusinessTrade pointer. A published website uses the exact snapshot IDs
+ * captured at website publish. New ServiceRequest rows freeze the version
+ * the form displayed. Historical Cleaning V1/V2, Handyman V1, and existing
+ * requests resolve from their own recorded schema key/version/JSON — never
+ * from a later publish.
  *
  * No JavaScript expressions, eval, Function, or client businessId.
  */

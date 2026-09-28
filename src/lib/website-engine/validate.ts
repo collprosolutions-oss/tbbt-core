@@ -50,6 +50,13 @@ export function validateWebsiteSnapshot(
       errors.push("A gallery image URL is not valid.");
     }
   }
+  for (const trade of snapshot.trades) {
+    if (trade.tenantIntakeCaptured && trade.tenantIntake) {
+      if (!trade.tenantIntake.snapshotId || trade.tenantIntake.versionNumber < 1) {
+        errors.push(`Published intake snapshot for ${trade.label || trade.code} is invalid.`);
+      }
+    }
+  }
   if (errors.length > 0) return { ok: false, errors };
   try {
     return { ok: true, snapshot: parseWebsiteSnapshot(snapshot) };

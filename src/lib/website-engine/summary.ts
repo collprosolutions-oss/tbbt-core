@@ -32,5 +32,14 @@ export function summarizeWebsiteSnapshotChange(
   if (previous.trades.map((row) => row.code).join() !== next.trades.map((row) => row.code).join()) {
     parts.push("trades updated");
   }
+  const prevIntake = previous.trades
+    .map((row) => `${row.code}:${row.tenantIntake?.snapshotId ?? (row.tenantIntakeCaptured ? "none" : "legacy")}`)
+    .join("|");
+  const nextIntake = next.trades
+    .map((row) => `${row.code}:${row.tenantIntake?.snapshotId ?? (row.tenantIntakeCaptured ? "none" : "legacy")}`)
+    .join("|");
+  if (prevIntake !== nextIntake) {
+    parts.push("intake snapshot updated");
+  }
   return parts.length > 0 ? parts.join(" · ") : "Website republished";
 }
