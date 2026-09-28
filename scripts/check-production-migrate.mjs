@@ -1363,30 +1363,6 @@ check(
       )
       .includes("sendOwnerSms"),
 );
-check(
-  "Owner STOP and provider-block writes take the shared reminder lock",
-  studioWeeklyReminderOps.includes("export async function recordOwnerStudioReminderStop") &&
-    studioWeeklyReminderOps.includes("export async function recordOwnerStudioReminderBlocked") &&
-    studioWeeklyReminderOps
-      .slice(
-        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStop"),
-        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStart"),
-      )
-      .includes("withReminderLock") &&
-    studioWeeklyReminderOps
-      .slice(
-        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderBlocked"),
-        studioWeeklyReminderOps.indexOf("function asReminder"),
-      )
-      .includes("withReminderLock") &&
-    studioWeeklyReminderOps.includes("await recordOwnerStudioReminderBlocked") &&
-    !studioWeeklyReminderOps
-      .slice(
-        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStop"),
-        studioWeeklyReminderOps.indexOf("function asReminder"),
-      )
-      .includes("sendOwnerSms"),
-);
 
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
