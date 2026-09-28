@@ -488,44 +488,6 @@ try {
     JSON.parse(afterToggle.checklistJson).find((item) => item.key === "kitchen")?.checked === true,
   );
 
-  const jobChecklistRace = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
-  await setCleaningVisitCadence(prisma, ownerA, {
-    jobId: jobChecklistRace.id,
-    cadence: "WEEKLY",
-  });
-  await expectThrow(
-    "Assignment change after the initial read refuses a checklist tap",
-    () =>
-      setAssignedChecklistItem(
-        prisma,
-        { businessId: cleanA.id, membershipId: memWorkerA.id },
-        {
-          jobId: jobChecklistRace.id,
-          itemKey: "kitchen",
-          checked: true,
-          afterInitialRead: async () => {
-            await prisma.job.update({
-              where: { id: jobChecklistRace.id },
-              data: { assignedMembershipId: memOtherA.id },
-            });
-          },
-        },
-      ),
-    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
-  );
-  const visitAfterChecklistRace = await prisma.jobCrewVisit.findFirst({
-    where: { jobId: jobChecklistRace.id, businessId: cleanA.id },
-  });
-  const jobAfterChecklistRace = await prisma.job.findFirst({
-    where: { id: jobChecklistRace.id, businessId: cleanA.id },
-    select: { assignedMembershipId: true },
-  });
-  check(
-    "Reassigned Job after the initial checklist read leaves no progress write",
-    JSON.parse(visitAfterChecklistRace.checklistJson).every((item) => item.checked === false) &&
-      jobAfterChecklistRace?.assignedMembershipId === memOtherA.id,
-  );
-
   await expectThrow(
     "Visit completed is refused before the job is started",
     () =>
@@ -676,6 +638,44 @@ try {
       visitAfterAssignRace?.outcomeRecordedByMembershipId == null &&
       jobAfterAssignRace?.status === "IN_PROGRESS" &&
       jobAfterAssignRace?.assignedMembershipId === memOtherA.id,
+  );
+
+  const jobChecklistRace = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobChecklistRace.id,
+    cadence: "WEEKLY",
+  });
+  await expectThrow(
+    "Assignment change after the initial read refuses a checklist tap",
+    () =>
+      setAssignedChecklistItem(
+        prisma,
+        { businessId: cleanA.id, membershipId: memWorkerA.id },
+        {
+          jobId: jobChecklistRace.id,
+          itemKey: "kitchen",
+          checked: true,
+          afterInitialRead: async () => {
+            await prisma.job.update({
+              where: { id: jobChecklistRace.id },
+              data: { assignedMembershipId: memOtherA.id },
+            });
+          },
+        },
+      ),
+    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
+  );
+  const visitAfterChecklistRace = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobChecklistRace.id, businessId: cleanA.id },
+  });
+  const jobAfterChecklistRace = await prisma.job.findFirst({
+    where: { id: jobChecklistRace.id, businessId: cleanA.id },
+    select: { assignedMembershipId: true },
+  });
+  check(
+    "Reassigned Job after the initial checklist read leaves no progress write",
+    JSON.parse(visitAfterChecklistRace.checklistJson).every((item) => item.checked === false) &&
+      jobAfterChecklistRace?.assignedMembershipId === memOtherA.id,
   );
 
   const jobRaceStatus = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
