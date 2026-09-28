@@ -73,7 +73,7 @@ const testUrl = parsed.toString();
 
 const push = spawnSync(
   "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+  ["prisma", "db", "push", "--skip-generate", "--force-reset", "--accept-data-loss"],
   { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
 );
 if (push.status !== 0) {
