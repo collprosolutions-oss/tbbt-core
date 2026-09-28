@@ -7,6 +7,9 @@ import { prisma } from "@/lib/prisma";
 import {
   RETENTION_FOLLOW_UP_CANCELLED_MESSAGE,
   RETENTION_FOLLOW_UP_DONE_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_CLEARED_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_UNCHANGED_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_UPDATED_MESSAGE,
   RETENTION_FOLLOW_UP_RECORDED_MESSAGE,
   RETENTION_FOLLOW_UP_STATUS_UNCHANGED_MESSAGE,
   RETENTION_FOLLOW_UP_UPDATED_MESSAGE,
@@ -14,6 +17,7 @@ import {
   recordRetentionFollowUpTask,
   resolveRetentionFollowUpTaskStatus,
   retentionFollowUpErrorMessage,
+  updateRetentionFollowUpDueOn,
 } from "@/lib/growth/retention";
 import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
 
@@ -31,10 +35,12 @@ export async function recordRetentionFollowUpTaskAction(
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
     await requireProductCapability(prisma, access.businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+    const dueOn = readString(formData, "dueOn");
     const result = await recordRetentionFollowUpTask(prisma, access, {
       customerId: readString(formData, "customerId"),
       jobId: readString(formData, "jobId"),
       group: readString(formData, "group"),
+      ...(dueOn ? { dueOn } : {}),
     });
     revalidatePath(RETENTION_ROUTE);
     return {
@@ -71,5 +77,30 @@ export async function resolveRetentionFollowUpTaskStatusAction(
     };
   } catch (error) {
     return { error: retentionFollowUpErrorMessage(error, "That follow-up task could not be updated.") };
+  }
+}
+
+export async function updateRetentionFollowUpDueOnAction(
+  _prev: RetentionFollowUpActionState,
+  formData: FormData,
+): Promise<RetentionFollowUpActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    await requireProductCapability(prisma, access.businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
+    const result = await updateRetentionFollowUpDueOn(prisma, access, {
+      followUpId: readString(formData, "followUpId"),
+      dueOn: readString(formData, "dueOn"),
+    });
+    revalidatePath(RETENTION_ROUTE);
+    if (result.outcome === "UNCHANGED") {
+      return { message: RETENTION_FOLLOW_UP_DUE_UNCHANGED_MESSAGE };
+    }
+    return {
+      message: result.followUp.dueOn
+        ? RETENTION_FOLLOW_UP_DUE_UPDATED_MESSAGE
+        : RETENTION_FOLLOW_UP_DUE_CLEARED_MESSAGE,
+    };
+  } catch (error) {
+    return { error: retentionFollowUpErrorMessage(error, "That follow-up due date could not be updated.") };
   }
 }

@@ -29,8 +29,11 @@ export function retentionWorkspaceText(workspace: RetentionWorkspace): string {
   for (const row of workspace.groups.noLaterJob) {
     parts.push(row.fact, row.lastCompletedAgeLabel ?? "");
   }
+  for (const row of workspace.groups.dueOrOverdue) {
+    parts.push(row.fact, row.status, row.statusLabel, row.dueStateLabel);
+  }
   for (const row of workspace.groups.recordedFollowUp) {
-    parts.push(row.fact, row.status, row.statusLabel);
+    parts.push(row.fact, row.status, row.statusLabel, row.dueStateLabel);
   }
   for (const row of workspace.groups.noReferralRequest) {
     parts.push(row.fact, row.lastCompletedAgeLabel ?? "");

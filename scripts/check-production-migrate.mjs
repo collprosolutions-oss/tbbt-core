@@ -1168,6 +1168,25 @@ check(
       localNames.indexOf("20260928020000_job_next_booking_source_unique"),
 );
 
+const retentionDueOnMigration = readFileSync(
+  new URL("../prisma/migrations/20260928120000_customer_follow_up_retention_due_on/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Retention follow-up dueOn migration is additive and after origin",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(retentionDueOnMigration) &&
+    retentionDueOnMigration.includes('ADD COLUMN IF NOT EXISTS "dueOn"') &&
+    retentionDueOnMigration.includes("CustomerFollowUp_businessId_origin_status_dueOn_idx") &&
+    !retentionDueOnMigration.includes("CREATE TABLE") &&
+    localNames.includes("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.indexOf("20260927210000_customer_follow_up_retention_origin") <
+      localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.indexOf("20260928010000_owner_scenario_assumption_set") <
+      localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") &&
+    localNames.indexOf("20260928020000_job_next_booking_source_unique") <
+      localNames.indexOf("20260928120000_customer_follow_up_retention_due_on"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

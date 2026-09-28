@@ -1,28 +1,27 @@
 /**
- * OWNER-explicit status write for a recorded RETENTION_TASK follow-up.
+ * OWNER-explicit due-date write for a recorded RETENTION_TASK follow-up.
  *
- * Done is a recorded work status. It is never SENT, never a send, and
- * never emits CUSTOMER_FOLLOW_UP_DUE. A DONE row cannot retain
- * cancelledAt. COMMUNICATION follow-ups and automation send paths are
- * not used.
+ * Sets or clears dueOn only. Status, SENT, cancelledAt, and communication
+ * fields stay unchanged. This path never emits CUSTOMER_FOLLOW_UP_DUE.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   isRetentionFollowUpTask,
   retentionFollowUpStatusLockKey,
 } from "@/lib/customer-follow-up-origin";
 import { requireRetentionFollowUpWrite } from "@/lib/growth/retention/access";
 import {
-  RETENTION_FOLLOW_UP_NOT_RESOLVABLE_MESSAGE,
+  RETENTION_FOLLOW_UP_DUE_EDITABLE_STATUSES,
+  RETENTION_FOLLOW_UP_DUE_NOT_EDITABLE_MESSAGE,
+  RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
   RETENTION_FOLLOW_UP_NOT_TASK_MESSAGE,
-  RETENTION_FOLLOW_UP_RESOLVE_STATUSES,
   RETENTION_FOLLOW_UP_SENT_NOT_DONE_MESSAGE,
-  RETENTION_FOLLOW_UP_UNKNOWN_STATUS_MESSAGE,
   RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE,
-  type RetentionFollowUpResolveStatus,
 } from "@/lib/growth/retention/constants";
+import { dueOnInstantsEqual, parseRetentionFollowUpDueOn } from "@/lib/growth/retention/due";
 import {
   RetentionFollowUpError,
   type RecordedRetentionFollowUp,
@@ -42,26 +41,18 @@ const followUpSelect = {
   cancelledAt: true,
 } as const;
 
-const RESOLVABLE_FROM_STATUSES = ["OPEN", "DONE", "CANCELLED"] as const;
-
-export type ResolveRetentionFollowUpTaskStatusInput = {
+export type UpdateRetentionFollowUpDueOnInput = {
   followUpId: string;
-  status: string;
+  dueOn?: string | null;
 };
 
-export type ResolveRetentionFollowUpTaskStatusResult = {
+export type UpdateRetentionFollowUpDueOnResult = {
   outcome: "UPDATED" | "UNCHANGED";
   followUp: RecordedRetentionFollowUp;
 };
 
-export function isRetentionFollowUpResolveStatus(
-  value: string,
-): value is RetentionFollowUpResolveStatus {
-  return (RETENTION_FOLLOW_UP_RESOLVE_STATUSES as readonly string[]).includes(value);
-}
-
-function isResolvableFromStatus(status: string) {
-  return (RESOLVABLE_FROM_STATUSES as readonly string[]).includes(status);
+function isDueEditableStatus(status: string) {
+  return (RETENTION_FOLLOW_UP_DUE_EDITABLE_STATUSES as readonly string[]).includes(status);
 }
 
 async function withRetentionStatusLock<T>(
@@ -88,15 +79,15 @@ async function findOwnedFollowUp(
   });
 }
 
-function assertRetentionTaskResolvable(row: { origin: string; status: string }) {
+function assertRetentionTaskDueEditable(row: { origin: string; status: string }) {
   if (!isRetentionFollowUpTask(row.origin)) {
     throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_NOT_TASK_MESSAGE);
   }
   if (row.status === "SENT") {
     throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_SENT_NOT_DONE_MESSAGE);
   }
-  if (!isResolvableFromStatus(row.status)) {
-    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_NOT_RESOLVABLE_MESSAGE);
+  if (!isDueEditableStatus(row.status)) {
+    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_DUE_NOT_EDITABLE_MESSAGE);
   }
 }
 
@@ -122,28 +113,21 @@ function recordedFollowUp(row: {
   };
 }
 
-function statusWriteData(status: RetentionFollowUpResolveStatus, cancelledAt: Date | null) {
-  if (status === "CANCELLED") {
-    return {
-      status: "CANCELLED" as const,
-      cancelledAt: cancelledAt ?? new Date(),
-    };
-  }
-  return { status: "DONE" as const, cancelledAt: null };
+async function loadBusinessTimeZone(db: RetentionDb, businessId: string) {
+  const business = await db.business.findFirst({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  return resolveBusinessTimeZone(business);
 }
 
-export async function resolveRetentionFollowUpTaskStatus(
+export async function updateRetentionFollowUpDueOn(
   db: RetentionDb,
   access: BusinessAccess,
-  input: ResolveRetentionFollowUpTaskStatusInput,
-): Promise<ResolveRetentionFollowUpTaskStatusResult> {
+  input: UpdateRetentionFollowUpDueOnInput,
+): Promise<UpdateRetentionFollowUpDueOnResult> {
   requireRetentionFollowUpWrite(access);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_REVIEWS);
-
-  const status = input.status;
-  if (!isRetentionFollowUpResolveStatus(status)) {
-    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_UNKNOWN_STATUS_MESSAGE);
-  }
 
   const followUpId = input.followUpId.trim();
   if (!followUpId) {
@@ -158,7 +142,14 @@ export async function resolveRetentionFollowUpTaskStatus(
     throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE);
   }
   access.assertOwned(existing);
-  assertRetentionTaskResolvable(existing);
+  assertRetentionTaskDueEditable(existing);
+
+  const timeZone = await loadBusinessTimeZone(db, access.businessId);
+  const parsedDueOn = parseRetentionFollowUpDueOn(input.dueOn, timeZone);
+  if (!parsedDueOn.ok) {
+    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE);
+  }
+  const dueOn = parsedDueOn.dueOn;
 
   return withRetentionStatusLock(db, retentionFollowUpStatusLockKey(existing.id), async (tx) => {
     const current = await findOwnedFollowUp(tx, {
@@ -169,14 +160,14 @@ export async function resolveRetentionFollowUpTaskStatus(
       throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_UNKNOWN_TASK_MESSAGE);
     }
     access.assertOwned(current);
-    assertRetentionTaskResolvable(current);
-    if (current.status === status) {
+    assertRetentionTaskDueEditable(current);
+    if (dueOnInstantsEqual(current.dueOn, dueOn)) {
       return { outcome: "UNCHANGED", followUp: recordedFollowUp(current) };
     }
 
     const updated = await tx.customerFollowUp.update({
       where: { id: current.id },
-      data: statusWriteData(status, current.cancelledAt),
+      data: { dueOn },
       select: followUpSelect,
     });
     return { outcome: "UPDATED", followUp: recordedFollowUp(updated) };

@@ -1,5 +1,5 @@
 import type { RecoveryQueue } from "@/lib/growth";
-import type { RetentionGroup } from "@/lib/growth/retention/constants";
+import type { RetentionFollowUpDueState, RetentionGroup } from "@/lib/growth/retention/constants";
 
 export type RetentionCompletionSource = "JOB_COMPLETED" | "unrecorded";
 
@@ -29,7 +29,7 @@ export type RetentionCandidate = {
 };
 
 export type RetentionFollowUpRow = {
-  group: "RECORDED_FOLLOW_UP";
+  group: "RECORDED_FOLLOW_UP" | "DUE_OR_OVERDUE";
   fact: string;
   followUpId: string;
   customerId: string;
@@ -39,6 +39,9 @@ export type RetentionFollowUpRow = {
   status: string;
   statusLabel: string;
   origin: string;
+  dueOn: Date | null;
+  dueState: RetentionFollowUpDueState;
+  dueStateLabel: string;
   links: RetentionLink[];
 };
 
@@ -63,6 +66,7 @@ export type RetentionWorkspace = {
   groups: {
     noReviewRequest: RetentionCandidate[];
     noLaterJob: RetentionCandidate[];
+    dueOrOverdue: RetentionFollowUpRow[];
     recordedFollowUp: RetentionFollowUpRow[];
     noReferralRequest: RetentionCandidate[];
     incompleteJourney: RetentionJourneyRow[];
@@ -70,6 +74,7 @@ export type RetentionWorkspace = {
   totals: {
     noReviewRequest: number;
     noLaterJob: number;
+    dueOrOverdue: number;
     recordedFollowUp: number;
     noReferralRequest: number;
     incompleteJourney: number;

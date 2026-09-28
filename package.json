@@ -139,7 +139,8 @@
     "test:native-field-visit": "node --experimental-strip-types scripts/check-native-field-visit.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",
-    "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs"
+    "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs",
+    "test:retention-follow-up-due": "node --experimental-strip-types scripts/check-retention-follow-up-due.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

@@ -8,6 +8,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   CUSTOMER_FOLLOW_UP_ORIGINS,
   retentionFollowUpLockKey,
@@ -17,12 +18,14 @@ import {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
   RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE,
   RETENTION_FOLLOW_UP_FOREIGN_JOB_MESSAGE,
+  RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
   RETENTION_FOLLOW_UP_JOB_CUSTOMER_MISMATCH_MESSAGE,
   RETENTION_FOLLOW_UP_JOB_NOT_COMPLETED_MESSAGE,
   RETENTION_FOLLOW_UP_STALE_FINDING_MESSAGE,
   RETENTION_FOLLOW_UP_UNKNOWN_FINDING_MESSAGE,
   type RetentionFollowUpFindingGroup,
 } from "@/lib/growth/retention/constants";
+import { parseRetentionFollowUpDueOn } from "@/lib/growth/retention/due";
 import {
   findLastCompletedJobForCustomer,
   hasLaterSameBusinessJob,
@@ -40,6 +43,7 @@ const followUpSelect = {
   kind: true,
   status: true,
   origin: true,
+  dueOn: true,
 } as const;
 
 export class RetentionFollowUpError extends Error {
@@ -65,6 +69,7 @@ export type RecordRetentionFollowUpTaskInput = {
   customerId: string;
   jobId: string;
   group: string;
+  dueOn?: string | null;
 };
 
 export type RecordedRetentionFollowUp = {
@@ -75,6 +80,7 @@ export type RecordedRetentionFollowUp = {
   kind: string;
   status: string;
   origin: string;
+  dueOn: Date | null;
 };
 
 export type RecordRetentionFollowUpTaskResult = {
@@ -144,6 +150,7 @@ async function writeRetentionFollowUpTask(
     customerId: string;
     jobId: string;
     kind: "JOB_COMPLETE" | "REPEAT";
+    dueOn?: Date | null;
   },
 ): Promise<RecordRetentionFollowUpTaskResult> {
   const existing = await findOwnedRetentionTask(db, {
@@ -154,7 +161,10 @@ async function writeRetentionFollowUpTask(
   if (existing) {
     const updated = await db.customerFollowUp.update({
       where: { id: existing.id },
-      data: { kind: existing.kind },
+      data: {
+        kind: existing.kind,
+        ...(input.dueOn !== undefined ? { dueOn: input.dueOn } : {}),
+      },
       select: followUpSelect,
     });
     return { outcome: "UPDATED", followUp: updated };
@@ -169,6 +179,7 @@ async function writeRetentionFollowUpTask(
         kind: input.kind,
         status: "OPEN",
         origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+        dueOn: input.dueOn ?? null,
         createdByMembershipId: access.workspace.membership.id,
       },
       select: followUpSelect,
@@ -245,6 +256,18 @@ export async function recordRetentionFollowUpTask(
 
   await assertFindingStillRecorded(db, access.businessId, input.group, customer.id, job);
 
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { timezone: true },
+  });
+  const timeZone = resolveBusinessTimeZone(business);
+  const hasDueOnInput = input.dueOn !== undefined;
+  const parsedDueOn = hasDueOnInput ? parseRetentionFollowUpDueOn(input.dueOn, timeZone) : null;
+  if (hasDueOnInput && parsedDueOn && !parsedDueOn.ok) {
+    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE);
+  }
+  const dueOn = hasDueOnInput && parsedDueOn?.ok ? parsedDueOn.dueOn : undefined;
+
   const kind = retentionFollowUpKind(input.group);
   return withRetentionWriteLock(
     db,
@@ -258,6 +281,7 @@ export async function recordRetentionFollowUpTask(
         customerId: customer.id,
         jobId: job.id,
         kind,
+        dueOn,
       }),
   );
 }
