@@ -1213,6 +1213,32 @@ check(
       localNames.indexOf("20260928120000_customer_follow_up_retention_due_on"),
 );
 
+const correctiveCleanSourceUniqueMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928145000_job_corrective_clean_source_unique/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Cleaning corrective-clean source unique migration is additive and after retention due",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(correctiveCleanSourceUniqueMigration) &&
+    correctiveCleanSourceUniqueMigration.includes(
+      'ADD COLUMN IF NOT EXISTS "correctiveCleanSourceJobId"',
+    ) &&
+    correctiveCleanSourceUniqueMigration.includes("CREATE UNIQUE INDEX IF NOT EXISTS") &&
+    correctiveCleanSourceUniqueMigration.includes("Job_correctiveCleanSourceJobId_key") &&
+    !correctiveCleanSourceUniqueMigration.includes("Job_nextBookingSourceJobId_key") &&
+    !correctiveCleanSourceUniqueMigration.includes("Job_recurrenceSourceJobId_key") &&
+    correctiveCleanSourceUniqueMigration.includes("Distinct from nextBookingSourceJobId") &&
+    localNames.includes("20260928145000_job_corrective_clean_source_unique") &&
+    !localNames.includes("20260928120000_job_corrective_clean_source_unique") &&
+    localNames.indexOf("20260928020000_job_next_booking_source_unique") <
+      localNames.indexOf("20260928145000_job_corrective_clean_source_unique") &&
+    localNames.indexOf("20260928120000_customer_follow_up_retention_due_on") <
+      localNames.indexOf("20260928145000_job_corrective_clean_source_unique"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",
