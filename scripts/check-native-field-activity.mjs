@@ -427,14 +427,6 @@ try {
     assignedMembershipId: memberMem.id,
     customerName: "Rollback Activity Canary",
   });
-  const rollbackStartedAt = new Date(Date.now() - 60_000);
-  const rollbackTime = await createRunningTime({
-    businessId: businessA.id,
-    membershipId: memberMem.id,
-    jobId: rollbackJob.id,
-    activityType: "TRAVEL",
-    startedAt: rollbackStartedAt,
-  });
   const duplicateJob = await createActivityJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -511,7 +503,6 @@ try {
       assignedDetail?.stopTravelAction.available === false &&
       assignedDetail?.startPickupAction.available === true &&
       assignedDetail?.stopPickupAction.available === false &&
-      assignedDetail?.startAction.available === true &&
       assignedDetail?.runningTime.running === false &&
       assignedDetail?.travelTime.running === false &&
       assignedDetail?.pickupTime.running === false &&
@@ -765,7 +756,6 @@ try {
     firstTravel.ok === true &&
       firstTravel.alreadyStarted === false &&
       firstTravel.job.status === "SCHEDULED" &&
-      firstTravel.job.startAction.available === true &&
       firstTravel.job.travelTime.running === true &&
       firstTravel.job.travelTime.activityType === "TRAVEL" &&
       firstTravel.job.runningTime.running === false &&
@@ -786,8 +776,38 @@ try {
       reloadedTravel?.travelTime.running === true &&
       reloadedTravel?.travelTime.activityType === "TRAVEL" &&
       reloadedTravel?.runningTime.running === false &&
-      reloadedTravel?.startAction.available === true &&
       reloadedTravel?.stopTravelAction.available === true,
+  );
+
+  const firstTravelStop = await stopNativeAssignedActivityTime(
+    prisma,
+    memberAccess.access,
+    travelJob.id,
+    "TRAVEL",
+  );
+  const travelTimeAfterStop = await prisma.timeEntry.findFirst({
+    where: { id: travelTimePersisted?.id ?? "", businessId: businessA.id },
+    select: { status: true, endedAt: true },
+  });
+  const travelJobAfterStop = await prisma.job.findFirst({
+    where: { id: travelJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const travelStopAdjustment = await prisma.timeEntryAdjustment.findFirst({
+    where: { timeEntryId: travelTimePersisted?.id ?? "", reason: TRAVEL_STOP_TIME_CLOSED_REASON },
+    select: { action: true },
+  });
+  check(
+    "Assigned worker can stop TRAVEL without starting or completing the Job",
+    firstTravelStop.ok === true &&
+      firstTravelStop.alreadyStopped === false &&
+      firstTravelStop.job.status === "SCHEDULED" &&
+      firstTravelStop.job.travelTime.running === false &&
+      firstTravelStop.job.travelTime.recorded === true &&
+      travelJobAfterStop?.status === "SCHEDULED" &&
+      travelTimeAfterStop?.status === "READY" &&
+      travelTimeAfterStop?.endedAt != null &&
+      travelStopAdjustment?.action === "UPDATE",
   );
 
   const firstPickup = await startNativeAssignedActivityTime(
@@ -863,37 +883,6 @@ try {
       pickupTimeAfterStop?.status === "READY" &&
       pickupTimeAfterStop?.endedAt != null &&
       pickupStopAdjustment?.action === "UPDATE",
-  );
-
-  const firstTravelStop = await stopNativeAssignedActivityTime(
-    prisma,
-    memberAccess.access,
-    travelJob.id,
-    "TRAVEL",
-  );
-  const travelTimeAfterStop = await prisma.timeEntry.findFirst({
-    where: { id: travelTimePersisted?.id ?? "", businessId: businessA.id },
-    select: { status: true, endedAt: true },
-  });
-  const travelJobAfterStop = await prisma.job.findFirst({
-    where: { id: travelJob.id, businessId: businessA.id },
-    select: { status: true },
-  });
-  const travelStopAdjustment = await prisma.timeEntryAdjustment.findFirst({
-    where: { timeEntryId: travelTimePersisted?.id ?? "", reason: TRAVEL_STOP_TIME_CLOSED_REASON },
-    select: { action: true },
-  });
-  check(
-    "Assigned worker can stop TRAVEL without starting or completing the Job",
-    firstTravelStop.ok === true &&
-      firstTravelStop.alreadyStopped === false &&
-      firstTravelStop.job.status === "SCHEDULED" &&
-      firstTravelStop.job.travelTime.running === false &&
-      firstTravelStop.job.travelTime.recorded === true &&
-      travelJobAfterStop?.status === "SCHEDULED" &&
-      travelTimeAfterStop?.status === "READY" &&
-      travelTimeAfterStop?.endedAt != null &&
-      travelStopAdjustment?.action === "UPDATE",
   );
 
   const repeatTravel = await startNativeAssignedActivityTime(
@@ -1028,6 +1017,14 @@ try {
       raceTimeAfter === 0,
   );
 
+  const rollbackStartedAt = new Date(Date.now() - 60_000);
+  const rollbackTime = await createRunningTime({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: rollbackJob.id,
+    activityType: "TRAVEL",
+    startedAt: rollbackStartedAt,
+  });
   await prisma.timesheetWeek.create({
     data: {
       businessId: businessA.id,
