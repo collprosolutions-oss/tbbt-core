@@ -12,6 +12,7 @@ import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
+import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking-form";
 import { CleaningVisitCadenceForm } from "@/components/jobs/cleaning-visit-cadence-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
@@ -93,6 +94,7 @@ import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
+import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 
 export const metadata: Metadata = {
@@ -351,6 +353,9 @@ export default async function JobPage({
     createIfMissing: true,
   });
   const cleaningVisit = await loadCleaningVisitView(prisma, access, job.id);
+  const cleaningNextBooking = isCompleted
+    ? await loadCleaningNextBookingReview(prisma, access, job.id)
+    : null;
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -838,6 +843,27 @@ export default async function JobPage({
             <CleaningVisitCadenceForm
               visit={cleaningVisit}
               canSetCadence={access.workspace.role === "OWNER"}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {cleaningNextBooking?.eligible ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Next booking</CardTitle>
+            <CardDescription>
+              Create one next booking from this completed Cleaning job. Review
+              the same-business customer, property, and selected service scope,
+              then choose a date and confirm. This does not create a recurring
+              series, invoice, or customer message.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CleaningNextBookingForm
+              review={cleaningNextBooking}
+              canCreate={cleaningNextBooking.canCreate}
+              timeZone={timeZone}
             />
           </CardContent>
         </Card>

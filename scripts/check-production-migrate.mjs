@@ -1148,6 +1148,26 @@ check(
       localNames.indexOf("20260928010000_owner_scenario_assumption_set"),
 );
 
+const nextBookingSourceUniqueMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928020000_job_next_booking_source_unique/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Cleaning next-booking source unique migration is additive and after assumption sets",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(nextBookingSourceUniqueMigration) &&
+    nextBookingSourceUniqueMigration.includes('ADD COLUMN IF NOT EXISTS "nextBookingSourceJobId"') &&
+    nextBookingSourceUniqueMigration.includes("CREATE UNIQUE INDEX IF NOT EXISTS") &&
+    nextBookingSourceUniqueMigration.includes("Job_nextBookingSourceJobId_key") &&
+    !nextBookingSourceUniqueMigration.includes("Job_recurrenceSourceJobId_key") &&
+    nextBookingSourceUniqueMigration.includes("recurrenceSourceJobId stays nonunique") &&
+    localNames.includes("20260928020000_job_next_booking_source_unique") &&
+    localNames.indexOf("20260928010000_owner_scenario_assumption_set") <
+      localNames.indexOf("20260928020000_job_next_booking_source_unique"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",
