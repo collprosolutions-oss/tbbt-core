@@ -186,6 +186,7 @@ const jobRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/route.ts");
 const completeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/complete/route.ts");
 const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.ts");
 const visitRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/visit/route.ts");
+const checklistRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/checklist/route.ts");
 const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
 const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
 const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
@@ -201,6 +202,7 @@ check(
     completeRouteSrc.includes("readBearerToken") &&
     startRouteSrc.includes("readBearerToken") &&
     visitRouteSrc.includes("readBearerToken") &&
+    checklistRouteSrc.includes("readBearerToken") &&
     photoAuthorizeRouteSrc.includes("readBearerToken") &&
     photoFinalizeRouteSrc.includes("readBearerToken") &&
     photoAbortRouteSrc.includes("readBearerToken") &&
@@ -211,6 +213,7 @@ check(
     !completeRouteSrc.includes("cookies(") &&
     !startRouteSrc.includes("cookies(") &&
     !visitRouteSrc.includes("cookies(") &&
+    !checklistRouteSrc.includes("cookies(") &&
     !photoAuthorizeRouteSrc.includes("cookies(") &&
     !photoFinalizeRouteSrc.includes("cookies(") &&
     !photoAbortRouteSrc.includes("cookies(") &&
@@ -336,6 +339,8 @@ check(
     nativeAppSrc.includes("Start job") &&
     nativeAppSrc.includes("Record visit completed") &&
     nativeAppSrc.includes("/visit") &&
+    nativeAppSrc.includes("/checklist") &&
+    nativeAppSrc.includes("Mark done") &&
     nativeAppSrc.includes("runningTime") &&
     nativeAppSrc.includes("loadNativeJob") &&
     nativeAppSrc.includes("truncatedNotice") &&

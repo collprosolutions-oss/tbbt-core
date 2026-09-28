@@ -172,8 +172,13 @@ check(
     visitOutcomeLabel("RE_CLEAN_REQUESTED") === "Re-clean requested" &&
     visitOutcomeLabel("NONE") === "No visit outcome recorded",
 );
-const recordOutcomeSrc = read("src/lib/cleaning-visit-ops.ts").slice(
-  read("src/lib/cleaning-visit-ops.ts").indexOf("export async function recordAssignedVisitOutcome"),
+const opsSrc = read("src/lib/cleaning-visit-ops.ts");
+const checklistItemSrc = opsSrc.slice(
+  opsSrc.indexOf("export async function setAssignedChecklistItem"),
+  opsSrc.indexOf("export async function recordAssignedVisitOutcome"),
+);
+const recordOutcomeSrc = opsSrc.slice(
+  opsSrc.indexOf("export async function recordAssignedVisitOutcome"),
 );
 check(
   "VISIT_COMPLETED writes the visit and Job complete in one transaction",
@@ -194,6 +199,16 @@ check(
       recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
     recordOutcomeSrc.indexOf("locked.status") <
       recordOutcomeSrc.indexOf("jobCrewVisit.update"),
+);
+check(
+  "Assigned checklist locks the Job and rechecks assignment before writing",
+  checklistItemSrc.includes("lockTenantOwnedJob") &&
+    checklistItemSrc.includes("afterInitialRead") &&
+    checklistItemSrc.includes("assignedMembershipId") &&
+    checklistItemSrc.indexOf("lockTenantOwnedJob") <
+      checklistItemSrc.indexOf("jobCrewVisit.update") &&
+    checklistItemSrc.indexOf("locked.assignedMembershipId") <
+      checklistItemSrc.indexOf("jobCrewVisit.update"),
 );
 check(
   "Handyman jobs are not eligible; Cleaning recurrenceSupport is required",
@@ -471,6 +486,44 @@ try {
   check(
     "Assigned worker checkmark is persisted only on the owned visit",
     JSON.parse(afterToggle.checklistJson).find((item) => item.key === "kitchen")?.checked === true,
+  );
+
+  const jobChecklistRace = await createTradeJob(cleanA.id, "CLEANING", memWorkerA.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobChecklistRace.id,
+    cadence: "WEEKLY",
+  });
+  await expectThrow(
+    "Assignment change after the initial read refuses a checklist tap",
+    () =>
+      setAssignedChecklistItem(
+        prisma,
+        { businessId: cleanA.id, membershipId: memWorkerA.id },
+        {
+          jobId: jobChecklistRace.id,
+          itemKey: "kitchen",
+          checked: true,
+          afterInitialRead: async () => {
+            await prisma.job.update({
+              where: { id: jobChecklistRace.id },
+              data: { assignedMembershipId: memOtherA.id },
+            });
+          },
+        },
+      ),
+    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
+  );
+  const visitAfterChecklistRace = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobChecklistRace.id, businessId: cleanA.id },
+  });
+  const jobAfterChecklistRace = await prisma.job.findFirst({
+    where: { id: jobChecklistRace.id, businessId: cleanA.id },
+    select: { assignedMembershipId: true },
+  });
+  check(
+    "Reassigned Job after the initial checklist read leaves no progress write",
+    JSON.parse(visitAfterChecklistRace.checklistJson).every((item) => item.checked === false) &&
+      jobAfterChecklistRace?.assignedMembershipId === memOtherA.id,
   );
 
   await expectThrow(
