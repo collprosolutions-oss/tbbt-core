@@ -18,6 +18,7 @@ export const MARKETING_AREAS = [
   "grow",
   "completed-jobs",
   "create-content",
+  "approval-queue",
   "calendar",
   "social-posts",
   "website-seo",
@@ -33,6 +34,7 @@ export const MARKETING_AREA_LABELS: Record<MarketingArea, string> = {
   grow: "Grow My Business",
   "completed-jobs": "Completed Jobs",
   "create-content": "Create Content",
+  "approval-queue": "Weekly review",
   calendar: "Content Calendar",
   "social-posts": "Social Posts",
   "website-seo": "Website / SEO",
@@ -47,6 +49,7 @@ export const IMPLEMENTED_MARKETING_AREAS: readonly MarketingArea[] = [
   "grow",
   "completed-jobs",
   "create-content",
+  "approval-queue",
   "calendar",
   "social-posts",
   "website-seo",
@@ -153,6 +156,30 @@ export const COMING_NEXT_MESSAGE =
 
 export const OWNER_STUDIO_APPROVAL_MESSAGE =
   "Approving a creator package requires the OWNER role. ADMIN may draft, edit, and send it for review.";
+
+export const STUDIO_APPROVAL_QUEUE_LIMIT = 50;
+export const STUDIO_APPROVAL_QUEUE_STATUS = "READY_FOR_REVIEW" as const;
+
+export const WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE =
+  "This weekly review queue lists creator packages waiting for OWNER approval. TBBT will not auto-approve, publish, post, or send customer messages.";
+
+export const STUDIO_APPROVAL_QUEUE_LIMITS_MESSAGE =
+  "The weekly queue shows at most 50 packages awaiting review. Remaining READY_FOR_REVIEW packages stay on file and appear as earlier items leave the queue.";
+
+export const STUDIO_RETURN_FOR_CHANGES_MESSAGE =
+  "Returning a creator package for changes requires the OWNER role. The package goes back to DRAFT. TBBT will not publish or send a customer message.";
+
+export const STUDIO_APPROVED_INTERNAL_MESSAGE =
+  "Creator package approved for internal use. It has not been published, posted, or sent to a customer.";
+
+export const STUDIO_RETURNED_MESSAGE =
+  "Creator package returned for changes. It is a DRAFT again and has not been published.";
+
+export const STUDIO_APPROVE_NOT_READY_MESSAGE =
+  "Only packages awaiting review can be approved.";
+
+export const STUDIO_RETURN_NOT_READY_MESSAGE =
+  "Only packages awaiting review can be returned for changes.";
 
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
@@ -357,10 +384,46 @@ export function canApproveStudioPackage(input: {
   photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
 }): boolean {
   return (
-    input.status === "READY_FOR_REVIEW" &&
+    input.status === STUDIO_APPROVAL_QUEUE_STATUS &&
     input.role === "OWNER" &&
     studioPhotosEligible(input.photos)
   );
+}
+
+export function canReturnStudioPackage(input: { status: string; role: string }): boolean {
+  return input.status === STUDIO_APPROVAL_QUEUE_STATUS && input.role === "OWNER";
+}
+
+export function canActOnStudioApprovalQueue(role: string): boolean {
+  return role === "OWNER";
+}
+
+export function isStudioApprovalQueueStatus(status: string): boolean {
+  return status === STUDIO_APPROVAL_QUEUE_STATUS;
+}
+
+export function studioApprovalQueueMeta(total: number): {
+  limit: number;
+  total: number;
+  truncated: boolean;
+} {
+  return {
+    limit: STUDIO_APPROVAL_QUEUE_LIMIT,
+    total,
+    truncated: total > STUDIO_APPROVAL_QUEUE_LIMIT,
+  };
+}
+
+export function boundStudioApprovalQueue<T>(rows: readonly T[]): {
+  items: T[];
+  truncated: boolean;
+  limit: number;
+} {
+  return {
+    items: rows.slice(0, STUDIO_APPROVAL_QUEUE_LIMIT),
+    truncated: rows.length > STUDIO_APPROVAL_QUEUE_LIMIT,
+    limit: STUDIO_APPROVAL_QUEUE_LIMIT,
+  };
 }
 
 export function canExportCreatorPackage(input: {

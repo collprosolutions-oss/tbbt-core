@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ContentStatusButton } from "@/components/marketing/content-status-button";
+import { StudioApprovalQueue } from "@/components/marketing/studio-approval-queue";
 import { CreateContentForm } from "@/components/marketing/create-content-form";
 import { ExportPackageButton } from "@/components/marketing/export-package-button";
 import { ReviewPacketButton } from "@/components/marketing/review-packet-button";
@@ -76,6 +77,7 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
           {area === "create-content" ||
           area === "social-posts" ||
           area === "overview" ||
+          area === "approval-queue" ||
           area === "brand-library" ||
           area === "lead-sources" ||
           area === "campaigns" ||
@@ -101,6 +103,9 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
             <p>{source.counts.readyOpportunities} completed job{source.counts.readyOpportunities === 1 ? "" : "s"} with marketing-approved photos.</p>
             <p>{source.counts.needsPermission} completed job{source.counts.needsPermission === 1 ? "" : "s"} still need photo permission.</p>
             <p>{source.counts.awaitingReview} item{source.counts.awaitingReview === 1 ? "" : "s"} awaiting owner review.</p>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/marketing?area=approval-queue">Open weekly approval queue</Link>
+            </Button>
             <p className="text-xs text-muted-foreground">Review / referral follow-up is a later module. Not built here.</p>
             <Button asChild size="sm" variant="outline">
               <Link href="/marketing?area=grow">Open Grow My Business</Link>
@@ -299,6 +304,10 @@ function ContentBody({
     );
   }
 
+  if (area === "approval-queue") {
+    return <StudioApprovalQueue queue={source.approvalQueue} viewerRole={viewerRole} />;
+  }
+
   if (area === "create-content") {
     return (
       <Card>
@@ -452,6 +461,9 @@ function ContentBody({
 
   return (
     <div className="space-y-3">
+      {area === "overview" ? (
+        <StudioApprovalQueue queue={source.approvalQueue} viewerRole={viewerRole} />
+      ) : null}
       {area === "social-posts" ? (
         <Card>
           <CardHeader>

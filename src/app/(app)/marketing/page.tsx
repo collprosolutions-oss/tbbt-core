@@ -58,7 +58,7 @@ export default async function MarketingPage({
     {
       label: "Awaiting review",
       value: String(source.counts.awaitingReview),
-      sublabel: "Owner/admin approval",
+      sublabel: "Weekly OWNER review queue",
       defaultIconId: "clock",
     },
     {

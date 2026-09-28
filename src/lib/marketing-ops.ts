@@ -22,6 +22,10 @@ import {
   nextContentStatus,
   OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
+  STUDIO_APPROVE_NOT_READY_MESSAGE,
+  STUDIO_APPROVAL_QUEUE_STATUS,
+  STUDIO_RETURN_FOR_CHANGES_MESSAGE,
+  STUDIO_RETURN_NOT_READY_MESSAGE,
   parseHashtags,
   parseMarketingDate,
   parseRequiredShotList,
@@ -397,6 +401,91 @@ export async function advanceMarketingContentStatus(
       reviewedAt: next === "APPROVED" ? new Date() : content.reviewedAt,
     },
   });
+}
+
+function requireOwnerStudioApproval(access: BusinessAccess, message: string) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(message);
+  }
+  requireBusinessRole(access, "OWNER");
+}
+
+function studioApprovalQueueWriteWhere(
+  access: BusinessAccess,
+  contentId: string,
+  updatedAt?: Date,
+) {
+  return {
+    id: contentId,
+    businessId: access.businessId,
+    status: STUDIO_APPROVAL_QUEUE_STATUS,
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+export async function approveMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+) {
+  requireOwnerStudioApproval(access, OWNER_STUDIO_APPROVAL_MESSAGE);
+  return runInTransaction(db, async (tx) => {
+    const content = access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: input.contentId, ...access.scope },
+      }),
+    );
+    if (content.status !== STUDIO_APPROVAL_QUEUE_STATUS) {
+      throw new MarketingError(STUDIO_APPROVE_NOT_READY_MESSAGE);
+    }
+    await assertAttachedPhotosStillApproved(tx, access, content.id);
+    // Same business + READY_FOR_REVIEW + snapshot updatedAt at commit.
+    const claimed = await tx.marketingContent.updateMany({
+      where: studioApprovalQueueWriteWhere(access, content.id, content.updatedAt),
+      data: {
+        status: "APPROVED",
+        reviewedByMembershipId: access.workspace.membership.id,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) {
+      throw new MarketingError(STUDIO_APPROVE_NOT_READY_MESSAGE);
+    }
+    return access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: content.id, ...access.scope },
+      }),
+    );
+  });
+}
+
+export async function returnMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+) {
+  requireOwnerStudioApproval(access, STUDIO_RETURN_FOR_CHANGES_MESSAGE);
+  const content = access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: input.contentId, ...access.scope },
+    }),
+  );
+  if (content.status !== STUDIO_APPROVAL_QUEUE_STATUS) {
+    throw new MarketingError(STUDIO_RETURN_NOT_READY_MESSAGE);
+  }
+  const claimed = await db.marketingContent.updateMany({
+    where: studioApprovalQueueWriteWhere(access, content.id),
+    data: { status: "DRAFT" },
+  });
+  if (claimed.count !== 1) {
+    throw new MarketingError(STUDIO_RETURN_NOT_READY_MESSAGE);
+  }
+  return access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: content.id, ...access.scope },
+    }),
+  );
 }
 
 export async function exportMarketingCreatorPackage(
