@@ -1302,6 +1302,68 @@ check(
     !studioWeeklyReminderOps.includes("ADD COLUMN"),
 );
 
+const ownerStudioSmsDestinationMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928190000_owner_studio_reminder_sms_destination/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "OWNER studio reminder SMS destination migration is additive and after #204",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsTo"') &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "studioWeeklyReminderOwnerSmsOptedIn"') &&
+    ownerStudioSmsDestinationMigration.includes('ADD COLUMN IF NOT EXISTS "smsSendClaimedAt"') &&
+    ownerStudioSmsDestinationMigration.includes("20260928150000_marketing_studio_weekly_reminder") &&
+    ownerStudioSmsDestinationMigration.includes("20260928180000_job_recurrence_occurrence_key") &&
+    localNames.includes("20260928190000_owner_studio_reminder_sms_destination") &&
+    localNames.includes("20260928180000_job_recurrence_occurrence_key") &&
+    !localNames.includes("20260928160000_owner_studio_reminder_sms_destination") &&
+    !localNames.includes("20260928180000_owner_studio_reminder_sms_destination") &&
+    localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") <
+      localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") &&
+    localNames.indexOf("20260928180000_job_recurrence_occurrence_key") <
+      localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination"),
+);
+check(
+  "Owner weekly reminder SMS is not sent inside a rollbackable reminder transaction",
+  studioWeeklyReminderOps.includes("deliverOwnerStudioWeeklyReminderSms") &&
+    studioWeeklyReminderOps.includes("smsSendClaimedAt") &&
+    !studioWeeklyReminderOps.includes("publicPhone") &&
+    !studioWeeklyReminderOps
+      .slice(
+        studioWeeklyReminderOps.indexOf("async function claimOwnerStudioReminderSmsIfDestinationUnchanged"),
+        studioWeeklyReminderOps.indexOf("async function deliverOwnerStudioWeeklyReminderSms"),
+      )
+      .includes("sendOwnerSms") &&
+    studioWeeklyReminderOps.includes("const sent = await sendOwnerSms"),
+);
+check(
+  "Owner STOP and provider-block writes take the shared reminder lock",
+  studioWeeklyReminderOps.includes("export async function recordOwnerStudioReminderStop") &&
+    studioWeeklyReminderOps.includes("export async function recordOwnerStudioReminderBlocked") &&
+    studioWeeklyReminderOps
+      .slice(
+        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStop"),
+        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStart"),
+      )
+      .includes("withReminderLock") &&
+    studioWeeklyReminderOps
+      .slice(
+        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderBlocked"),
+        studioWeeklyReminderOps.indexOf("function asReminder"),
+      )
+      .includes("withReminderLock") &&
+    studioWeeklyReminderOps.includes("await recordOwnerStudioReminderBlocked") &&
+    !studioWeeklyReminderOps
+      .slice(
+        studioWeeklyReminderOps.indexOf("export async function recordOwnerStudioReminderStop"),
+        studioWeeklyReminderOps.indexOf("function asReminder"),
+      )
+      .includes("sendOwnerSms"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

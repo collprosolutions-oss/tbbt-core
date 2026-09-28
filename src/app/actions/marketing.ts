@@ -33,8 +33,12 @@ import {
   STUDIO_APPROVED_INTERNAL_MESSAGE,
   STUDIO_RETURNED_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE,
 } from "@/lib/marketing";
-import { setStudioWeeklyReviewReminderOptIn } from "@/lib/marketing-studio-reminder";
+import {
+  setStudioWeeklyReminderOwnerSms,
+  setStudioWeeklyReviewReminderOptIn,
+} from "@/lib/marketing-studio-reminder";
 import { prisma } from "@/lib/prisma";
 
 export type MarketingActionState = {
@@ -272,6 +276,26 @@ export async function setStudioWeeklyReviewReminderOptInAction(
   }
 }
 
+export async function setStudioWeeklyReminderOwnerSmsAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE };
+    }
+    const result = await setStudioWeeklyReminderOwnerSms(prisma, access, {
+      destination: readString(formData, "ownerSmsTo"),
+      optedIn: readString(formData, "ownerSmsOptedIn") === "true",
+    });
+    revalidateMarketing();
+    return { message: result.message };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That OWNER SMS destination could not be saved.") };
+  }
+}
+
 export async function setMarketingPlannedDateAction(
   _prev: MarketingActionState,
   formData: FormData,
@@ -299,7 +323,7 @@ export async function generateMarketingAiAction(
     const task = readString(formData, "marketingAiTask");
     const attemptId = readString(formData, "attemptId");
     if (!isAiAttemptId(attemptId)) return { error: "Retry that request from the form." };
-    const source = await loadMarketingSource(prisma, access.businessId);
+    const source = await loadMarketingSource(prisma, access.businessId, new Date(), access.workspace.role);
     const actor = {
       businessId: access.businessId,
       membershipId: access.workspace.membership.id,

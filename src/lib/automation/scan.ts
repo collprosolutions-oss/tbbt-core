@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { customerFollowUpDueScanWhere } from "@/lib/customer-follow-up-origin";
 import {
-  dispatchStudioWeeklyReviewReminder,
+  createStudioWeeklyReviewReminder,
   missingStudioWeeklyReminderSchema,
 } from "@/lib/marketing-studio-reminder";
 
@@ -124,7 +124,7 @@ export async function scanScheduledBusinessEvents(db: Db, businessId: string) {
   }
 
   try {
-    await dispatchStudioWeeklyReviewReminder(db, businessId);
+    await createStudioWeeklyReviewReminder(db, businessId);
   } catch (error) {
     if (!missingStudioWeeklyReminderSchema(error)) throw error;
   }

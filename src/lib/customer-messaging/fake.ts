@@ -11,8 +11,12 @@ export type FakeCustomerMessagingProvider = CustomerMessagingProvider & {
   sent: CustomerMessageSendInput[];
   failNext: boolean;
   throwNext: boolean;
+  timeoutNext: boolean;
+  errorCodeNext: string | null;
   setFailNext(value: boolean): void;
   setThrowNext(value: boolean): void;
+  setTimeoutNext(value: boolean): void;
+  setErrorCodeNext(value: string | null): void;
 };
 
 function validSignature(payload: string, signature: string | null, secret: string) {
@@ -34,16 +38,40 @@ export function createFakeCustomerMessagingProvider(
     sent,
     failNext: false,
     throwNext: false,
+    timeoutNext: false,
+    errorCodeNext: null,
     setFailNext(value) {
       provider.failNext = value;
     },
     setThrowNext(value) {
       provider.throwNext = value;
     },
+    setTimeoutNext(value) {
+      provider.timeoutNext = value;
+    },
+    setErrorCodeNext(value) {
+      provider.errorCodeNext = value;
+    },
     async send(input: CustomerMessageSendInput): Promise<CustomerMessageSendResult> {
       if (provider.throwNext) {
         provider.throwNext = false;
         throw new Error("Fake SMS provider threw.");
+      }
+      if (provider.timeoutNext) {
+        provider.timeoutNext = false;
+        const error = new Error("The messaging provider timed out.");
+        error.name = "AbortError";
+        throw error;
+      }
+      if (provider.errorCodeNext) {
+        const errorCode = provider.errorCodeNext;
+        provider.errorCodeNext = null;
+        return {
+          ok: false,
+          status: "FAILED",
+          error: `Fake SMS provider rejected the message (${errorCode}).`,
+          errorCode,
+        };
       }
       if (provider.failNext) {
         provider.failNext = false;

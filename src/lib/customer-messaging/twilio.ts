@@ -16,12 +16,15 @@ import type {
 } from "@/lib/customer-messaging/types";
 import { getAppUrl } from "@/lib/mail";
 
+export const TWILIO_SEND_TIMEOUT_MS = 8000;
+
 export type TwilioFetch = (
   input: string,
   init: {
     method: string;
     headers: Record<string, string>;
     body: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
@@ -155,6 +158,8 @@ export function createTwilioCustomerMessagingProvider(
 
       const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`;
       let response: { ok: boolean; status: number; json(): Promise<unknown> };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TWILIO_SEND_TIMEOUT_MS);
       try {
         response = await fetchImpl(url, {
           method: "POST",
@@ -163,9 +168,19 @@ export function createTwilioCustomerMessagingProvider(
             "Content-Type": "application/x-www-form-urlencoded",
           },
           body: body.toString(),
+          signal: controller.signal,
         });
-      } catch {
-        return { ok: false, status: "FAILED", error: "The messaging provider failed." };
+      } catch (error) {
+        const timedOut =
+          (error instanceof Error && error.name === "AbortError") ||
+          controller.signal.aborted;
+        return {
+          ok: false,
+          status: "FAILED",
+          error: timedOut ? "The messaging provider timed out." : "The messaging provider failed.",
+        };
+      } finally {
+        clearTimeout(timer);
       }
 
       let payload: Record<string, unknown> = {};
@@ -185,7 +200,11 @@ export function createTwilioCustomerMessagingProvider(
           typeof payload.message === "string"
             ? payload.message
             : "The messaging provider rejected the message.";
-        return { ok: false, status: "FAILED", error: message };
+        const errorCode =
+          typeof payload.code === "number" || typeof payload.code === "string"
+            ? String(payload.code)
+            : undefined;
+        return { ok: false, status: "FAILED", error: message, errorCode };
       }
 
       return {
@@ -245,6 +264,7 @@ export function createTwilioCustomerMessagingProvider(
             mapped === "FAILED"
               ? params.ErrorMessage || params.ErrorCode || "Twilio reported delivery failure."
               : undefined,
+          errorCode: params.ErrorCode || undefined,
         },
         providerEventId: `${messageSid}:${mapped}`,
       };

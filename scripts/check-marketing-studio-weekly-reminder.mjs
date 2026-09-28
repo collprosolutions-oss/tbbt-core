@@ -4,9 +4,9 @@
  * Proves consent (default off / explicit opt-in), opt-out, timezone
  * week boundaries, idempotency for the same business/week,
  * authorization, and tenant isolation on a dedicated test database.
- * Delivery stays on the existing OWNER in-app path. SMS is labeled
- * honestly when it is not actually configured. Never messages
- * customers, auto-approves, publishes, or posts.
+ * Delivery stays on the existing OWNER in-app path. Optional OWNER SMS
+ * uses a fake provider adapter only. Never messages customers,
+ * auto-approves, publishes, posts, or sends a real SMS.
  *
  * Run with:
  *   npm run test:marketing-studio-weekly-reminder
@@ -36,13 +36,32 @@ const {
   STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_OWNER_SMS_INVALID_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_SMS_ACCEPTED,
+  STUDIO_WEEKLY_REMINDER_SMS_BLOCKED,
+  STUDIO_WEEKLY_REMINDER_SMS_FAILED,
+  STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION,
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN,
+  STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_BLOCKED,
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED,
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
+  STUDIO_WEEKLY_REMINDER_SMS_STOPPED,
+  STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
   canManageStudioWeeklyReminder,
+  isStudioWeeklyReminderSendWindow,
+  maskOwnerSmsDestination,
+  parseOwnerSmsE164,
+  resolveOwnerStudioReminderSmsTo,
   studioWeeklyReminderCopy,
   studioWeeklyReminderDelivery,
+  studioWeeklyReminderSafeSmsLabel,
+  studioWeeklyReminderSmsBody,
   studioWeeklyReminderSmsConnected,
   studioWeeklyReminderWeekKey,
 } = await import("@/lib/marketing");
@@ -54,13 +73,28 @@ const {
 } = await import("@/lib/marketing-ops");
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 const {
+  authorizeStudioWeeklyReminderCron,
+  createStudioWeeklyReviewReminder,
   dispatchStudioWeeklyReviewReminder,
   loadStudioWeeklyReminderState,
   missingStudioWeeklyReminderSchema,
+  presentStudioWeeklyReminderForViewer,
+  recordOwnerStudioReminderBlocked,
+  recordOwnerStudioReminderStop,
+  runScheduledStudioWeeklyReminders,
+  setStudioWeeklyReminderOwnerSms,
   setStudioWeeklyReviewReminderOptIn,
 } = await import("@/lib/marketing-studio-reminder");
 const { emitBusinessEvent } = await import("@/lib/automation/events");
 const { INVOICE_DUE_AFTER_MS, scanScheduledBusinessEvents } = await import("@/lib/automation/scan");
+const {
+  applyCustomerMessageDeliveryUpdate,
+  applyInboundConsentEvent,
+  createFakeCustomerMessagingProvider,
+  isCustomerMessagePurpose,
+  resetCustomerMessagingProvider,
+  setCustomerMessagingProvider,
+} = await import("@/lib/customer-messaging");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -69,12 +103,20 @@ function readSrc(relative) {
 
 const domainSrc = readSrc("src/lib/marketing.ts");
 const reminderOpsSrc = readSrc("src/lib/marketing-studio-reminder.ts");
+const ownerSmsSrc = readSrc("src/lib/customer-messaging/owner-sms.ts");
 const dataSrc = readSrc("src/lib/marketing-data.ts");
+const reminderTestSrc = readSrc("scripts/check-marketing-studio-weekly-reminder.mjs");
 const actionSrc = readSrc("src/app/actions/marketing.ts");
 const queueUiSrc = readSrc("src/components/marketing/studio-approval-queue.tsx");
 const reminderUiSrc = readSrc("src/components/marketing/studio-weekly-reminder.tsx");
 const scanSrc = readSrc("src/lib/automation/scan.ts");
 const pageSrc = readSrc("src/app/(app)/marketing/page.tsx");
+const cronRouteSrc = readSrc("src/app/api/cron/studio-weekly-reminder/route.ts");
+const cronPathSrc = readSrc("src/lib/studio-weekly-reminder-cron-path.ts");
+const vercelSrc = readSrc("vercel.json");
+const proxySrc = readSrc("src/proxy.ts");
+const inboundSrc = readSrc("src/lib/customer-messaging/inbound.ts");
+const twilioSrc = readSrc("src/lib/customer-messaging/twilio.ts");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -112,6 +154,65 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+
+async function writeOwnerSmsDestination(businessId, destination, optedIn) {
+  await prisma.businessSettings.upsert({
+    where: { businessId },
+    create: {
+      businessId,
+      studioWeeklyReminderOwnerSmsTo: destination,
+      studioWeeklyReminderOwnerSmsOptedIn: optedIn,
+    },
+    update: {
+      studioWeeklyReminderOwnerSmsTo: destination,
+      studioWeeklyReminderOwnerSmsOptedIn: optedIn,
+    },
+  });
+}
+
+async function clearOwnerSmsStopAndBlock(businessId) {
+  await prisma.businessSettings.updateMany({
+    where: { businessId },
+    data: {
+      studioWeeklyReminderOwnerSmsStopAt: null,
+      studioWeeklyReminderOwnerSmsBlockedAt: null,
+    },
+  });
+}
+
+async function resetOwnerSmsSendWeek(businessId, destination) {
+  await clearOwnerSmsStopAndBlock(businessId);
+  await writeOwnerSmsDestination(businessId, destination, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId } });
+}
+
+function createGate() {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+function createNotifier() {
+  let notify;
+  const reached = new Promise((resolve) => {
+    notify = resolve;
+  });
+  return { reached, notify };
+}
+
+async function waitUntilUngrantedAdvisoryLock(client) {
+  for (;;) {
+    const rows = await client.$queryRaw`
+      SELECT COUNT(*)::int AS n
+      FROM pg_locks
+      WHERE locktype = 'advisory' AND NOT granted
+    `;
+    if ((rows[0]?.n ?? 0) > 0) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
 
 let failures = 0;
 function check(label, condition) {
@@ -221,6 +322,32 @@ try {
     studioWeeklyReminderCopy(1) === "1 package awaits OWNER review this week." &&
       studioWeeklyReminderCopy(3) === "3 packages await OWNER review this week.",
   );
+  check(
+    "Owner SMS destination requires a valid E.164 number",
+    parseOwnerSmsE164("+19415550199") === "+19415550199" &&
+      parseOwnerSmsE164("+1 941 555 0199") === "+19415550199" &&
+      parseOwnerSmsE164("9415550199") === null &&
+      parseOwnerSmsE164("(941) 555-0199") === null &&
+      parseOwnerSmsE164("9415550") === null &&
+      parseOwnerSmsE164("+1941555") === null &&
+      parseOwnerSmsE164("+1234567") === null &&
+      resolveOwnerStudioReminderSmsTo({ ownerSmsTo: "+19415550199" }) === "+19415550199" &&
+      resolveOwnerStudioReminderSmsTo({ ownerSmsTo: "" }) === null &&
+      resolveOwnerStudioReminderSmsTo({ ownerSmsTo: null }) === null,
+  );
+  check(
+    "Owner SMS destination is masked for non-OWNER page data",
+    maskOwnerSmsDestination("+19415550199") === "••••0199",
+  );
+  check(
+    "Owner SMS resolver does not accept a public company phone",
+    !/function resolveOwnerStudioReminderSmsTo[\s\S]*publicPhone/.test(domainSrc),
+  );
+  check(
+    "Owner SMS body stays on the in-app review reminder",
+    studioWeeklyReminderSmsBody(2).includes("2 packages await OWNER review this week.") &&
+      studioWeeklyReminderSmsBody(2).includes("will not auto-approve or message customers"),
+  );
 
   const saturdayEt = zonedCivilToUtc(2026, 9, 26, 23, 0, 0, "America/New_York");
   const sundayEt = zonedCivilToUtc(2026, 9, 27, 0, 30, 0, "America/New_York");
@@ -254,7 +381,40 @@ try {
       !reminderOpsSrc.includes("attemptCustomer") &&
       !reminderOpsSrc.includes('"PUBLISHED"') &&
       reminderOpsSrc.includes("isCustomerMessagingConfigured") &&
-      reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL"),
+      reminderOpsSrc.includes("sendOwnerSms") &&
+      reminderOpsSrc.includes("deliverOwnerStudioWeeklyReminderSms") &&
+      reminderOpsSrc.includes("smsSendClaimedAt") &&
+      reminderOpsSrc.includes("claimOwnerStudioReminderSmsIfDestinationUnchanged") &&
+      reminderOpsSrc.includes("beforeOwnerSmsClaim") &&
+      reminderOpsSrc.includes("afterOwnerSmsClaimLockAcquired") &&
+      reminderOpsSrc.includes("afterReminderLockAcquired") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderStop") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderBlocked") &&
+      reminderOpsSrc.includes("currentTo !== selectedTo") &&
+      reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL") &&
+      !reminderOpsSrc
+        .slice(
+          reminderOpsSrc.indexOf("async function claimOwnerStudioReminderSmsIfDestinationUnchanged"),
+          reminderOpsSrc.indexOf("async function deliverOwnerStudioWeeklyReminderSms"),
+        )
+        .includes("sendOwnerSms") &&
+      reminderOpsSrc.includes("const sent = await sendOwnerSms") &&
+      ownerSmsSrc.includes("Never reads Customer") &&
+      !ownerSmsSrc.includes("attemptCustomerSms") &&
+      !ownerSmsSrc.includes("customer.phone") &&
+      !reminderOpsSrc.includes("publicPhone") &&
+      !reminderOpsSrc.includes("api.twilio.com"),
+  );
+  check(
+    "Dedicated reminder tests use a fake provider and do not send a real SMS",
+    reminderTestSrc.includes("createFakeCustomerMessagingProvider") &&
+      reminderTestSrc.includes("messagingProvider: fakeSms") &&
+      !ownerSmsSrc.includes("twilio.com") &&
+      !reminderOpsSrc.includes("createTwilioCustomerMessagingProvider"),
+  );
+  check(
+    "Owner studio reminder purpose cannot go through customer SMS",
+    isCustomerMessagePurpose("STUDIO_WEEKLY_REMINDER") === false,
   );
   check(
     "Missing reminder schema is detected only for this table or column",
@@ -266,6 +426,21 @@ try {
         code: "P2022",
         message:
           "The column `BusinessSettings.studioWeeklyReviewReminderOptedIn` does not exist in the current database.",
+      }) &&
+      missingStudioWeeklyReminderSchema({
+        code: "P2022",
+        message:
+          "The column `BusinessSettings.studioWeeklyReminderOwnerSmsTo` does not exist in the current database.",
+      }) &&
+      missingStudioWeeklyReminderSchema({
+        code: "P2022",
+        message:
+          "The column `MarketingStudioWeeklyReminder.smsSendClaimedAt` does not exist in the current database.",
+      }) &&
+      missingStudioWeeklyReminderSchema({
+        code: "P2022",
+        message:
+          "The column `BusinessSettings.studioWeeklyReminderOwnerSmsStopAt` does not exist in the current database.",
       }) &&
       missingStudioWeeklyReminderSchema({
         message: 'relation "MarketingStudioWeeklyReminder" does not exist',
@@ -327,18 +502,121 @@ try {
   check(
     "OWNER action and UI expose opt-in and opt-out",
     actionSrc.includes("setStudioWeeklyReviewReminderOptInAction") &&
+      actionSrc.includes("setStudioWeeklyReminderOwnerSmsAction") &&
       actionSrc.includes('access.workspace.role !== "OWNER"') &&
       reminderUiSrc.includes("Turn weekly reminder on") &&
       reminderUiSrc.includes("Turn weekly reminder off") &&
+      reminderUiSrc.includes("OWNER SMS number") &&
+      reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE") &&
       reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED") &&
       queueUiSrc.includes("StudioWeeklyReminderControls"),
   );
   check(
-    "Page and scan dispatch the existing in-app reminder only",
-    pageSrc.includes("dispatchStudioWeeklyReviewReminder") &&
-      scanSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+    "Page and server loaders never send or wait on owner SMS",
+    !pageSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+      !pageSrc.includes("sendOwnerSms") &&
+      !pageSrc.includes("runScheduledStudioWeeklyReminders") &&
+      !dataSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+      !dataSrc.includes("sendOwnerSms") &&
+      !actionSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+      !actionSrc.includes("sendOwnerSms") &&
+      dataSrc.includes("presentStudioWeeklyReminderForViewer") &&
       domainSrc.includes("STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE") &&
       STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE.includes("will not send customer SMS"),
+  );
+  check(
+    "Scan creates the in-app reminder without sending SMS",
+    scanSrc.includes("createStudioWeeklyReviewReminder") &&
+      !scanSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+      !scanSrc.includes("sendOwnerSms"),
+  );
+  check(
+    "Weekly owner SMS is scheduled by a secret-protected cron",
+    reminderOpsSrc.includes("runScheduledStudioWeeklyReminders") &&
+      reminderOpsSrc.includes("isStudioWeeklyReminderSendWindow") &&
+      reminderOpsSrc.includes("authorizeStudioWeeklyReminderCron") &&
+      cronRouteSrc.includes("authorizeStudioWeeklyReminderCron") &&
+      cronRouteSrc.includes("runScheduledStudioWeeklyReminders") &&
+      cronPathSrc.includes("/api/cron/studio-weekly-reminder") &&
+      vercelSrc.includes("/api/cron/studio-weekly-reminder") &&
+      vercelSrc.includes("0 15 * * *") &&
+      !vercelSrc.includes("0 * * * *") &&
+      proxySrc.includes("isStudioWeeklyReminderCronPath") &&
+      proxySrc.includes("api/cron/"),
+  );
+  check(
+    "Provider send has a timeout and owner STOP is separate from customer consent",
+    ownerSmsSrc.includes("OWNER_SMS_PROVIDER_TIMEOUT_MS") &&
+      twilioSrc.includes("AbortController") &&
+      twilioSrc.includes("TWILIO_SEND_TIMEOUT_MS") &&
+      inboundSrc.includes("applyOwnerStudioReminderInbound") &&
+      inboundSrc.includes("recordOwnerStudioReminderStop") &&
+      inboundSrc.includes("recordOwnerStudioReminderStart") &&
+      !inboundSrc.includes("studioWeeklyReminderOwnerSmsStopAt: new Date()") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderDeliveryBlock") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderBlocked") &&
+      reminderOpsSrc.includes("OWNER_SMS_BLOCKED_PROVIDER_CODE"),
+  );
+  const stopWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStop"),
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStart"),
+  );
+  const startWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStart"),
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderBlocked"),
+  );
+  const blockedWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderBlocked"),
+    reminderOpsSrc.indexOf("function asReminder"),
+  );
+  const deliveryBlockSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderDeliveryBlock"),
+    reminderOpsSrc.indexOf("export async function setStudioWeeklyReminderOwnerSms"),
+  );
+  const sendTimeBlockSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("const sent = await sendOwnerSms"),
+    reminderOpsSrc.indexOf("function unavailableReminderState"),
+  );
+  check(
+    "STOP and provider-block writes take the same per-business reminder lock",
+    stopWriteSrc.includes("withReminderLock") &&
+      startWriteSrc.includes("withReminderLock") &&
+      blockedWriteSrc.includes("withReminderLock") &&
+      blockedWriteSrc.includes("studioWeeklyReminderOwnerSmsBlockedAt") &&
+      deliveryBlockSrc.includes("recordOwnerStudioReminderBlocked") &&
+      !deliveryBlockSrc.includes("studioWeeklyReminderOwnerSmsBlockedAt: new Date()") &&
+      sendTimeBlockSrc.includes("recordOwnerStudioReminderBlocked") &&
+      !stopWriteSrc.includes("sendOwnerSms") &&
+      !startWriteSrc.includes("sendOwnerSms") &&
+      !blockedWriteSrc.includes("sendOwnerSms") &&
+      sendTimeBlockSrc.indexOf("const sent = await sendOwnerSms") <
+        sendTimeBlockSrc.indexOf("recordOwnerStudioReminderBlocked"),
+  );
+  check(
+    "Owner SMS sends only on the business local Monday",
+    isStudioWeeklyReminderSendWindow(
+      zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/New_York"),
+      "America/New_York",
+    ) === true &&
+      isStudioWeeklyReminderSendWindow(
+        zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York"),
+        "America/New_York",
+      ) === true &&
+      isStudioWeeklyReminderSendWindow(
+        zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York"),
+        "America/Los_Angeles",
+      ) === false &&
+      isStudioWeeklyReminderSendWindow(
+        zonedCivilToUtc(2026, 10, 4, 10, 0, 0, "America/New_York"),
+        "America/New_York",
+      ) === false,
+  );
+  check(
+    "Safe SMS labels never include raw provider text",
+    studioWeeklyReminderSafeSmsLabel("FAILED", "Fake SMS provider rejected the message.") ===
+      STUDIO_WEEKLY_REMINDER_SMS_FAILED &&
+      studioWeeklyReminderSafeSmsLabel("FAILED", STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT) ===
+        STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT,
   );
 
   const businessA = await prisma.business.create({
@@ -387,6 +665,8 @@ try {
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
 
   const weekInstant = zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/New_York");
+  const mondayEtSundayPt = zonedCivilToUtc(2026, 9, 28, 2, 0, 0, "America/New_York");
+  const pacificMonday10 = zonedCivilToUtc(2026, 9, 28, 10, 0, 0, "America/Los_Angeles");
   const nextWeekInstant = zonedCivilToUtc(2026, 10, 4, 10, 0, 0, "America/New_York");
 
   console.log("\nTEST — Consent: default off, no reminder without opt-in");
@@ -580,26 +860,629 @@ try {
     !reminderOpsSrc.includes("customer.phone") &&
       !reminderOpsSrc.includes("customer.email") &&
       !reminderOpsSrc.includes("publicEmail") &&
-      !reminderOpsSrc.includes("publicPhone"),
+      !reminderOpsSrc.includes("publicPhone") &&
+      reminderOpsSrc.includes("studioWeeklyReminderOwnerSmsTo") &&
+      reminderOpsSrc.includes("resolveOwnerStudioReminderSmsTo"),
   );
 
-  console.log("\nTEST — SMS connected still stays in-app");
+  console.log("\nTEST — SMS connected without destination stays in-app");
   await prisma.business.update({
     where: { id: businessB.id },
     data: { operationalSmsNumber: "1235550100" },
   });
+  await writeOwnerSmsDestination(businessB.id, null, true);
   await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
-  const connected = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, weekInstant, {
+  const fakeUnused = createFakeCustomerMessagingProvider();
+  const connected = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
     smsPlatformConfigured: true,
+    messagingProvider: fakeUnused,
   });
   check(
-    "Connected SMS is labeled unused and still in-app",
+    "Connected SMS without an owner destination stays in-app and is not sent",
     connected.created === true &&
       connected.reminder?.channel === STUDIO_WEEKLY_REMINDER_CHANNEL &&
-      connected.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED &&
-      connected.reminder?.smsLabel === "" &&
-      connected.delivery.customerMessageSent === false,
+      connected.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT &&
+      connected.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION &&
+      connected.delivery.customerMessageSent === false &&
+      fakeUnused.sent.length === 0,
   );
+
+  console.log("\nTEST — Public company phone alone never receives SMS");
+  const publicCompanyPhone = "2395550188";
+  const ownerDest = "+19415550199";
+  const tenantFrom = "1235550100";
+  const tenantFromA = "1235550101";
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom, publicPhone: publicCompanyPhone },
+  });
+  await writeOwnerSmsDestination(businessB.id, null, false);
+  await prisma.customer.updateMany({
+    where: { businessId: businessB.id },
+    data: { phone: "2395550111", smsConsentStatus: "GRANTED" },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const publicOnly = createFakeCustomerMessagingProvider();
+  const publicOnlyDispatch = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: publicOnly,
+  });
+  check(
+    "A public company phone alone never receives SMS",
+    publicOnlyDispatch.created === true &&
+      publicOnlyDispatch.reminder?.channel === STUDIO_WEEKLY_REMINDER_CHANNEL &&
+      publicOnlyDispatch.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT &&
+      publicOnlyDispatch.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN &&
+      publicOnly.sent.length === 0,
+  );
+
+  console.log("\nTEST — Optional OWNER SMS uses the fake provider only");
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const fakeSms = createFakeCustomerMessagingProvider();
+  setCustomerMessagingProvider(fakeSms);
+  const ownerSms = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: fakeSms,
+  });
+  check(
+    "Working provider and tenant number accept one OWNER SMS",
+    ownerSms.created === true &&
+      ownerSms.reminder?.channel === STUDIO_WEEKLY_REMINDER_CHANNEL &&
+      ownerSms.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED &&
+      ownerSms.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_ACCEPTED &&
+      fakeSms.sent.length === 1 &&
+      fakeSms.sent[0]?.from === tenantFrom &&
+      fakeSms.sent[0]?.to === ownerDest &&
+      fakeSms.sent[0]?.to !== publicCompanyPhone &&
+      fakeSms.sent[0]?.purpose === "STUDIO_WEEKLY_REMINDER" &&
+      fakeSms.sent[0]?.body.includes("OWNER review") &&
+      Boolean(ownerSms.reminder?.smsSendClaimedAt) &&
+      Boolean(ownerSms.reminder?.smsProviderMessageId) &&
+      ownerSms.delivery.customerMessageSent === false,
+  );
+  check(
+    "Owner SMS did not write a customer communication",
+    (await prisma.customerCommunication.count({ where: { businessId: businessB.id } })) === 0,
+  );
+  check(
+    "Owner SMS did not use a customer phone",
+    fakeSms.sent[0]?.to !== "2395550111",
+  );
+  const ownerSmsAgain = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: fakeSms,
+  });
+  check(
+    "Same business/week does not send a second OWNER SMS",
+    ownerSmsAgain.created === false &&
+      ownerSmsAgain.reason === "already_recorded" &&
+      ownerSmsAgain.reminder?.id === ownerSms.reminder.id &&
+      fakeSms.sent.length === 1,
+  );
+  check(
+    "Accepted owner SMS does not approve or publish the package",
+    (await prisma.marketingContent.findFirst({
+      where: { businessId: businessB.id, status: "READY_FOR_REVIEW" },
+    })) !== null &&
+      (await prisma.marketingContent.count({
+        where: { businessId: businessB.id, status: { in: ["APPROVED", "PUBLISHED"] } },
+      })) === 0,
+  );
+
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const failSms = createFakeCustomerMessagingProvider();
+  failSms.setFailNext(true);
+  const failed = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: failSms,
+  });
+  check(
+    "Provider rejection is recorded as failed and still leaves the in-app reminder",
+    failed.created === true &&
+      failed.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED &&
+      failed.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_FAILED &&
+      !failed.reminder?.smsLabel.includes("Fake") &&
+      failed.reminder?.channel === STUDIO_WEEKLY_REMINDER_CHANNEL &&
+      failSms.sent.length === 0,
+  );
+
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const throwSms = createFakeCustomerMessagingProvider();
+  throwSms.setThrowNext(true);
+  const threw = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: throwSms,
+  });
+  check(
+    "Provider throw is recorded as failed without claiming delivery",
+    threw.created === true &&
+      threw.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED &&
+      threw.reminder?.smsLabel.includes("failed") &&
+      throwSms.sent.length === 0,
+  );
+
+  await writeOwnerSmsDestination(businessB.id, null, false);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { publicPhone: publicCompanyPhone },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const customerOnly = createFakeCustomerMessagingProvider();
+  const skippedCustomer = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: customerOnly,
+  });
+  check(
+    "A customer phone is not used when the owner destination is missing",
+    skippedCustomer.created === true &&
+      skippedCustomer.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT &&
+      skippedCustomer.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN &&
+      customerOnly.sent.length === 0,
+  );
+
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: null, publicPhone: publicCompanyPhone },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const noNumber = createFakeCustomerMessagingProvider();
+  const missingNumber = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: noNumber,
+  });
+  check(
+    "A working provider without a dedicated tenant number does not send",
+    missingNumber.created === true &&
+      missingNumber.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED &&
+      missingNumber.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED &&
+      noNumber.sent.length === 0,
+  );
+
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom, publicPhone: publicCompanyPhone },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, false, weekInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: fakeSms,
+  });
+  const afterOwnerOff = createFakeCustomerMessagingProvider();
+  const skippedOff = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: afterOwnerOff,
+  });
+  check(
+    "Opt-out at dispatch skips owner SMS",
+    skippedOff.created === false &&
+      skippedOff.reason === "not_opted_in" &&
+      afterOwnerOff.sent.length === 0,
+  );
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, true, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+
+  console.log("\nTEST — Opt-out at the send boundary prevents SMS");
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const optOutBeforeSend = createFakeCustomerMessagingProvider();
+  const racedOptOut = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: optOutBeforeSend,
+    beforeOwnerSmsSend: async () => {
+      await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, false, weekInstant, {
+        smsPlatformConfigured: true,
+        messagingProvider: optOutBeforeSend,
+      });
+    },
+  });
+  check(
+    "Opt-out winning before send keeps the in-app reminder and sends no SMS",
+    racedOptOut.created === true &&
+      racedOptOut.reminder?.channel === STUDIO_WEEKLY_REMINDER_CHANNEL &&
+      racedOptOut.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT &&
+      racedOptOut.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT &&
+      optOutBeforeSend.sent.length === 0,
+  );
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, true, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+
+  console.log("\nTEST — Failed status write after provider acceptance is not a second send");
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const claimSms = createFakeCustomerMessagingProvider();
+  const acceptedThenFailedWrite = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimSms,
+    afterProviderAccepted: async () => {
+      throw new Error("status write failed after provider acceptance");
+    },
+  });
+  const claimedRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: acceptedThenFailedWrite.reminder?.weekKey },
+  });
+  check(
+    "Provider acceptance with a failed status write still leaves one claimed in-app reminder",
+    acceptedThenFailedWrite.created === true &&
+      claimSms.sent.length === 1 &&
+      claimedRow?.smsSendClaimedAt != null &&
+      claimedRow.smsStatus !== STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED,
+  );
+  const retryAfterFailedWrite = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimSms,
+  });
+  check(
+    "Retry after a failed status write does not send a second SMS",
+    retryAfterFailedWrite.created === false &&
+      retryAfterFailedWrite.reason === "already_recorded" &&
+      retryAfterFailedWrite.reminder?.id === claimedRow.id &&
+      retryAfterFailedWrite.reminder?.smsSendClaimedAt != null &&
+      claimSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — Destination change that commits first does not send the old number");
+  const oldOwnerDest = ownerDest;
+  const newOwnerDest = "+15551234002";
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const destChangeSms = createFakeCustomerMessagingProvider();
+  let releaseDestClaim;
+  const destClaimGate = new Promise((resolve) => {
+    releaseDestClaim = resolve;
+  });
+  let notifyDestClaimReached;
+  const destClaimReached = new Promise((resolve) => {
+    notifyDestClaimReached = resolve;
+  });
+  const destChangeFirst = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: destChangeSms,
+    async beforeOwnerSmsClaim() {
+      notifyDestClaimReached();
+      await destClaimGate;
+    },
+  });
+  await destClaimReached;
+  await setStudioWeeklyReminderOwnerSms(
+    prisma,
+    ownerB,
+    { destination: newOwnerDest, optedIn: true },
+    pacificMonday10,
+  );
+  releaseDestClaim();
+  const destChangeResult = await destChangeFirst;
+  const destChangeRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: destChangeResult.reminder?.weekKey },
+  });
+  check(
+    "A destination change that commits before revalidate+claim sends nothing to the old number",
+    destChangeResult.created === true &&
+      destChangeSms.sent.length === 0 &&
+      destChangeSms.sent.every((row) => row.to !== oldOwnerDest) &&
+      destChangeRow?.smsSendClaimedAt == null &&
+      destChangeRow?.id === destChangeResult.reminder?.id,
+  );
+
+  console.log("\nTEST — Claim first then destination change keeps the once-per-week claim");
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId: businessB.id } });
+  const claimFirstSms = createFakeCustomerMessagingProvider();
+  const claimedFirst = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimFirstSms,
+  });
+  await setStudioWeeklyReminderOwnerSms(
+    prisma,
+    ownerB,
+    { destination: newOwnerDest, optedIn: true },
+    pacificMonday10,
+  );
+  const afterClaimChange = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimFirstSms,
+  });
+  const claimedFirstRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: claimedFirst.reminder?.weekKey },
+  });
+  check(
+    "A later destination change does not unclaim or send a second SMS",
+    claimedFirst.created === true &&
+      claimedFirst.reminder?.smsSendClaimedAt != null &&
+      claimFirstSms.sent.length === 1 &&
+      claimFirstSms.sent[0]?.to === oldOwnerDest &&
+      afterClaimChange.created === false &&
+      afterClaimChange.reason === "already_recorded" &&
+      afterClaimChange.reminder?.id === claimedFirst.reminder.id &&
+      claimedFirstRow?.smsSendClaimedAt != null &&
+      claimFirstSms.sent.length === 1,
+  );
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+
+  console.log("\nTEST — STOP that commits before claim sends nothing");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  const stopBeforeSms = createFakeCustomerMessagingProvider();
+  const stopBeforeClaimGate = createGate();
+  const stopBeforeClaimReached = createNotifier();
+  const stopBeforeClaimDispatch = dispatchStudioWeeklyReviewReminder(
+    prisma,
+    businessB.id,
+    pacificMonday10,
+    {
+      smsPlatformConfigured: true,
+      messagingProvider: stopBeforeSms,
+      async beforeOwnerSmsClaim() {
+        stopBeforeClaimReached.notify();
+        await stopBeforeClaimGate.gate;
+      },
+    },
+  );
+  await stopBeforeClaimReached.reached;
+  const stopBeforeClaimEvent = await applyInboundConsentEvent(prisma, {
+    provider: "fake",
+    providerEventId: `owner-stop-before-claim-${randomUUID()}`,
+    from: ownerDest,
+    to: tenantFrom,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  stopBeforeClaimGate.release();
+  const stopBeforeClaimResult = await stopBeforeClaimDispatch;
+  const stopBeforeClaimRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: stopBeforeClaimResult.reminder?.weekKey },
+  });
+  check(
+    "A STOP that commits before revalidate+claim neither claims nor sends",
+    stopBeforeClaimEvent.applied === true &&
+      stopBeforeClaimEvent.reason === "owner_stopped" &&
+      stopBeforeClaimResult.created === true &&
+      stopBeforeClaimRow?.smsSendClaimedAt == null &&
+      stopBeforeSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — Provider-block that commits before claim sends nothing");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const blockBeforeSms = createFakeCustomerMessagingProvider();
+  const blockBeforeClaimGate = createGate();
+  const blockBeforeClaimReached = createNotifier();
+  const blockBeforeClaimDispatch = dispatchStudioWeeklyReviewReminder(
+    prisma,
+    businessB.id,
+    pacificMonday10,
+    {
+      smsPlatformConfigured: true,
+      messagingProvider: blockBeforeSms,
+      async beforeOwnerSmsClaim() {
+        blockBeforeClaimReached.notify();
+        await blockBeforeClaimGate.gate;
+      },
+    },
+  );
+  await blockBeforeClaimReached.reached;
+  await recordOwnerStudioReminderBlocked(prisma, businessB.id);
+  blockBeforeClaimGate.release();
+  const blockBeforeClaimResult = await blockBeforeClaimDispatch;
+  const blockBeforeClaimRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: blockBeforeClaimResult.reminder?.weekKey },
+  });
+  const blockBeforeSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  check(
+    "A provider-block write that commits before revalidate+claim neither claims nor sends",
+    blockBeforeSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      blockBeforeClaimResult.created === true &&
+      blockBeforeClaimRow?.smsSendClaimedAt == null &&
+      blockBeforeSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — Claim first then STOP keeps the once-per-week send");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const claimThenStopSms = createFakeCustomerMessagingProvider();
+  const claimedThenStop = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenStopSms,
+  });
+  const stopAfterClaim = await applyInboundConsentEvent(prisma, {
+    provider: "fake",
+    providerEventId: `owner-stop-after-claim-${randomUUID()}`,
+    from: ownerDest,
+    to: tenantFrom,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const rerunAfterStop = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenStopSms,
+  });
+  check(
+    "STOP after a committed claim cannot send a second SMS",
+    claimedThenStop.created === true &&
+      claimedThenStop.reminder?.smsSendClaimedAt != null &&
+      claimThenStopSms.sent.length === 1 &&
+      stopAfterClaim.reason === "owner_stopped" &&
+      rerunAfterStop.created === false &&
+      rerunAfterStop.reason === "already_recorded" &&
+      rerunAfterStop.reminder?.id === claimedThenStop.reminder.id &&
+      claimThenStopSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — Claim first then provider-block keeps the once-per-week send");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const claimThenBlockSms = createFakeCustomerMessagingProvider();
+  const claimedThenBlock = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenBlockSms,
+  });
+  await recordOwnerStudioReminderBlocked(prisma, businessB.id);
+  const rerunAfterBlock = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenBlockSms,
+  });
+  check(
+    "A provider-block write after a committed claim cannot send a second SMS",
+    claimedThenBlock.created === true &&
+      claimedThenBlock.reminder?.smsSendClaimedAt != null &&
+      claimThenBlockSms.sent.length === 1 &&
+      rerunAfterBlock.created === false &&
+      rerunAfterBlock.reason === "already_recorded" &&
+      rerunAfterBlock.reminder?.id === claimedThenBlock.reminder.id &&
+      claimThenBlockSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — STOP waits on the reminder lock while a claim transaction holds it");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const stopWaitSms = createFakeCustomerMessagingProvider();
+  const stopWaitClaimGate = createGate();
+  const stopWaitClaimHeld = createNotifier();
+  const stopWaitStarted = createNotifier();
+  let stopWaitAcquiredLock = false;
+  const lockClientStop = new PrismaClient({ datasourceUrl: testUrl });
+  const stopWaitDispatch = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: stopWaitSms,
+    async afterOwnerSmsClaimLockAcquired() {
+      stopWaitClaimHeld.notify();
+      await stopWaitClaimGate.gate;
+    },
+  });
+  await stopWaitClaimHeld.reached;
+  const stopWaitWrite = recordOwnerStudioReminderStop(lockClientStop, businessB.id, "9415550199", {
+    async beforeSerialize() {
+      stopWaitStarted.notify();
+    },
+    async afterReminderLockAcquired() {
+      stopWaitAcquiredLock = true;
+    },
+  });
+  await stopWaitStarted.reached;
+  check(
+    "STOP has not entered the reminder lock while the claim transaction holds it",
+    stopWaitAcquiredLock === false,
+  );
+  await waitUntilUngrantedAdvisoryLock(prisma);
+  check(
+    "STOP is waiting on the advisory lock held by the claim transaction",
+    stopWaitAcquiredLock === false,
+  );
+  stopWaitClaimGate.release();
+  const [stopWaitResult, stopWaitConsent] = await Promise.all([stopWaitDispatch, stopWaitWrite]);
+  await lockClientStop.$disconnect();
+  const rerunAfterStopWait = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: stopWaitSms,
+  });
+  check(
+    "Claim that holds the lock first still sends at most once after a waiting STOP",
+    stopWaitAcquiredLock === true &&
+      stopWaitConsent.reason === "owner_stopped" &&
+      stopWaitResult.reminder?.smsSendClaimedAt != null &&
+      stopWaitSms.sent.length === 1 &&
+      rerunAfterStopWait.created === false &&
+      stopWaitSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — Provider-block waits on the reminder lock while a claim transaction holds it");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const blockWaitSms = createFakeCustomerMessagingProvider();
+  const blockWaitClaimGate = createGate();
+  const blockWaitClaimHeld = createNotifier();
+  const blockWaitStarted = createNotifier();
+  let blockWaitAcquiredLock = false;
+  const lockClientBlock = new PrismaClient({ datasourceUrl: testUrl });
+  const blockWaitDispatch = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: blockWaitSms,
+    async afterOwnerSmsClaimLockAcquired() {
+      blockWaitClaimHeld.notify();
+      await blockWaitClaimGate.gate;
+    },
+  });
+  await blockWaitClaimHeld.reached;
+  const blockWaitWrite = recordOwnerStudioReminderBlocked(lockClientBlock, businessB.id, {
+    async beforeSerialize() {
+      blockWaitStarted.notify();
+    },
+    async afterReminderLockAcquired() {
+      blockWaitAcquiredLock = true;
+    },
+  });
+  await blockWaitStarted.reached;
+  check(
+    "Provider-block has not entered the reminder lock while the claim transaction holds it",
+    blockWaitAcquiredLock === false,
+  );
+  await waitUntilUngrantedAdvisoryLock(prisma);
+  check(
+    "Provider-block is waiting on the advisory lock held by the claim transaction",
+    blockWaitAcquiredLock === false,
+  );
+  blockWaitClaimGate.release();
+  const [blockWaitResult] = await Promise.all([blockWaitDispatch, blockWaitWrite]);
+  await lockClientBlock.$disconnect();
+  const rerunAfterBlockWait = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: blockWaitSms,
+  });
+  const blockWaitSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  check(
+    "Claim that holds the lock first still sends at most once after a waiting provider-block",
+    blockWaitAcquiredLock === true &&
+      blockWaitSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      blockWaitResult.reminder?.smsSendClaimedAt != null &&
+      blockWaitSms.sent.length === 1 &&
+      rerunAfterBlockWait.created === false &&
+      blockWaitSms.sent.length === 1,
+  );
+
+  await clearOwnerSmsStopAndBlock(businessB.id);
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+
+  const adminDeniedSms = await setStudioWeeklyReminderOwnerSms(
+    prisma,
+    adminA,
+    { destination: ownerDest, optedIn: true },
+    weekInstant,
+  ).catch((error) => error);
+  check(
+    "ADMIN cannot set the OWNER SMS destination",
+    adminDeniedSms instanceof MarketingError &&
+      adminDeniedSms.message === STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
+  );
+  await expectError(
+    "OWNER cannot save a non-E.164 destination",
+    () =>
+      setStudioWeeklyReminderOwnerSms(
+        prisma,
+        ownerB,
+        { destination: "9415550199", optedIn: true },
+        pacificMonday10,
+      ),
+    (error) =>
+      error instanceof MarketingError && error.message === STUDIO_WEEKLY_REMINDER_OWNER_SMS_INVALID_MESSAGE,
+  );
+
+  resetCustomerMessagingProvider();
 
   console.log("\nTEST — Opt-out that commits first cannot create a later reminder");
   await prisma.marketingStudioWeeklyReminder.deleteMany({
@@ -669,6 +1552,333 @@ try {
       [raceOne.reason, raceTwo.reason].includes("created") &&
       [raceOne.reason, raceTwo.reason].includes("already_recorded") &&
       raceOne.reminder?.id === raceTwo.reminder?.id,
+  );
+
+  console.log("\nTEST — Authorization: cron secret and no page trigger");
+  const previousCronSecret = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "studio-weekly-cron-secret";
+  check(
+    "Cron accepts the Bearer secret",
+    authorizeStudioWeeklyReminderCron(
+      new Headers({ authorization: "Bearer studio-weekly-cron-secret" }),
+    ) === true,
+  );
+  check(
+    "Cron rejects a wrong secret",
+    authorizeStudioWeeklyReminderCron(new Headers({ authorization: "Bearer other" })) === false,
+  );
+  process.env.CRON_SECRET = "";
+  check(
+    "Cron fails closed without CRON_SECRET",
+    authorizeStudioWeeklyReminderCron(
+      new Headers({ authorization: "Bearer studio-weekly-cron-secret" }),
+    ) === false,
+  );
+  process.env.CRON_SECRET = previousCronSecret;
+  const optInDoesNotSend = createFakeCustomerMessagingProvider();
+  await writeOwnerSmsDestination(businessA.id, ownerDest, true);
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { operationalSmsNumber: tenantFromA },
+  });
+  const pageLikeOptIn = await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, weekInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: optInDoesNotSend,
+  });
+  const pageLikeCreate = await createStudioWeeklyReviewReminder(prisma, businessA.id, weekInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: optInDoesNotSend,
+  });
+  check(
+    "Opt-in and create-only paths never call the SMS provider",
+    optInDoesNotSend.sent.length === 0 &&
+      pageLikeOptIn.dispatch?.reminder?.smsSendClaimedAt == null &&
+      pageLikeCreate.reminder?.smsSendClaimedAt == null,
+  );
+
+  console.log("\nTEST — Scheduled dispatch sends without opening Marketing");
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom, publicPhone: publicCompanyPhone },
+  });
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, true, pacificMonday10, {
+    smsPlatformConfigured: false,
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const scheduledSms = createFakeCustomerMessagingProvider();
+  const pageLoadBeforeSchedule = await loadMarketingSource(
+    prisma,
+    businessB.id,
+    pacificMonday10,
+    "ADMIN",
+  );
+  check(
+    "Loading Marketing does not send owner SMS",
+    scheduledSms.sent.length === 0 && pageLoadBeforeSchedule.weeklyReminder.reminder === null,
+  );
+  const scheduled = await runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: scheduledSms,
+  });
+  const scheduledB = scheduled.find((row) => row.businessId === businessB.id);
+  check(
+    "Daily schedule sends OWNER SMS without a Marketing page view",
+    scheduledB?.created === true &&
+      scheduledB.skipped == null &&
+      scheduledB.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED &&
+      scheduledSms.sent.some((row) => row.to === ownerDest) &&
+      scheduledSms.sent.every((row) => row.to !== publicCompanyPhone),
+  );
+
+  console.log("\nTEST — Scheduling / timezone send window");
+  await writeOwnerSmsDestination(businessA.id, "+15551234001", true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: { in: [businessA.id, businessB.id] }, weekKey: "2026-09-27" },
+  });
+  const tzSms = createFakeCustomerMessagingProvider();
+  const sameUtcWindow = await runScheduledStudioWeeklyReminders(prisma, mondayEtSundayPt, {
+    smsPlatformConfigured: true,
+    messagingProvider: tzSms,
+  });
+  const windowA = sameUtcWindow.find((row) => row.businessId === businessA.id);
+  const windowB = sameUtcWindow.find((row) => row.businessId === businessB.id);
+  check(
+    "Monday 02:00 Eastern is a local Monday send day",
+    windowA?.skipped == null && windowA?.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED,
+  );
+  check(
+    "The same UTC instant is Sunday evening Pacific and is skipped",
+    windowB?.skipped === "outside_send_window" &&
+      tzSms.sent.length === 1 &&
+      tzSms.sent[0]?.to === "+15551234001",
+  );
+  const laterPacific = await runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: tzSms,
+  });
+  const laterB = laterPacific.find((row) => row.businessId === businessB.id);
+  check(
+    "Pacific Monday later sends B once the local Monday begins",
+    laterB?.skipped == null &&
+      laterB?.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED &&
+      tzSms.sent.length === 2 &&
+      tzSms.sent[1]?.to === ownerDest,
+  );
+
+  console.log("\nTEST — Tenant isolation of scheduled send and owner STOP");
+  const isolatedA = tzSms.sent.filter((row) => row.to === "+15551234001");
+  const isolatedB = tzSms.sent.filter((row) => row.to === ownerDest);
+  check("A's scheduled SMS never used B's destination", isolatedA.length === 1 && isolatedB.length === 1);
+  const customerOnOwnerPhone = await prisma.customer.create({
+    data: {
+      businessId: businessB.id,
+      name: "Same digits customer",
+      phone: "9415550199",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const ownerStop = await applyInboundConsentEvent(prisma, {
+    provider: "fake",
+    providerEventId: `owner-stop-${randomUUID()}`,
+    from: ownerDest,
+    to: tenantFrom,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const afterOwnerStop = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: {
+      studioWeeklyReminderOwnerSmsOptedIn: true,
+      studioWeeklyReminderOwnerSmsStopAt: true,
+    },
+  });
+  const afterOwnerStopA = await prisma.businessSettings.findUnique({
+    where: { businessId: businessA.id },
+    select: { studioWeeklyReminderOwnerSmsStopAt: true },
+  });
+  const customerAfterOwnerStop = await prisma.customer.findFirst({
+    where: { id: customerOnOwnerPhone.id, businessId: businessB.id },
+    select: { smsConsentStatus: true },
+  });
+  check(
+    "Owner STOP records on the owner setting and leaves customer consent alone",
+    ownerStop.applied === true &&
+      ownerStop.reason === "owner_stopped" &&
+      afterOwnerStop?.studioWeeklyReminderOwnerSmsOptedIn === false &&
+      afterOwnerStop?.studioWeeklyReminderOwnerSmsStopAt != null &&
+      afterOwnerStopA?.studioWeeklyReminderOwnerSmsStopAt == null &&
+      customerAfterOwnerStop?.smsConsentStatus === "GRANTED",
+  );
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const afterStopSms = createFakeCustomerMessagingProvider();
+  const stoppedDispatch = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: afterStopSms,
+  });
+  check(
+    "A recorded owner STOP prevents the weekly SMS",
+    stoppedDispatch.created === true &&
+      stoppedDispatch.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT &&
+      stoppedDispatch.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_STOPPED &&
+      afterStopSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — Owner 21610 blocked is not a generic failure");
+  await prisma.businessSettings.update({
+    where: { businessId: businessB.id },
+    data: { studioWeeklyReminderOwnerSmsStopAt: null, studioWeeklyReminderOwnerSmsBlockedAt: null },
+  });
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const blockedSms = createFakeCustomerMessagingProvider();
+  blockedSms.setErrorCodeNext("21610");
+  const blockedDispatch = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: blockedSms,
+  });
+  const blockedSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  const customerAfterBlock = await prisma.customer.findFirst({
+    where: { id: customerOnOwnerPhone.id, businessId: businessB.id },
+    select: { smsConsentStatus: true },
+  });
+  check(
+    "Twilio 21610 records owner blocked and keeps customer consent",
+    blockedDispatch.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_BLOCKED &&
+      blockedDispatch.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_BLOCKED &&
+      blockedSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      customerAfterBlock?.smsConsentStatus === "GRANTED" &&
+      blockedSms.sent.length === 0,
+  );
+  await prisma.businessSettings.update({
+    where: { businessId: businessB.id },
+    data: { studioWeeklyReminderOwnerSmsBlockedAt: null },
+  });
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const webhookSms = createFakeCustomerMessagingProvider();
+  const acceptedForWebhook = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: webhookSms,
+  });
+  const webhookBlock = await applyCustomerMessageDeliveryUpdate(prisma, {
+    provider: "fake",
+    providerMessageId: acceptedForWebhook.reminder.smsProviderMessageId,
+    status: "FAILED",
+    errorCode: "21610",
+    failureReason: "21610",
+    claimedBusinessId: businessB.id,
+  });
+  const webhookSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  check(
+    "A 21610 delivery update blocks the owner destination, not a customer",
+    webhookBlock.applied === true &&
+      webhookBlock.reason === "owner_blocked" &&
+      webhookSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      (await prisma.customer.findFirst({
+        where: { id: customerOnOwnerPhone.id, businessId: businessB.id },
+      }))?.smsConsentStatus === "GRANTED",
+  );
+
+  console.log("\nTEST — Timeout is a handled failure");
+  await prisma.businessSettings.update({
+    where: { businessId: businessB.id },
+    data: { studioWeeklyReminderOwnerSmsBlockedAt: null, studioWeeklyReminderOwnerSmsStopAt: null },
+  });
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const timeoutSms = createFakeCustomerMessagingProvider();
+  timeoutSms.setTimeoutNext(true);
+  const timedOut = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: timeoutSms,
+  });
+  check(
+    "Provider timeout is recorded as a handled failure",
+    timedOut.created === true &&
+      timedOut.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED &&
+      timedOut.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT &&
+      timeoutSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — ADMIN/manager page data masks phone and provider errors");
+  const failedForMask = createFakeCustomerMessagingProvider();
+  failedForMask.setFailNext(true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: failedForMask,
+  });
+  const adminSource = await loadMarketingSource(prisma, businessB.id, pacificMonday10, "ADMIN");
+  const ownerSource = await loadMarketingSource(prisma, businessB.id, pacificMonday10, "OWNER");
+  const adminPresented = presentStudioWeeklyReminderForViewer(
+    await loadStudioWeeklyReminderState(prisma, businessB.id, pacificMonday10),
+    "ADMIN",
+  );
+  const adminJson = JSON.stringify(adminSource.weeklyReminder);
+  check(
+    "ADMIN page data receives a masked owner number and a safe SMS label",
+    adminSource.weeklyReminder.ownerSmsTo === "••••0199" &&
+      adminSource.weeklyReminder.ownerSmsToMasked === "••••0199" &&
+      adminPresented.ownerSmsTo === "••••0199" &&
+      ownerSource.weeklyReminder.ownerSmsTo === ownerDest &&
+      adminSource.weeklyReminder.reminder?.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_FAILED &&
+      !adminJson.includes(ownerDest) &&
+      !adminJson.includes("9415550199") &&
+      !adminJson.includes("Fake SMS provider") &&
+      !adminJson.includes("smsProviderError"),
+  );
+
+  console.log("\nTEST — Duplicate-send: concurrent scheduled runs send at most once");
+  await prisma.businessSettings.update({
+    where: { businessId: businessB.id },
+    data: { studioWeeklyReminderOwnerSmsBlockedAt: null, studioWeeklyReminderOwnerSmsStopAt: null },
+  });
+  await writeOwnerSmsDestination(businessB.id, ownerDest, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const concurrentSms = createFakeCustomerMessagingProvider();
+  const [cronOne, cronTwo] = await Promise.all([
+    runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
+      smsPlatformConfigured: true,
+      messagingProvider: concurrentSms,
+    }),
+    runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
+      smsPlatformConfigured: true,
+      messagingProvider: concurrentSms,
+    }),
+  ]);
+  const concurrentB = [...cronOne, ...cronTwo].filter((row) => row.businessId === businessB.id);
+  const concurrentRows = await prisma.marketingStudioWeeklyReminder.findMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  check(
+    "Concurrent weekly dispatches send at most one SMS per business/week",
+    concurrentSms.sent.filter((row) => row.to === ownerDest).length === 1 &&
+      concurrentRows.length === 1 &&
+      concurrentRows[0]?.smsSendClaimedAt != null &&
+      concurrentB.some((row) => row.created === true) &&
+      concurrentB.some((row) => row.created === false || row.reminder?.id === concurrentRows[0]?.id),
   );
 
   console.log("\nTEST — Other live database errors are not missing schema");
@@ -817,6 +2027,7 @@ try {
     dueAfterColumnScan === dueBeforeColumnScan,
   );
 } finally {
+  resetCustomerMessagingProvider();
   await prisma.$disconnect();
 }
 

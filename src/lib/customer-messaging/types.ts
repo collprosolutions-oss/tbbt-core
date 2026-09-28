@@ -23,6 +23,11 @@ export const CUSTOMER_MESSAGE_PURPOSES = [
 ] as const;
 export type CustomerMessagePurpose = (typeof CUSTOMER_MESSAGE_PURPOSES)[number];
 
+/// Internal OWNER-only purposes. Never accepted by attemptCustomerSms.
+export const OWNER_MESSAGE_PURPOSES = ["STUDIO_WEEKLY_REMINDER"] as const;
+export type OwnerMessagePurpose = (typeof OWNER_MESSAGE_PURPOSES)[number];
+export type MessagingSendPurpose = CustomerMessagePurpose | OwnerMessagePurpose;
+
 export const CUSTOMER_MESSAGE_RELATED_TYPES = [
   "ESTIMATE",
   "JOB",
@@ -67,7 +72,7 @@ export type CustomerMessageSendInput = {
   /** Tenant sending/receiving identity (normalized digits). Required for Twilio. */
   from?: string | null;
   body: string;
-  purpose: CustomerMessagePurpose;
+  purpose: MessagingSendPurpose;
 };
 
 export type CustomerMessageSendResult =
@@ -81,6 +86,7 @@ export type CustomerMessageSendResult =
       ok: false;
       status: "FAILED" | "NOT_SENT";
       error: string;
+      errorCode?: string;
       providerMetadata?: Record<string, unknown>;
     };
 
@@ -89,6 +95,7 @@ export type CustomerMessageDeliveryUpdate = {
   providerMessageId: string;
   status: "QUEUED" | "ACCEPTED" | "SENT" | "DELIVERED" | "FAILED";
   failureReason?: string;
+  errorCode?: string;
   claimedBusinessId?: string | null;
   providerEventId?: string;
   routingNumber?: string | null;
@@ -153,6 +160,10 @@ export type CustomerCommunicationAttemptResult = {
 
 export function isCustomerMessagePurpose(value: string): value is CustomerMessagePurpose {
   return (CUSTOMER_MESSAGE_PURPOSES as readonly string[]).includes(value);
+}
+
+export function isOwnerMessagePurpose(value: string): value is OwnerMessagePurpose {
+  return (OWNER_MESSAGE_PURPOSES as readonly string[]).includes(value);
 }
 
 export function isAcceptedCustomerMessageStatus(status: string) {

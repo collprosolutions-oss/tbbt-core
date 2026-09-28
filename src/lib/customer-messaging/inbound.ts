@@ -2,6 +2,10 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging/schema";
 import type { InboundSmsEvent } from "@/lib/customer-messaging/types";
+import {
+  recordOwnerStudioReminderStart,
+  recordOwnerStudioReminderStop,
+} from "@/lib/marketing-studio-reminder";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -57,6 +61,29 @@ function receivingNumberDigits(value: string) {
   return normalizePhone(value);
 }
 
+async function applyOwnerStudioReminderInbound(
+  db: Db,
+  input: { businessId: string; fromDigits: string; optOutType: InboundSmsEvent["optOutType"] },
+): Promise<{ matched: boolean; applied: boolean; reason: string }> {
+  const settings = await db.businessSettings.findUnique({
+    where: { businessId: input.businessId },
+    select: {
+      studioWeeklyReminderOwnerSmsTo: true,
+    },
+  });
+  const ownerDigits = normalizePhone(settings?.studioWeeklyReminderOwnerSmsTo);
+  if (!settings || !ownerDigits || ownerDigits !== input.fromDigits) {
+    return { matched: false, applied: false, reason: "not_owner_destination" };
+  }
+  if (input.optOutType === "HELP") {
+    return { matched: true, applied: false, reason: "owner_help_no_change" };
+  }
+  if (input.optOutType === "START") {
+    return recordOwnerStudioReminderStart(db, input.businessId, input.fromDigits);
+  }
+  return recordOwnerStudioReminderStop(db, input.businessId, input.fromDigits);
+}
+
 export async function applyInboundConsentEvent(
   db: Db,
   inbound: InboundSmsEvent,
@@ -103,6 +130,19 @@ export async function applyInboundConsentEvent(
   const fromDigits = normalizePhone(inbound.from);
   if (!isUsableNormalizedPhone(fromDigits)) {
     return { applied: false, reason: "unusable_from", businessId: business.id };
+  }
+
+  const ownerHandled = await applyOwnerStudioReminderInbound(db, {
+    businessId: business.id,
+    fromDigits,
+    optOutType: inbound.optOutType,
+  });
+  if (ownerHandled.matched) {
+    return {
+      applied: ownerHandled.applied,
+      reason: ownerHandled.reason,
+      businessId: business.id,
+    };
   }
 
   const candidates = await db.customer.findMany({

@@ -2340,19 +2340,27 @@ model MarketingContent {
 }
 
 /// One OWNER-opted weekly in-app reminder that studio packages await
-/// review. Unique per business + timezone week. Never a customer
-/// message, auto-approve, publish, or post.
+/// review. Unique per business + timezone week. Optional OWNER SMS is
+/// recorded on this same row. Never a customer message, auto-approve,
+/// publish, or post.
 model MarketingStudioWeeklyReminder {
   id            String   @id @default(cuid())
   businessId    String
   /// Sunday-first week start (YYYY-MM-DD) in Business.timezone.
   weekKey       String
   awaitingCount Int
-  /// IN_APP only. Owner SMS is not a connected delivery path.
+  /// IN_APP. Owner SMS is an optional extra delivery on this row.
   channel       String   @default("IN_APP")
-  /// NOT_CONNECTED | CONNECTED_UNUSED
+  /// NOT_CONNECTED | CONNECTED_UNUSED | NOT_SENT | ACCEPTED | SENT | FAILED | BLOCKED
   smsStatus     String
   smsLabel      String   @default("")
+  /// Committed before the provider is called. A later failed status
+  /// update cannot unclaim this; retries must not send again.
+  smsSendClaimedAt DateTime?
+  /// Provider message id when the send was accepted. Server-side only.
+  smsProviderMessageId String?
+  /// Raw provider error. Server-side only — never shown to ADMIN/manager.
+  smsProviderError String?
   createdAt     DateTime @default(now())
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -2658,8 +2666,22 @@ model BusinessSettings {
   marketingIdentityNotes String?
   /// OWNER opt-in for one weekly in-app reminder when studio packages
   /// await review. Default off. Absence of a settings row also means off.
+  /// Optional OWNER SMS uses the communications provider only when that
+  /// provider, the dedicated tenant From number, and an explicit OWNER
+  /// SMS destination opt-in actually work. Never uses Business.publicPhone.
   /// Never sends customer SMS/email or auto-approves/publishes/posts.
   studioWeeklyReviewReminderOptedIn Boolean @default(false)
+  /// OWNER-controlled SMS destination for the weekly studio reminder.
+  /// Stored as E.164. Null/blank means in-app only — no SMS.
+  /// Never Business.publicPhone and never a customer phone.
+  studioWeeklyReminderOwnerSmsTo String?
+  /// Separate opt-in for sending the weekly reminder to
+  /// studioWeeklyReminderOwnerSmsTo. Default off.
+  studioWeeklyReminderOwnerSmsOptedIn Boolean @default(false)
+  /// Inbound STOP from the OWNER destination. Separate from Customer consent.
+  studioWeeklyReminderOwnerSmsStopAt DateTime?
+  /// Provider blocked/opted-out the OWNER destination (Twilio 21610).
+  studioWeeklyReminderOwnerSmsBlockedAt DateTime?
   reviewGoogleUrl String?
   reviewFacebookUrl String?
   reviewOtherUrl String?

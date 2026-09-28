@@ -10,7 +10,7 @@
  * import these helpers directly.
  */
 
-import { formatISODateInTimeZone } from "@/lib/business-timezone";
+import { formatISODateInTimeZone, zonedWeekday } from "@/lib/business-timezone";
 import { marketingAiAssistAvailable as providerAssistAvailable } from "@/lib/marketing-draft";
 import { parseScheduleDate, startOfDay, startOfWeek } from "@/lib/schedule";
 
@@ -186,6 +186,32 @@ export const STUDIO_WEEKLY_REMINDER_CHANNEL = "IN_APP" as const;
 export const STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED = "SMS not connected";
 export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED = "NOT_CONNECTED" as const;
 export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED = "CONNECTED_UNUSED" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT = "NOT_SENT" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED = "ACCEPTED" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT = "SENT" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED = "FAILED" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_ACCEPTED = "Owner SMS accepted by the provider";
+export const STUDIO_WEEKLY_REMINDER_SMS_SENT = "Owner SMS sent by the provider";
+export const STUDIO_WEEKLY_REMINDER_SMS_FAILED = "Owner SMS failed";
+export const STUDIO_WEEKLY_REMINDER_SMS_NOT_SENT = "Owner SMS not sent";
+export const STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION =
+  "Owner SMS destination is not on file";
+export const STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN =
+  "Owner SMS is off for the OWNER destination";
+export const STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT =
+  "Owner SMS skipped because the OWNER opted out";
+export const STUDIO_WEEKLY_REMINDER_SMS_STATUS_BLOCKED = "BLOCKED" as const;
+export const STUDIO_WEEKLY_REMINDER_SMS_STOPPED =
+  "Owner SMS was stopped by the destination";
+export const STUDIO_WEEKLY_REMINDER_SMS_BLOCKED =
+  "Owner SMS is blocked for this destination";
+export const STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT =
+  "Owner SMS timed out waiting for the provider";
+export const OWNER_SMS_PROVIDER_TIMEOUT_MS = 8000;
+export const STUDIO_WEEKLY_REMINDER_SEND_WEEKDAY = 1;
+export const OWNER_SMS_BLOCKED_PROVIDER_CODE = "21610";
+export const STUDIO_WEEKLY_REMINDER_SMS_UNCONFIRMED =
+  "Provider acceptance is not a delivery confirmation. TBBT has not run a live provider test on this path.";
 
 export const STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE =
   "OWNER can opt into one weekly reminder when creator packages await review. TBBT will not auto-approve, publish, post, or send customer messages.";
@@ -194,16 +220,28 @@ export const STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE =
   "Turning weekly review reminders on or off requires the OWNER role.";
 
 export const STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE =
-  "This reminder stays in Marketing Studio for the OWNER. TBBT will not send customer SMS, auto-approve, publish, or post.";
+  "This reminder stays in Marketing Studio for the OWNER. Optional owner SMS uses only an OWNER-controlled destination the OWNER opted in, plus the communications provider and this business's dedicated number. The public company phone is never used. TBBT will not send customer SMS, auto-approve, publish, or post.";
 
 export const STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE =
-  "Weekly review reminders are on. You will get one in-app reminder each business week while packages await review.";
+  "Weekly review reminders are on. You will get one in-app reminder each business week while packages await review. Owner SMS is attempted only when an OWNER destination is opted in and the provider and dedicated tenant number actually work.";
 
 export const STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE =
   "Weekly review reminders are off. TBBT will not create another reminder until an OWNER opts in again.";
 
 export const STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE =
   "Weekly review reminders are unavailable until this workspace's schema is migrated. TBBT will not invent a reminder or change the database from this page.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE =
+  "Optional OWNER SMS goes only to this OWNER-controlled number after a separate opt-in. The public company phone is never used.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_SAVED_MESSAGE =
+  "OWNER SMS destination saved. TBBT will not use the public company phone.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_INVALID_MESSAGE =
+  "Enter a valid E.164 OWNER SMS number before opting that number in.";
+
+export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE =
+  "Setting the OWNER SMS destination requires the OWNER role.";
 
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
@@ -468,6 +506,81 @@ export function studioWeeklyReminderWeekKey(now: Date, timeZone: string): string
 export function studioWeeklyReminderCopy(awaitingCount: number): string {
   const noun = awaitingCount === 1 ? "package awaits" : "packages await";
   return `${awaitingCount} ${noun} OWNER review this week.`;
+}
+
+export function studioWeeklyReminderSmsBody(awaitingCount: number): string {
+  return `${studioWeeklyReminderCopy(awaitingCount)} Open Marketing Studio to review. TBBT will not auto-approve or message customers.`;
+}
+
+export function parseOwnerSmsE164(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw.startsWith("+")) return null;
+  const digits = raw.slice(1).replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15 || !/^\d+$/.test(digits)) return null;
+  return `+${digits}`;
+}
+
+export function resolveOwnerStudioReminderSmsTo(input: {
+  ownerSmsTo?: string | null;
+}): string | null {
+  return parseOwnerSmsE164(input.ownerSmsTo);
+}
+
+export function maskOwnerSmsDestination(value: string | null | undefined): string | null {
+  const parsed = parseOwnerSmsE164(value);
+  if (!parsed) return null;
+  return `••••${parsed.slice(-4)}`;
+}
+
+export function isStudioWeeklyReminderSendWindow(now: Date, timeZone: string): boolean {
+  return zonedWeekday(now, timeZone) === STUDIO_WEEKLY_REMINDER_SEND_WEEKDAY;
+}
+
+export function isOwnerSmsBlockedProviderCode(code: string | number | null | undefined): boolean {
+  return String(code ?? "").trim() === OWNER_SMS_BLOCKED_PROVIDER_CODE;
+}
+
+export function studioWeeklyReminderSafeSmsLabel(status: string, label: string | null | undefined) {
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED) return STUDIO_WEEKLY_REMINDER_SMS_ACCEPTED;
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT) return STUDIO_WEEKLY_REMINDER_SMS_SENT;
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_BLOCKED) return STUDIO_WEEKLY_REMINDER_SMS_BLOCKED;
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED) {
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT) return STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT;
+    return STUDIO_WEEKLY_REMINDER_SMS_FAILED;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT) {
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT) return STUDIO_WEEKLY_REMINDER_SMS_OPTED_OUT;
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN) return STUDIO_WEEKLY_REMINDER_SMS_NOT_OPTED_IN;
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION) return STUDIO_WEEKLY_REMINDER_SMS_NO_DESTINATION;
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_STOPPED) return STUDIO_WEEKLY_REMINDER_SMS_STOPPED;
+    if (label === STUDIO_WEEKLY_REMINDER_SMS_BLOCKED) return STUDIO_WEEKLY_REMINDER_SMS_BLOCKED;
+    return STUDIO_WEEKLY_REMINDER_SMS_NOT_SENT;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED) {
+    return STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED;
+  }
+  return STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED;
+}
+
+export function studioWeeklyReminderSmsOutcomeLabel(status: string, failureReason?: string | null) {
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_ACCEPTED) {
+    return STUDIO_WEEKLY_REMINDER_SMS_ACCEPTED;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT) {
+    return STUDIO_WEEKLY_REMINDER_SMS_SENT;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_FAILED) {
+    const detail = failureReason?.trim();
+    return detail ? `${STUDIO_WEEKLY_REMINDER_SMS_FAILED}: ${detail}` : STUDIO_WEEKLY_REMINDER_SMS_FAILED;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT) {
+    const detail = failureReason?.trim();
+    return detail || STUDIO_WEEKLY_REMINDER_SMS_NOT_SENT;
+  }
+  if (status === STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED) {
+    return STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED;
+  }
+  return failureReason?.trim() || null;
 }
 
 export function isStudioApprovalQueueStatus(status: string): boolean {
