@@ -59,7 +59,7 @@ export default async function CleaningRepeatVisitPage({
   }
 
   const cleaningItems = website.site.items.filter((item) => item.tradeCode === "CLEANING");
-  const cleaningGroups = groupPublicCatalog(cleaningItems);
+  const cleaningGroups = groupPublicCatalog(cleaningItems, "CLEANING");
   const tradeCodes = ["CLEANING"];
   const intakeSchemasByTrade = website.snapshot
     ? Object.fromEntries(

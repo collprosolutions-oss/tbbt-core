@@ -422,6 +422,8 @@ try {
 
   const alpha = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaTwo = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
+  const alphaCatalogIsolation = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
+  const alphaMissingSnap = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaNoCustomer = await createCleaningJob(cleanA.id, { includeCustomer: false });
   const beta = await createCleaningJob(cleanB.id, { catalogItemId: catalogB.id });
   const handy = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
@@ -547,7 +549,7 @@ try {
     intakeAnswers: cleaningAnswers(),
   });
   const foreignCatalog = await createCleaningCustomerRepeatVisitRequest(prisma, {
-    token: alpha.job.projectToken,
+    token: alphaCatalogIsolation.job.projectToken,
     slug: cleanA.slug,
     name: alpha.customer.name,
     email: alpha.customer.email,
@@ -658,7 +660,7 @@ try {
   );
 
   const missingSnap = await createCleaningCustomerRepeatVisitRequest(prisma, {
-    token: alphaTwo.job.projectToken,
+    token: alphaMissingSnap.job.projectToken,
     slug: cleanA.slug,
     name: alphaTwo.customer.name,
     email: alphaTwo.customer.email,
