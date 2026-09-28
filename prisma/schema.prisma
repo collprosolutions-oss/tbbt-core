@@ -1408,8 +1408,13 @@ model Job {
   recurrenceSourceJobId String?
   /// Completed Cleaning job this OWNER-created next booking was copied from.
   /// Unique so one completed job yields at most one manual next booking.
-  /// Distinct from recurrenceSourceJobId.
+  /// Distinct from recurrenceSourceJobId and correctiveCleanSourceJobId.
   nextBookingSourceJobId String? @unique
+  /// Cleaning job whose visit recorded RE_CLEAN_REQUESTED and that this
+  /// OWNER-scheduled corrective Cleaning job was copied from. Unique so
+  /// one requested re-clean yields at most one corrective job. Distinct
+  /// from nextBookingSourceJobId and recurrenceSourceJobId.
+  correctiveCleanSourceJobId String? @unique
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")
@@ -1457,6 +1462,8 @@ model Job {
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
   nextBookingSource       Job?  @relation("JobNextBookingSource", fields: [nextBookingSourceJobId], references: [id], onDelete: SetNull)
   nextBookings            Job[] @relation("JobNextBookingSource")
+  correctiveCleanSource   Job?  @relation("JobCorrectiveCleanSource", fields: [correctiveCleanSourceJobId], references: [id], onDelete: SetNull)
+  correctiveCleans        Job[] @relation("JobCorrectiveCleanSource")
   growthActionRequests    GrowthActionRequest[]
   workforceOutreachTasks  WorkforceOutreachTask[]
   materialPurchaseLists   MaterialPurchaseList[]

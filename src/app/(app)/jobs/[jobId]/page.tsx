@@ -12,6 +12,7 @@ import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
+import { CleaningCorrectiveCleanForm } from "@/components/jobs/cleaning-corrective-clean-form";
 import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking-form";
 import { CleaningVisitCadenceForm } from "@/components/jobs/cleaning-visit-cadence-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
@@ -94,6 +95,7 @@ import { prisma } from "@/lib/prisma";
 import { formatISODate } from "@/lib/schedule";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
+import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-clean-data";
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 
@@ -353,6 +355,11 @@ export default async function JobPage({
     createIfMissing: true,
   });
   const cleaningVisit = await loadCleaningVisitView(prisma, access, job.id);
+  const cleaningCorrectiveClean = await loadCleaningCorrectiveCleanReview(
+    prisma,
+    access,
+    job.id,
+  );
   const cleaningNextBooking = isCompleted
     ? await loadCleaningNextBookingReview(prisma, access, job.id)
     : null;
@@ -843,6 +850,27 @@ export default async function JobPage({
             <CleaningVisitCadenceForm
               visit={cleaningVisit}
               canSetCadence={access.workspace.role === "OWNER"}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {cleaningCorrectiveClean?.eligible ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Corrective clean</CardTitle>
+            <CardDescription>
+              Re-clean was requested on this visit. Review the original job,
+              choose a date, and confirm one corrective Cleaning job. This is
+              not a next booking. It does not invoice, charge, or message the
+              customer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CleaningCorrectiveCleanForm
+              review={cleaningCorrectiveClean}
+              canCreate={cleaningCorrectiveClean.canCreate}
+              timeZone={timeZone}
             />
           </CardContent>
         </Card>
