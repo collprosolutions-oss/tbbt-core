@@ -997,6 +997,11 @@ model ServiceRequest {
   serviceIntent String @default("ONE_TIME")
   /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
   recurrenceCadence String @default("")
+  /// Cleaning job this existing-customer "another visit" request came from.
+  /// Unique so one source job yields at most one customer-submitted request.
+  /// Distinct from Job.nextBookingSourceJobId (OWNER-created Job) and
+  /// Job.correctiveCleanSourceJobId. Null on ordinary public hire requests.
+  repeatVisitSourceJobId String? @unique
 
   business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   campaign           MarketingCampaign?  @relation("ServiceRequestCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
@@ -1017,6 +1022,7 @@ model ServiceRequest {
   pipelineOpportunity PipelineOpportunity?
   growthActionRequests GrowthActionRequest[]
   phoneInteractions   PhoneInteraction[]
+  repeatVisitSourceJob Job? @relation("ServiceRequestRepeatVisitSource", fields: [repeatVisitSourceJobId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([businessId, tradeCode])
@@ -1470,6 +1476,7 @@ model Job {
   materialPurchaseLists   MaterialPurchaseList[]
   materialPurchaseOrders  MaterialPurchaseOrder[]
   crewVisit               JobCrewVisit?
+  repeatVisitRequest      ServiceRequest? @relation("ServiceRequestRepeatVisitSource")
 
   @@index([businessId])
   @@index([assignedMembershipId])

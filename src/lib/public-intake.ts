@@ -20,8 +20,11 @@ import {
   appendIntakeIdentityReview,
   decideCustomerMatch,
   normalizeEmail,
+  normalizePhone,
   type CustomerIdentityRecord,
+  type IntakeIdentityReview,
 } from "@/lib/customer-identity";
+import { Prisma } from "@prisma/client";
 import { smsConsentFromPublicOptIn } from "@/lib/customer-messaging/opt-in";
 import {
   findReusableLegacyProperty,
@@ -135,6 +138,14 @@ export type PublicIntakeInput = {
    * submit the snapshot they displayed after a later website publish.
    */
   tenantIntakeSnapshotId?: string | null;
+  /**
+   * Server-resolved existing customer. Never accepted from the browser.
+   * Used by the Cleaning repeat-visit path after projectToken verification.
+   */
+  existingCustomer?: {
+    customerId: string;
+    repeatVisitSourceJobId?: string | null;
+  } | null;
 };
 
 export type PublicIntakeDb = {
@@ -218,7 +229,11 @@ export type PublicIntakeDb = {
   };
   serviceRequest: {
     findFirst: (args: {
-      where: { businessId: string; description: { contains: string } };
+      where: {
+        businessId: string;
+        description?: { contains: string };
+        repeatVisitSourceJobId?: string;
+      };
       select: { id: true };
     }) => Promise<{ id: string } | null>;
   };
@@ -227,6 +242,22 @@ export type PublicIntakeDb = {
 
 export type PublicIntakeTx = {
   customer: {
+    findFirst: (args: {
+      where: { id: string; businessId: string };
+      select: {
+        id?: true;
+        name?: true;
+        phone?: true;
+        smsConsentStatus?: true;
+        smsConsentUpdatedAt?: true;
+      };
+    }) => Promise<{
+      id?: string;
+      name?: string;
+      phone?: string | null;
+      smsConsentStatus?: string | null;
+      smsConsentUpdatedAt?: Date | null;
+    } | null>;
     findMany: (args: {
       where: { businessId: string };
       select: { id: true; name: true; email: true; phone: true };
@@ -250,6 +281,17 @@ export type PublicIntakeTx = {
         smsConsentUpdatedAt?: Date | null;
       };
     }) => Promise<{ id: string }>;
+    updateMany: (args: {
+      where: {
+        id: string;
+        businessId: string;
+        phone?: string | null;
+      };
+      data: {
+        smsConsentStatus?: "GRANTED" | "UNKNOWN" | "REVOKED";
+        smsConsentUpdatedAt?: Date | null;
+      };
+    }) => Promise<{ count: number }>;
   };
   property: {
     findMany: (args: {
@@ -286,7 +328,11 @@ export type PublicIntakeTx = {
   };
   serviceRequest: {
     findFirst: (args: {
-      where: { businessId: string; description: { contains: string } };
+      where: {
+        businessId: string;
+        description?: { contains: string };
+        repeatVisitSourceJobId?: string;
+      };
       select: { id: true };
     }) => Promise<{ id: string } | null>;
     create: (args: {
@@ -314,8 +360,15 @@ export type PublicIntakeTx = {
         tenantIntakeSnapshotVersion?: number | null;
         serviceIntent?: string;
         recurrenceCadence?: string;
+        repeatVisitSourceJobId?: string | null;
       };
     }) => Promise<{ id: string }>;
+  };
+  job?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string; customerId?: string };
+      select: { id: true; customerId: true };
+    }) => Promise<{ id: string; customerId: string | null } | null>;
   };
   serviceRequestItem: {
     createMany: (args: {
@@ -427,7 +480,9 @@ async function createPublicServiceRequestInner(
     return structured;
   }
 
-  if (!name) {
+  const boundCustomerId = input.existingCustomer?.customerId?.trim() || "";
+  const repeatVisitSourceJobId = input.existingCustomer?.repeatVisitSourceJobId?.trim() || "";
+  if (!name && !boundCustomerId) {
     return { ok: false, error: "Name is required." };
   }
   if (notes.length > MAX_NOTES_LENGTH) {
@@ -655,6 +710,9 @@ async function createPublicServiceRequestInner(
     return resolvedTrade;
   }
   const requestTradeCode = resolvedTrade.tradeCode;
+  if (repeatVisitSourceJobId && requestTradeCode !== "CLEANING") {
+    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
   const referencedIntake = await resolveReferencedTenantIntakeSnapshot(db, {
     businessId: business.id,
     tradeCode: requestTradeCode,
@@ -708,6 +766,17 @@ async function createPublicServiceRequestInner(
 
   try {
     const requestId = await db.$transaction(async (tx) => {
+      if (repeatVisitSourceJobId) {
+        const existingRepeat = await tx.serviceRequest.findFirst({
+          where: {
+            businessId: business.id,
+            repeatVisitSourceJobId,
+          },
+          select: { id: true },
+        });
+        if (existingRepeat) return existingRepeat.id;
+      }
+
       if (submissionId) {
         const existing = await tx.serviceRequest.findFirst({
           where: {
@@ -719,40 +788,92 @@ async function createPublicServiceRequestInner(
         if (existing) return existing.id;
       }
 
-      const existingCustomers = await tx.customer.findMany({
-        where: { businessId: business.id },
-        select: { id: true, name: true, email: true, phone: true },
-      });
-      const match = decideCustomerMatch(existingCustomers, { email, phone });
-      const identityReview = match.kind === "ambiguous" ? match.review : null;
+      let identityReview: IntakeIdentityReview | null = null;
+      let customer: { id: string };
+      let reusedExistingCustomer = false;
       const smsConsentGrant = smsConsentFromPublicOptIn({
         smsOptIn: input.smsOptIn,
         phone,
       });
-      const customer =
-        match.kind === "reuse"
-          ? { id: match.customer.id }
-          : await tx.customer.create({
-              data: {
-                businessId: business.id,
-                name,
-                email: email || null,
-                phone: phone || null,
-                ...(smsConsentGrant ?? {}),
-                firstLeadSource: leadSource,
-                firstCampaignId: campaignId,
-              },
-            });
+
+      if (boundCustomerId) {
+        const bound = await tx.customer.findFirst({
+          where: { id: boundCustomerId, businessId: business.id },
+          select: { id: true, name: true },
+        });
+        if (!bound?.id) {
+          return Promise.reject(new Error("bound-customer"));
+        }
+        if (repeatVisitSourceJobId) {
+          const sourceJob = tx.job
+            ? await tx.job.findFirst({
+                where: {
+                  id: repeatVisitSourceJobId,
+                  businessId: business.id,
+                  customerId: bound.id,
+                },
+                select: { id: true, customerId: true },
+              })
+            : null;
+          if (!sourceJob || sourceJob.customerId !== bound.id) {
+            return Promise.reject(new Error("bound-job"));
+          }
+        }
+        customer = { id: bound.id };
+        reusedExistingCustomer = true;
+      } else {
+        const existingCustomers = await tx.customer.findMany({
+          where: { businessId: business.id },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+        const match = decideCustomerMatch(existingCustomers, { email, phone });
+        identityReview = match.kind === "ambiguous" ? match.review : null;
+        customer =
+          match.kind === "reuse"
+            ? { id: match.customer.id }
+            : await tx.customer.create({
+                data: {
+                  businessId: business.id,
+                  name,
+                  email: email || null,
+                  phone: phone || null,
+                  ...(smsConsentGrant ?? {}),
+                  firstLeadSource: leadSource,
+                  firstCampaignId: campaignId,
+                },
+              });
+        reusedExistingCustomer = match.kind === "reuse";
+      }
       // Repeat matches keep the stored name/email/phone even when the
       // submitted form disagrees. Conflicting identifiers create a new
       // customer and flag the request instead of merging anyone.
       // Explicit public SMS opt-in may grant consent without rewriting
-      // identity fields.
-      if (match.kind === "reuse" && smsConsentGrant) {
-        await tx.customer.update({
-          where: { id: customer.id },
-          data: smsConsentGrant,
-        });
+      // identity fields. The existingCustomer path rechecks the stored
+      // phone inside this transaction and never grants from a different
+      // submitted number. The consent write is predicated on the exact
+      // phone just read, so a later owner edit matches zero rows.
+      if (reusedExistingCustomer && smsConsentGrant) {
+        if (boundCustomerId) {
+          const stored = await tx.customer.findFirst({
+            where: { id: customer.id, businessId: business.id },
+            select: { phone: true },
+          });
+          if (stored && normalizePhone(stored.phone) === normalizePhone(phone)) {
+            await tx.customer.updateMany({
+              where: {
+                id: customer.id,
+                businessId: business.id,
+                phone: stored.phone,
+              },
+              data: smsConsentGrant,
+            });
+          }
+        } else {
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: smsConsentGrant,
+          });
+        }
       }
 
       let propertyId: string | null = null;
@@ -843,6 +964,7 @@ async function createPublicServiceRequestInner(
           tenantIntakeSnapshotVersion: publishedIntake?.versionNumber ?? null,
           serviceIntent,
           recurrenceCadence,
+          repeatVisitSourceJobId: repeatVisitSourceJobId || null,
         },
       });
 
@@ -916,7 +1038,18 @@ async function createPublicServiceRequestInner(
     });
 
     return { ok: true, requestId };
-  } catch {
+  } catch (error) {
+    if (
+      repeatVisitSourceJobId &&
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      const existing = await db.serviceRequest.findFirst({
+        where: { businessId: business.id, repeatVisitSourceJobId },
+        select: { id: true },
+      });
+      if (existing) return { ok: true, requestId: existing.id };
+    }
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
   }
 }

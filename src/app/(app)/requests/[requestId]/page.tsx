@@ -30,6 +30,7 @@ import {
   requestedWorkSummary,
 } from "@/lib/service-request-work";
 import { requestNotesText } from "@/lib/work-area-intake";
+import { CLEANING_REPEAT_VISIT_OWNER_REVIEW_MESSAGE } from "@/lib/cleaning-repeat-visit";
 
 export const metadata: Metadata = {
   title: "Request",
@@ -68,6 +69,7 @@ export default async function RequestRecordPage({
         select: { id: true, status: true, total: true },
         orderBy: { createdAt: "asc" },
       },
+      repeatVisitSourceJob: { select: { id: true } },
     },
   });
 
@@ -127,6 +129,15 @@ export default async function RequestRecordPage({
           ) : (
             <p>{serviceName}</p>
           )}
+          {request.repeatVisitSourceJob ? (
+            <p>
+              {CLEANING_REPEAT_VISIT_OWNER_REVIEW_MESSAGE}{" "}
+              <Link href={`/jobs/${request.repeatVisitSourceJob.id}`} className="underline">
+                Open previous job
+              </Link>
+              .
+            </p>
+          ) : null}
           <p className="text-muted-foreground">
             {requestNotesText(request.description) ||
               request.summary ||

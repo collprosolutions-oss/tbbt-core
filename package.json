@@ -136,6 +136,7 @@
     "test:business-timeline": "node --experimental-strip-types scripts/check-business-timeline.mjs",
     "test:cleaning-visit-workflow": "node --experimental-strip-types scripts/check-cleaning-visit-workflow.mjs",
     "test:cleaning-next-booking": "node --experimental-strip-types scripts/check-cleaning-next-booking.mjs",
+    "test:cleaning-repeat-visit": "node --experimental-strip-types scripts/check-cleaning-repeat-visit.mjs",
     "test:cleaning-corrective-clean": "node --experimental-strip-types scripts/check-cleaning-corrective-clean.mjs",
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
