@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { REVIEW_BEFORE_SEND_MESSAGE } from "@/lib/estimate-line-templates";
 
 const initialState: EstimateActionState = {};
 
@@ -30,10 +31,18 @@ function customerLabel(customer: CustomerOption) {
   return details ? `${customer.name} — ${details}` : customer.name;
 }
 
+type TemplateOption = {
+  id: string;
+  name: string;
+  lineCount: number;
+};
+
 export function CreateManualEstimateForm({
   customers,
+  templates = [],
 }: {
   customers: CustomerOption[];
+  templates?: TemplateOption[];
 }) {
   const [mode, setMode] = useState<"existing" | "new">(
     customers.length > 0 ? "existing" : "new",
@@ -203,6 +212,30 @@ export function CreateManualEstimateForm({
           </div>
         </div>
       )}
+
+      {templates.length > 0 ? (
+        <div className="space-y-2">
+          <Label htmlFor="new-estimate-templateId">Named template (optional)</Label>
+          <select
+            id="new-estimate-templateId"
+            name="templateId"
+            defaultValue=""
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            <option value="">No template — empty draft</option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} ({template.lineCount} line
+                {template.lineCount === 1 ? "" : "s"})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Applying a template copies draft lines onto this new estimate.{" "}
+            {REVIEW_BEFORE_SEND_MESSAGE}
+          </p>
+        </div>
+      ) : null}
 
       <Button type="submit" disabled={pending || (mode === "existing" && customers.length === 0)}>
         {pending ? "Creating…" : "Create estimate"}

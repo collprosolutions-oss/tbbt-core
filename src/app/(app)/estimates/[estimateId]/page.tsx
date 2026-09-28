@@ -4,6 +4,10 @@ import { notFound } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form";
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
+import {
+  ApplyEstimateLineTemplateForm,
+  SaveEstimateLineTemplateForm,
+} from "@/components/estimates/estimate-line-template-forms";
 import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
 import { CopyEstimateLinkButton } from "@/components/estimates/copy-estimate-link-button";
 import { EditEstimateButton } from "@/components/estimates/edit-estimate-button";
@@ -130,6 +134,8 @@ import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
+import { canAccessEstimateLineTemplates } from "@/lib/estimate-line-templates";
+import { loadEstimateLineTemplateOptions } from "@/lib/estimate-line-template-ops";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -764,6 +770,46 @@ export default async function EstimateBuilderPage({
     </>
   ) : null;
 
+  const canManageTemplates = canAccessEstimateLineTemplates(access.workspace.role);
+  const templateOptions = await loadEstimateLineTemplateOptions(prisma, access);
+  const templateCards =
+    isDraft && canManageTemplates ? (
+      <>
+        <Card>
+          <CardHeader>
+            <CardTitle>Save as named template</CardTitle>
+            <CardDescription>
+              OWNER-only. Saves a bounded set of this draft&apos;s labor,
+              material, and other lines for this business. Does not change
+              catalog prices or approved estimates, and does not publish hourly
+              rates.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SaveEstimateLineTemplateForm
+              estimateId={estimate.id}
+              canSave={estimate.lineItems.length > 0}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Apply named template</CardTitle>
+            <CardDescription>
+              Copies the saved lines onto this draft. Review and edit before
+              sending. Sent and approved estimates stay unchanged.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ApplyEstimateLineTemplateForm
+              estimateId={estimate.id}
+              templates={templateOptions}
+            />
+          </CardContent>
+        </Card>
+      </>
+    ) : null;
+
   return (
     <PageContainer>
       <PageHeader
@@ -896,6 +942,7 @@ export default async function EstimateBuilderPage({
           <div className="space-y-6 border-t border-border/60 p-6">
             {laborAndMaterials}
             {addCatalogAndCustom}
+            {templateCards}
           </div>
         </details>
       ) : (
@@ -1063,7 +1110,12 @@ export default async function EstimateBuilderPage({
         </Card>
       ) : null}
 
-      {isDraft && !collapseBuilder ? addCatalogAndCustom : null}
+      {isDraft && !collapseBuilder ? (
+        <>
+          {addCatalogAndCustom}
+          {templateCards}
+        </>
+      ) : null}
 
       <EstimateVersionHistory versions={estimate.versions} />
     </PageContainer>

@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadEstimateLineTemplateOptions } from "@/lib/estimate-line-template-ops";
 import { formatAddress } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
@@ -25,6 +26,7 @@ export default async function NewManualEstimatePage() {
   const access = await requireManagementPageAccess();
   const entitlement = await loadSaasEntitlement(prisma, access.workspace.business);
   const operating = saasOperatingUiState(entitlement, access.workspace.role);
+  const templates = await loadEstimateLineTemplateOptions(prisma, access);
   const customers = await prisma.customer.findMany({
     where: access.scope,
     select: {
@@ -99,6 +101,7 @@ export default async function NewManualEstimatePage() {
                 label: formatAddress(property),
               })),
             }))}
+            templates={templates}
           />
         </CardContent>
       </Card>
