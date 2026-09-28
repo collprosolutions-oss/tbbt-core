@@ -19,6 +19,7 @@ export type OwnerDayRouteJobRecord = {
   scheduledDurationMinutes: number | null;
   arrivalWindowMinutes?: number | null;
   pickupDurationMinutes?: number | null;
+  assignedMembershipId?: string | null;
   customer?: { id?: string | null; name: string | null } | null;
   property?: OwnerDayRouteProperty | null;
 };
@@ -35,6 +36,8 @@ export type OwnerDayRouteStop = {
   customerName: string;
   status: string;
   scheduledAt: Date;
+  scheduledDurationMinutes: number | null;
+  scheduleSnapshot: OwnerDayRouteScheduleSnapshot;
   appointmentWindowLabel: string | null;
   materialPickup: MaterialPickupVisibility;
   includedInMaps: boolean;

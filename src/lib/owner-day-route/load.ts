@@ -9,8 +9,13 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { requireOwnerDayRouteAccess } from "@/lib/owner-day-route/access";
 import { buildOwnerDayRouteView } from "@/lib/owner-day-route/build";
 import { OWNER_DAY_ROUTE_JOBS_TAKE, OWNER_DAY_ROUTE_MUTATIONS_ON_LOAD } from "@/lib/owner-day-route/constants";
+import {
+  scheduleSnapshotFromJob,
+} from "@/lib/owner-day-route/snapshot";
 import type { OwnerDayRouteScheduleSnapshot, OwnerDayRouteView } from "@/lib/owner-day-route/types";
 import { dayRange, parseScheduleDate } from "@/lib/schedule";
+
+export { scheduleSnapshotFromJob } from "@/lib/owner-day-route/snapshot";
 
 type DayRouteDb = PrismaClient | Prisma.TransactionClient;
 
@@ -82,24 +87,6 @@ export async function loadOwnerDayRoute(
     range,
     timeZone,
   });
-}
-
-export function scheduleSnapshotFromJob(job: {
-  id: string;
-  scheduledAt: Date | null;
-  status: string;
-  pickupDurationMinutes: number | null;
-  arrivalWindowMinutes: number | null;
-  assignedMembershipId: string | null;
-}): OwnerDayRouteScheduleSnapshot {
-  return {
-    jobId: job.id,
-    scheduledAt: job.scheduledAt ? job.scheduledAt.toISOString() : null,
-    status: job.status,
-    pickupDurationMinutes: job.pickupDurationMinutes,
-    arrivalWindowMinutes: job.arrivalWindowMinutes,
-    assignedMembershipId: job.assignedMembershipId,
-  };
 }
 
 export async function readOwnerDayRouteScheduleSnapshots(

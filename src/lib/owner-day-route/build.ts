@@ -15,6 +15,7 @@ import {
   buildOwnerDayRouteMapsHandoff,
   eligibleOwnerDayRouteMapsQueries,
 } from "@/lib/owner-day-route/maps";
+import { scheduleSnapshotFromJob } from "@/lib/owner-day-route/snapshot";
 import type {
   OwnerDayRouteExclusionReason,
   OwnerDayRouteJobRecord,
@@ -64,6 +65,15 @@ export function buildOwnerDayRouteStop(
     customerName: job.customer?.name?.trim() || "Customer",
     status: job.status,
     scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: job.scheduledDurationMinutes ?? null,
+    scheduleSnapshot: scheduleSnapshotFromJob({
+      id: job.id,
+      scheduledAt: job.scheduledAt,
+      status: job.status,
+      pickupDurationMinutes: job.pickupDurationMinutes ?? null,
+      arrivalWindowMinutes: job.arrivalWindowMinutes ?? null,
+      assignedMembershipId: job.assignedMembershipId ?? null,
+    }),
     appointmentWindowLabel: ownerTodayTimeWindowLabel(job, options.timeZone),
     materialPickup: buildMaterialPickupVisibility(job, options.timeZone),
     includedInMaps,

@@ -67,6 +67,7 @@ const libFiles = [
   "src/lib/owner-day-route/build.ts",
   "src/lib/owner-day-route/load.ts",
   "src/lib/owner-day-route/wording.ts",
+  "src/lib/owner-day-route/snapshot.ts",
   "src/lib/owner-day-route/index.ts",
 ];
 const uiFiles = [
