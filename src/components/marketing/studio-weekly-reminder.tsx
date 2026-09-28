@@ -12,6 +12,7 @@ import {
   STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
   canManageStudioWeeklyReminder,
 } from "@/lib/marketing";
 import type { MarketingSource } from "@/lib/marketing-data";
@@ -34,6 +35,15 @@ export function StudioWeeklyReminderControls({
     reminder.reminder?.smsLabel ||
     reminder.delivery.smsLabel ||
     STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED;
+
+  if (!reminder.available) {
+    return (
+      <div className="space-y-2 rounded-lg border border-border/70 p-3">
+        <p className="text-sm font-medium">Weekly review reminder</p>
+        <p className="text-sm">{STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2 rounded-lg border border-border/70 p-3">

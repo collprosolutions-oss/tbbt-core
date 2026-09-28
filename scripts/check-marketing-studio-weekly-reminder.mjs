@@ -39,6 +39,7 @@ const {
   STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED,
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED,
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+  STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
   canManageStudioWeeklyReminder,
   studioWeeklyReminderCopy,
   studioWeeklyReminderDelivery,
@@ -55,8 +56,11 @@ const { loadMarketingSource } = await import("@/lib/marketing-data");
 const {
   dispatchStudioWeeklyReviewReminder,
   loadStudioWeeklyReminderState,
+  missingStudioWeeklyReminderSchema,
   setStudioWeeklyReviewReminderOptIn,
 } = await import("@/lib/marketing-studio-reminder");
+const { emitBusinessEvent } = await import("@/lib/automation/events");
+const { INVOICE_DUE_AFTER_MS, scanScheduledBusinessEvents } = await import("@/lib/automation/scan");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -253,6 +257,68 @@ try {
       reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL"),
   );
   check(
+    "Missing reminder schema is detected only for this table or column",
+    missingStudioWeeklyReminderSchema({
+      code: "P2021",
+      message: "The table `MarketingStudioWeeklyReminder` does not exist in the current database.",
+    }) &&
+      missingStudioWeeklyReminderSchema({
+        code: "P2022",
+        message:
+          "The column `BusinessSettings.studioWeeklyReviewReminderOptedIn` does not exist in the current database.",
+      }) &&
+      missingStudioWeeklyReminderSchema({
+        message: 'relation "MarketingStudioWeeklyReminder" does not exist',
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2002",
+        message: "Unique constraint failed on the fields: (`MarketingStudioWeeklyReminder`)",
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2003",
+        message: "Foreign key constraint failed on the field: `MarketingStudioWeeklyReminder.businessId`",
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2014",
+        message:
+          "The change you are trying to make would violate the required relation 'MarketingStudioWeeklyReminderToBusiness'",
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2025",
+        message: "Record to update not found for MarketingStudioWeeklyReminder",
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2021",
+        message: "The table `WebsitePublish` does not exist in the current database.",
+      }) &&
+      !missingStudioWeeklyReminderSchema({
+        code: "P2022",
+        message: "The column `Business.timezone` does not exist in the current database.",
+      }) &&
+      !missingStudioWeeklyReminderSchema(new Error("Can't reach database server at 127.0.0.1:5432")),
+  );
+  check(
+    "Reminder ops fail closed without request-time DDL",
+    reminderOpsSrc.includes("missingStudioWeeklyReminderSchema") &&
+      reminderOpsSrc.includes("pg_advisory_xact_lock") &&
+      reminderOpsSrc.includes("schema_unavailable") &&
+      !reminderOpsSrc.includes("$executeRawUnsafe") &&
+      !reminderOpsSrc.includes("ALTER TABLE") &&
+      !reminderOpsSrc.includes("CREATE TABLE") &&
+      !reminderOpsSrc.includes("ADD COLUMN"),
+  );
+  check(
+    "Studio shows an unavailable reminder state",
+    reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE") &&
+      reminderUiSrc.includes("!reminder.available") &&
+      domainSrc.includes("STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE"),
+  );
+  check(
+    "Scan swallows only missing reminder schema",
+    scanSrc.includes("missingStudioWeeklyReminderSchema") &&
+      scanSrc.includes("if (!missingStudioWeeklyReminderSchema(error)) throw error"),
+  );
+  check(
     "Loader stays read-only for reminder state",
     dataSrc.includes("loadStudioWeeklyReminderState") &&
       !dataSrc.includes("setStudioWeeklyReviewReminderOptIn") &&
@@ -381,7 +447,8 @@ try {
   const source = await loadMarketingSource(prisma, businessA.id, weekInstant);
   check(
     "Loader surfaces the in-app reminder and SMS not connected label",
-    source.weeklyReminder.optedIn === true &&
+    source.weeklyReminder.available === true &&
+      source.weeklyReminder.optedIn === true &&
       source.weeklyReminder.reminder?.id === optedIn.dispatch.reminder.id &&
       source.weeklyReminder.delivery.smsLabel === STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED &&
       source.weeklyReminder.copy === "1 package awaits OWNER review this week.",
@@ -532,6 +599,222 @@ try {
       connected.reminder?.smsStatus === STUDIO_WEEKLY_REMINDER_SMS_STATUS_CONNECTED_UNUSED &&
       connected.reminder?.smsLabel === "" &&
       connected.delivery.customerMessageSent === false,
+  );
+
+  console.log("\nTEST — Opt-out that commits first cannot create a later reminder");
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessA.id, weekKey: "2026-10-04" },
+  });
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, nextWeekInstant, {
+    smsPlatformConfigured: false,
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessA.id, weekKey: "2026-10-04" },
+  });
+  let releaseSerialize;
+  const serializeGate = new Promise((resolve) => {
+    releaseSerialize = resolve;
+  });
+  let notifySerializeReached;
+  const serializeReached = new Promise((resolve) => {
+    notifySerializeReached = resolve;
+  });
+  const delayedDispatch = dispatchStudioWeeklyReviewReminder(prisma, businessA.id, nextWeekInstant, {
+    smsPlatformConfigured: false,
+    async beforeSerialize() {
+      notifySerializeReached();
+      await serializeGate;
+    },
+  });
+  await serializeReached;
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, false, nextWeekInstant, {
+    smsPlatformConfigured: false,
+  });
+  releaseSerialize();
+  const raced = await delayedDispatch;
+  check(
+    "Dispatch after a committed opt-out does not create a reminder",
+    raced.created === false && raced.reason === "not_opted_in",
+  );
+  check(
+    "No new row exists for the raced week",
+    (await prisma.marketingStudioWeeklyReminder.count({
+      where: { businessId: businessA.id, weekKey: "2026-10-04" },
+    })) === 0,
+  );
+
+  console.log("\nTEST — Concurrent same-week dispatch creates one row");
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, nextWeekInstant, {
+    smsPlatformConfigured: false,
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessA.id, weekKey: "2026-10-04" },
+  });
+  const [raceOne, raceTwo] = await Promise.all([
+    dispatchStudioWeeklyReviewReminder(prisma, businessA.id, nextWeekInstant, {
+      smsPlatformConfigured: false,
+    }),
+    dispatchStudioWeeklyReviewReminder(prisma, businessA.id, nextWeekInstant, {
+      smsPlatformConfigured: false,
+    }),
+  ]);
+  const createdCount = [raceOne, raceTwo].filter((row) => row.created).length;
+  const sameWeekRows = await prisma.marketingStudioWeeklyReminder.findMany({
+    where: { businessId: businessA.id, weekKey: "2026-10-04" },
+  });
+  check(
+    "Exactly one concurrent create wins the week",
+    createdCount === 1 &&
+      sameWeekRows.length === 1 &&
+      [raceOne.reason, raceTwo.reason].includes("created") &&
+      [raceOne.reason, raceTwo.reason].includes("already_recorded") &&
+      raceOne.reminder?.id === raceTwo.reminder?.id,
+  );
+
+  console.log("\nTEST — Other live database errors are not missing schema");
+  try {
+    await prisma.marketingStudioWeeklyReminder.create({
+      data: {
+        businessId: "not-a-business",
+        weekKey: "2026-10-04",
+        awaitingCount: 1,
+        channel: STUDIO_WEEKLY_REMINDER_CHANNEL,
+        smsStatus: STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_CONNECTED,
+      },
+    });
+    check("Foreign-key create should fail", false);
+  } catch (error) {
+    check(
+      "Live foreign-key failure is not missing reminder schema",
+      missingStudioWeeklyReminderSchema(error) === false,
+    );
+  }
+
+  const scanOwner = await prisma.user.create({
+    data: { name: "Scan Owner", email: `scan-reminder-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const scanBusiness = await prisma.business.create({
+    data: {
+      name: "Scan Reminder",
+      slug: `scan-reminder-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+      timezone: "America/New_York",
+    },
+  });
+  await prisma.membership.create({
+    data: { userId: scanOwner.id, businessId: scanBusiness.id, role: "OWNER" },
+  });
+  const scanCustomer = await prisma.customer.create({
+    data: { businessId: scanBusiness.id, name: "Scan Customer" },
+  });
+  const oldSentAt = new Date(Date.now() - INVOICE_DUE_AFTER_MS - 60_000);
+  const dueInvoice = await prisma.invoice.create({
+    data: {
+      businessId: scanBusiness.id,
+      customerId: scanCustomer.id,
+      status: "SENT",
+      total: 80,
+      createdAt: oldSentAt,
+    },
+  });
+  await emitBusinessEvent(prisma, {
+    businessId: scanBusiness.id,
+    type: "INVOICE_SENT",
+    subjectType: "INVOICE",
+    subjectId: dueInvoice.id,
+    payload: { customerId: scanCustomer.id },
+    idempotencyKey: `INVOICE_SENT:${dueInvoice.id}`,
+    occurredAt: oldSentAt,
+  });
+
+  console.log("\nTEST — Missing reminder table fails closed and scan continues");
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "MarketingStudioWeeklyReminder"`);
+  const tableMissing = await loadStudioWeeklyReminderState(prisma, businessA.id, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+  const tableMissingSource = await loadMarketingSource(prisma, businessA.id, weekInstant);
+  const tableMissingDispatch = await dispatchStudioWeeklyReviewReminder(prisma, businessA.id, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+  await expectError(
+    "Opt-in fails closed when the reminder table is missing",
+    () =>
+      setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, weekInstant, {
+        smsPlatformConfigured: false,
+      }),
+    (error) =>
+      error instanceof MarketingError && error.message === STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  );
+  await scanScheduledBusinessEvents(prisma, scanBusiness.id);
+  const dueAfterTableDrop = await prisma.businessEvent.findMany({
+    where: { businessId: scanBusiness.id, type: "INVOICE_DUE", subjectId: dueInvoice.id },
+  });
+  check(
+    "Missing table shows an unavailable reminder state",
+    tableMissing.available === false &&
+      tableMissing.optedIn === false &&
+      tableMissing.reminder === null &&
+      tableMissing.inAppMessage === STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE &&
+      tableMissingSource.weeklyReminder.available === false &&
+      tableMissingSource.approvalQueue.total >= 0,
+  );
+  check(
+    "Missing table dispatch does not invent a reminder",
+    tableMissingDispatch.created === false && tableMissingDispatch.reason === "schema_unavailable",
+  );
+  check("Scan still emits INVOICE_DUE when the reminder table is missing", dueAfterTableDrop.length === 1);
+
+  console.log("\nTEST — Missing reminder column fails closed and scan continues");
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "MarketingStudioWeeklyReminder" (
+      "id" TEXT NOT NULL,
+      "businessId" TEXT NOT NULL,
+      "weekKey" TEXT NOT NULL,
+      "awaitingCount" INTEGER NOT NULL,
+      "channel" TEXT NOT NULL DEFAULT 'IN_APP',
+      "smsStatus" TEXT NOT NULL,
+      "smsLabel" TEXT NOT NULL DEFAULT '',
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "MarketingStudioWeeklyReminder_pkey" PRIMARY KEY ("id")
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "studioWeeklyReviewReminderOptedIn"`,
+  );
+  const columnMissing = await loadStudioWeeklyReminderState(prisma, businessA.id, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+  const columnMissingDispatch = await dispatchStudioWeeklyReviewReminder(prisma, businessA.id, nextWeekInstant, {
+    smsPlatformConfigured: false,
+  });
+  await expectError(
+    "Opt-out fails closed when the reminder column is missing",
+    () =>
+      setStudioWeeklyReviewReminderOptIn(prisma, ownerA, false, nextWeekInstant, {
+        smsPlatformConfigured: false,
+      }),
+    (error) =>
+      error instanceof MarketingError && error.message === STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  );
+  const dueBeforeColumnScan = await prisma.businessEvent.count({
+    where: { businessId: scanBusiness.id, type: "INVOICE_DUE", subjectId: dueInvoice.id },
+  });
+  await scanScheduledBusinessEvents(prisma, scanBusiness.id);
+  const dueAfterColumnScan = await prisma.businessEvent.count({
+    where: { businessId: scanBusiness.id, type: "INVOICE_DUE", subjectId: dueInvoice.id },
+  });
+  check(
+    "Missing column shows an unavailable reminder state",
+    columnMissing.available === false &&
+      columnMissing.inAppMessage === STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  );
+  check(
+    "Missing column dispatch does not invent a reminder",
+    columnMissingDispatch.created === false && columnMissingDispatch.reason === "schema_unavailable",
+  );
+  check(
+    "Scan stays idempotent and does not throw when the reminder column is missing",
+    dueAfterColumnScan === dueBeforeColumnScan,
   );
 } finally {
   await prisma.$disconnect();

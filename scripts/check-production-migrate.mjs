@@ -1258,6 +1258,20 @@ check(
       localNames.indexOf("20260928150000_marketing_studio_weekly_reminder"),
 );
 
+const studioWeeklyReminderOps = readFileSync(
+  new URL("../src/lib/marketing-studio-reminder.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Marketing Studio weekly reminder fails closed without request-time DDL",
+  studioWeeklyReminderOps.includes("missingStudioWeeklyReminderSchema") &&
+    studioWeeklyReminderOps.includes("pg_advisory_xact_lock") &&
+    !studioWeeklyReminderOps.includes("$executeRawUnsafe") &&
+    !studioWeeklyReminderOps.includes("ALTER TABLE") &&
+    !studioWeeklyReminderOps.includes("CREATE TABLE") &&
+    !studioWeeklyReminderOps.includes("ADD COLUMN"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

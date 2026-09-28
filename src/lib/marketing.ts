@@ -202,6 +202,9 @@ export const STUDIO_WEEKLY_REMINDER_OPTED_IN_MESSAGE =
 export const STUDIO_WEEKLY_REMINDER_OPTED_OUT_MESSAGE =
   "Weekly review reminders are off. TBBT will not create another reminder until an OWNER opts in again.";
 
+export const STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE =
+  "Weekly review reminders are unavailable until this workspace's schema is migrated. TBBT will not invent a reminder or change the database from this page.";
+
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
 
