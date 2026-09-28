@@ -125,7 +125,7 @@ export async function loadCleaningNextBookingReview(
       : null;
 
   const existingNextBooking = await db.job.findFirst({
-    where: { businessId: access.businessId, recurrenceSourceJobId: job.id },
+    where: { businessId: access.businessId, nextBookingSourceJobId: job.id },
     select: { id: true, scheduledAt: true, status: true },
     orderBy: { createdAt: "asc" },
   });

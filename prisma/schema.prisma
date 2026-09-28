@@ -1354,10 +1354,13 @@ model Job {
   serviceIntent String @default("ONE_TIME")
   /// WEEKLY | BIWEEKLY | MONTHLY | CUSTOM. Empty when one-time.
   recurrenceCadence String @default("")
-  /// Parent / source job when this row is a later occurrence. For the
-  /// OWNER-created Cleaning next booking this is the completed source Job
-  /// and is unique — one next booking per source, not a recurring series.
-  recurrenceSourceJobId String? @unique
+  /// Parent / source job when this row is a later occurrence.
+  /// Later recurring occurrences may share the same source. Not unique.
+  recurrenceSourceJobId String?
+  /// Completed Cleaning job this OWNER-created next booking was copied from.
+  /// Unique so one completed job yields at most one manual next booking.
+  /// Distinct from recurrenceSourceJobId.
+  nextBookingSourceJobId String? @unique
   nextOccurrenceAt DateTime?
   /// ACTIVE | SKIPPED | CANCELLED. Empty when one-time.
   recurrenceStatus String @default("")
@@ -1403,6 +1406,8 @@ model Job {
   phoneInteractions       PhoneInteraction[]
   recurrenceSource        Job?  @relation("JobRecurrenceSource", fields: [recurrenceSourceJobId], references: [id], onDelete: SetNull)
   recurrenceOccurrences   Job[] @relation("JobRecurrenceSource")
+  nextBookingSource       Job?  @relation("JobNextBookingSource", fields: [nextBookingSourceJobId], references: [id], onDelete: SetNull)
+  nextBookings            Job[] @relation("JobNextBookingSource")
   growthActionRequests    GrowthActionRequest[]
   workforceOutreachTasks  WorkforceOutreachTask[]
   materialPurchaseLists   MaterialPurchaseList[]
@@ -1412,6 +1417,7 @@ model Job {
   @@index([businessId])
   @@index([assignedMembershipId])
   @@index([businessLocationId])
+  @@index([recurrenceSourceJobId])
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
   @@index([campaignId])

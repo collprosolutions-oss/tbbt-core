@@ -187,16 +187,22 @@ check(
     !actionSrc.includes("emitAndProcessBusinessEvent"),
 );
 check(
-  "New booking is ONE_TIME and unique on recurrenceSourceJobId",
+  "New booking is ONE_TIME and unique on nextBookingSourceJobId, not recurrenceSourceJobId",
   opsSrc.includes("oneTimeNextBookingPlan") &&
-    opsSrc.includes("recurrenceSourceJobId: fresh.id") &&
-    schemaSrc.includes("recurrenceSourceJobId String? @unique") &&
+    opsSrc.includes("nextBookingSourceJobId: fresh.id") &&
+    opsSrc.includes("recurrenceSourceJobId: null") &&
+    schemaSrc.includes("recurrenceSourceJobId String?") &&
+    !schemaSrc.includes("recurrenceSourceJobId String? @unique") &&
+    schemaSrc.includes("nextBookingSourceJobId String? @unique") &&
+    schemaSrc.includes("@@index([recurrenceSourceJobId])") &&
+    migrationSrc.includes('ADD COLUMN IF NOT EXISTS "nextBookingSourceJobId"') &&
     migrationSrc.includes("CREATE UNIQUE INDEX IF NOT EXISTS") &&
-    migrationSrc.includes("Job_recurrenceSourceJobId_key") &&
+    migrationSrc.includes("Job_nextBookingSourceJobId_key") &&
+    !migrationSrc.includes("Job_recurrenceSourceJobId_key") &&
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migrationSrc),
 );
 check(
-  "Duplicate-submit reuses the existing next booking (P2002 + pre-check)",
+  "Duplicate-submit reuses the existing next booking via nextBookingSourceJobId (P2002 + pre-check)",
   opsSrc.includes("alreadyExists") &&
     opsSrc.includes('error.code === "P2002"') &&
     opsSrc.includes("findExistingNextBooking") &&
@@ -585,7 +591,7 @@ try {
     where: { id: jobA.id, businessId: cleanA.id },
   });
   const seriesCount = await prisma.job.count({
-    where: { businessId: cleanA.id, recurrenceSourceJobId: jobA.id },
+    where: { businessId: cleanA.id, nextBookingSourceJobId: jobA.id },
   });
 
   check(
@@ -596,7 +602,8 @@ try {
       created.propertyId === jobA.propertyId &&
       created.estimateId === jobA.estimateId &&
       created.approvedEstimateVersionId === jobA.approvedEstimateVersionId &&
-      created.recurrenceSourceJobId === jobA.id &&
+      created.nextBookingSourceJobId === jobA.id &&
+      created.recurrenceSourceJobId === null &&
       created.status === "SCHEDULED" &&
       created.serviceIntent === "ONE_TIME" &&
       created.recurrenceCadence === "" &&
@@ -633,7 +640,7 @@ try {
   });
   const jobsAfterDuplicate = await countBusinessJobs(prisma, cleanA.id);
   const seriesAfterDuplicate = await prisma.job.count({
-    where: { businessId: cleanA.id, recurrenceSourceJobId: jobA.id },
+    where: { businessId: cleanA.id, nextBookingSourceJobId: jobA.id },
   });
   check(
     "Duplicate submit returns the existing booking and does not change the date",
@@ -687,6 +694,59 @@ try {
   check(
     "Each tenant only gained its own one next booking",
     jobsAFinal === jobsAfterCreate && jobsB >= 2,
+  );
+
+  const recurrenceParent = await createCompletedCleaningJob(cleanA.id);
+  const occurrenceShared = {
+    businessId: cleanA.id,
+    customerId: recurrenceParent.customerId,
+    propertyId: recurrenceParent.propertyId,
+    estimateId: recurrenceParent.estimateId,
+    status: "SCHEDULED",
+    serviceIntent: "RECURRING",
+    recurrenceCadence: "WEEKLY",
+    recurrenceStatus: "ACTIVE",
+    recurrenceSourceJobId: recurrenceParent.id,
+  };
+  const occurrenceOne = await prisma.job.create({
+    data: {
+      ...occurrenceShared,
+      projectToken: randomUUID(),
+      scheduledAt: new Date("2026-10-12T16:00:00.000Z"),
+    },
+  });
+  const occurrenceTwo = await prisma.job.create({
+    data: {
+      ...occurrenceShared,
+      projectToken: randomUUID(),
+      scheduledAt: new Date("2026-10-19T16:00:00.000Z"),
+    },
+  });
+  check(
+    "Two recurring occurrences can share recurrenceSourceJobId",
+    occurrenceOne.id !== occurrenceTwo.id &&
+      occurrenceOne.recurrenceSourceJobId === recurrenceParent.id &&
+      occurrenceTwo.recurrenceSourceJobId === recurrenceParent.id &&
+      occurrenceOne.nextBookingSourceJobId === null &&
+      occurrenceTwo.nextBookingSourceJobId === null,
+  );
+
+  await expectThrow(
+    "Two manual next bookings cannot share nextBookingSourceJobId",
+    () =>
+      prisma.job.create({
+        data: {
+          businessId: cleanA.id,
+          customerId: jobA.customerId,
+          propertyId: jobA.propertyId,
+          estimateId: jobA.estimateId,
+          projectToken: randomUUID(),
+          status: "SCHEDULED",
+          scheduledAt: new Date("2026-11-15T18:00:00.000Z"),
+          nextBookingSourceJobId: jobA.id,
+        },
+      }),
+    (error) => error?.code === "P2002",
   );
 } catch (error) {
   failed += 1;

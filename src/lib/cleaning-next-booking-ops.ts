@@ -96,6 +96,7 @@ export type CreatedCleaningNextBooking = {
   estimateId: string | null;
   approvedEstimateVersionId: string | null;
   recurrenceSourceJobId: string | null;
+  nextBookingSourceJobId: string | null;
   status: string;
   scheduledAt: Date | null;
   serviceIntent: string;
@@ -113,6 +114,7 @@ const CREATED_SELECT = {
   estimateId: true,
   approvedEstimateVersionId: true,
   recurrenceSourceJobId: true,
+  nextBookingSourceJobId: true,
   status: true,
   scheduledAt: true,
   serviceIntent: true,
@@ -200,7 +202,7 @@ async function findExistingNextBooking(
   sourceJobId: string,
 ) {
   return db.job.findFirst({
-    where: { businessId, recurrenceSourceJobId: sourceJobId },
+    where: { businessId, nextBookingSourceJobId: sourceJobId },
     select: CREATED_SELECT,
   });
 }
@@ -299,7 +301,8 @@ export async function createNextBookingFromCompletedCleaningJob(
           recurrenceCadence: oneTime.recurrenceCadence,
           recurrenceStatus: oneTime.recurrenceStatus,
           nextOccurrenceAt: oneTime.nextOccurrenceAt,
-          recurrenceSourceJobId: fresh.id,
+          recurrenceSourceJobId: null,
+          nextBookingSourceJobId: fresh.id,
           appointmentConfirmationStatus: "NONE",
         },
         select: CREATED_SELECT,
