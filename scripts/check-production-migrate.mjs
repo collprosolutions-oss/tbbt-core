@@ -1258,6 +1258,36 @@ check(
       localNames.indexOf("20260928150000_marketing_studio_weekly_reminder"),
 );
 
+const recurringOccurrenceKeyMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928180000_job_recurrence_occurrence_key/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Cleaning recurring occurrence-key migration is additive and after weekly reminder",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(recurringOccurrenceKeyMigration) &&
+    recurringOccurrenceKeyMigration.includes(
+      'ADD COLUMN IF NOT EXISTS "recurrenceOccurrenceKey"',
+    ) &&
+    recurringOccurrenceKeyMigration.includes("CREATE UNIQUE INDEX IF NOT EXISTS") &&
+    recurringOccurrenceKeyMigration.includes("Job_recurrenceOccurrenceKey_key") &&
+    !recurringOccurrenceKeyMigration.includes("Job_nextBookingSourceJobId_key") &&
+    !recurringOccurrenceKeyMigration.includes("Job_correctiveCleanSourceJobId_key") &&
+    !recurringOccurrenceKeyMigration.includes("Job_recurrenceSourceJobId_key") &&
+    recurringOccurrenceKeyMigration.includes("recurrenceSourceJobId stays nonunique") &&
+    localNames.includes("20260928180000_job_recurrence_occurrence_key") &&
+    !localNames.includes("20260928150000_job_recurrence_occurrence_key") &&
+    localNames.includes("20260928170000_service_request_repeat_visit_source") &&
+    localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") <
+      localNames.indexOf("20260928170000_service_request_repeat_visit_source") &&
+    localNames.indexOf("20260928170000_service_request_repeat_visit_source") <
+      localNames.indexOf("20260928180000_job_recurrence_occurrence_key") &&
+    localNames.indexOf("20260928145000_job_corrective_clean_source_unique") <
+      localNames.indexOf("20260928180000_job_recurrence_occurrence_key"),
+);
+
 const studioWeeklyReminderOps = readFileSync(
   new URL("../src/lib/marketing-studio-reminder.ts", import.meta.url),
   "utf8",

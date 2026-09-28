@@ -247,6 +247,8 @@ export function calculateDailyCapacity(input: {
   const forecastUntil = input.forecastUntil ?? addZonedCalendarDays(dayStart, 1, zone);
   for (const job of dayJobs) {
     if (!recurrenceForecastActive(job) || !job.scheduledAt) continue;
+    // Materialized occurrences are known jobs. Forecast only from the series source.
+    if (job.recurrenceSourceJobId) continue;
     const projected = projectRecurrenceOccurrences({
       jobId: job.id,
       scheduledAt: job.scheduledAt,
