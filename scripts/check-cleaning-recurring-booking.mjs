@@ -1396,20 +1396,20 @@ try {
   const nextBooking = await createNextBookingFromCompletedCleaningJob(prisma, ownerA, {
     jobId: jobADistinct.id,
     date: "2026-10-20",
-    time: "09:00",
+    time: "14:00",
     confirmCreate: "1",
   });
   const corrective = await scheduleCorrectiveCleanFromReCleanRequestedJob(prisma, ownerA, {
     jobId: jobADistinct.id,
     date: "2026-10-21",
-    time: "10:00",
+    time: "14:00",
     confirmCreate: "1",
   });
   const recurringDistinct = await setupCleaningRecurringBookings(prisma, ownerA, {
     jobId: jobADistinct.id,
     cadence: "BIWEEKLY",
-    date: "2026-10-26",
-    time: "15:00",
+    date: "2026-10-15",
+    time: "14:00",
     confirmCreate: "1",
     now: frozenNow,
   });
