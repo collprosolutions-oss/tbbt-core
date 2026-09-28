@@ -71,9 +71,20 @@ const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 
+{
+  const { PrismaClient: AdminPrisma } = createRequire(import.meta.url)("@prisma/client");
+  const admin = new AdminPrisma({ datasourceUrl: baseUrl });
+  await admin.$queryRawUnsafe(
+    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+    testDbName,
+  );
+  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  await admin.$disconnect();
+}
+
 const push = spawnSync(
   "npx",
-  ["prisma", "db", "push", "--skip-generate", "--force-reset", "--accept-data-loss"],
+  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
   { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
 );
 if (push.status !== 0) {

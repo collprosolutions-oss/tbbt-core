@@ -52,11 +52,19 @@ export class EstimateLineTemplateUnavailableError extends EstimateLineTemplateEr
   }
 }
 
+function prismaErrorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: string }).code)
+    : "";
+}
+
+export function isDuplicateEstimateLineTemplateNameError(error: unknown) {
+  return prismaErrorCode(error) === "P2002";
+}
+
 export function missingEstimateLineTemplateSchema(error: unknown) {
-  const code =
-    error && typeof error === "object" && "code" in error
-      ? String((error as { code?: string }).code)
-      : "";
+  const code = prismaErrorCode(error);
+  if (code === "P2002") return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
     code === "P2021" ||
@@ -372,16 +380,11 @@ export async function saveEstimateLineTemplateFromDraft(
       message: NO_CATALOG_PRICE_WRITE_MESSAGE,
     };
   } catch (error) {
+    if (isDuplicateEstimateLineTemplateNameError(error)) {
+      throw new EstimateLineTemplateError(DUPLICATE_TEMPLATE_NAME_MESSAGE);
+    }
     if (missingEstimateLineTemplateSchema(error)) {
       throw new EstimateLineTemplateUnavailableError();
-    }
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      String((error as { code?: string }).code) === "P2002"
-    ) {
-      throw new EstimateLineTemplateError(DUPLICATE_TEMPLATE_NAME_MESSAGE);
     }
     throw error;
   }
