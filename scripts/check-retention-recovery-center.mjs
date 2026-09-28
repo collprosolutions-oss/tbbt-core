@@ -55,6 +55,7 @@ const libFiles = [
   "src/lib/growth/retention/constants.ts",
   "src/lib/growth/retention/types.ts",
   "src/lib/growth/retention/age.ts",
+  "src/lib/growth/retention/due.ts",
   "src/lib/growth/retention/access.ts",
   "src/lib/growth/retention/links.ts",
   "src/lib/growth/retention/queries.ts",

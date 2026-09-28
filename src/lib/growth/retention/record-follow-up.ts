@@ -17,12 +17,17 @@ import {
   RETENTION_FOLLOW_UP_FINDING_GROUPS,
   RETENTION_FOLLOW_UP_FOREIGN_CUSTOMER_MESSAGE,
   RETENTION_FOLLOW_UP_FOREIGN_JOB_MESSAGE,
+  RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
   RETENTION_FOLLOW_UP_JOB_CUSTOMER_MISMATCH_MESSAGE,
   RETENTION_FOLLOW_UP_JOB_NOT_COMPLETED_MESSAGE,
   RETENTION_FOLLOW_UP_STALE_FINDING_MESSAGE,
   RETENTION_FOLLOW_UP_UNKNOWN_FINDING_MESSAGE,
   type RetentionFollowUpFindingGroup,
 } from "@/lib/growth/retention/constants";
+import {
+  loadRetentionBusinessTimeZone,
+  parseRetentionFollowUpDueOn,
+} from "@/lib/growth/retention/due";
 import {
   findLastCompletedJobForCustomer,
   hasLaterSameBusinessJob,
@@ -40,6 +45,7 @@ const followUpSelect = {
   kind: true,
   status: true,
   origin: true,
+  dueAt: true,
 } as const;
 
 export class RetentionFollowUpError extends Error {
@@ -65,6 +71,7 @@ export type RecordRetentionFollowUpTaskInput = {
   customerId: string;
   jobId: string;
   group: string;
+  dueOn?: string;
 };
 
 export type RecordedRetentionFollowUp = {
@@ -75,6 +82,7 @@ export type RecordedRetentionFollowUp = {
   kind: string;
   status: string;
   origin: string;
+  dueAt: Date | null;
 };
 
 export type RecordRetentionFollowUpTaskResult = {
@@ -144,6 +152,7 @@ async function writeRetentionFollowUpTask(
     customerId: string;
     jobId: string;
     kind: "JOB_COMPLETE" | "REPEAT";
+    dueAt?: Date | null;
   },
 ): Promise<RecordRetentionFollowUpTaskResult> {
   const existing = await findOwnedRetentionTask(db, {
@@ -154,7 +163,10 @@ async function writeRetentionFollowUpTask(
   if (existing) {
     const updated = await db.customerFollowUp.update({
       where: { id: existing.id },
-      data: { kind: existing.kind },
+      data: {
+        kind: existing.kind,
+        ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
+      },
       select: followUpSelect,
     });
     return { outcome: "UPDATED", followUp: updated };
@@ -169,6 +181,7 @@ async function writeRetentionFollowUpTask(
         kind: input.kind,
         status: "OPEN",
         origin: CUSTOMER_FOLLOW_UP_ORIGINS.RETENTION_TASK,
+        dueAt: input.dueAt ?? null,
         createdByMembershipId: access.workspace.membership.id,
       },
       select: followUpSelect,
@@ -245,6 +258,12 @@ export async function recordRetentionFollowUpTask(
 
   await assertFindingStillRecorded(db, access.businessId, input.group, customer.id, job);
 
+  const timeZone = await loadRetentionBusinessTimeZone(db, access.businessId);
+  const parsedDueAt = parseRetentionFollowUpDueOn(input.dueOn, timeZone);
+  if (parsedDueAt === "invalid") {
+    throw new RetentionFollowUpError(RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE);
+  }
+
   const kind = retentionFollowUpKind(input.group);
   return withRetentionWriteLock(
     db,
@@ -258,6 +277,7 @@ export async function recordRetentionFollowUpTask(
         customerId: customer.id,
         jobId: job.id,
         kind,
+        dueAt: input.dueOn?.trim() ? parsedDueAt : undefined,
       }),
   );
 }

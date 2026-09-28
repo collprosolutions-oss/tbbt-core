@@ -2908,6 +2908,9 @@ model CustomerFollowUp {
   /// COMMUNICATION | RETENTION_TASK
   /// RETENTION_TASK is owner-recorded work and is excluded from due scans.
   origin                String    @default("COMMUNICATION")
+  /// Owner-set calendar due instant for RETENTION_TASK. Never used by
+  /// CUSTOMER_FOLLOW_UP_DUE scans. COMMUNICATION rows stay null.
+  dueAt                 DateTime?
   notes                 String    @default("")
   cancelledAt           DateTime?
   sentAt                DateTime?
@@ -2925,6 +2928,7 @@ model CustomerFollowUp {
   @@index([businessId])
   @@index([businessId, kind, status])
   @@index([businessId, origin, status])
+  @@index([businessId, origin, status, dueAt])
   @@index([customerId])
   @@index([jobId])
   @@index([createdByMembershipId])

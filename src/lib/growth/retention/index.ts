@@ -7,6 +7,7 @@ export {
   NO_REVIEW_REQUEST_FACT,
   NO_LATER_JOB_FACT,
   RECORDED_FOLLOW_UP_FACT,
+  DUE_OR_OVERDUE_FACT,
   NO_REFERRAL_REQUEST_FACT,
   INCOMPLETE_JOURNEY_FACT,
   RETENTION_READ_ONLY_MESSAGE,
@@ -29,6 +30,7 @@ export {
   RETENTION_FOLLOW_UP_JOB_NOT_COMPLETED_MESSAGE,
   RETENTION_FOLLOW_UP_UNKNOWN_FINDING_MESSAGE,
   RETENTION_FOLLOW_UP_STALE_FINDING_MESSAGE,
+  RETENTION_FOLLOW_UP_INVALID_DUE_DATE_MESSAGE,
   RETENTION_NO_CADENCE_MESSAGE,
   RETENTION_AGE_PREFIX,
   CUSTOMER_FOLLOW_UP_STATUSES,
@@ -47,6 +49,19 @@ export {
   daysSinceInBusinessTimeZone,
   formatLastCompletedAge,
 } from "@/lib/growth/retention/age";
+
+export {
+  RETENTION_FOLLOW_UP_DUE_STATES,
+  RETENTION_FOLLOW_UP_DUE_STATE_LABELS,
+  loadRetentionBusinessTimeZone,
+  parseRetentionFollowUpDueOn,
+  retentionFollowUpDueState,
+  isRetentionFollowUpDueOrOverdue,
+  retentionFollowUpDueStateLabel,
+  retentionFollowUpDueViewCutoff,
+  retentionFollowUpDueViewWhere,
+  type RetentionFollowUpDueState,
+} from "@/lib/growth/retention/due";
 
 export {
   requireRetentionCenterAccess,

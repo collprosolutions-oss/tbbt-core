@@ -38,6 +38,7 @@ const followUpSelect = {
   kind: true,
   status: true,
   origin: true,
+  dueAt: true,
   cancelledAt: true,
 } as const;
 
@@ -107,6 +108,7 @@ function recordedFollowUp(row: {
   kind: string;
   status: string;
   origin: string;
+  dueAt: Date | null;
 }): RecordedRetentionFollowUp {
   return {
     id: row.id,
@@ -116,6 +118,7 @@ function recordedFollowUp(row: {
     kind: row.kind,
     status: row.status,
     origin: row.origin,
+    dueAt: row.dueAt,
   };
 }
 

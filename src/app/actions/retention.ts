@@ -35,6 +35,7 @@ export async function recordRetentionFollowUpTaskAction(
       customerId: readString(formData, "customerId"),
       jobId: readString(formData, "jobId"),
       group: readString(formData, "group"),
+      dueOn: readString(formData, "dueOn"),
     });
     revalidatePath(RETENTION_ROUTE);
     return {

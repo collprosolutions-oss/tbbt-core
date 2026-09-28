@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   recordRetentionFollowUpTaskAction,
   resolveRetentionFollowUpTaskStatusAction,
@@ -33,10 +34,11 @@ export function RetentionCenter({
 }) {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Kpi label={RETENTION_GROUP_TITLES.NO_REVIEW_REQUEST} value={workspace.totals.noReviewRequest} />
         <Kpi label={RETENTION_GROUP_TITLES.NO_LATER_JOB} value={workspace.totals.noLaterJob} />
         <Kpi label={RETENTION_GROUP_TITLES.RECORDED_FOLLOW_UP} value={workspace.totals.recordedFollowUp} />
+        <Kpi label={RETENTION_GROUP_TITLES.DUE_OR_OVERDUE} value={workspace.totals.dueOrOverdue} />
         <Kpi label={RETENTION_GROUP_TITLES.NO_REFERRAL_REQUEST} value={workspace.totals.noReferralRequest} />
         <Kpi label={RETENTION_GROUP_TITLES.INCOMPLETE_JOURNEY} value={workspace.totals.incompleteJourney} />
       </div>
@@ -62,7 +64,12 @@ export function RetentionCenter({
         empty="No past customers with a completed job and no later same-business Job in this window."
         canRecordFollowUp={canRecordFollowUp}
       />
-      <FollowUpGroup rows={workspace.groups.recordedFollowUp} canResolveFollowUp={canResolveFollowUp} />
+      <FollowUpGroup
+        rows={workspace.groups.recordedFollowUp}
+        timeZone={workspace.timeZone}
+        canResolveFollowUp={canResolveFollowUp}
+      />
+      <DueOrOverdueGroup rows={workspace.groups.dueOrOverdue} timeZone={workspace.timeZone} />
       <CandidateGroup
         title={RETENTION_GROUP_TITLES.NO_REFERRAL_REQUEST}
         description={workspace.groups.noReferralRequest[0]?.fact}
@@ -159,6 +166,10 @@ function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
       <input type="hidden" name="jobId" value={row.lastCompletedJobId} />
       <input type="hidden" name="group" value={row.group} />
       <p className="text-xs text-muted-foreground">{RETENTION_OWNER_FOLLOW_UP_MESSAGE}</p>
+      <label className="block text-xs text-muted-foreground">
+        Due date (optional)
+        <Input type="date" name="dueOn" className="mt-1 w-40" />
+      </label>
       <Button type="submit" size="sm">
         Record follow-up task
       </Button>
@@ -168,9 +179,11 @@ function RetentionFollowUpForm({ row }: { row: RetentionCandidate }) {
 
 function FollowUpGroup({
   rows,
+  timeZone,
   canResolveFollowUp,
 }: {
   rows: RetentionFollowUpRow[];
+  timeZone: string;
   canResolveFollowUp: boolean;
 }) {
   return (
@@ -194,6 +207,9 @@ function FollowUpGroup({
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
               Kind: {row.kind}. Recorded status: {row.statusLabel}.
+              {row.dueAt
+                ? ` Due date: ${formatDate(row.dueAt, timeZone)} (${row.dueStateLabel}).`
+                : " No due date."}
             </p>
             <LinkRow links={row.links} />
             {canResolveFollowUp &&
@@ -201,6 +217,49 @@ function FollowUpGroup({
             (row.status === "OPEN" || row.status === "DONE" || row.status === "CANCELLED") ? (
               <RetentionFollowUpResolveForm row={row} />
             ) : null}
+          </article>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DueOrOverdueGroup({
+  rows,
+  timeZone,
+}: {
+  rows: RetentionFollowUpRow[];
+  timeZone: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{RETENTION_GROUP_TITLES.DUE_OR_OVERDUE}</CardTitle>
+        <CardDescription>
+          {rows[0]?.fact ??
+            "Owner-recorded retention follow-up tasks whose due date is today or earlier in the business timezone. This is not a send."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length === 0 ? (
+          <EmptyState
+            title="None recorded"
+            description="No open owner-recorded follow-up tasks are due or overdue in this window."
+          />
+        ) : null}
+        {rows.map((row) => (
+          <article key={row.followUpId} className="rounded-md border border-border/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium">{row.customerName}</p>
+              <Badge variant={row.dueState === "OVERDUE" ? "destructive" : "outline"}>
+                {row.dueStateLabel}
+              </Badge>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Kind: {row.kind}. Recorded status: {row.statusLabel}. Due date:{" "}
+              {row.dueAt ? formatDate(row.dueAt, timeZone) : "Not recorded"}.
+            </p>
+            <LinkRow links={row.links} />
           </article>
         ))}
       </CardContent>

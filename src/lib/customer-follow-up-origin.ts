@@ -4,7 +4,8 @@
  * COMMUNICATION rows are the existing reviews/automation follow-ups and
  * remain eligible for CUSTOMER_FOLLOW_UP_DUE scans. RETENTION_TASK rows
  * are owner-recorded retention work and must never generate a due event
- * or send a message.
+ * or send a message. An owner-set dueAt is only for the retention
+ * due/overdue view.
  */
 export const CUSTOMER_FOLLOW_UP_ORIGINS = {
   COMMUNICATION: "COMMUNICATION",
