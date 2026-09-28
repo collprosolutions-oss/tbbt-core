@@ -225,7 +225,8 @@ try {
     "UI offers an optional due date and not Mark sent",
     uiSrc.includes("updateRetentionFollowUpDueOnAction") &&
       uiSrc.includes('name="dueOn"') &&
-      uiSrc.includes("Due or overdue follow-up tasks") &&
+      uiSrc.includes("RETENTION_GROUP_TITLES.DUE_OR_OVERDUE") &&
+      uiSrc.includes("DueFollowUpGroup") &&
       !/Mark sent|Send via connected|requestText|messageBody|lastEmailStatus|lastSmsStatus/.test(uiSrc),
   );
   check(
