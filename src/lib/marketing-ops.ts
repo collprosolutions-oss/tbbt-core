@@ -22,6 +22,10 @@ import {
   nextContentStatus,
   OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
+  STUDIO_APPROVE_NOT_READY_MESSAGE,
+  STUDIO_APPROVAL_QUEUE_STATUS,
+  STUDIO_RETURN_FOR_CHANGES_MESSAGE,
+  STUDIO_RETURN_NOT_READY_MESSAGE,
   parseHashtags,
   parseMarketingDate,
   parseRequiredShotList,
@@ -396,6 +400,67 @@ export async function advanceMarketingContentStatus(
       reviewedByMembershipId: next === "APPROVED" ? access.workspace.membership.id : content.reviewedByMembershipId,
       reviewedAt: next === "APPROVED" ? new Date() : content.reviewedAt,
     },
+  });
+}
+
+async function loadOwnedStudioPackageForReview(
+  db: Db,
+  access: BusinessAccess,
+  contentId: string,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(OWNER_STUDIO_APPROVAL_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+  return access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: contentId, ...access.scope },
+    }),
+  );
+}
+
+export async function approveMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+) {
+  const content = await loadOwnedStudioPackageForReview(db, access, input.contentId);
+  if (content.status !== STUDIO_APPROVAL_QUEUE_STATUS) {
+    throw new MarketingError(STUDIO_APPROVE_NOT_READY_MESSAGE);
+  }
+  await assertAttachedPhotosStillApproved(db, access, content.id);
+  return db.marketingContent.update({
+    where: { id: content.id },
+    data: {
+      status: "APPROVED",
+      reviewedByMembershipId: access.workspace.membership.id,
+      reviewedAt: new Date(),
+    },
+  });
+}
+
+export async function returnMarketingStudioPackage(
+  db: Db,
+  access: BusinessAccess,
+  input: { contentId: string },
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(STUDIO_RETURN_FOR_CHANGES_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+  const content = access.assertOwned(
+    await db.marketingContent.findFirst({
+      where: { id: input.contentId, ...access.scope },
+    }),
+  );
+  if (content.status !== STUDIO_APPROVAL_QUEUE_STATUS) {
+    throw new MarketingError(STUDIO_RETURN_NOT_READY_MESSAGE);
+  }
+  return db.marketingContent.update({
+    where: { id: content.id },
+    data: { status: "DRAFT" },
   });
 }
 

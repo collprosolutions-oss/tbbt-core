@@ -15,6 +15,10 @@ import {
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   PERFORMANCE_UNAVAILABLE_MESSAGE,
   SOCIAL_MANUAL_COPY_MESSAGE,
+  STUDIO_APPROVAL_QUEUE_LIMIT,
+  STUDIO_APPROVAL_QUEUE_STATUS,
+  WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
+  studioApprovalQueueMeta,
 } from "@/lib/marketing";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
@@ -53,7 +57,9 @@ export async function loadMarketingSource(
 ) {
   const scope = { businessId } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices] = await Promise.all([
+  const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
+
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -159,6 +165,38 @@ export async function loadMarketingSource(
     prisma.review.count({ where: scope }),
     prisma.serviceArea.count({ where: scope }),
     prisma.invoice.count({ where: { ...scope, status: "SENT" } }),
+    prisma.marketingContent.findMany({
+      where: approvalQueueWhere,
+      take: STUDIO_APPROVAL_QUEUE_LIMIT,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        contentType: true,
+        title: true,
+        body: true,
+        channelIntent: true,
+        status: true,
+        plannedFor: true,
+        createdAt: true,
+        updatedAt: true,
+        storyboardJson: true,
+        shotListJson: true,
+        hashtags: true,
+        photos: {
+          include: {
+            jobPhoto: {
+              select: {
+                id: true,
+                url: true,
+                stage: true,
+                marketingPermissionStatus: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+    prisma.marketingContent.count({ where: approvalQueueWhere }),
   ]);
 
   const catalogName = (id: string | null) =>
@@ -249,6 +287,30 @@ export async function loadMarketingSource(
         approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
       })),
     })),
+    approvalQueue: {
+      ...studioApprovalQueueMeta(approvalQueueTotal),
+      message: WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
+      items: approvalQueueRows.map((content) => ({
+        id: content.id,
+        contentType: content.contentType,
+        title: content.title,
+        body: content.body,
+        channelIntent: content.channelIntent,
+        status: content.status,
+        plannedFor: content.plannedFor,
+        createdAt: content.createdAt,
+        updatedAt: content.updatedAt,
+        storyboardJson: content.storyboardJson,
+        shotListJson: content.shotListJson,
+        hashtags: content.hashtags,
+        photos: content.photos.map((row) => ({
+          id: row.jobPhoto.id,
+          url: row.jobPhoto.url,
+          stage: row.jobPhoto.stage,
+          approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
+        })),
+      })),
+    },
     counts: {
       completedJobs: opportunities.length,
       drafts: drafts.length,

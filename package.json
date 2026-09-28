@@ -46,6 +46,7 @@
     "test:financial-intelligence": "node --experimental-strip-types scripts/check-financial-intelligence.mjs",
     "test:production-certification": "node --experimental-strip-types scripts/check-production-certification.mjs",
     "test:marketing": "node --experimental-strip-types scripts/check-marketing.mjs",
+    "test:marketing-approval-queue": "node --experimental-strip-types scripts/check-marketing-approval-queue.mjs",
     "test:reviews": "node --experimental-strip-types scripts/check-reviews.mjs",
     "test:pipeline": "node --experimental-strip-types scripts/check-pipeline.mjs",
     "test:knowledge": "node --experimental-strip-types scripts/check-knowledge.mjs",

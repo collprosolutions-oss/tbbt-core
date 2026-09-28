@@ -18,15 +18,21 @@ import {
 import { loadMarketingSource } from "@/lib/marketing-data";
 import {
   advanceMarketingContentStatus,
+  approveMarketingStudioPackage,
   createMarketingStudioPackage,
   downloadMarketingReviewPacket,
   exportMarketingCreatorPackage,
   grantJobPhotoMarketingPermission,
   marketingErrorMessage,
+  returnMarketingStudioPackage,
   revokeJobPhotoMarketingPermission,
   setMarketingContentPlannedFor,
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
+import {
+  STUDIO_APPROVED_INTERNAL_MESSAGE,
+  STUDIO_RETURNED_MESSAGE,
+} from "@/lib/marketing";
 import { prisma } from "@/lib/prisma";
 
 export type MarketingActionState = {
@@ -211,6 +217,38 @@ export async function advanceMarketingContentAction(
     };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That content status could not be updated.") };
+  }
+}
+
+export async function approveMarketingStudioPackageAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    await approveMarketingStudioPackage(prisma, access, {
+      contentId: readString(formData, "contentId"),
+    });
+    revalidateMarketing();
+    return { message: STUDIO_APPROVED_INTERNAL_MESSAGE };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That creator package could not be approved.") };
+  }
+}
+
+export async function returnMarketingStudioPackageAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    await returnMarketingStudioPackage(prisma, access, {
+      contentId: readString(formData, "contentId"),
+    });
+    revalidateMarketing();
+    return { message: STUDIO_RETURNED_MESSAGE };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That creator package could not be returned for changes.") };
   }
 }
 
