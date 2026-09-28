@@ -124,6 +124,17 @@ export type StudioWeeklyReminderDeps = {
    * locked revalidate+claim. Destination updates that commit here win.
    */
   beforeOwnerSmsClaim?: () => Promise<void>;
+  /**
+   * Test hook. Runs inside the claim transaction after the per-business
+   * advisory lock is held and before the destination revalidate+claim.
+   */
+  afterOwnerSmsClaimLockAcquired?: () => Promise<void>;
+  /**
+   * Test hook. Runs inside any withReminderLock transaction after the
+   * per-business advisory lock is held. Used to prove STOP/block writes
+   * wait while a claim transaction holds the lock.
+   */
+  afterReminderLockAcquired?: () => Promise<void>;
   /** Test hook. Throws after provider acceptance to simulate a failed status write. */
   afterProviderAccepted?: () => Promise<void>;
 };
@@ -214,8 +225,122 @@ async function withReminderLock<T>(
   if (deps?.beforeSerialize) await deps.beforeSerialize();
   return runInTransaction(db, async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${reminderLockKey(businessId)}))`;
+    if (deps?.afterReminderLockAcquired) await deps.afterReminderLockAcquired();
     return work(tx);
   });
+}
+
+export type OwnerStudioReminderConsentWriteResult = {
+  matched: boolean;
+  applied: boolean;
+  reason: string;
+};
+
+async function ownerDestinationMatches(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  fromDigits: string,
+) {
+  const settings = await tx.businessSettings.findUnique({
+    where: { businessId },
+    select: {
+      studioWeeklyReminderOwnerSmsTo: true,
+      studioWeeklyReminderOwnerSmsStopAt: true,
+    },
+  });
+  const ownerDigits = normalizePhone(settings?.studioWeeklyReminderOwnerSmsTo);
+  if (!settings || !ownerDigits || ownerDigits !== fromDigits) {
+    return { settings: null, matched: false as const };
+  }
+  return { settings, matched: true as const };
+}
+
+/**
+ * Persist an inbound OWNER STOP under the same per-business advisory
+ * lock as claim and destination updates. Provider I/O stays outside.
+ */
+export async function recordOwnerStudioReminderStop(
+  db: Db,
+  businessId: string,
+  fromDigits: string,
+  deps?: StudioWeeklyReminderDeps,
+): Promise<OwnerStudioReminderConsentWriteResult> {
+  return withReminderLock(
+    db,
+    businessId,
+    async (tx) => {
+      const matched = await ownerDestinationMatches(tx, businessId, fromDigits);
+      if (!matched.matched) {
+        return { matched: false, applied: false, reason: "not_owner_destination" };
+      }
+      if (matched.settings.studioWeeklyReminderOwnerSmsStopAt) {
+        return { matched: true, applied: true, reason: "owner_stop_idempotent" };
+      }
+      await tx.businessSettings.update({
+        where: { businessId },
+        data: {
+          studioWeeklyReminderOwnerSmsOptedIn: false,
+          studioWeeklyReminderOwnerSmsStopAt: new Date(),
+        },
+      });
+      return { matched: true, applied: true, reason: "owner_stopped" };
+    },
+    deps,
+  );
+}
+
+/**
+ * Clear an inbound OWNER START under the same per-business advisory
+ * lock as claim and destination updates. Provider I/O stays outside.
+ */
+export async function recordOwnerStudioReminderStart(
+  db: Db,
+  businessId: string,
+  fromDigits: string,
+  deps?: StudioWeeklyReminderDeps,
+): Promise<OwnerStudioReminderConsentWriteResult> {
+  return withReminderLock(
+    db,
+    businessId,
+    async (tx) => {
+      const matched = await ownerDestinationMatches(tx, businessId, fromDigits);
+      if (!matched.matched) {
+        return { matched: false, applied: false, reason: "not_owner_destination" };
+      }
+      if (!matched.settings.studioWeeklyReminderOwnerSmsStopAt) {
+        return { matched: true, applied: true, reason: "owner_start_not_applicable" };
+      }
+      await tx.businessSettings.update({
+        where: { businessId },
+        data: { studioWeeklyReminderOwnerSmsStopAt: null },
+      });
+      return { matched: true, applied: true, reason: "owner_stop_cleared" };
+    },
+    deps,
+  );
+}
+
+/**
+ * Persist a provider block (Twilio 21610 / send-time or delivery
+ * webhook) under the same per-business advisory lock as claim.
+ * The provider call itself stays outside this lock.
+ */
+export async function recordOwnerStudioReminderBlocked(
+  db: Db,
+  businessId: string,
+  deps?: StudioWeeklyReminderDeps,
+): Promise<void> {
+  await withReminderLock(
+    db,
+    businessId,
+    async (tx) => {
+      await tx.businessSettings.updateMany({
+        where: { businessId },
+        data: { studioWeeklyReminderOwnerSmsBlockedAt: new Date() },
+      });
+    },
+    deps,
+  );
 }
 
 function asReminder(row: {
@@ -310,8 +435,10 @@ async function claimOwnerStudioReminderSmsIfDestinationUnchanged(
   db: Db,
   reminder: StudioWeeklyReminderRecord,
   selectedTo: string,
+  deps?: StudioWeeklyReminderDeps,
 ): Promise<OwnerSmsClaimOutcome> {
   return withReminderLock(db, reminder.businessId, async (tx) => {
+    if (deps?.afterOwnerSmsClaimLockAcquired) await deps.afterOwnerSmsClaimLockAcquired();
     const row = await tx.marketingStudioWeeklyReminder.findFirst({
       where: { id: reminder.id, businessId: reminder.businessId },
       select: { smsSendClaimedAt: true },
@@ -466,7 +593,7 @@ async function deliverOwnerStudioWeeklyReminderSms(
 
   if (deps?.beforeOwnerSmsClaim) await deps.beforeOwnerSmsClaim();
 
-  const claim = await claimOwnerStudioReminderSmsIfDestinationUnchanged(db, existing, toDigits);
+  const claim = await claimOwnerStudioReminderSmsIfDestinationUnchanged(db, existing, toDigits, deps);
   if (claim === "destination_changed") {
     return { ...result, reminder: await loadReminderRow(db, existing) };
   }
@@ -522,10 +649,7 @@ async function deliverOwnerStudioWeeklyReminderSms(
   try {
     const blocked = !sent.ok && isOwnerSmsBlockedProviderCode(sent.errorCode);
     if (blocked) {
-      await db.businessSettings.updateMany({
-        where: { businessId: existing.businessId },
-        data: { studioWeeklyReminderOwnerSmsBlockedAt: new Date() },
-      });
+      await recordOwnerStudioReminderBlocked(db, existing.businessId);
     }
     const timedOut = !sent.ok && sent.error === "The messaging provider timed out.";
     const smsStatus = sent.ok
@@ -882,10 +1006,7 @@ export async function recordOwnerStudioReminderDeliveryBlock(
     if (!blocked) {
       return { applied: false, reason: "not_owner_block", businessId: reminder.businessId };
     }
-    await db.businessSettings.updateMany({
-      where: { businessId: reminder.businessId },
-      data: { studioWeeklyReminderOwnerSmsBlockedAt: new Date() },
-    });
+    await recordOwnerStudioReminderBlocked(db, reminder.businessId);
     await recordReminderSms(
       db,
       asReminder(reminder),

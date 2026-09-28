@@ -79,6 +79,8 @@ const {
   loadStudioWeeklyReminderState,
   missingStudioWeeklyReminderSchema,
   presentStudioWeeklyReminderForViewer,
+  recordOwnerStudioReminderBlocked,
+  recordOwnerStudioReminderStop,
   runScheduledStudioWeeklyReminders,
   setStudioWeeklyReminderOwnerSms,
   setStudioWeeklyReviewReminderOptIn,
@@ -166,6 +168,50 @@ async function writeOwnerSmsDestination(businessId, destination, optedIn) {
       studioWeeklyReminderOwnerSmsOptedIn: optedIn,
     },
   });
+}
+
+async function clearOwnerSmsStopAndBlock(businessId) {
+  await prisma.businessSettings.updateMany({
+    where: { businessId },
+    data: {
+      studioWeeklyReminderOwnerSmsStopAt: null,
+      studioWeeklyReminderOwnerSmsBlockedAt: null,
+    },
+  });
+}
+
+async function resetOwnerSmsSendWeek(businessId, destination) {
+  await clearOwnerSmsStopAndBlock(businessId);
+  await writeOwnerSmsDestination(businessId, destination, true);
+  await prisma.marketingStudioWeeklyReminder.deleteMany({ where: { businessId } });
+}
+
+function createGate() {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+function createNotifier() {
+  let notify;
+  const reached = new Promise((resolve) => {
+    notify = resolve;
+  });
+  return { reached, notify };
+}
+
+async function waitUntilUngrantedAdvisoryLock(client) {
+  for (;;) {
+    const rows = await client.$queryRaw`
+      SELECT COUNT(*)::int AS n
+      FROM pg_locks
+      WHERE locktype = 'advisory' AND NOT granted
+    `;
+    if ((rows[0]?.n ?? 0) > 0) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 let failures = 0;
@@ -340,6 +386,10 @@ try {
       reminderOpsSrc.includes("smsSendClaimedAt") &&
       reminderOpsSrc.includes("claimOwnerStudioReminderSmsIfDestinationUnchanged") &&
       reminderOpsSrc.includes("beforeOwnerSmsClaim") &&
+      reminderOpsSrc.includes("afterOwnerSmsClaimLockAcquired") &&
+      reminderOpsSrc.includes("afterReminderLockAcquired") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderStop") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderBlocked") &&
       reminderOpsSrc.includes("currentTo !== selectedTo") &&
       reminderOpsSrc.includes("STUDIO_WEEKLY_REMINDER_CHANNEL") &&
       !reminderOpsSrc
@@ -500,9 +550,47 @@ try {
       twilioSrc.includes("AbortController") &&
       twilioSrc.includes("TWILIO_SEND_TIMEOUT_MS") &&
       inboundSrc.includes("applyOwnerStudioReminderInbound") &&
-      inboundSrc.includes("studioWeeklyReminderOwnerSmsStopAt") &&
+      inboundSrc.includes("recordOwnerStudioReminderStop") &&
+      inboundSrc.includes("recordOwnerStudioReminderStart") &&
+      !inboundSrc.includes("studioWeeklyReminderOwnerSmsStopAt: new Date()") &&
       reminderOpsSrc.includes("recordOwnerStudioReminderDeliveryBlock") &&
+      reminderOpsSrc.includes("recordOwnerStudioReminderBlocked") &&
       reminderOpsSrc.includes("OWNER_SMS_BLOCKED_PROVIDER_CODE"),
+  );
+  const stopWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStop"),
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStart"),
+  );
+  const startWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderStart"),
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderBlocked"),
+  );
+  const blockedWriteSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderBlocked"),
+    reminderOpsSrc.indexOf("function asReminder"),
+  );
+  const deliveryBlockSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("export async function recordOwnerStudioReminderDeliveryBlock"),
+    reminderOpsSrc.indexOf("export async function setStudioWeeklyReminderOwnerSms"),
+  );
+  const sendTimeBlockSrc = reminderOpsSrc.slice(
+    reminderOpsSrc.indexOf("const sent = await sendOwnerSms"),
+    reminderOpsSrc.indexOf("function unavailableReminderState"),
+  );
+  check(
+    "STOP and provider-block writes take the same per-business reminder lock",
+    stopWriteSrc.includes("withReminderLock") &&
+      startWriteSrc.includes("withReminderLock") &&
+      blockedWriteSrc.includes("withReminderLock") &&
+      blockedWriteSrc.includes("studioWeeklyReminderOwnerSmsBlockedAt") &&
+      deliveryBlockSrc.includes("recordOwnerStudioReminderBlocked") &&
+      !deliveryBlockSrc.includes("studioWeeklyReminderOwnerSmsBlockedAt: new Date()") &&
+      sendTimeBlockSrc.includes("recordOwnerStudioReminderBlocked") &&
+      !stopWriteSrc.includes("sendOwnerSms") &&
+      !startWriteSrc.includes("sendOwnerSms") &&
+      !blockedWriteSrc.includes("sendOwnerSms") &&
+      sendTimeBlockSrc.indexOf("const sent = await sendOwnerSms") <
+        sendTimeBlockSrc.indexOf("recordOwnerStudioReminderBlocked"),
   );
   check(
     "Owner SMS sends only on the business local Monday",
@@ -1121,6 +1209,253 @@ try {
       claimedFirstRow?.smsSendClaimedAt != null &&
       claimFirstSms.sent.length === 1,
   );
+  await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
+
+  console.log("\nTEST — STOP that commits before claim sends nothing");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  const stopBeforeSms = createFakeCustomerMessagingProvider();
+  const stopBeforeClaimGate = createGate();
+  const stopBeforeClaimReached = createNotifier();
+  const stopBeforeClaimDispatch = dispatchStudioWeeklyReviewReminder(
+    prisma,
+    businessB.id,
+    pacificMonday10,
+    {
+      smsPlatformConfigured: true,
+      messagingProvider: stopBeforeSms,
+      async beforeOwnerSmsClaim() {
+        stopBeforeClaimReached.notify();
+        await stopBeforeClaimGate.gate;
+      },
+    },
+  );
+  await stopBeforeClaimReached.reached;
+  const stopBeforeClaimEvent = await applyInboundConsentEvent(prisma, {
+    provider: "fake",
+    providerEventId: `owner-stop-before-claim-${randomUUID()}`,
+    from: ownerDest,
+    to: tenantFrom,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  stopBeforeClaimGate.release();
+  const stopBeforeClaimResult = await stopBeforeClaimDispatch;
+  const stopBeforeClaimRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: stopBeforeClaimResult.reminder?.weekKey },
+  });
+  check(
+    "A STOP that commits before revalidate+claim neither claims nor sends",
+    stopBeforeClaimEvent.applied === true &&
+      stopBeforeClaimEvent.reason === "owner_stopped" &&
+      stopBeforeClaimResult.created === true &&
+      stopBeforeClaimRow?.smsSendClaimedAt == null &&
+      stopBeforeSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — Provider-block that commits before claim sends nothing");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const blockBeforeSms = createFakeCustomerMessagingProvider();
+  const blockBeforeClaimGate = createGate();
+  const blockBeforeClaimReached = createNotifier();
+  const blockBeforeClaimDispatch = dispatchStudioWeeklyReviewReminder(
+    prisma,
+    businessB.id,
+    pacificMonday10,
+    {
+      smsPlatformConfigured: true,
+      messagingProvider: blockBeforeSms,
+      async beforeOwnerSmsClaim() {
+        blockBeforeClaimReached.notify();
+        await blockBeforeClaimGate.gate;
+      },
+    },
+  );
+  await blockBeforeClaimReached.reached;
+  await recordOwnerStudioReminderBlocked(prisma, businessB.id);
+  blockBeforeClaimGate.release();
+  const blockBeforeClaimResult = await blockBeforeClaimDispatch;
+  const blockBeforeClaimRow = await prisma.marketingStudioWeeklyReminder.findFirst({
+    where: { businessId: businessB.id, weekKey: blockBeforeClaimResult.reminder?.weekKey },
+  });
+  const blockBeforeSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  check(
+    "A provider-block write that commits before revalidate+claim neither claims nor sends",
+    blockBeforeSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      blockBeforeClaimResult.created === true &&
+      blockBeforeClaimRow?.smsSendClaimedAt == null &&
+      blockBeforeSms.sent.length === 0,
+  );
+
+  console.log("\nTEST — Claim first then STOP keeps the once-per-week send");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const claimThenStopSms = createFakeCustomerMessagingProvider();
+  const claimedThenStop = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenStopSms,
+  });
+  const stopAfterClaim = await applyInboundConsentEvent(prisma, {
+    provider: "fake",
+    providerEventId: `owner-stop-after-claim-${randomUUID()}`,
+    from: ownerDest,
+    to: tenantFrom,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const rerunAfterStop = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenStopSms,
+  });
+  check(
+    "STOP after a committed claim cannot send a second SMS",
+    claimedThenStop.created === true &&
+      claimedThenStop.reminder?.smsSendClaimedAt != null &&
+      claimThenStopSms.sent.length === 1 &&
+      stopAfterClaim.reason === "owner_stopped" &&
+      rerunAfterStop.created === false &&
+      rerunAfterStop.reason === "already_recorded" &&
+      rerunAfterStop.reminder?.id === claimedThenStop.reminder.id &&
+      claimThenStopSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — Claim first then provider-block keeps the once-per-week send");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const claimThenBlockSms = createFakeCustomerMessagingProvider();
+  const claimedThenBlock = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenBlockSms,
+  });
+  await recordOwnerStudioReminderBlocked(prisma, businessB.id);
+  const rerunAfterBlock = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: claimThenBlockSms,
+  });
+  check(
+    "A provider-block write after a committed claim cannot send a second SMS",
+    claimedThenBlock.created === true &&
+      claimedThenBlock.reminder?.smsSendClaimedAt != null &&
+      claimThenBlockSms.sent.length === 1 &&
+      rerunAfterBlock.created === false &&
+      rerunAfterBlock.reason === "already_recorded" &&
+      rerunAfterBlock.reminder?.id === claimedThenBlock.reminder.id &&
+      claimThenBlockSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — STOP waits on the reminder lock while a claim transaction holds it");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const stopWaitSms = createFakeCustomerMessagingProvider();
+  const stopWaitClaimGate = createGate();
+  const stopWaitClaimHeld = createNotifier();
+  const stopWaitStarted = createNotifier();
+  let stopWaitAcquiredLock = false;
+  const lockClientStop = new PrismaClient({ datasourceUrl: testUrl });
+  const stopWaitDispatch = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: stopWaitSms,
+    async afterOwnerSmsClaimLockAcquired() {
+      stopWaitClaimHeld.notify();
+      await stopWaitClaimGate.gate;
+    },
+  });
+  await stopWaitClaimHeld.reached;
+  const stopWaitWrite = recordOwnerStudioReminderStop(lockClientStop, businessB.id, "9415550199", {
+    async beforeSerialize() {
+      stopWaitStarted.notify();
+    },
+    async afterReminderLockAcquired() {
+      stopWaitAcquiredLock = true;
+    },
+  });
+  await stopWaitStarted.reached;
+  check(
+    "STOP has not entered the reminder lock while the claim transaction holds it",
+    stopWaitAcquiredLock === false,
+  );
+  await waitUntilUngrantedAdvisoryLock(prisma);
+  check(
+    "STOP is waiting on the advisory lock held by the claim transaction",
+    stopWaitAcquiredLock === false,
+  );
+  stopWaitClaimGate.release();
+  const [stopWaitResult, stopWaitConsent] = await Promise.all([stopWaitDispatch, stopWaitWrite]);
+  await lockClientStop.$disconnect();
+  const rerunAfterStopWait = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: stopWaitSms,
+  });
+  check(
+    "Claim that holds the lock first still sends at most once after a waiting STOP",
+    stopWaitAcquiredLock === true &&
+      stopWaitConsent.reason === "owner_stopped" &&
+      stopWaitResult.reminder?.smsSendClaimedAt != null &&
+      stopWaitSms.sent.length === 1 &&
+      rerunAfterStopWait.created === false &&
+      stopWaitSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — Provider-block waits on the reminder lock while a claim transaction holds it");
+  await resetOwnerSmsSendWeek(businessB.id, ownerDest);
+  const blockWaitSms = createFakeCustomerMessagingProvider();
+  const blockWaitClaimGate = createGate();
+  const blockWaitClaimHeld = createNotifier();
+  const blockWaitStarted = createNotifier();
+  let blockWaitAcquiredLock = false;
+  const lockClientBlock = new PrismaClient({ datasourceUrl: testUrl });
+  const blockWaitDispatch = dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: blockWaitSms,
+    async afterOwnerSmsClaimLockAcquired() {
+      blockWaitClaimHeld.notify();
+      await blockWaitClaimGate.gate;
+    },
+  });
+  await blockWaitClaimHeld.reached;
+  const blockWaitWrite = recordOwnerStudioReminderBlocked(lockClientBlock, businessB.id, {
+    async beforeSerialize() {
+      blockWaitStarted.notify();
+    },
+    async afterReminderLockAcquired() {
+      blockWaitAcquiredLock = true;
+    },
+  });
+  await blockWaitStarted.reached;
+  check(
+    "Provider-block has not entered the reminder lock while the claim transaction holds it",
+    blockWaitAcquiredLock === false,
+  );
+  await waitUntilUngrantedAdvisoryLock(prisma);
+  check(
+    "Provider-block is waiting on the advisory lock held by the claim transaction",
+    blockWaitAcquiredLock === false,
+  );
+  blockWaitClaimGate.release();
+  const [blockWaitResult] = await Promise.all([blockWaitDispatch, blockWaitWrite]);
+  await lockClientBlock.$disconnect();
+  const rerunAfterBlockWait = await dispatchStudioWeeklyReviewReminder(prisma, businessB.id, pacificMonday10, {
+    smsPlatformConfigured: true,
+    messagingProvider: blockWaitSms,
+  });
+  const blockWaitSettings = await prisma.businessSettings.findUnique({
+    where: { businessId: businessB.id },
+    select: { studioWeeklyReminderOwnerSmsBlockedAt: true },
+  });
+  check(
+    "Claim that holds the lock first still sends at most once after a waiting provider-block",
+    blockWaitAcquiredLock === true &&
+      blockWaitSettings?.studioWeeklyReminderOwnerSmsBlockedAt != null &&
+      blockWaitResult.reminder?.smsSendClaimedAt != null &&
+      blockWaitSms.sent.length === 1 &&
+      rerunAfterBlockWait.created === false &&
+      blockWaitSms.sent.length === 1,
+  );
+
+  await clearOwnerSmsStopAndBlock(businessB.id);
   await writeOwnerSmsDestination(businessB.id, oldOwnerDest, true);
 
   const adminDeniedSms = await setStudioWeeklyReminderOwnerSms(

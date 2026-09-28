@@ -2,6 +2,10 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { isUsableNormalizedPhone, normalizePhone } from "@/lib/customer-identity";
 import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging/schema";
 import type { InboundSmsEvent } from "@/lib/customer-messaging/types";
+import {
+  recordOwnerStudioReminderStart,
+  recordOwnerStudioReminderStop,
+} from "@/lib/marketing-studio-reminder";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -65,8 +69,6 @@ async function applyOwnerStudioReminderInbound(
     where: { businessId: input.businessId },
     select: {
       studioWeeklyReminderOwnerSmsTo: true,
-      studioWeeklyReminderOwnerSmsOptedIn: true,
-      studioWeeklyReminderOwnerSmsStopAt: true,
     },
   });
   const ownerDigits = normalizePhone(settings?.studioWeeklyReminderOwnerSmsTo);
@@ -77,26 +79,9 @@ async function applyOwnerStudioReminderInbound(
     return { matched: true, applied: false, reason: "owner_help_no_change" };
   }
   if (input.optOutType === "START") {
-    if (!settings.studioWeeklyReminderOwnerSmsStopAt) {
-      return { matched: true, applied: true, reason: "owner_start_not_applicable" };
-    }
-    await db.businessSettings.update({
-      where: { businessId: input.businessId },
-      data: { studioWeeklyReminderOwnerSmsStopAt: null },
-    });
-    return { matched: true, applied: true, reason: "owner_stop_cleared" };
+    return recordOwnerStudioReminderStart(db, input.businessId, input.fromDigits);
   }
-  if (settings.studioWeeklyReminderOwnerSmsStopAt) {
-    return { matched: true, applied: true, reason: "owner_stop_idempotent" };
-  }
-  await db.businessSettings.update({
-    where: { businessId: input.businessId },
-    data: {
-      studioWeeklyReminderOwnerSmsOptedIn: false,
-      studioWeeklyReminderOwnerSmsStopAt: new Date(),
-    },
-  });
-  return { matched: true, applied: true, reason: "owner_stopped" };
+  return recordOwnerStudioReminderStop(db, input.businessId, input.fromDigits);
 }
 
 export async function applyInboundConsentEvent(
