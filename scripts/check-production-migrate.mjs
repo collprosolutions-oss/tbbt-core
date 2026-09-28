@@ -1279,7 +1279,10 @@ check(
     recurringOccurrenceKeyMigration.includes("recurrenceSourceJobId stays nonunique") &&
     localNames.includes("20260928180000_job_recurrence_occurrence_key") &&
     !localNames.includes("20260928150000_job_recurrence_occurrence_key") &&
+    localNames.includes("20260928170000_service_request_repeat_visit_source") &&
     localNames.indexOf("20260928150000_marketing_studio_weekly_reminder") <
+      localNames.indexOf("20260928170000_service_request_repeat_visit_source") &&
+    localNames.indexOf("20260928170000_service_request_repeat_visit_source") <
       localNames.indexOf("20260928180000_job_recurrence_occurrence_key") &&
     localNames.indexOf("20260928145000_job_corrective_clean_source_unique") <
       localNames.indexOf("20260928180000_job_recurrence_occurrence_key"),
