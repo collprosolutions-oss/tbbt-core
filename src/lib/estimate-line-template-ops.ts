@@ -154,6 +154,7 @@ export async function saveEstimateLineTemplateFromDraft(
   if (named.error || !named.name) {
     throw new EstimateLineTemplateError(named.error ?? "Name the estimate template before saving.");
   }
+  const templateName = named.name;
 
   const estimate = access.assertOwned(
     await db.estimate.findFirst({
@@ -187,7 +188,7 @@ export async function saveEstimateLineTemplateFromDraft(
   const duplicate = await db.estimateLineTemplate.findFirst({
     where: {
       businessId: access.businessId,
-      name: { equals: named.name, mode: "insensitive" },
+      name: { equals: templateName, mode: "insensitive" },
     },
     select: { id: true, businessId: true },
   });
@@ -203,7 +204,7 @@ export async function saveEstimateLineTemplateFromDraft(
       const template = await tx.estimateLineTemplate.create({
         data: {
           businessId: access.businessId,
-          name: named.name,
+          name: templateName,
           createdByMembershipId: access.workspace.membership.id,
         },
       });
