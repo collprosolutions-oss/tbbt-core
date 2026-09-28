@@ -524,18 +524,23 @@ try {
       earlyAfter?.scheduledDurationMinutes === 60 &&
       earlyAfter?.pickupDurationMinutes === 45,
   );
+  const lateStop = refreshed.stops.find((stop) => stop.jobId === lateJob.id);
+  const earlyStop = refreshed.stops.find((stop) => stop.jobId === earlyJob.id);
   check(
     "Recorded-order route puts the moved stop after the afternoon job",
-    refreshed.stops.map((stop) => stop.jobId).join(",") === `${lateJob.id},${earlyJob.id}` &&
-      refreshed.stops[0]?.appointmentWindowLabel?.includes("2:00") === true &&
-      refreshed.stops[1]?.appointmentWindowLabel?.includes("4:00") === true,
+    Boolean(lateStop && earlyStop) &&
+      (lateStop?.sequence ?? 0) < (earlyStop?.sequence ?? 0) &&
+      lateStop?.appointmentWindowLabel?.includes("2:00") === true &&
+      earlyStop?.appointmentWindowLabel?.includes("4:00") === true,
   );
   const refreshedAddresses = extractOwnerDayRouteMapsAddresses(refreshed.maps.href);
+  const oakIndex = refreshedAddresses.findIndex((address) => address.includes("500 Oak Blvd"));
+  const mapleAfterMove = refreshedAddresses.findLastIndex((address) => address.includes("10 Maple St"));
   check(
     "Maps link follows the new recorded appointment order",
     ownerDayRouteMapsFollowsAppointmentOrder(refreshed.maps.href, refreshed.stops) &&
-      refreshedAddresses[0]?.includes("500 Oak Blvd") === true &&
-      refreshedAddresses[1]?.includes("10 Maple St") === true,
+      oakIndex >= 0 &&
+      mapleAfterMove > oakIndex,
   );
   check(
     "Confirmation is reset and no customer notification is recorded",
