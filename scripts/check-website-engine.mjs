@@ -240,14 +240,20 @@ check(
   snapshot.includes("intakeMeasurementMode") &&
     snapshot.includes("asksWorkAreaIntake") &&
     snapshot.includes("PublishedTradeIntake") &&
+    snapshot.includes("tenantIntakeCaptured") &&
     builder.includes("publicIntakeSchemaProjection") &&
+    builder.includes("readCurrentPublishedIntake") &&
+    builder.includes("tenantIntakeCaptured") &&
     builder.includes("catalogAsksWorkAreaIntake") &&
     builder.includes("continue") &&
     publicView.includes("snapshotIntakeSchemasByTrade") &&
+    publicView.includes("loadPublicWebsiteIntakeOverlays") &&
     intakeSrc.includes("publishedSnapshot") &&
     intakeSrc.includes("snapshotIntakeSchemaForTrade") &&
+    intakeSrc.includes("snapshotTenantIntakeStateForTrade") &&
     requestPage.includes("snapshot.seo.request") &&
-    requestPage.includes("snapshotIntakeSchemasByTrade"),
+    requestPage.includes("snapshotIntakeSchemasByTrade") &&
+    requestPage.includes("loadPublicWebsiteIntakeOverlays"),
 );
 check(
   "Publish/rollback forms send a stable client attempt id",

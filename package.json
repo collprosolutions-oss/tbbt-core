@@ -73,6 +73,7 @@
     "test:intake-conditionals": "node --experimental-strip-types scripts/check-intake-conditionals.mjs",
     "test:intake-snapshot-publish": "node --experimental-strip-types scripts/check-intake-snapshot-publish.mjs",
     "test:intake-snapshot-restore": "node --experimental-strip-types scripts/check-intake-snapshot-restore.mjs",
+    "test:website-intake-snapshot": "node --experimental-strip-types scripts/check-website-intake-snapshot.mjs",
     "test:request-company-notify": "node --experimental-strip-types scripts/check-request-company-notify.mjs",
     "test:work-area-intake": "node --experimental-strip-types scripts/check-work-area-intake.mjs",
     "test:intake-quote-handoff": "node --experimental-strip-types scripts/check-intake-quote-handoff.mjs",

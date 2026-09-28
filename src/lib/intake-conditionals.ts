@@ -75,13 +75,13 @@ export const INTAKE_CONDITION_ACTION_LABELS: Record<IntakeConditionAction, strin
 };
 
 export const INTAKE_CONDITION_PUBLISH_DESCRIPTION =
-  "Drafts are not live. OWNER review + publish creates a new immutable tenant intake snapshot. New public requests freeze that version. Historical Cleaning V1/V2, Handyman V1, and existing requests keep resolving exactly as recorded.";
+  "Drafts are not live. OWNER review + publish creates a new immutable tenant intake snapshot and moves this trade’s current pointer. A published website keeps the intake version captured at website publish until the owner publishes the website again. New public requests freeze the version their form displayed. Historical Cleaning V1/V2, Handyman V1, and existing requests keep resolving exactly as recorded.";
 
 export const INTAKE_CONDITION_PUBLISH_REVIEW_REQUIRED =
   "Confirm you reviewed this draft before publishing a new immutable tenant intake snapshot.";
 
 export const INTAKE_CONDITION_RESTORE_DESCRIPTION =
-  "Published versions are immutable. Restoring an older version moves this business and trade’s current public pointer only. Snapshot rows stay unchanged. Historical requests and an open hire form still resolve the exact version they already recorded or displayed.";
+  "Published versions are immutable. Restoring an older version moves this business and trade’s current public pointer only. Snapshot rows stay unchanged. A published website keeps the intake version captured at website publish until the owner publishes the website again. Historical requests and an open hire form still resolve the exact version they already recorded or displayed.";
 
 export const INTAKE_CONDITION_RESTORE_CONFIRM_REQUIRED =
   "Confirm you want to restore this published version as the current public pointer. Snapshot rows and historical requests stay unchanged.";

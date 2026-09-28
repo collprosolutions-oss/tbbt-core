@@ -36,12 +36,38 @@ export type PublishedTradeIntake = {
   fields: PublishedTradeIntakeField[];
 };
 
+/** Exact TenantIntakeSnapshot captured when this website version was published. */
+export type PublishedTradeTenantIntake = {
+  snapshotId: string;
+  versionNumber: number;
+};
+
 export type PublishedTrade = {
   code: string;
   label: string;
   customerFacingLabel: string;
   intake: PublishedTradeIntake;
+  /**
+   * Immutable tenant intake pointer frozen at website publish.
+   * Null means this publish recorded no tenant overlay for the trade.
+   */
+  tenantIntake: PublishedTradeTenantIntake | null;
+  /**
+   * True when this snapshot recorded tenant intake (including explicit null).
+   * False on legacy website publishes that predate capture.
+   */
+  tenantIntakeCaptured: boolean;
 };
+
+export function publishedTradeTenantIntakeState(trade: PublishedTrade): {
+  captured: boolean;
+  tenantIntake: PublishedTradeTenantIntake | null;
+} {
+  return {
+    captured: trade.tenantIntakeCaptured === true,
+    tenantIntake: trade.tenantIntake,
+  };
+}
 
 export type PublishedService = {
   id: string;
@@ -250,6 +276,28 @@ function parseTradeIntake(value: unknown, fallbackTitle: string): PublishedTrade
   };
 }
 
+function parseTradeTenantIntake(row: Record<string, unknown>): {
+  tenantIntake: PublishedTradeTenantIntake | null;
+  tenantIntakeCaptured: boolean;
+} {
+  if (!("tenantIntake" in row) && row.tenantIntakeCaptured !== true) {
+    return { tenantIntake: null, tenantIntakeCaptured: false };
+  }
+  if (row.tenantIntake == null) {
+    return { tenantIntake: null, tenantIntakeCaptured: true };
+  }
+  if (!isRecord(row.tenantIntake)) {
+    return { tenantIntake: { snapshotId: "", versionNumber: 0 }, tenantIntakeCaptured: true };
+  }
+  return {
+    tenantIntake: {
+      snapshotId: asString(row.tenantIntake.snapshotId).trim(),
+      versionNumber: asNumber(row.tenantIntake.versionNumber, 0),
+    },
+    tenantIntakeCaptured: true,
+  };
+}
+
 export function parseWebsiteSnapshot(raw: string | unknown): PublishedWebsiteSnapshot {
   const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
   if (!isRecord(parsed)) {
@@ -284,11 +332,14 @@ export function parseWebsiteSnapshot(raw: string | unknown): PublishedWebsiteSna
         .map((row) => {
           const code = asString(row.code);
           const label = asString(row.label);
+          const tenant = parseTradeTenantIntake(row);
           return {
             code,
             label,
             customerFacingLabel: asString(row.customerFacingLabel, label),
             intake: parseTradeIntake(row.intake, label),
+            tenantIntake: tenant.tenantIntake,
+            tenantIntakeCaptured: tenant.tenantIntakeCaptured,
           };
         })
         .filter((row) => row.code && row.label)

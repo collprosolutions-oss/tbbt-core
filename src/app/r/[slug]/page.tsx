@@ -26,9 +26,11 @@ import {
   currentIntakeSchema,
   publicIntakeSchemaProjection,
 } from "@/lib/intake-schema";
-import { snapshotIntakeSchemasByTrade } from "@/lib/website-engine/public";
+import {
+  loadPublicWebsiteIntakeOverlays,
+  snapshotIntakeSchemasByTrade,
+} from "@/lib/website-engine/public";
 import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
-import { loadPublishedIntakeOverlaysByTrade } from "@/lib/intake-snapshot-ops";
 import { snapshotPageMetadata } from "@/lib/website-engine/seo";
 import { publicOriginForSlug } from "@/lib/website-engine/hosts";
 import { publishedRequestAccent } from "@/lib/website-engine/copy";
@@ -92,8 +94,9 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
     : Object.fromEntries(
         tradeCodes.map((code) => [code, publicIntakeSchemaProjection(currentIntakeSchema(code))]),
       );
-  const publishedIntake = await loadPublishedIntakeOverlaysByTrade(
+  const publishedIntake = await loadPublicWebsiteIntakeOverlays(
     prisma,
+    view,
     site.business.id,
     tradeCodes,
   );
