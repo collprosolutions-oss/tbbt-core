@@ -141,6 +141,28 @@ export async function startNativeJob(
   };
 }
 
+export async function stopNativeJobRunningTime(
+  token: string,
+  jobId: string,
+): Promise<{ job: NativeJobDetail; alreadyStopped: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-time`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return { error: typeof body.error === "string" ? body.error : "That job time could not be stopped." };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadyStopped: boolean };
+}
+
 export async function completeNativeJob(
   token: string,
   jobId: string,

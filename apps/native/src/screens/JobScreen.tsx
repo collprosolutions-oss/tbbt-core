@@ -15,6 +15,7 @@ import {
   recordNativeJobChecklistItem,
   recordNativeJobVisit,
   startNativeJob,
+  stopNativeJobRunningTime,
 } from "../api";
 import type { NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
 import { JobPhotosSection } from "./JobPhotosSection";
@@ -32,6 +33,7 @@ export function JobScreen({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"start" | "complete" | "stop" | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<NativeVisitOutcomeStatus | null>(
     null,
   );
@@ -68,29 +70,52 @@ export function JobScreen({
   async function startAssignedJob() {
     if (pending) return;
     setPending(true);
+    setPendingAction("start");
     setActionError(null);
     const result = await startNativeJob(token, jobId);
     if (isApiError(result)) {
       setPending(false);
+      setPendingAction(null);
       setActionError(result.error);
       return;
     }
     await reloadAssignedJob(result.job);
     setPending(false);
+    setPendingAction(null);
+  }
+
+  async function stopAssignedJobTime() {
+    if (pending) return;
+    setPending(true);
+    setPendingAction("stop");
+    setActionError(null);
+    const result = await stopNativeJobRunningTime(token, jobId);
+    if (isApiError(result)) {
+      setPending(false);
+      setPendingAction(null);
+      setActionError(result.error);
+      return;
+    }
+    await reloadAssignedJob(result.job);
+    setPending(false);
+    setPendingAction(null);
   }
 
   async function completeAssignedJob() {
     if (pending) return;
     setPending(true);
+    setPendingAction("complete");
     setActionError(null);
     const result = await completeNativeJob(token, jobId);
     if (isApiError(result)) {
       setPending(false);
+      setPendingAction(null);
       setActionError(result.error);
       return;
     }
     await reloadAssignedJob(result.job);
     setPending(false);
+    setPendingAction(null);
   }
 
   async function recordChecklistItem(itemKey: string, checked: boolean) {
@@ -145,7 +170,15 @@ export function JobScreen({
               ? `Time running · ${job.runningTime.activityLabel ?? "Job"} · Since ${
                   job.runningTime.startedAtLabel ?? "now"
                 }`
-              : "No running job time"}
+              : job.runningTime.recorded
+                ? `Recorded job time${
+                    job.runningTime.hoursLabel ? ` · ${job.runningTime.hoursLabel}` : ""
+                  }${
+                    job.runningTime.endedAtLabel
+                      ? ` · Ended ${job.runningTime.endedAtLabel}`
+                      : ""
+                  }`
+                : "No running job time"}
           </Text>
           {job.address ? <Text style={styles.body}>{job.address}</Text> : null}
           {job.customerPhone ? <Text style={styles.body}>{job.customerPhone}</Text> : null}
@@ -170,11 +203,24 @@ export function JobScreen({
               style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pending ? "Starting…" : "Start job"}
+                {pendingAction === "start" ? "Starting…" : "Start job"}
               </Text>
             </Pressable>
           ) : job.startAction.reason ? (
             <Text style={styles.notice}>{job.startAction.reason}</Text>
+          ) : null}
+          {job.stopTimeAction.available ? (
+            <Pressable
+              disabled={pending}
+              onPress={() => {
+                void stopAssignedJobTime();
+              }}
+              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>
+                {pendingAction === "stop" ? "Stopping…" : "Stop job time"}
+              </Text>
+            </Pressable>
           ) : null}
           {job.completeAction.available ? (
             <Pressable
@@ -185,7 +231,7 @@ export function JobScreen({
               style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pending ? "Completing…" : "Complete job"}
+                {pendingAction === "complete" ? "Completing…" : "Complete job"}
               </Text>
             </Pressable>
           ) : job.status === "COMPLETED" ? (

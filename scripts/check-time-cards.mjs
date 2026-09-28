@@ -52,7 +52,9 @@ const {
   correctTimeEntry,
   createManualTimeEntry,
   JOB_COMPLETION_TIME_CLOSED_REASON,
+  JOB_STOP_TIME_CLOSED_REASON,
   reopenTimesheetWeek,
+  stopRunningAssignedJobTime,
   requestTimeCorrection,
   TimeCardError,
   updateMembershipWage,
@@ -252,6 +254,14 @@ try {
       timeCardOpsSrc.includes("FOR UPDATE") &&
       timeCardOpsSrc.includes('activityType: "JOB"') &&
       timeCardOpsSrc.includes("JOB_COMPLETION_TIME_CLOSED_REASON"),
+  );
+  check(
+    "Canonical stopRunningAssignedJobTime locks the tenant-owned Job and does not complete it",
+    timeCardOpsSrc.includes("export async function stopRunningAssignedJobTime") &&
+      timeCardOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
+      timeCardOpsSrc.includes("JOB_STOP_TIME_CLOSED_REASON") &&
+      timeCardOpsSrc.includes("alreadyStopped") &&
+      !/stopRunningAssignedJobTime[\s\S]*status: lifecycle.nextStatus/.test(timeCardOpsSrc),
   );
   check(
     "clockInTime refuses JOB time on a persisted COMPLETED Job",
@@ -1349,6 +1359,199 @@ try {
     "Race settled without an uncaught rejection",
     (raceClock.status === "fulfilled" || raceClock.status === "rejected") &&
       (raceComplete.status === "fulfilled" || raceComplete.status === "rejected"),
+  );
+
+  const stopWorkerUser = await prisma.user.create({
+    data: { name: "Sid Stopper", email: "stop-time@example.com", passwordHash: "x" },
+  });
+  const stopWorkerMem = await prisma.membership.create({
+    data: { userId: stopWorkerUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const stopOtherUser = await prisma.user.create({
+    data: { name: "Otis Other", email: "stop-other-time@example.com", passwordHash: "x" },
+  });
+  const stopOtherMem = await prisma.membership.create({
+    data: { userId: stopOtherUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const stopJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: stopWorkerMem.id,
+    },
+  });
+  const stopOtherJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: stopOtherMem.id,
+    },
+  });
+  const stopBetaJob = await prisma.job.create({
+    data: {
+      businessId: businessB.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: betaMemberMem.id,
+    },
+  });
+  const stopJobStartedAt = hoursAgo(2);
+  const stopJobClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: stopWorkerMem.id,
+      jobId: stopJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: stopJobStartedAt,
+      source: "CLOCK",
+    },
+  });
+  const stopTravelClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: stopWorkerMem.id,
+      activityType: "TRAVEL",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      source: "CLOCK",
+    },
+  });
+  const stopOtherClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: stopOtherMem.id,
+      jobId: stopOtherJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      source: "CLOCK",
+    },
+  });
+  const stopBetaClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: betaMemberMem.id,
+      jobId: stopBetaJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      source: "CLOCK",
+    },
+  });
+
+  const stopped = await stopRunningAssignedJobTime(prisma, {
+    businessId: businessA.id,
+    jobId: stopJob.id,
+    actorMembershipId: stopWorkerMem.id,
+  });
+  const stoppedRow = await prisma.timeEntry.findUnique({ where: { id: stopJobClock.id } });
+  const stoppedJobRow = await prisma.job.findUnique({ where: { id: stopJob.id } });
+  const stopAdjustments = await prisma.timeEntryAdjustment.findMany({
+    where: { timeEntryId: stopJobClock.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+  });
+  check("Stopping assigned RUNNING JOB time succeeds", stopped.ok === true && stopped.alreadyStopped === false);
+  check("Stop does not complete the Job", stoppedJobRow.status === "IN_PROGRESS");
+  check(
+    "Stopped JOB entry is READY with preserved startedAt",
+    stoppedRow.status === "READY" &&
+      stoppedRow.endedAt != null &&
+      stoppedRow.startedAt.getTime() === stopJobStartedAt.getTime(),
+  );
+  check("Stop wrote exactly one close adjustment", stopAdjustments.length === 1);
+  check(
+    "Stop leaves TRAVEL, other-job JOB time, and tenant B JOB time running",
+    (await prisma.timeEntry.findUnique({ where: { id: stopTravelClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: stopOtherClock.id } })).status === "RUNNING" &&
+      (await prisma.timeEntry.findUnique({ where: { id: stopBetaClock.id } })).status === "RUNNING" &&
+      (await prisma.job.findUnique({ where: { id: stopOtherJob.id } })).status === "IN_PROGRESS" &&
+      (await prisma.job.findUnique({ where: { id: stopBetaJob.id } })).status === "IN_PROGRESS",
+  );
+
+  const repeatStop = await stopRunningAssignedJobTime(prisma, {
+    businessId: businessA.id,
+    jobId: stopJob.id,
+    actorMembershipId: stopWorkerMem.id,
+  });
+  check("Repeated stop is idempotent", repeatStop.ok === true && repeatStop.alreadyStopped === true);
+  check(
+    "Repeated stop does not double-adjust",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: stopJobClock.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+    })) === 1,
+  );
+
+  const crossTenantStop = await stopRunningAssignedJobTime(prisma, {
+    businessId: businessB.id,
+    jobId: stopJob.id,
+    actorMembershipId: betaOwnerMem.id,
+  });
+  check(
+    "Tenant B cannot stop Tenant A running JOB time",
+    crossTenantStop.ok === false,
+  );
+  check(
+    "Cross-tenant stop left the Tenant A entry READY",
+    (await prisma.timeEntry.findUnique({ where: { id: stopJobClock.id } })).status === "READY" &&
+      (await prisma.timeEntryAdjustment.count({
+        where: { timeEntryId: stopJobClock.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+      })) === 1,
+  );
+
+  const approvedStopJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: stopWorkerMem.id,
+    },
+  });
+  const approvedStopClock = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: stopWorkerMem.id,
+      jobId: approvedStopJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: hoursAgo(1),
+      source: "CLOCK",
+    },
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: stopWorkerMem.id,
+      weekStartedAt: weekRange(approvedStopClock.startedAt).start,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+    },
+  });
+  const blockedStop = await stopRunningAssignedJobTime(prisma, {
+    businessId: businessA.id,
+    jobId: approvedStopJob.id,
+    actorMembershipId: stopWorkerMem.id,
+  });
+  check("Approved week blocks stop", blockedStop.ok === false && /approved/i.test(blockedStop.error ?? ""));
+  check(
+    "Approved-week stop leaves Job IN_PROGRESS",
+    (await prisma.job.findUnique({ where: { id: approvedStopJob.id } })).status === "IN_PROGRESS",
+  );
+  const stillRunningStop = await prisma.timeEntry.findUnique({ where: { id: approvedStopClock.id } });
+  check(
+    "Approved-week stop does not silently close or mutate the running entry",
+    stillRunningStop.status === "RUNNING" && stillRunningStop.endedAt == null,
+  );
+  check(
+    "Approved-week stop wrote no stop adjustment",
+    (await prisma.timeEntryAdjustment.count({
+      where: { timeEntryId: approvedStopClock.id, reason: JOB_STOP_TIME_CLOSED_REASON },
+    })) === 0,
   );
 
   await clockOutTime(prisma, memberA, { membershipId: memberMem.id }).catch(() => null);

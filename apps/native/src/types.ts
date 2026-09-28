@@ -32,12 +32,22 @@ export type NativeJobStartAction = {
   reason: string | null;
 };
 
+export type NativeJobStopTimeAction = {
+  available: boolean;
+  reason: string | null;
+};
+
 export type NativeJobRunningTime = {
   running: boolean;
+  recorded: boolean;
   activityType: string | null;
   activityLabel: string | null;
   startedAt: string | null;
   startedAtLabel: string | null;
+  endedAt: string | null;
+  endedAtLabel: string | null;
+  hours: number | null;
+  hoursLabel: string | null;
 };
 
 export type NativeJobPhotoStage = "BEFORE" | "DURING" | "AFTER";
@@ -107,6 +117,7 @@ export type NativeJobDetail = NativeJobSummary & {
   };
   startAction: NativeJobStartAction;
   completeAction: NativeJobCompleteAction;
+  stopTimeAction: NativeJobStopTimeAction;
   runningTime: NativeJobRunningTime;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;

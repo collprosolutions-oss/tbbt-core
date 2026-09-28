@@ -2,9 +2,9 @@
  * Native assigned-job mutations.
  *
  * Reads stay in `src/lib/native-field.ts`. Assigned-worker writes are
- * Start job, Complete job, assigned job photos, Cleaning visit
- * outcomes, and Cleaning checklist progress on the caller's own
- * assigned Job. Photo storage lives in `src/lib/native-field-photos.ts`.
+ * Start job, Complete job, Stop job time, assigned job photos,
+ * Cleaning visit outcomes, and Cleaning checklist progress on the
+ * caller's own assigned Job. Photo storage lives in `src/lib/native-field-photos.ts`.
  * Visit outcomes live in `src/lib/native-field-visits.ts` and reuse
  * `recordAssignedVisitOutcome`. Checklist writes live in
  * `src/lib/native-field-checklist.ts` and reuse `setAssignedChecklistItem`.
@@ -14,7 +14,7 @@
  * After that authorize read, the write locks the Job and rechecks
  * businessId, assignedMembershipId, and status — the same assignment-
  * change protection Cleaning `recordAssignedVisitOutcome` uses — then
- * reuses the canonical start/complete time-safe writes. This is not a
+ * reuses the canonical start/complete/stop time-safe writes. This is not a
  * second lifecycle and does not send invoices.
  */
 import type { PrismaClient } from "@prisma/client";
@@ -40,6 +40,7 @@ import {
   isTimeCardError,
   lockTenantOwnedJob,
   startJobWithRunningTimeSafetyInTransaction,
+  stopRunningAssignedJobTimeInTransaction,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
 
@@ -73,6 +74,10 @@ export type NativeCompleteAssignedJobResult =
   | { ok: true; alreadyCompleted: boolean; job: NativeJobDetail }
   | { ok: false; status: number; error: string };
 
+export type NativeStopAssignedJobTimeResult =
+  | { ok: true; alreadyStopped: boolean; job: NativeJobDetail }
+  | { ok: false; status: number; error: string };
+
 export function assignmentStillHeld<T extends { businessId: string; assignedMembershipId: string | null }>(
   locked: T | null,
   access: NativeFieldAccess,
@@ -82,6 +87,85 @@ export function assignmentStillHeld<T extends { businessId: string; assignedMemb
     locked.businessId === access.businessId &&
     locked.assignedMembershipId === access.membershipId
   );
+}
+
+export async function stopNativeAssignedJobRunningTime(
+  db: PrismaClient,
+  access: NativeFieldAccess,
+  jobId: string,
+  options?: {
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
+): Promise<NativeStopAssignedJobTimeResult> {
+  const assigned = await db.job.findFirst({
+    where: nativeAssignedJobWhere(jobId, access),
+    select: { id: true, businessId: true, customerId: true, status: true },
+  });
+  if (!assigned) {
+    return { ok: false, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+  }
+
+  try {
+    await requireSaasOperatingEntitlement(db, {
+      businessId: access.businessId,
+      workspace: { role: access.workspace.role },
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: 403,
+      error: saasOperatingErrorMessage(error) ?? SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
+    };
+  }
+
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+
+  let stopped: Extract<
+    Awaited<ReturnType<typeof stopRunningAssignedJobTimeInTransaction>>,
+    { ok: true }
+  >;
+  try {
+    const written = await db.$transaction(async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
+      if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+
+      const result = await stopRunningAssignedJobTimeInTransaction(tx, {
+        businessId: locked.businessId,
+        jobId: locked.id,
+        actorMembershipId: access.membershipId,
+        membershipId: access.membershipId,
+      });
+      if (!result.ok) {
+        return { ok: false as const, status: 409, error: result.error };
+      }
+      return { ok: true as const, result };
+    });
+
+    if (!written.ok) {
+      return written;
+    }
+    stopped = written.result;
+  } catch (error) {
+    if (isTimeCardError(error)) {
+      return {
+        ok: false,
+        status: 409,
+        error: timeCardErrorMessage(error, NATIVE_JOB_NOT_AVAILABLE),
+      };
+    }
+    throw error;
+  }
+
+  const job = await loadNativeAssignedJob(db, access, assigned.id);
+  if (!job) {
+    return { ok: false, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+  }
+  return { ok: true, alreadyStopped: stopped.alreadyStopped, job };
 }
 
 export async function completeNativeAssignedJob(
