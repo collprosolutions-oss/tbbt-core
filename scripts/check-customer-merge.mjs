@@ -378,6 +378,8 @@ try {
       inboundSrc.includes("start_not_applicable") &&
       inboundSrc.includes("customerMessagingWebhookEvent.deleteMany") &&
       inboundSrc.includes("console.error") &&
+      inboundSrc.includes("error: input.error") &&
+      inboundSrc.includes("applyRecordedInboundConsent") &&
       !/customer\.update\(\s*\{/.test(inboundSrc) &&
       !/catch\s*\{/.test(inboundSrc),
   );

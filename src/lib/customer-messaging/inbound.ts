@@ -123,17 +123,35 @@ export async function applyInboundConsentEvent(
     return { applied: true, reason: "idempotent", businessId: business.id };
   }
 
+  try {
+    return await applyRecordedInboundConsent(db, inbound, business.id);
+  } catch (error) {
+    await abandonRecordedInboundWebhook(db, {
+      businessId: business.id,
+      provider: inbound.provider,
+      providerEventId: inbound.providerEventId,
+      error,
+    });
+    throw error;
+  }
+}
+
+async function applyRecordedInboundConsent(
+  db: Db,
+  inbound: InboundSmsEvent,
+  businessId: string,
+): Promise<InboundConsentResult> {
   if (!inbound.optOutType) {
-    return { applied: false, reason: "ignored_inbound", businessId: business.id };
+    return { applied: false, reason: "ignored_inbound", businessId };
   }
 
   const fromDigits = normalizePhone(inbound.from);
   if (!isUsableNormalizedPhone(fromDigits)) {
-    return { applied: false, reason: "unusable_from", businessId: business.id };
+    return { applied: false, reason: "unusable_from", businessId };
   }
 
   const ownerHandled = await applyOwnerStudioReminderInbound(db, {
-    businessId: business.id,
+    businessId,
     fromDigits,
     optOutType: inbound.optOutType,
   });
@@ -141,12 +159,12 @@ export async function applyInboundConsentEvent(
     return {
       applied: ownerHandled.applied,
       reason: ownerHandled.reason,
-      businessId: business.id,
+      businessId,
     };
   }
 
   const candidates = await db.customer.findMany({
-    where: { businessId: business.id, phone: { not: null } },
+    where: { businessId, phone: { not: null } },
     select: { id: true, phone: true, smsConsentStatus: true },
   });
   const matches = candidates.filter(
@@ -156,7 +174,7 @@ export async function applyInboundConsentEvent(
     return {
       applied: false,
       reason: matches.length === 0 ? "unknown_customer" : "ambiguous_customer",
-      businessId: business.id,
+      businessId,
     };
   }
 
@@ -165,7 +183,7 @@ export async function applyInboundConsentEvent(
     return {
       applied: false,
       reason: "help_no_consent_change",
-      businessId: business.id,
+      businessId,
       customerId: customer.id,
       consentStatus: customer.smsConsentStatus,
     };
@@ -176,17 +194,15 @@ export async function applyInboundConsentEvent(
       return {
         applied: true,
         reason: "idempotent",
-        businessId: business.id,
+        businessId,
         customerId: customer.id,
         consentStatus: "REVOKED",
       };
     }
     return applyConsentStatus(db, {
-      businessId: business.id,
+      businessId,
       customerId: customer.id,
       fromDigits,
-      provider: inbound.provider,
-      providerEventId: inbound.providerEventId,
       status: "REVOKED",
       reason: "revoked",
     });
@@ -197,20 +213,45 @@ export async function applyInboundConsentEvent(
     return {
       applied: false,
       reason: "start_not_applicable",
-      businessId: business.id,
+      businessId,
       customerId: customer.id,
       consentStatus: customer.smsConsentStatus,
     };
   }
   return applyConsentStatus(db, {
-    businessId: business.id,
+    businessId,
     customerId: customer.id,
     fromDigits,
-    provider: inbound.provider,
-    providerEventId: inbound.providerEventId,
     status: "GRANTED",
     reason: "granted",
   });
+}
+
+async function abandonRecordedInboundWebhook(
+  db: Db,
+  input: {
+    businessId: string;
+    provider: string;
+    providerEventId: string;
+    customerId?: string;
+    status?: string;
+    error: unknown;
+  },
+) {
+  console.error("Inbound consent write failed", {
+    businessId: input.businessId,
+    providerEventId: input.providerEventId,
+    customerId: input.customerId,
+    status: input.status,
+    error: input.error,
+  });
+  try {
+    await db.customerMessagingWebhookEvent.deleteMany({
+      where: { provider: input.provider, providerEventId: input.providerEventId },
+    });
+  } catch (cleanupError) {
+    console.error("Failed to delete inbound webhook after consent write error", cleanupError);
+  }
 }
 
 const CONSENT_MERGE_HOPS = 4;
@@ -221,123 +262,104 @@ async function applyConsentStatus(
     businessId: string;
     customerId: string;
     fromDigits: string;
-    provider: string;
-    providerEventId: string;
     status: "REVOKED" | "GRANTED";
     reason: "revoked" | "granted";
   },
 ): Promise<InboundConsentResult> {
-  try {
-    const firstWhere =
-      input.status === "GRANTED"
-        ? { id: input.customerId, businessId: input.businessId, smsConsentStatus: "REVOKED" }
-        : { id: input.customerId, businessId: input.businessId };
-    const first = await db.customer.updateMany({
-      where: firstWhere,
-      data: {
-        smsConsentStatus: input.status,
-        smsConsentUpdatedAt: new Date(),
-      },
+  const firstWhere =
+    input.status === "GRANTED"
+      ? { id: input.customerId, businessId: input.businessId, smsConsentStatus: "REVOKED" }
+      : { id: input.customerId, businessId: input.businessId };
+  const first = await db.customer.updateMany({
+    where: firstWhere,
+    data: {
+      smsConsentStatus: input.status,
+      smsConsentUpdatedAt: new Date(),
+    },
+  });
+  if (first.count > 0) {
+    return {
+      applied: true,
+      reason: input.reason,
+      businessId: input.businessId,
+      customerId: input.customerId,
+      consentStatus: input.status,
+    };
+  }
+
+  let currentId = input.customerId;
+  for (let hop = 0; hop < CONSENT_MERGE_HOPS; hop += 1) {
+    const merge = await db.customerMerge.findFirst({
+      where: { businessId: input.businessId, absorbedCustomerId: currentId },
+      select: { survivorCustomerId: true },
     });
-    if (first.count > 0) {
+    if (!merge) {
       return {
-        applied: true,
-        reason: input.reason,
+        applied: false,
+        reason: "unknown_customer",
         businessId: input.businessId,
-        customerId: input.customerId,
-        consentStatus: input.status,
       };
     }
+    currentId = merge.survivorCustomerId;
 
-    let currentId = input.customerId;
-    for (let hop = 0; hop < CONSENT_MERGE_HOPS; hop += 1) {
-      const merge = await db.customerMerge.findFirst({
-        where: { businessId: input.businessId, absorbedCustomerId: currentId },
-        select: { survivorCustomerId: true },
+    if (input.status === "GRANTED") {
+      const survivor = await db.customer.findFirst({
+        where: { id: currentId, businessId: input.businessId },
+        select: { id: true, phone: true, smsConsentStatus: true },
       });
-      if (!merge) {
+      if (
+        !survivor ||
+        survivor.smsConsentStatus !== "REVOKED" ||
+        normalizePhone(survivor.phone) !== input.fromDigits
+      ) {
         return {
           applied: false,
-          reason: "unknown_customer",
+          reason: "start_not_applicable",
           businessId: input.businessId,
+          customerId: survivor?.id,
+          consentStatus: survivor?.smsConsentStatus,
         };
       }
-      currentId = merge.survivorCustomerId;
-
-      if (input.status === "GRANTED") {
-        const survivor = await db.customer.findFirst({
-          where: { id: currentId, businessId: input.businessId },
-          select: { id: true, phone: true, smsConsentStatus: true },
-        });
-        if (
-          !survivor ||
-          survivor.smsConsentStatus !== "REVOKED" ||
-          normalizePhone(survivor.phone) !== input.fromDigits
-        ) {
-          return {
-            applied: false,
-            reason: "start_not_applicable",
-            businessId: input.businessId,
-            customerId: survivor?.id,
-            consentStatus: survivor?.smsConsentStatus,
-          };
-        }
-        const startHop = await db.customer.updateMany({
-          where: { id: currentId, businessId: input.businessId, smsConsentStatus: "REVOKED" },
-          data: {
-            smsConsentStatus: "GRANTED",
-            smsConsentUpdatedAt: new Date(),
-          },
-        });
-        if (startHop.count > 0) {
-          return {
-            applied: true,
-            reason: "granted",
-            businessId: input.businessId,
-            customerId: currentId,
-            consentStatus: "GRANTED",
-          };
-        }
-        continue;
-      }
-
-      const hopUpdated = await db.customer.updateMany({
-        where: { id: currentId, businessId: input.businessId },
+      const startHop = await db.customer.updateMany({
+        where: { id: currentId, businessId: input.businessId, smsConsentStatus: "REVOKED" },
         data: {
-          smsConsentStatus: "REVOKED",
+          smsConsentStatus: "GRANTED",
           smsConsentUpdatedAt: new Date(),
         },
       });
-      if (hopUpdated.count > 0) {
+      if (startHop.count > 0) {
         return {
           applied: true,
-          reason: "revoked",
+          reason: "granted",
           businessId: input.businessId,
           customerId: currentId,
-          consentStatus: "REVOKED",
+          consentStatus: "GRANTED",
         };
       }
+      continue;
     }
 
-    return {
-      applied: false,
-      reason: "unknown_customer",
-      businessId: input.businessId,
-    };
-  } catch (error) {
-    console.error("Inbound consent write failed", {
-      businessId: input.businessId,
-      providerEventId: input.providerEventId,
-      customerId: input.customerId,
-      status: input.status,
+    const hopUpdated = await db.customer.updateMany({
+      where: { id: currentId, businessId: input.businessId },
+      data: {
+        smsConsentStatus: "REVOKED",
+        smsConsentUpdatedAt: new Date(),
+      },
     });
-    try {
-      await db.customerMessagingWebhookEvent.deleteMany({
-        where: { provider: input.provider, providerEventId: input.providerEventId },
-      });
-    } catch (cleanupError) {
-      console.error("Failed to delete inbound webhook after consent write error", cleanupError);
+    if (hopUpdated.count > 0) {
+      return {
+        applied: true,
+        reason: "revoked",
+        businessId: input.businessId,
+        customerId: currentId,
+        consentStatus: "REVOKED",
+      };
     }
-    throw error;
   }
+
+  return {
+    applied: false,
+    reason: "unknown_customer",
+    businessId: input.businessId,
+  };
 }
