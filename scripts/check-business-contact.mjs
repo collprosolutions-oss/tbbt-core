@@ -127,7 +127,8 @@ const contactLoaderFn = contactLoaderSrc.slice(
 );
 check(
   "Dashboard/workspace Business SELECT runs only after a fail-closed contact schema probe",
-  workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
+  (workspaceSrc.includes("loadActiveWorkspaceMemberships") ||
+    workspaceSrc.includes("requireWorkspaceFromRequest")) &&
     !workspaceSrc.includes("$executeRaw") &&
     contactLoaderFn.includes("await ensureBusinessPublicContactSchema(db)") &&
     contactLoaderFn.indexOf("await ensureBusinessPublicContactSchema(db)") <

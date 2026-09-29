@@ -1,23 +1,15 @@
 import { redirect } from "next/navigation";
-import type { Business, Membership, MembershipRole, Prisma, PrismaClient } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
-import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
 import { prisma } from "@/lib/prisma";
+import {
+  requireWorkspace as requireWorkspaceFromRequest,
+  type WorkspaceContext,
+  type WorkspaceRequestDeps,
+} from "@/lib/workspace-request";
 
-export type WorkspaceContext = {
-  user: { id: string; email: string; name: string };
-  business: Business;
-  membership: Membership;
-  role: MembershipRole;
-};
+export type { WorkspaceContext, WorkspaceRequestDeps };
 
-export type WorkspaceRequestDeps = {
-  db?: PrismaClient | Prisma.TransactionClient;
-  getSessionUser?: typeof getSessionUser;
-  getWorkspaceCookie?: typeof getWorkspaceCookie;
-  setWorkspaceCookie?: typeof setWorkspaceCookie;
-  redirect?: (path: string) => never;
-};
+export type OptionalWorkspaceRequestDeps = Partial<WorkspaceRequestDeps>;
 
 /**
  * Authenticated workspace load. Schema/data migration belongs exclusively
@@ -26,45 +18,13 @@ export type WorkspaceRequestDeps = {
  * migrate deploy, including on Preview (shared production DATABASE_URL).
  */
 export async function requireWorkspace(
-  deps: WorkspaceRequestDeps = {},
+  deps: OptionalWorkspaceRequestDeps = {},
 ): Promise<WorkspaceContext> {
-  const db = deps.db ?? prisma;
-  const readUser = deps.getSessionUser ?? getSessionUser;
-  const readCookie = deps.getWorkspaceCookie ?? getWorkspaceCookie;
-  const writeCookie = deps.setWorkspaceCookie ?? setWorkspaceCookie;
-  const bounce = deps.redirect ?? redirect;
-
-  const user = await readUser();
-  if (!user) {
-    bounce("/sign-in");
-    throw new Error("requireWorkspace redirected");
-  }
-
-  // Only an ACTIVE membership resolves to a real workspace -- an
-  // OWNER/ADMIN-deactivated MEMBER membership (see removeTeamMember() in
-  // src/app/actions/team.ts) must lose access here, at the single place
-  // every authenticated page/action derives its workspace from, not just
-  // in the Team UI.
-  const memberships = await loadActiveWorkspaceMemberships(db, user.id);
-
-  if (memberships.length === 0) {
-    bounce("/sign-in");
-    throw new Error("requireWorkspace redirected");
-  }
-
-  const requestedId = await readCookie();
-  const current =
-    memberships.find((membership) => membership.businessId === requestedId) ??
-    memberships[0];
-
-  if (current.businessId !== requestedId) {
-    await writeCookie(current.businessId);
-  }
-
-  return {
-    user,
-    business: current.business,
-    membership: current,
-    role: current.role,
-  };
+  return requireWorkspaceFromRequest({
+    db: deps.db ?? prisma,
+    getSessionUser: deps.getSessionUser ?? getSessionUser,
+    getWorkspaceCookie: deps.getWorkspaceCookie ?? getWorkspaceCookie,
+    setWorkspaceCookie: deps.setWorkspaceCookie ?? setWorkspaceCookie,
+    redirect: deps.redirect ?? redirect,
+  });
 }

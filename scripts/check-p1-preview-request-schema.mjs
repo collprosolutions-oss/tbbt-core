@@ -28,7 +28,7 @@ const {
   SAAS_FOUNDER_TRIAL_BACKFILL_SQL,
 } = await import("@/lib/saas-billing/schema");
 const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
-const { requireWorkspace } = await import("@/lib/workspace");
+const { requireWorkspace } = await import("@/lib/workspace-request");
 const {
   ensureBusinessPublicContactSchema,
   resetBusinessPublicContactSchemaEnsure,
@@ -92,6 +92,7 @@ function recordedWrites(statements) {
 
 console.log("\nSTATIC — request path is not a second migration engine");
 const workspaceSrc = readRepo("src/lib/workspace.ts");
+const workspaceRequestSrc = readRepo("src/lib/workspace-request.ts");
 const policySrc = readRepo("scripts/production-migrate-policy.mjs");
 const billingSrc = readRepo("src/lib/saas-billing/schema.ts");
 const contactSrc = readRepo("src/lib/business-contact.ts");
@@ -104,8 +105,11 @@ check(
     !workspaceSrc.includes("ensureSaasBillingSchema") &&
     !workspaceSrc.includes("ensureBusinessTimezoneSchema") &&
     !workspaceSrc.includes("ensureCustomerMessagingSchema") &&
-    workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
-    workspaceSrc.includes("fail closed"),
+    workspaceSrc.includes("fail closed") &&
+    workspaceSrc.includes("requireWorkspaceFromRequest") &&
+    workspaceRequestSrc.includes("loadActiveWorkspaceMemberships") &&
+    !workspaceRequestSrc.includes("$executeRaw") &&
+    !workspaceRequestSrc.includes("ensureSaasBillingSchema"),
 );
 check(
   "Migrate policy exports a Preview/shared-production request-path write ban",

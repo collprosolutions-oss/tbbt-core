@@ -171,9 +171,14 @@ const workspaceLoader = readFileSync(
   new URL("../src/lib/workspace.ts", import.meta.url),
   "utf8",
 );
+const workspaceRequestLoader = readFileSync(
+  new URL("../src/lib/workspace-request.ts", import.meta.url),
+  "utf8",
+);
 check(
   "Authenticated workspace load probes public contact columns before Business SELECT",
-  workspaceLoader.includes("loadActiveWorkspaceMemberships") &&
+  workspaceLoader.includes("requireWorkspaceFromRequest") &&
+    workspaceRequestLoader.includes("loadActiveWorkspaceMemberships") &&
     businessContact.includes("export async function loadActiveWorkspaceMemberships") &&
     businessContact.includes("include: { business: true }") &&
     businessContact.indexOf("await ensureBusinessPublicContactSchema(db)") <
@@ -188,7 +193,9 @@ check(
     !workspaceLoader.includes("ensureSaasBillingSchema") &&
     !workspaceLoader.includes("ensureBusinessTimezoneSchema") &&
     !workspaceLoader.includes("ensureCustomerMessagingSchema") &&
-    !workspaceLoader.includes("$executeRaw"),
+    !workspaceLoader.includes("$executeRaw") &&
+    !workspaceRequestLoader.includes("ensureSaasBillingSchema") &&
+    !workspaceRequestLoader.includes("$executeRaw"),
 );
 
 const availabilityData = readFileSync(
