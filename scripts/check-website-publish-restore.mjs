@@ -213,8 +213,11 @@ const publicIntakeSrc = read("src/lib/public-intake.ts");
 const navSrc = read("src/lib/nav.ts");
 const settingsSrc = read("src/lib/settings.ts");
 const restoreFn = publishSrc.slice(
+  publishSrc.indexOf("async function restoreCapturedIntakePointers"),
+  publishSrc.indexOf("async function loadWebsitePublishHistoryRows"),
+);
+const restoreExport = publishSrc.slice(
   publishSrc.indexOf("export async function restoreOwnedWebsitePublish"),
-  publishSrc.length,
 );
 
 check(
@@ -228,15 +231,16 @@ check(
 );
 check(
   "Restore moves website and captured intake pointers only",
-  restoreFn.includes("publishedWebsiteId: source.id") &&
+  restoreExport.includes("publishedWebsiteId: source.id") &&
     restoreFn.includes("publishedIntakeSnapshotId: row.id") &&
-    restoreFn.includes("business.updateMany") &&
+    restoreExport.includes("business.updateMany") &&
     restoreFn.includes("businessTrade.updateMany") &&
     !restoreFn.includes("websitePublish.update") &&
     !restoreFn.includes("tenantIntakeSnapshot.update") &&
     !restoreFn.includes("serviceRequest") &&
-    !restoreFn.includes("snapshotJson:") &&
-    !restoreFn.includes("create({"),
+    !restoreExport.includes("snapshotJson:") &&
+    !restoreExport.includes("create({") &&
+    !restoreFn.includes("serviceRequest."),
 );
 check(
   "Restore requires OWNER confirmation, expected current id, and never takes client businessId",
