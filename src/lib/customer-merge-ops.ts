@@ -676,6 +676,10 @@ function isTransactionTimeout(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2028";
 }
 
+function isForeignKeyConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
+}
+
 function isAlreadyMergedPrisma(error: unknown) {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -843,6 +847,9 @@ export async function mergeConfirmedCustomers(
     } catch (error) {
       if (error instanceof CustomerMergeError) throw error;
       if (isTransactionTimeout(error)) {
+        throw new CustomerMergeError(MERGE_TRY_AGAIN_MESSAGE);
+      }
+      if (isForeignKeyConflict(error)) {
         throw new CustomerMergeError(MERGE_TRY_AGAIN_MESSAGE);
       }
       if (isSerializationFailure(error)) {

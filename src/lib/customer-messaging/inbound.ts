@@ -181,20 +181,12 @@ export async function applyInboundConsentEvent(
         consentStatus: "REVOKED",
       };
     }
-    await db.customer.update({
-      where: { id: customer.id },
-      data: {
-        smsConsentStatus: "REVOKED",
-        smsConsentUpdatedAt: new Date(),
-      },
-    });
-    return {
-      applied: true,
-      reason: "revoked",
+    return applyConsentStatus(db, {
       businessId: business.id,
       customerId: customer.id,
-      consentStatus: "REVOKED",
-    };
+      status: "REVOKED",
+      reason: "revoked",
+    });
   }
 
   // START is recognized Twilio Advanced Opt-Out re-opt-in only from REVOKED.
@@ -207,18 +199,87 @@ export async function applyInboundConsentEvent(
       consentStatus: customer.smsConsentStatus,
     };
   }
-  await db.customer.update({
-    where: { id: customer.id },
-    data: {
-      smsConsentStatus: "GRANTED",
-      smsConsentUpdatedAt: new Date(),
-    },
-  });
-  return {
-    applied: true,
-    reason: "granted",
+  return applyConsentStatus(db, {
     businessId: business.id,
     customerId: customer.id,
-    consentStatus: "GRANTED",
-  };
+    status: "GRANTED",
+    reason: "granted",
+  });
+}
+
+const CONSENT_MERGE_HOPS = 4;
+
+async function applyConsentStatus(
+  db: Db,
+  input: {
+    businessId: string;
+    customerId: string;
+    status: "REVOKED" | "GRANTED";
+    reason: "revoked" | "granted";
+  },
+): Promise<InboundConsentResult> {
+  try {
+    const first = await db.customer.updateMany({
+      where: { id: input.customerId, businessId: input.businessId },
+      data: {
+        smsConsentStatus: input.status,
+        smsConsentUpdatedAt: new Date(),
+      },
+    });
+    if (first.count > 0) {
+      return {
+        applied: true,
+        reason: input.reason,
+        businessId: input.businessId,
+        customerId: input.customerId,
+        consentStatus: input.status,
+      };
+    }
+
+    let currentId = input.customerId;
+    for (let hop = 0; hop < CONSENT_MERGE_HOPS; hop += 1) {
+      const merge = await db.customerMerge.findFirst({
+        where: { businessId: input.businessId, absorbedCustomerId: currentId },
+        select: { survivorCustomerId: true },
+      });
+      if (!merge) {
+        return {
+          applied: false,
+          reason: "unknown_customer",
+          businessId: input.businessId,
+        };
+      }
+      currentId = merge.survivorCustomerId;
+      const hopUpdated = await db.customer.updateMany({
+        where: { id: currentId, businessId: input.businessId },
+        data: {
+          smsConsentStatus: input.status,
+          smsConsentUpdatedAt: new Date(),
+        },
+      });
+      if (hopUpdated.count > 0) {
+        return {
+          applied: true,
+          reason: input.reason,
+          businessId: input.businessId,
+          customerId: currentId,
+          consentStatus: input.status,
+        };
+      }
+    }
+
+    return {
+      applied: false,
+      reason: "unknown_customer",
+      businessId: input.businessId,
+    };
+  } catch {
+    // The webhook row is already recorded. Throwing here would make
+    // Twilio's retry look like a duplicate and drop the consent change.
+    return {
+      applied: false,
+      reason: "unknown_customer",
+      businessId: input.businessId,
+    };
+  }
 }

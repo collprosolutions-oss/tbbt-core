@@ -59,6 +59,7 @@ const {
 } = await import("@/lib/customer-merge-ops");
 const { authorizeManagedUpload } = await import("@/lib/business-storage/service");
 const { StorageAccessError } = await import("@/lib/business-storage/types");
+const { applyInboundConsentEvent } = await import("@/lib/customer-messaging/inbound");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -75,6 +76,7 @@ const featureFiles = [
 ];
 const featureSource = featureFiles.map(readSrc).join("\n");
 const opsSrc = readSrc("src/lib/customer-merge-ops.ts");
+const inboundSrc = readSrc("src/lib/customer-messaging/inbound.ts");
 const testSrc = readSrc("scripts/check-customer-merge.mjs");
 const require = createRequire(import.meta.url);
 const { Prisma, PrismaClient } = require("@prisma/client");
@@ -184,38 +186,6 @@ function isUnavailableOrTryAgain(error) {
   return (
     error instanceof CustomerMergeError &&
     (error.message === CUSTOMERS_NOT_AVAILABLE_MESSAGE || error.message === MERGE_TRY_AGAIN_MESSAGE)
-  );
-}
-
-async function waitForTestDbLockOrNowait(admin, label) {
-  const started = Date.now();
-  while (Date.now() - started < LOCK_POLL_MS) {
-    const locks = await admin.$queryRaw`
-      SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
-      FROM pg_stat_activity
-      WHERE datname = ${testDbName}
-        AND pid <> pg_backend_pid()
-        AND wait_event_type = 'Lock'
-    `;
-    if (locks.length > 0) return { kind: "lock", rows: locks };
-    const nowait = await admin.$queryRaw`
-      SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
-      FROM pg_stat_activity
-      WHERE datname = ${testDbName}
-        AND pid <> pg_backend_pid()
-        AND query ILIKE '%FOR UPDATE NOWAIT%'
-    `;
-    if (nowait.length > 0) return { kind: "nowait", rows: nowait };
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  const snapshot = await admin.$queryRaw`
-    SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
-    FROM pg_stat_activity
-    WHERE datname = ${testDbName}
-      AND pid <> pg_backend_pid()
-  `;
-  throw new Error(
-    `${label}: timed out waiting for wait_event_type=Lock or FOR UPDATE NOWAIT on ${testDbName}. activity=${JSON.stringify(snapshot)}`,
   );
 }
 
@@ -359,6 +329,7 @@ try {
     opsSrc.includes("P2034") &&
       opsSrc.includes("40001") &&
       opsSrc.includes("P2028") &&
+      opsSrc.includes("P2003") &&
       opsSrc.includes("MERGE_TRY_AGAIN_MESSAGE") &&
       opsSrc.includes("maxWait") &&
       opsSrc.includes("timeout") &&
@@ -395,6 +366,14 @@ try {
       readSrc("prisma/schema.prisma").includes("onDelete: SetNull") &&
       readSrc("prisma/migrations/20260929020000_customer_merge/migration.sql").includes("ON DELETE SET NULL") &&
       !/DROP NOT NULL|DROP CONSTRAINT/i.test(readSrc("prisma/migrations/20260929020000_customer_merge/migration.sql")),
+  );
+  check(
+    "STOP and START consent writes use updateMany and follow absorbed merge hops",
+    inboundSrc.includes("updateMany") &&
+      inboundSrc.includes("absorbedCustomerId") &&
+      inboundSrc.includes("smsConsentUpdatedAt") &&
+      inboundSrc.includes("CONSENT_MERGE_HOPS") &&
+      !/customer\.update\(\s*\{/.test(inboundSrc),
   );
   check(
     "Upload-create takes FOR KEY SHARE on the customer before inserting a StoredAsset",
@@ -1487,7 +1466,7 @@ try {
   });
   const reverseMergeSettled = Promise.allSettled([reverseMergeP]);
   try {
-    await waitForTestDbLockOrNowait(lockAdmin, "reverse-order merge");
+    await waitForTestDbLock(lockAdmin, "reverse-order merge");
   } finally {
     await reverseBarrier.arrive();
   }
@@ -1519,6 +1498,73 @@ try {
     );
   }
   await assertNoOrphans(reversePair.right.id, "Reverse-order upload then merge");
+
+  console.log("\nCONCURRENT — merge vs inbound STOP on the absorbed phone");
+  const stopEmail = `stop-${randomUUID().slice(0, 8)}@example.com`;
+  const stopPhone = "2395550177";
+  const stopTo = "2395550180";
+  await prisma.business.update({
+    where: { id: alpha.business.id },
+    data: { operationalSmsNumber: stopTo },
+  });
+  const stopKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Stop Keep",
+      email: stopEmail,
+      phone: null,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const stopAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Stop Absorb",
+      email: stopEmail,
+      phone: stopPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const stopBarrier = createCount2Barrier();
+  const stopMergeClient = createTestClient();
+  const stopInboundClient = createTestClient();
+  const stopMergeP = mergeConfirmedCustomers(
+    stopMergeClient,
+    alpha.owner,
+    { keepCustomerId: stopKeep.id, absorbCustomerId: stopAbsorb.id, confirmedSameCustomer: true },
+    { afterLocked: stopBarrier.arrive },
+  );
+  const stopMergeSettled = Promise.allSettled([stopMergeP]);
+  await withTimeout(stopBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-STOP entered write");
+  const stopInboundP = applyInboundConsentEvent(stopInboundClient, {
+    provider: "twilio",
+    providerEventId: `SM_merge_stop_${randomUUID()}`,
+    from: `+1${stopPhone}`,
+    to: `+1${stopTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const stopInboundSettled = Promise.allSettled([stopInboundP]);
+  await releaseAfterLock(lockAdmin, stopBarrier, "merge vs inbound STOP");
+  const [stopMergeResult] = await withTimeout(stopMergeSettled, 25000, "merge vs STOP merge");
+  const [stopInboundResult] = await withTimeout(stopInboundSettled, 25000, "merge vs STOP inbound");
+  await Promise.all([disconnectClient(stopMergeClient), disconnectClient(stopInboundClient)]);
+  check("Merge vs STOP: merge succeeds", stopMergeResult.status === "fulfilled");
+  check(
+    "Merge vs STOP: result is revoked on the survivor",
+    stopInboundResult.status === "fulfilled" &&
+      stopInboundResult.value.applied === true &&
+      stopInboundResult.value.reason === "revoked" &&
+      stopInboundResult.value.consentStatus === "REVOKED" &&
+      stopInboundResult.value.customerId === stopKeep.id,
+  );
+  const stopSurvivor = await prisma.customer.findUnique({ where: { id: stopKeep.id } });
+  check("Merge vs STOP: survivor is REVOKED", stopSurvivor?.smsConsentStatus === "REVOKED");
+  check(
+    "Merge vs STOP: absorbed customer is gone",
+    (await prisma.customer.findUnique({ where: { id: stopAbsorb.id } })) === null,
+  );
+  await assertNoOrphans(stopAbsorb.id, "Merge vs STOP");
 } catch (error) {
   console.error(error);
   failures += 1;
