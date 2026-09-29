@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AvailabilityExceptionRequestForm } from "@/components/field/availability-exception-request-form";
 import { FieldJobCard } from "@/components/field/field-job-card";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FieldTimeCorrectionRequests } from "@/components/field/field-time-correction-requests";
@@ -8,8 +9,11 @@ import { formatTime } from "@/lib/format";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { hasProductCapability } from "@/lib/product-entitlements";
 import { calculateDailyCapacity } from "@/lib/workforce-capacity";
 import { capacityJobsFromRows, loadSchedulingPolicy, loadWorkforceMembers } from "@/lib/workforce-data";
+import { loadSelfAvailabilityExceptionRequests } from "@/lib/workforce-availability-request-ops";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
 import {
   TIME_ACTIVITY_LABELS,
@@ -99,6 +103,19 @@ export default async function FieldHomePage() {
     },
     take: 12,
   });
+  const canRequestAvailability =
+    field.workspace.role === "MEMBER" &&
+    (await hasProductCapability(
+      prisma,
+      field.businessId,
+      PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
+    ));
+  const availabilityRequests = canRequestAvailability
+    ? await loadSelfAvailabilityExceptionRequests(prisma, {
+        businessId: field.businessId,
+        membershipId: field.membershipId,
+      })
+    : [];
   const running = await prisma.timeEntry.findFirst({
     where: {
       businessId: field.businessId,
@@ -130,6 +147,21 @@ export default async function FieldHomePage() {
           {myCapacity.overloaded ? " — this day looks full" : ""}. Other workers and the Fill-In Bench stay hidden.
         </p>
       </div>
+
+      {canRequestAvailability ? (
+        <AvailabilityExceptionRequestForm
+          membershipId={field.membershipId}
+          requests={availabilityRequests.map((request) => ({
+            id: request.id,
+            date: request.date,
+            kind: request.kind,
+            startMinutes: request.startMinutes,
+            endMinutes: request.endMinutes,
+            note: request.note,
+            status: request.status,
+          }))}
+        />
+      ) : null}
 
       <FieldTimeClock
         membershipId={field.membershipId}

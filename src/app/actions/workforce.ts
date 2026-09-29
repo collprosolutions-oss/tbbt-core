@@ -6,12 +6,20 @@ import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { parseUnavailableDate } from "@/lib/availability";
 import {
+  AVAILABILITY_REQUEST_DECISIONS,
   OUTREACH_TASK_KINDS,
   parseBoundedInt,
+  parseExpectedUpdatedAt,
   parseOptionalBoundedInt,
   parseSkillList,
+  type AvailabilityRequestDecision,
   type OutreachTaskKind,
 } from "@/lib/workforce";
+import {
+  availabilityRequestErrorMessage,
+  decideMemberAvailabilityExceptionRequestOp,
+  requestMemberAvailabilityExceptionOp,
+} from "@/lib/workforce-availability-request-ops";
 import {
   createWorkforceOutreachTaskOp,
   setMemberAvailabilityExceptionOp,
@@ -42,6 +50,7 @@ function revalidateWorkforce() {
   revalidatePath("/team");
   revalidatePath("/team/bench");
   revalidatePath("/jobs");
+  revalidatePath("/field");
   revalidatePath("/business-health");
 }
 
@@ -249,6 +258,78 @@ export async function createWorkforceOutreachTask(
   } catch (error) {
     if (error instanceof WorkforceError) return { error: error.message };
     throw error;
+  }
+}
+
+export async function requestAvailabilityException(
+  _prev: WorkforceActionState,
+  formData: FormData,
+): Promise<WorkforceActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  const membershipId = readString(formData, "membershipId") || access.workspace.membership.id;
+  const date = parseUnavailableDate(readString(formData, "date"));
+  if (!date) return { error: "Choose a valid date." };
+
+  const kind = readString(formData, "kind") === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE";
+  const startMinutes = timeToMinutes(readString(formData, "start"));
+  const endMinutes = timeToMinutes(readString(formData, "end"));
+
+  try {
+    await requestMemberAvailabilityExceptionOp(prisma, access, {
+      membershipId,
+      date,
+      kind,
+      startMinutes,
+      endMinutes,
+      note: readString(formData, "note"),
+    });
+  } catch (error) {
+    return { error: availabilityRequestErrorMessage(error, "That request could not be submitted.") };
+  }
+
+  revalidateWorkforce();
+  return {
+    message:
+      "Request sent to the owner. Recorded availability does not change until they accept. Existing jobs were not cancelled, reassigned, or messaged.",
+  };
+}
+
+export async function decideAvailabilityExceptionRequest(
+  _prev: WorkforceActionState,
+  formData: FormData,
+): Promise<WorkforceActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.TEAM_MANAGEMENT);
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+
+  const requestId = readString(formData, "requestId");
+  const expectedUpdatedAt = parseExpectedUpdatedAt(readString(formData, "expectedUpdatedAt"));
+  const decisionRaw = readString(formData, "decision");
+  const decision = (AVAILABILITY_REQUEST_DECISIONS as readonly string[]).includes(decisionRaw)
+    ? (decisionRaw as AvailabilityRequestDecision)
+    : null;
+  if (!requestId || !expectedUpdatedAt || !decision) {
+    return { error: "Choose a pending request to accept or decline." };
+  }
+
+  try {
+    const result = await decideMemberAvailabilityExceptionRequestOp(prisma, access, {
+      requestId,
+      decision,
+      expectedUpdatedAt,
+      replaceExisting: readString(formData, "replaceExisting") === "1",
+    });
+    revalidateWorkforce();
+    return {
+      message:
+        result.decision === "ACCEPT"
+          ? "Accepted. Recorded availability now includes that date. Existing jobs were not cancelled, reassigned, or messaged."
+          : "Declined. Recorded availability is unchanged. Existing jobs were not cancelled, reassigned, or messaged.",
+    };
+  } catch (error) {
+    return { error: availabilityRequestErrorMessage(error, "That request could not be decided.") };
   }
 }
 
