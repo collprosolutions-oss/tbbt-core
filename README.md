@@ -80,6 +80,7 @@ Focused isolation / domain scripts (all require `DATABASE_URL`):
 ```bash
 npm run test:isolation
 npm run test:authorization
+npm run test:customer-csv-import
 npm run test:bsos
 npm run test:chief-of-staff
 npm run test:business-coach
