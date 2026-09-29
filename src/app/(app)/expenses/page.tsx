@@ -16,6 +16,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   ACTIVE_EXPENSE_WHERE,
@@ -464,6 +465,7 @@ export default async function ExpensesPage({
     },
     filters,
     storageConfigured: isBusinessStorageConfigured(),
+    canChangeReceipts: roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS),
     defaultDate: formatISODate(now, timeZone),
     page,
     totalPages,

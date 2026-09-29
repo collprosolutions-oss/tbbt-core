@@ -1,8 +1,10 @@
 /**
- * Private expense receipts: OWNER attach / review / replace / remove on
- * managed storage. Proves upload/download authorization, tenant isolation,
- * file limits, storage-failure rollback, and replacement without changing
- * the recorded amount or inferring tax treatment.
+ * Private expense receipts: OWNER attach / replace / remove on managed
+ * storage. ADMIN may view and download same-business receipts and still
+ * record/review/edit expenses, but cannot mutate the file. Proves upload
+ * authorization, tenant isolation, file limits, storage-failure rollback,
+ * and replacement without changing the recorded amount or inferring tax
+ * treatment.
  *
  * Dedicated database: tbbt_expense_receipts_test
  *
@@ -22,9 +24,11 @@ const { CAPABILITIES, ForbiddenError, roleHasCapability } = await import(
 );
 const {
   CONCURRENT_EXPENSE_RECEIPT_ERROR,
+  attachExpenseReceipt,
   createExpense,
   expenseReceiptWriteTestHooks,
   reviewExpense,
+  updateExpense,
 } = await import("@/lib/expense-ops");
 const {
   EXPENSE_RECEIPT_MAX_BYTES,
@@ -41,6 +45,7 @@ const {
   isBusinessStorageConfigured,
   privateAssetPath,
   putExpenseReceiptFromBytes,
+  releaseUnreferencedExpenseReceiptAsset,
   removeExpenseReceiptAttachment,
 } = await import("@/lib/business-storage/index");
 
@@ -117,6 +122,28 @@ function makeAccess(businessId, role, membershipId, slug) {
 
 function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+function watchPuts(inner) {
+  const state = { count: 0 };
+  return {
+    state,
+    provider: {
+      get id() {
+        return inner.id;
+      },
+      async putObject(input) {
+        state.count += 1;
+        return inner.putObject(input);
+      },
+      getObjectMetadata: (input) => inner.getObjectMetadata(input),
+      getObject: (input) => inner.getObject(input),
+      objectExists: (input) => inner.objectExists(input),
+      createUploadUrl: (input) => inner.createUploadUrl(input),
+      createDownloadUrl: (input) => inner.createDownloadUrl(input),
+      deleteObject: (input) => inner.deleteObject(input),
+    },
+  };
 }
 
 function failPut(inner) {
@@ -214,6 +241,37 @@ async function accountSnapshot(businessId) {
     usedBytes: Number(account.storageUsedBytes),
     reservedBytes: Number(account.storageReservedBytes),
   };
+}
+
+async function expenseReceiptSnapshot(businessId, expenseId) {
+  const expense = await prisma.expense.findUnique({ where: { id: expenseId } });
+  const assets = await prisma.storedAsset.findMany({
+    where: { businessId },
+    select: { id: true, originalFilename: true, storageKey: true, status: true },
+  });
+  const account = await accountSnapshot(businessId);
+  return {
+    receiptStoredAssetId: expense?.receiptStoredAssetId ?? null,
+    amount: Number(expense?.amount.toString()),
+    assetIds: assets.map((asset) => asset.id).sort().join(","),
+    filenames: assets.map((asset) => asset.originalFilename),
+    usedBytes: account.usedBytes,
+    reservedBytes: account.reservedBytes,
+    assetCount: assets.length,
+  };
+}
+
+function receiptMutationBlocked(before, after, attemptedFilename, putCount) {
+  return (
+    after.receiptStoredAssetId === before.receiptStoredAssetId &&
+    after.amount === before.amount &&
+    after.usedBytes === before.usedBytes &&
+    after.reservedBytes === before.reservedBytes &&
+    after.assetCount === before.assetCount &&
+    after.assetIds === before.assetIds &&
+    !after.filenames.includes(attemptedFilename) &&
+    putCount === 0
+  );
 }
 
 async function readyReceiptInvariant(businessId) {
@@ -429,6 +487,24 @@ try {
       !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSES),
   );
   check(
+    "Receipt mutations are OWNER-only; ADMIN keeps MANAGE_EXPENSES",
+    roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS) &&
+      !roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS) &&
+      !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS) &&
+      roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSES),
+  );
+  check(
+    "UI hides receipt changes for ADMIN and keeps view/download",
+    workspaceSrc.includes("canChangeReceipts") &&
+      workspaceSrc.includes("Only the owner can change receipts") &&
+      typesSrc.includes("canChangeReceipts") &&
+      pageSrc.includes("MANAGE_EXPENSE_RECEIPTS") &&
+      sheetSrc.includes("Only the owner can change receipts") &&
+      expenseActions.includes("MANAGE_EXPENSE_RECEIPTS") &&
+      receiptLib.includes("MANAGE_EXPENSE_RECEIPTS") &&
+      expenseOps.includes("requireExpenseReceiptMutation"),
+  );
+  check(
     "isBusinessStorageConfigured is exported for the page gate",
     typeof isBusinessStorageConfigured === "function",
   );
@@ -576,6 +652,130 @@ try {
       !("body" in ownerRead),
   );
   check("ADMIN can download the same-business receipt", adminRead.ok === true && adminRead.url === ownerRead.url);
+
+  console.log("\nTEST — ADMIN is blocked from receipt mutations and keeps expense edits");
+  const adminRecorded = await createExpense(prisma, adminA, {
+    occurredOn: "2026-09-02",
+    description: "Admin tape",
+    amount: "5.00",
+    category: "OFFICE_ADMIN",
+  });
+  check(
+    "ADMIN can still record expenses",
+    adminRecorded.businessId === businessA.id && Number(adminRecorded.amount.toString()) === 5,
+  );
+  const adminEdited = await updateExpense(prisma, adminA, {
+    expenseId: adminRecorded.id,
+    occurredOn: "2026-09-02",
+    description: "Admin tape edited",
+    amount: "6.50",
+    category: "OFFICE_ADMIN",
+  });
+  check(
+    "ADMIN can still edit expenses",
+    adminEdited.description === "Admin tape edited" && Number(adminEdited.amount.toString()) === 6.5,
+  );
+
+  const watched = watchPuts(provider);
+  const adminDeps = { ...deps, provider: watched.provider };
+  const lumberBeforeAdmin = await expenseReceiptSnapshot(businessA.id, lumber.id);
+  const paintBeforeAdmin = await expenseReceiptSnapshot(businessA.id, paint.id);
+
+  await expectThrow(
+    "ADMIN cannot upload a receipt",
+    () =>
+      authorizeExpenseReceiptUpload(adminDeps, adminA, {
+        expenseId: paint.id,
+        originalFilename: "admin-upload.jpg",
+        mimeType: "image/jpeg",
+        fileSizeBytes: jpegBytes.byteLength,
+        body: jpegBytes,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  const paintAfterAdminUpload = await expenseReceiptSnapshot(businessA.id, paint.id);
+  check(
+    "ADMIN upload created no StoredAsset, wrote no object, and left quota and amount alone",
+    receiptMutationBlocked(paintBeforeAdmin, paintAfterAdminUpload, "admin-upload.jpg", watched.state.count),
+  );
+
+  await expectThrow(
+    "ADMIN cannot attach a receipt",
+    () =>
+      putExpenseReceiptFromBytes(adminDeps, adminA, {
+        expenseId: paint.id,
+        originalFilename: "admin-attach.jpg",
+        mimeType: "image/jpeg",
+        body: jpegBytes,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectThrow(
+    "ADMIN cannot attach through the expense-ops attach path",
+    () =>
+      attachExpenseReceipt(prisma, adminA, {
+        expenseId: paint.id,
+        storedAssetId: attached.asset.id,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  const paintAfterAdminAttach = await expenseReceiptSnapshot(businessA.id, paint.id);
+  check(
+    "ADMIN attach created no StoredAsset, wrote no object, and left quota, amount, and receipt reference alone",
+    receiptMutationBlocked(paintBeforeAdmin, paintAfterAdminAttach, "admin-attach.jpg", watched.state.count) &&
+      paintAfterAdminAttach.receiptStoredAssetId === null,
+  );
+
+  await expectThrow(
+    "ADMIN cannot replace a receipt",
+    () =>
+      putExpenseReceiptFromBytes(adminDeps, adminA, {
+        expenseId: lumber.id,
+        originalFilename: "admin-replace.jpg",
+        mimeType: "image/jpeg",
+        body: replacementBytes,
+      }),
+    (error) => error instanceof ForbiddenError,
+  );
+  const lumberAfterAdminReplace = await expenseReceiptSnapshot(businessA.id, lumber.id);
+  check(
+    "ADMIN replace left the existing receipt, amount, quota, and storage objects unchanged",
+    receiptMutationBlocked(lumberBeforeAdmin, lumberAfterAdminReplace, "admin-replace.jpg", watched.state.count) &&
+      lumberAfterAdminReplace.receiptStoredAssetId === attached.asset.id,
+  );
+
+  await expectThrow(
+    "ADMIN cannot remove a receipt",
+    () => removeExpenseReceiptAttachment(adminDeps, adminA, lumber.id),
+    (error) => error instanceof ForbiddenError,
+  );
+  await expectThrow(
+    "ADMIN cannot release an expense receipt asset",
+    () => releaseUnreferencedExpenseReceiptAsset(adminDeps, adminA, attached.asset.id),
+    (error) => error instanceof ForbiddenError,
+  );
+  const lumberAfterAdminRemove = await expenseReceiptSnapshot(businessA.id, lumber.id);
+  const lumberObjectStillThere = await provider.objectExists({
+    bucket: receiptBucket,
+    key: attached.asset.storageKey,
+  });
+  check(
+    "ADMIN remove and release left the existing receipt, amount, quota, and storage object unchanged",
+    receiptMutationBlocked(lumberBeforeAdmin, lumberAfterAdminRemove, "admin-replace.jpg", watched.state.count) &&
+      lumberAfterAdminRemove.receiptStoredAssetId === attached.asset.id &&
+      lumberObjectStillThere,
+  );
+
+  const adminReadAfterBlock = await authorizePrivateStoredAssetDownload(
+    prisma,
+    attached.asset.id,
+    businessA.id,
+    { provider, viewer: adminViewer },
+  );
+  check(
+    "ADMIN can still download the same-business receipt after blocked mutations",
+    adminReadAfterBlock.ok === true && adminReadAfterBlock.url === ownerRead.url,
+  );
 
   const reviewed = await reviewExpense(prisma, ownerA, {
     expenseId: lumber.id,
@@ -762,14 +962,14 @@ try {
       newRead.url === `memory://download/${receiptBucket}/${replaced.asset.storageKey}`,
   );
 
-  const pdfAttached = await putExpenseReceiptFromBytes(deps, adminA, {
+  const pdfAttached = await putExpenseReceiptFromBytes(deps, ownerA, {
     expenseId: paint.id,
     originalFilename: "paint.pdf",
     mimeType: "application/pdf",
     body: pdfBytes,
   });
   check(
-    "ADMIN can attach a PDF receipt without changing amount",
+    "OWNER can attach a PDF receipt without changing amount",
     pdfAttached.expense.receiptStoredAssetId === pdfAttached.asset.id &&
       Number(pdfAttached.expense.amount.toString()) === 48 &&
       pdfAttached.asset.mimeType === "application/pdf",

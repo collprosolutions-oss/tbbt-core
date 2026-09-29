@@ -291,6 +291,11 @@ async function requireExpenseMutation(db: Db, access: BusinessAccess) {
   await requireSaasOperatingEntitlement(db, access);
 }
 
+async function requireExpenseReceiptMutation(db: Db, access: BusinessAccess) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
+  await requireSaasOperatingEntitlement(db, access);
+}
+
 export async function createExpense(db: Db, access: BusinessAccess, input: CreateExpenseInput) {
   await requireExpenseMutation(db, access);
   const fields = await resolveExpenseFields(db, access, input);
@@ -448,7 +453,7 @@ export async function attachExpenseReceipt(
   input: { expenseId: string; storedAssetId: string },
   afterClaim?: ExpenseReceiptClaimAfter,
 ) {
-  await requireExpenseMutation(db, access);
+  await requireExpenseReceiptMutation(db, access);
   const storedAssetId = input.storedAssetId.trim();
   if (!storedAssetId) {
     throw new ExpenseError("A private receipt file is required.");
@@ -513,7 +518,7 @@ export async function removeExpenseReceipt(
   input: { expenseId: string },
   afterClaim?: ExpenseReceiptClaimAfter,
 ) {
-  await requireExpenseMutation(db, access);
+  await requireExpenseReceiptMutation(db, access);
   const expense = requireActiveExpense(
     access.assertOwned(
       await db.expense.findFirst({

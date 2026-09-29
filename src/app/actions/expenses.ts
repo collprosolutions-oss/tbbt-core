@@ -3,11 +3,13 @@
 /**
  * Expense server actions. Tenant scope always comes from
  * requireBusinessAccess() (session workspace), never from a client
- * businessId. OWNER/ADMIN only (MANAGE_EXPENSES). Receipts use private
- * managed storage — never a public file URL, and never used to infer
- * tax treatment.
+ * businessId. OWNER/ADMIN record and review expenses (MANAGE_EXPENSES).
+ * Only OWNER can attach, replace, or remove a private receipt
+ * (MANAGE_EXPENSE_RECEIPTS). Receipts never use a public file URL and
+ * are never used to infer tax treatment.
  */
 import { revalidatePath } from "next/cache";
+import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { isBusinessStorageConfigured } from "@/lib/business-storage/config";
 import {
@@ -51,6 +53,7 @@ async function maybeAttachReceipt(
   if (!(file instanceof File) || file.size === 0) {
     return null;
   }
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   const body = Buffer.from(await file.arrayBuffer());
   const inspection = inspectExpenseReceiptUpload({
     type: file.type,
@@ -247,6 +250,7 @@ export async function removeExpenseReceiptAction(
 ): Promise<ExpenseActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
     const expenseId = readString(formData, "expenseId");
     if (!expenseId) return { error: "That expense could not be found." };
     await removeExpenseReceiptAttachment({ db: prisma }, access, expenseId);

@@ -100,6 +100,7 @@ export type ExpenseWorkspaceData = {
   financial: ExpenseFinancialOverview;
   filters: ExpenseFilterChip[];
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   defaultDate: string;
   page: number;
   totalPages: number;

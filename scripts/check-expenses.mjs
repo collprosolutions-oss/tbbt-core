@@ -110,6 +110,9 @@ try {
   );
   check("OWNER/ADMIN have MANAGE_EXPENSES", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSES) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSES));
   check("MEMBER does not have MANAGE_EXPENSES", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSES));
+  check("OWNER has MANAGE_EXPENSE_RECEIPTS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("ADMIN does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("MEMBER does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
   check("MEMBER cannot access the management console", !canAccessManagementConsole("MEMBER"));
 
   const projection = projectedOperatingBalance({ knownInflows: 2150, knownOutflows: 3557.82 });
@@ -523,6 +526,13 @@ try {
       workspaceSource.includes("does not infer tax treatment") &&
       pageSource.includes("isManagedBlobUrl") &&
       !workspaceSource.includes("expense.receiptUrl"),
+  );
+  check(
+    "ADMIN cannot change receipts in the UI; view/download stays",
+    workspaceSource.includes("canChangeReceipts") &&
+      workspaceSource.includes("Only the owner can change receipts") &&
+      pageSource.includes("MANAGE_EXPENSE_RECEIPTS") &&
+      sheetSource.includes("Only the owner can change receipts"),
   );
   const pageStorage = pageSource.includes("isBusinessStorageConfigured") && !pageSource.includes("isStorageConfigured");
   check("Expenses page uses private business storage, not Vercel Blob", pageStorage);

@@ -130,6 +130,12 @@ export const CAPABILITIES = {
    */
   MANAGE_EXPENSES: "MANAGE_EXPENSES",
   /**
+   * OWNER-only attach, replace, and remove of a private expense receipt.
+   * ADMIN keeps MANAGE_EXPENSES (record/review/edit) and may view or
+   * download same-business receipts, but must not mutate the file.
+   */
+  MANAGE_EXPENSE_RECEIPTS: "MANAGE_EXPENSE_RECEIPTS",
+  /**
    * Read business-wide Reports (invoices, labor, customers, services).
    * OWNER/ADMIN only. MEMBER must never receive this -- Reports hold
    * private financial data for the whole business, not assigned-job
@@ -203,6 +209,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.AUTHORIZE_PAYROLL,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
+  CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
 ]);
 
 /**

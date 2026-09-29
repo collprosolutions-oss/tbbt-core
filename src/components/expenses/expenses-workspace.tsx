@@ -72,9 +72,11 @@ const BAR_COLORS: Record<string, string> = {
 
 export function ExpensesHeaderActions({
   storageConfigured,
+  canChangeReceipts,
   onAdd,
 }: {
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   onAdd: (mode: ExpenseSheetMode) => void;
 }) {
   const operating = useSaasOperating();
@@ -98,14 +100,16 @@ export function ExpensesHeaderActions({
           <DropdownMenuItem onClick={() => onAdd("recurring")}>Recurring expense</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button
-        variant="outline"
-        size="lg"
-        onClick={() => onAdd("receipt")}
-      >
-        <Upload />
-        Upload Receipt
-      </Button>
+      {canChangeReceipts ? (
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={() => onAdd("receipt")}
+        >
+          <Upload />
+          Upload Receipt
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -139,6 +143,7 @@ export function ExpensesWorkspace({
         actions={
           <ExpensesHeaderActions
             storageConfigured={workspace.storageConfigured}
+            canChangeReceipts={workspace.canChangeReceipts}
             onAdd={setSheetMode}
           />
         }
@@ -146,6 +151,7 @@ export function ExpensesWorkspace({
       <div className="flex flex-wrap items-center gap-2 md:hidden">
         <ExpensesHeaderActions
           storageConfigured={workspace.storageConfigured}
+          canChangeReceipts={workspace.canChangeReceipts}
           onAdd={setSheetMode}
         />
       </div>
@@ -256,14 +262,19 @@ export function ExpensesWorkspace({
             <ExpenseDetails
               expense={selected}
               storageConfigured={workspace.storageConfigured}
+              canChangeReceipts={workspace.canChangeReceipts}
               onEdit={() => {
                 setMobileOpen(false);
                 setSheetMode("edit");
               }}
-              onAttach={() => {
-                setMobileOpen(false);
-                setSheetMode("receipt");
-              }}
+              onAttach={
+                workspace.canChangeReceipts
+                  ? () => {
+                      setMobileOpen(false);
+                      setSheetMode("receipt");
+                    }
+                  : undefined
+              }
             />
           ) : null}
         </SheetContent>
@@ -281,6 +292,7 @@ export function ExpensesWorkspace({
           customers={workspace.customers}
           defaultDate={workspace.defaultDate}
           storageConfigured={workspace.storageConfigured}
+          canChangeReceipts={workspace.canChangeReceipts}
           attachExpenseId={selected?.id}
           editingExpense={selected}
         />
@@ -554,8 +566,9 @@ function RightRail({
         <ExpenseDetails
           expense={selected}
           storageConfigured={workspace.storageConfigured}
+          canChangeReceipts={workspace.canChangeReceipts}
           onEdit={() => onAdd("edit")}
-          onAttach={() => onAdd("receipt")}
+          onAttach={workspace.canChangeReceipts ? () => onAdd("receipt") : undefined}
         />
       ) : null}
     </div>
@@ -598,11 +611,13 @@ function OverviewRow({
 function ExpenseDetails({
   expense,
   storageConfigured,
+  canChangeReceipts,
   onEdit,
   onAttach,
 }: {
   expense: ExpenseListItem;
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   onEdit?: () => void;
   onAttach?: () => void;
 }) {
@@ -669,7 +684,12 @@ function ExpenseDetails({
             </Button>
           ) : null}
         </div>
-        {expense.hasPrivateReceipt ? <RemoveReceiptForm expenseId={expense.id} /> : null}
+        {canChangeReceipts && expense.hasPrivateReceipt ? (
+          <RemoveReceiptForm expenseId={expense.id} />
+        ) : null}
+        {canChangeReceipts ? null : (
+          <p className="text-xs text-muted-foreground">Only the owner can change receipts</p>
+        )}
 
         <form action={reviewAction} className="flex flex-wrap gap-2">
           <input type="hidden" name="expenseId" value={expense.id} />

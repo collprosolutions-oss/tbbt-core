@@ -1,11 +1,12 @@
 /**
  * Private managed expense receipts.
  *
- * OWNER/ADMIN attach a bounded file to a same-business expense, review
- * it through the authorized private download route, and replace or
- * remove it without changing the recorded amount or inferring tax
- * treatment. Bytes stay in managed object storage. The UI never receives
- * a public file URL.
+ * OWNER attaches a bounded file to a same-business expense, reviews
+ * it through the authorized private download route, and replaces or
+ * removes it without changing the recorded amount or inferring tax
+ * treatment. ADMIN may view and download the same-business receipt
+ * but cannot attach, replace, or remove it. Bytes stay in managed
+ * object storage. The UI never receives a public file URL.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -180,7 +181,7 @@ export function expenseReceiptHref(storedAssetId?: string | null) {
 }
 
 async function requireReceiptMutation(db: Db, access: BusinessAccess) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   await requireSaasOperatingEntitlement(db, access);
 }
 
@@ -309,7 +310,7 @@ export async function releaseUnreferencedExpenseReceiptAsset(
   access: BusinessAccess,
   assetId: string,
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   const id = assetId.trim();
   if (!id) return { released: false as const, reason: "missing", assetId: undefined };
   const asset = await deps.db.storedAsset.findFirst({
