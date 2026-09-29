@@ -1393,7 +1393,7 @@ check(
 );
 
 const collectionsWorkItemMigration = readFileSync(
-  new URL("../prisma/migrations/20260929010000_invoice_collection_work_item/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260929011000_invoice_collection_work_item/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -1405,10 +1405,10 @@ check(
     collectionsWorkItemMigration.includes("InvoiceCollectionWorkItem_businessId_invoiceId_key") &&
     collectionsWorkItemMigration.includes("20260928200000_estimate_line_template_archive") &&
     !collectionsWorkItemMigration.includes("ALTER TABLE \"Invoice\"") &&
-    localNames.includes("20260929010000_invoice_collection_work_item") &&
+    localNames.includes("20260929011000_invoice_collection_work_item") &&
     !localNames.includes("20260928200000_invoice_collection_work_item") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_invoice_collection_work_item"),
+      localNames.indexOf("20260929011000_invoice_collection_work_item"),
 );
 
 const materialsSchema = readFileSync(

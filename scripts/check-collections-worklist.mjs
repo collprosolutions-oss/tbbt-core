@@ -71,6 +71,15 @@ if (!baseUrl) {
   process.exit(1);
 }
 
+const parsedBase = new URL(baseUrl);
+const dbHost = parsedBase.hostname;
+if (dbHost !== "localhost" && dbHost !== "127.0.0.1" && dbHost !== "::1") {
+  console.error(
+    `Refusing to run collections worklist checks against DATABASE_URL host "${dbHost}". Only localhost, 127.0.0.1, or ::1 are allowed.`,
+  );
+  process.exit(1);
+}
+
 const testDbName = "tbbt_collections_worklist_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
@@ -78,28 +87,18 @@ const testUrl = parsed.toString();
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for collections worklist test database.");
-  process.exit(push.status ?? 1);
-}
 
 const require = createRequire(import.meta.url);
 const { Prisma, PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
+const clients = [];
+function trackClient(client) {
+  clients.push(client);
+  return client;
+}
+
+let prisma;
 function check(label, condition) {
   if (condition) {
     console.log(`  ok  - ${label}`);
@@ -165,8 +164,29 @@ async function seedSentInvoice(input) {
   return { job, invoice };
 }
 
-try {
-  console.log("\nSTATIC — OWNER worklist, recorded balances, no send");
+async function main() {
+  try {
+    const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+      encoding: "utf8",
+    });
+    if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+      throw new Error(
+        createDb.stderr || createDb.stdout || "Failed to create collections worklist test database.",
+      );
+    }
+
+    const push = spawnSync(
+      "npx",
+      ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+      { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+    );
+    if (push.status !== 0) {
+      throw new Error("Failed to push schema for collections worklist test database.");
+    }
+
+    prisma = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+
+    console.log("\nSTATIC — OWNER worklist, recorded balances, no send");
   check("Dedicated route stays /invoices/collections", COLLECTIONS_ROUTE === "/invoices/collections");
   check(
     "OWNER-only read and write gates",
@@ -586,15 +606,73 @@ try {
       bounded.overflow === true &&
       bounded.unpaidCount > COLLECTIONS_QUEUE_LIMIT,
   );
-} catch (error) {
-  console.error(error);
-  failures += 1;
-} finally {
-  await prisma.$disconnect();
+
+  const raceInvoice = await seedSentInvoice({
+    businessId: businessA.id,
+    customerId: customer.id,
+    total: "33.00",
+    createdAt: daysAgo(3, now),
+  });
+  function createBarrier(count) {
+    let arrived = 0;
+    let release;
+    const ready = new Promise((resolve) => {
+      release = resolve;
+    });
+    return {
+      async wait() {
+        arrived += 1;
+        if (arrived === count) release();
+        await ready;
+      },
+    };
+  }
+  const barrier = createBarrier(2);
+  const raceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const raceB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const raceResults = await Promise.all([
+    (async () => {
+      await barrier.wait();
+      return recordCollectionNextStep(raceA, ownerA, {
+        invoiceId: raceInvoice.invoice.id,
+        nextStep: "CALL",
+        note: "race-A",
+      });
+    })(),
+    (async () => {
+      await barrier.wait();
+      return recordCollectionNextStep(raceB, ownerA, {
+        invoiceId: raceInvoice.invoice.id,
+        nextStep: "WAIT",
+        note: "race-B",
+      });
+    })(),
+  ]);
+  const raceIds = new Set(raceResults.map((row) => row.workItem.id));
+  const raceCount = await prisma.invoiceCollectionWorkItem.count({
+    where: { businessId: businessA.id, invoiceId: raceInvoice.invoice.id },
+  });
+  check(
+    "Concurrent next-step writes on separate clients produce one work item",
+    raceIds.size === 1 && raceCount === 1,
+  );
+  } catch (error) {
+    console.error(error);
+    failures += 1;
+  } finally {
+    for (const client of clients) {
+      await client.$disconnect();
+    }
+    spawnSync("psql", [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`], {
+      encoding: "utf8",
+    });
+  }
 }
 
+await main();
 if (failures > 0) {
   console.error(`\n${failures} collections worklist check(s) failed.`);
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log("\nAll collections worklist checks passed.");
 }
-console.log("\nAll collections worklist checks passed.");

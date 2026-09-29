@@ -3,7 +3,7 @@
 -- statement is IF NOT EXISTS. No backfill. Existing invoices, payments,
 -- and communications stay unchanged. Recording a next step or resolution
 -- never marks an invoice paid and never sends a reminder.
--- Timestamp is 20260929010000 so it sits after
+-- Timestamp is 20260929011000 so it sits after
 -- 20260928200000_estimate_line_template_archive (#210).
 
 CREATE TABLE IF NOT EXISTS "InvoiceCollectionWorkItem" (
