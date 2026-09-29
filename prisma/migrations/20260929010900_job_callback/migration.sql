@@ -2,7 +2,7 @@
 -- Additive only. Preview shares Production and skips migrate, so every
 -- statement is IF NOT EXISTS. No backfill. Existing businesses keep zero rows.
 -- Does not invoice, schedule a Job, or message a customer.
--- Timestamp is 20260929010000 so it does not collide with
+-- Timestamp is 20260929010900 so it does not collide with
 -- 20260928200000_estimate_line_template_archive (#210).
 
 CREATE TABLE IF NOT EXISTS "JobCallback" (

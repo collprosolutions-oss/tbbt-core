@@ -1393,7 +1393,7 @@ check(
 );
 
 const jobCallbackMigration = readFileSync(
-  new URL("../prisma/migrations/20260929010000_job_callback/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260929010900_job_callback/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -1404,10 +1404,10 @@ check(
     jobCallbackMigration.includes("JobCallback_open_job_key") &&
     jobCallbackMigration.includes("WHERE \"status\" IN ('RECORDED', 'UNDER_REVIEW')") &&
     !jobCallbackMigration.includes("CREATE TABLE \"Invoice\"") &&
-    localNames.includes("20260929010000_job_callback") &&
+    localNames.includes("20260929010900_job_callback") &&
     localNames.includes("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_job_callback"),
+      localNames.indexOf("20260929010900_job_callback"),
 );
 
 const materialsSchema = readFileSync(

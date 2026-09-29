@@ -64,6 +64,15 @@ if (!baseUrl) {
   process.exit(1);
 }
 
+const sourceUrl = new URL(baseUrl);
+const databaseHost = sourceUrl.hostname.toLowerCase();
+if (databaseHost !== "localhost" && databaseHost !== "127.0.0.1" && databaseHost !== "::1") {
+  console.error(
+    "Job-callback checks refuse a remote DATABASE_URL. Host must be localhost, 127.0.0.1, or ::1.",
+  );
+  process.exit(1);
+}
+
 const testDbName = "tbbt_job_callback_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
@@ -72,36 +81,41 @@ process.env.DATABASE_URL = testUrl;
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) process.exit(push.status ?? 1);
-
-await prismaIndex();
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const clients = [];
 
-async function prismaIndex() {
-  // Partial unique index lives in the SQL migration. db push may omit it.
-  const { PrismaClient: Client } = createRequire(import.meta.url)("@prisma/client");
-  const indexClient = new Client({ datasourceUrl: testUrl });
-  await indexClient.$executeRawUnsafe(`
-    CREATE UNIQUE INDEX IF NOT EXISTS "JobCallback_open_job_key"
-    ON "JobCallback"("businessId", "jobId")
-    WHERE "status" IN ('RECORDED', 'UNDER_REVIEW')
-  `);
-  await indexClient.$disconnect();
+function trackClient(client) {
+  clients.push(client);
+  return client;
+}
+
+function createWriteBarrier(expected, timeoutMs) {
+  let arrived = 0;
+  let released = false;
+  let release;
+  let fail;
+  const held = new Promise((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  const timer = setTimeout(() => {
+    if (!released) {
+      fail(new Error(`Race barrier timed out after ${timeoutMs}ms`));
+    }
+  }, timeoutMs);
+  return {
+    async arriveAndWait() {
+      arrived += 1;
+      if (arrived >= expected) {
+        released = true;
+        clearTimeout(timer);
+        release();
+      }
+      await held;
+    },
+  };
 }
 
 let passed = 0;
@@ -160,7 +174,7 @@ const pageSrc = read("src/app/(app)/jobs/[jobId]/page.tsx");
 const portalSrc = read("src/app/p/[token]/page.tsx");
 const additionalWorkSrc = read("src/lib/additional-work-request.ts");
 const schemaSrc = read("prisma/schema.prisma");
-const migrationSrc = read("prisma/migrations/20260929010000_job_callback/migration.sql");
+const migrationSrc = read("prisma/migrations/20260929010900_job_callback/migration.sql");
 
 console.log("\nSTATIC — OWNER-only, trade-neutral, no invoice/job/message, no invented coverage");
 check(
@@ -230,6 +244,29 @@ check(
 );
 
 try {
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+    throw new Error(createDb.stderr || createDb.stdout || "Failed to create job-callback test database.");
+  }
+
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    throw new Error("Failed to push schema for job-callback test database.");
+  }
+
+  const prisma = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "JobCallback_open_job_key"
+    ON "JobCallback"("businessId", "jobId")
+    WHERE "status" IN ('RECORDED', 'UNDER_REVIEW')
+  `);
+
   const suffix = randomUUID().slice(0, 8);
   const ownerUser = await prisma.user.create({
     data: { name: "Owen", email: `owner-cb-${suffix}@example.com`, passwordHash: "x" },
@@ -572,17 +609,26 @@ try {
   );
 
   const concurrentJob = await createJob(businessA.id);
+  const raceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const raceB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const barrier = createWriteBarrier(2, 5000);
   const concurrent = await Promise.allSettled([
-    recordCustomerReportedCallback(prisma, ownerA, {
-      jobId: concurrentJob.id,
-      description: "Concurrent A",
-      reportedVia: "EMAIL",
-    }),
-    recordCustomerReportedCallback(prisma, ownerA, {
-      jobId: concurrentJob.id,
-      description: "Concurrent B",
-      reportedVia: "EMAIL",
-    }),
+    (async () => {
+      await barrier.arriveAndWait();
+      return recordCustomerReportedCallback(raceA, ownerA, {
+        jobId: concurrentJob.id,
+        description: "Concurrent A",
+        reportedVia: "EMAIL",
+      });
+    })(),
+    (async () => {
+      await barrier.arriveAndWait();
+      return recordCustomerReportedCallback(raceB, ownerA, {
+        jobId: concurrentJob.id,
+        description: "Concurrent B",
+        reportedVia: "EMAIL",
+      });
+    })(),
   ]);
   const concurrentOk = concurrent.filter((row) => row.status === "fulfilled");
   const concurrentDenied = concurrent.filter(
@@ -595,7 +641,9 @@ try {
   });
   check(
     "Concurrent duplicate-submit creates exactly one open callback",
-    concurrentOk.length === 1 && concurrentDenied.length === 1 && concurrentCount === 1,
+    concurrentCount === 1 &&
+      concurrentOk.length === 1 &&
+      concurrentDenied.length === 1,
   );
 
   console.log("\nISOLATION — other-business callbacks and warranty terms stay hidden");
@@ -678,7 +726,18 @@ try {
   console.error(error);
   failed += 1;
 } finally {
-  await prisma.$disconnect();
+  for (const client of clients) {
+    try {
+      await client.$disconnect();
+    } catch {
+      // Keep dropping the dedicated test database even if one disconnect fails.
+    }
+  }
+  spawnSync(
+    "psql",
+    [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`],
+    { encoding: "utf8" },
+  );
 }
 
-process.exit(failed === 0 ? 0 : 1);
+process.exitCode = failed === 0 ? 0 : 1;
