@@ -346,7 +346,16 @@ export default async function InvoicesPage({
           </form>
         }
       />
-      <PageHeader title="Invoices" description={`Invoices for ${access.workspace.business.name}.`} />
+      <PageHeader title="Invoices" description={`Invoices for ${access.workspace.business.name}.`}>
+        {access.workspace.role === "OWNER" ? (
+          <p className="text-sm">
+            <Link href="/invoices/collections" className="underline underline-offset-4">
+              Collections worklist
+            </Link>
+            {" — unpaid balances from recorded invoices and payments. Does not send reminders."}
+          </p>
+        ) : null}
+      </PageHeader>
 
       <FounderDesignRoot
         pageKey="invoices"

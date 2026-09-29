@@ -423,6 +423,8 @@ model Business {
   /// snapshots only — never public catalog prices or approved estimates.
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
+  /// OWNER-recorded collections next steps / resolutions. Not payments.
+  invoiceCollectionWorkItems InvoiceCollectionWorkItem[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -641,6 +643,8 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  createdInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemCreator")
+  updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -669,6 +673,7 @@ model Customer {
   jobs            Job[]
   invoices        Invoice[]
   payments        Payment[]
+  invoiceCollectionWorkItems InvoiceCollectionWorkItem[]
   expenses        Expense[]
   reviewRequests  ReviewRequest[]
   reviews         Review[]
@@ -1786,6 +1791,7 @@ model Invoice {
   lineItems            LineItem[]
   payments             Payment[]
   billedChangeOrders   ChangeOrder[]
+  collectionWorkItems  InvoiceCollectionWorkItem[]
 
   @@index([businessId])
   @@index([jobId, kind])
@@ -1824,6 +1830,37 @@ model Payment {
   @@index([estimateId])
   @@index([jobId])
   @@index([invoiceId])
+}
+
+/// OWNER-recorded collections work for one invoice. Next step and
+/// resolution are workspace notes only. They never mark an invoice paid,
+/// never write a Payment, and never send a reminder.
+model InvoiceCollectionWorkItem {
+  id                    String    @id @default(cuid())
+  businessId            String
+  invoiceId             String
+  customerId            String?
+  /// OPEN | RESOLVED
+  status                String    @default("OPEN")
+  /// CALL | EMAIL | WAIT | OTHER
+  nextStep              String?
+  note                  String    @default("")
+  createdByMembershipId String?
+  updatedByMembershipId String?
+  resolvedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice   Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customer  Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy Membership? @relation("InvoiceCollectionWorkItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  updatedBy Membership? @relation("InvoiceCollectionWorkItemUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, invoiceId])
+  @@index([businessId, status])
+  @@index([invoiceId])
+  @@index([customerId])
 }
 
 model LineItem {
