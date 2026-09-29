@@ -161,7 +161,7 @@ check(
     !checklistSectionSrc.includes("recordNativeJobVisit") &&
     !checklistSectionSrc
       .slice(
-        checklistSectionSrc.indexOf("useEffect"),
+        checklistSectionSrc.indexOf("useEffect(()"),
         checklistSectionSrc.indexOf("if (!source)"),
       )
       .includes("syncNativeJobChecklistDraft") &&

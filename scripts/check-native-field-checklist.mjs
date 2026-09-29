@@ -119,7 +119,7 @@ check(
     checklistOpsSrc.includes("afterInitialRead") &&
     checklistOpsSrc.includes("requireSaasOperatingEntitlement") &&
     checklistRouteSrc.includes("recordNativeAssignedChecklistItem") &&
-    !checklistOpsSrc.includes("$transaction") &&
+    checklistOpsSrc.includes("syncNativeAssignedChecklistDraft") &&
     !checklistOpsSrc.includes("job.create("),
 );
 check(
