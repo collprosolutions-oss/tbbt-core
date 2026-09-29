@@ -24,6 +24,7 @@ import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-b
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
+import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
@@ -76,6 +77,8 @@ import {
   expectedEnd,
   formatDurationMinutes,
 } from "@/lib/job-schedule";
+import { loadWorkOrderMilestones } from "@/lib/job-milestone-ops";
+import { canManageJobMilestones, jobMilestoneStatusLabel } from "@/lib/job-milestones";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import {
   OwnerRecordDepositSection,
@@ -563,6 +566,32 @@ export default async function JobPage({
             /p/{job.projectToken}
           </Link>
           <CopyProjectLinkButton projectToken={job.projectToken} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Job milestones</CardTitle>
+          <CardDescription>
+            Owner-recorded steps for this work order. Marking one complete
+            is explicit — it is not inferred from job status, the invoice,
+            or the crew checklist, and it does not message the customer.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <JobMilestonesCard
+            jobId={job.id}
+            milestones={(await loadWorkOrderMilestones(prisma, access, job.id)).map(
+              (row) => ({
+                ...row,
+                statusLabel: jobMilestoneStatusLabel(row.status),
+                completedAtLabel: row.completedAt
+                  ? formatDateTime(row.completedAt, timeZone)
+                  : null,
+              }),
+            )}
+            canManage={canManageJobMilestones(access.workspace.role)}
+          />
         </CardContent>
       </Card>
 
