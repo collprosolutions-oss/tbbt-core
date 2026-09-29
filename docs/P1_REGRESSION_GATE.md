@@ -24,31 +24,49 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
 
 - A domain that lists any DB-backed script refuses to start unless
   `DATABASE_URL` is set and its host is exactly `localhost`,
-  `127.0.0.1`, or `::1` (parsed with `URL`). The refusal happens
-  before any child process. `migration-and-db-safety` currently lists
+  `127.0.0.1`, or `::1` (parsed with `URL`). A query parameter named
+  `host`, `hostaddr`, or `service` (any case) is refused, and so is a
+  comma in the host, because libpq and Prisma honor those over the
+  authority. `DIRECT_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`,
+  `PGHOST`, `PGHOSTADDR`, and `PGSERVICE` are removed from the child
+  environment. If one of them is set to a non-local value, the gate
+  exits before any child. `migration-and-db-safety` currently lists
   only the static migrate check, so it does not require `DATABASE_URL`.
 - Node. `package.json` runs `scripts/check-production-migrate.mjs`
   with plain `node`. Every other listed script runs with
   `node --experimental-strip-types`. The gate follows that.
-- `TZ=America/New_York` is forced on every child. Six approved-week
-  cases depend on that zone: `scripts/check-native-field-api.mjs`
-  (around lines 1265 and 2101) and `scripts/check-time-cards.mjs`
-  (around lines 651, 715, and 784).
+- `TZ=America/New_York` is forced on every child. Six known failures
+  that depend on that zone are all in `scripts/check-native-field-api.mjs`
+  (lines 1285, 1291, 1643, 1649, 2121, and 2127).
+  `scripts/check-time-cards.mjs` uses the same approved-week pattern;
+  those lines are not confirmed failures.
 - `scripts/check-work-order-portal.mjs`,
   `scripts/check-client-portal-excellence.mjs`, and
   `scripts/check-change-orders.mjs` start `next start`. They need a
   `.next` directory already on disk. If it is missing, that script
-  fails with `requires prior next build`.
+  fails with `requires prior next build`. The check only tests that
+  the directory exists, so a stale `.next` passes.
+  `scripts/check-team-onboarding.mjs` still runs when `.next` is
+  missing; the gate prints a warning because that script skips its
+  HTTP section.
 
-`npm run build` runs the production migrate (`prisma generate`,
-`scripts/run-production-migrate.mjs`, then `next build`). It must
-never be a test prerequisite. This gate never runs `npm run build`
-or `next build`.
+`npm run build` runs `prisma generate`, then
+`scripts/run-production-migrate.mjs` (the production migrate runs only
+when `VERCEL_ENV=production`), then the R2 CORS step
+(`scripts/apply-r2-browser-upload-cors.mjs`, which always runs), then
+`next build`. It must never be a test prerequisite. This gate never
+runs `npm run build` or `next build`.
 
-About 135 existing DB scripts have no pre-DB localhost guard. About
-18 do. The gate does not edit those scripts. `node scripts/run-p1-gate.mjs <domain> --audit`
-reports the listed set. `--strict` fails the audit when a listed
-script is unguarded. Default audit is a warning report.
+An audit of the existing check scripts found 160 dangerous scripts and
+19 with a localhost guard. The gate does not edit those scripts.
+`node scripts/run-p1-gate.mjs <domain> --audit` reports the listed set.
+`--strict` fails the audit when a listed script is unguarded. Default
+audit is a warning report.
+
+Each child times out after 15 minutes (`P1_GATE_CHILD_TIMEOUT_MS` overrides
+that). On timeout the gate sends SIGTERM, then SIGKILL if the child is
+still running. SIGINT and SIGTERM delivered to the gate are forwarded
+to the running child so a killed gate does not leave that child behind.
 
 A missing listed file fails the run. `--allow-missing` is only for
 interim wiring. `--fail-fast` stops after the first script failure;

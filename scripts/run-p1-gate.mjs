@@ -6,12 +6,17 @@
  *
  * Before any child process, a domain that includes a DB-backed script
  * requires DATABASE_URL to parse as a URL whose host is exactly
- * localhost, 127.0.0.1, or ::1. Anything else exits non-zero and starts
- * nothing.
+ * localhost, 127.0.0.1, or ::1. Query parameters host, hostaddr, and
+ * service are refused (any case), as is a comma in the host, because
+ * libpq and Prisma honor those over the authority. DIRECT_URL,
+ * POSTGRES_URL, POSTGRES_PRISMA_URL, PGHOST, PGHOSTADDR, and PGSERVICE
+ * are removed from the child environment; a non-local value refuses
+ * the run before any child starts.
  *
  * Children run serially. package.json decides plain `node` versus
  * `node --experimental-strip-types`. TZ=America/New_York is forced.
- * This process never runs `npm run build` or `next build`.
+ * Each child has a timeout. SIGINT and SIGTERM are forwarded to the
+ * running child. This process never runs `npm run build` or `next build`.
  *
  * --audit is static: no database connection and no child scripts.
  * Findings on existing scripts are warnings. --strict fails the audit
@@ -33,6 +38,23 @@ import {
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_HOSTS = new Set(LOCAL_DATABASE_HOSTS);
+const BLOCKED_URL_PARAMS = new Set(["host", "hostaddr", "service"]);
+const SCRUBBED_CHILD_ENV = [
+  "DIRECT_URL",
+  "POSTGRES_URL",
+  "POSTGRES_PRISMA_URL",
+  "PGHOST",
+  "PGHOSTADDR",
+  "PGSERVICE",
+];
+const URL_ENV_VARS = ["DIRECT_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL"];
+const DEFAULT_CHILD_TIMEOUT_MS = 15 * 60 * 1000;
+const KILL_GRACE_MS = 5000;
+const TEAM_ONBOARDING_SCRIPT = "scripts/check-team-onboarding.mjs";
+
+let activeChild = null;
+let stopSignal = null;
+let signalsInstalled = false;
 
 function usage() {
   const ids = P1_DOMAINS.map((domain) => `  ${domain.id}`).join("\n");
@@ -51,21 +73,78 @@ ${ids}
 The gate never runs npm run build or next build.`;
 }
 
-export function databaseHostProblem(raw) {
-  if (!raw) {
-    return "DATABASE_URL is not set. This domain includes a DB-backed script, so the host must be exactly localhost, 127.0.0.1, or ::1.";
-  }
+function localUrlProblem(raw, label) {
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
-    return "DATABASE_URL is not a valid URL. The host must be exactly localhost, 127.0.0.1, or ::1.";
+    return `${label} is not a valid URL. The host must be exactly localhost, 127.0.0.1, or ::1.`;
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (BLOCKED_URL_PARAMS.has(key.toLowerCase())) {
+      return `${label} must not set query parameter "${key}". libpq and Prisma honor host, hostaddr, and service over the authority host.`;
+    }
+  }
+  if (parsed.host.includes(",")) {
+    return `${label} host must be a single host, not a comma-separated list (got ${parsed.host}).`;
   }
   const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (!LOCAL_HOSTS.has(host)) {
-    return `DATABASE_URL host must be exactly localhost, 127.0.0.1, or ::1 (got ${host || "(empty)"}).`;
+    return `${label} host must be exactly localhost, 127.0.0.1, or ::1 (got ${host || "(empty)"}).`;
   }
   return null;
+}
+
+export function databaseHostProblem(raw) {
+  if (!raw) {
+    return "DATABASE_URL is not set. This domain includes a DB-backed script, so the host must be exactly localhost, 127.0.0.1, or ::1.";
+  }
+  return localUrlProblem(raw, "DATABASE_URL");
+}
+
+function bareHostProblem(raw, label) {
+  const host = String(raw).trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host || host.includes(",") || host.includes("/") || !LOCAL_HOSTS.has(host)) {
+    return `${label} must be exactly localhost, 127.0.0.1, or ::1 (got ${raw}).`;
+  }
+  return null;
+}
+
+export function alternateDatabaseEnvProblem(env = process.env) {
+  for (const name of URL_ENV_VARS) {
+    const value = env[name];
+    if (value == null || String(value).trim() === "") continue;
+    const problem = localUrlProblem(value, name);
+    if (problem) return problem;
+  }
+  if (env.PGHOST != null && String(env.PGHOST).trim() !== "") {
+    const problem = bareHostProblem(env.PGHOST, "PGHOST");
+    if (problem) return problem;
+  }
+  if (env.PGHOSTADDR != null && String(env.PGHOSTADDR).trim() !== "") {
+    const addr = String(env.PGHOSTADDR).trim().replace(/^\[|\]$/g, "").toLowerCase();
+    if (addr !== "127.0.0.1" && addr !== "::1") {
+      return `PGHOSTADDR must be exactly 127.0.0.1 or ::1 (got ${env.PGHOSTADDR}).`;
+    }
+  }
+  if (env.PGSERVICE != null && String(env.PGSERVICE).trim() !== "") {
+    return `PGSERVICE can point at a remote host and is not allowed (got ${env.PGSERVICE}).`;
+  }
+  return null;
+}
+
+export function childProcessEnv(base = process.env) {
+  const env = { ...base, TZ: "America/New_York" };
+  for (const name of SCRUBBED_CHILD_ENV) delete env[name];
+  return env;
+}
+
+export function childTimeoutMs(env = process.env) {
+  const raw = env.P1_GATE_CHILD_TIMEOUT_MS;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_CHILD_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_CHILD_TIMEOUT_MS;
+  return parsed;
 }
 
 function maskComments(source) {
@@ -346,32 +425,91 @@ export function nextBuildBlockReason(scriptPath) {
   return "requires prior next build (no .next directory). This gate does not run npm run build or next build.";
 }
 
+export function httpSectionSkipWarning(scriptPath) {
+  if (scriptPath !== TEAM_ONBOARDING_SCRIPT) return null;
+  if (hasNextBuild()) return null;
+  return `WARN  ${scriptPath}  no .next directory; this script skips its HTTP section. The gate does not run next build.`;
+}
+
 function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function runChild(invocation) {
+function installSignalHandlers() {
+  if (signalsInstalled) return;
+  signalsInstalled = true;
+  const onSignal = (signal) => {
+    if (stopSignal) {
+      if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
+        activeChild.kill("SIGKILL");
+      }
+      return;
+    }
+    stopSignal = signal;
+    console.error(`P1 gate received ${signal}; forwarding it to the running child.`);
+    const child = activeChild;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill(signal);
+      const grace = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, KILL_GRACE_MS);
+      grace.unref();
+    }
+  };
+  process.on("SIGINT", () => onSignal("SIGINT"));
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
+}
+
+export function launchChild({ exec, args, env, cwd = repoRoot, timeoutMs, stdio = "inherit" }) {
+  installSignalHandlers();
   const started = performance.now();
+  const limit = timeoutMs ?? childTimeoutMs(env);
   return new Promise((resolvePromise) => {
-    const child = spawn(invocation.exec, invocation.args, {
-      cwd: repoRoot,
-      env: { ...process.env, TZ: "America/New_York" },
-      stdio: "inherit",
+    const child = spawn(exec, args, {
+      cwd,
+      env: childProcessEnv(env),
+      stdio,
     });
+    activeChild = child;
+    let settled = false;
+    let timedOut = false;
+    let timer;
+    let killTimer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (activeChild === child) activeChild = null;
+      resolvePromise(result);
+    };
+    timer = setTimeout(() => {
+      timedOut = true;
+      console.error(`Child timed out after ${formatSeconds(limit)}; sending SIGTERM.`);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, KILL_GRACE_MS);
+    }, limit);
+    if (settled) clearTimeout(timer);
     child.on("error", (error) => {
-      resolvePromise({
+      finish({
         code: 1,
         signal: null,
         ms: performance.now() - started,
         error,
+        timedOut,
+        stopped: stopSignal,
       });
     });
     child.on("close", (code, signal) => {
-      resolvePromise({
+      finish({
         code: code ?? 1,
-        signal,
+        signal: signal ?? null,
         ms: performance.now() - started,
         error: null,
+        timedOut,
+        stopped: stopSignal,
       });
     });
   });
@@ -381,7 +519,8 @@ async function runDomain(domain, options) {
   assertPendingNotRegistered(domain);
   const dbBacked = domain.scripts.filter((scriptPath) => isDatabaseBacked(scriptPath));
   if (dbBacked.length > 0) {
-    const problem = databaseHostProblem(process.env.DATABASE_URL);
+    const problem =
+      databaseHostProblem(process.env.DATABASE_URL) || alternateDatabaseEnvProblem(process.env);
     if (problem) {
       console.error(`P1 gate refused to start ${domain.id}.`);
       console.error(problem);
@@ -401,6 +540,7 @@ async function runDomain(domain, options) {
   const results = [];
   let childrenStarted = 0;
   for (const scriptPath of domain.scripts) {
+    if (stopSignal) break;
     const absolute = join(repoRoot, scriptPath);
     if (!existsSync(absolute)) {
       const message = `missing file ${scriptPath}`;
@@ -421,15 +561,34 @@ async function runDomain(domain, options) {
       if (options.failFast) break;
       continue;
     }
+    const skipHttp = httpSectionSkipWarning(scriptPath);
+    if (skipHttp) console.error(skipHttp);
     const invocation = packageInvocation(scriptPath);
     console.log(`\n--- ${scriptPath} (${invocation.mode}) ---`);
     childrenStarted += 1;
-    const outcome = await runChild(invocation);
-    const status = outcome.code === 0 && !outcome.signal ? "pass" : "fail";
-    const detail = outcome.signal ? `signal ${outcome.signal}` : `exit ${outcome.code}`;
+    const outcome = await launchChild({
+      exec: invocation.exec,
+      args: invocation.args,
+      env: process.env,
+    });
+    if (stopSignal) {
+      console.error(`FAIL  ${scriptPath}  stopped by ${stopSignal}`);
+      results.push({ scriptPath, status: "fail", ms: outcome.ms, code: outcome.code ?? 1 });
+      break;
+    }
+    const status = outcome.code === 0 && !outcome.signal && !outcome.timedOut ? "pass" : "fail";
+    const detail = outcome.timedOut
+      ? `timed out after ${formatSeconds(childTimeoutMs())} (${outcome.signal ? `signal ${outcome.signal}` : `exit ${outcome.code}`})`
+      : outcome.signal
+        ? `signal ${outcome.signal}`
+        : `exit ${outcome.code}`;
     console.log(`${status === "pass" ? "PASS" : "FAIL"}  ${scriptPath}  ${formatSeconds(outcome.ms)}  ${detail}`);
     results.push({ scriptPath, status, ms: outcome.ms, code: outcome.code });
     if (status === "fail" && options.failFast) break;
+  }
+  if (stopSignal) {
+    console.error(`P1 gate stopped because of ${stopSignal}.`);
+    return stopSignal === "SIGINT" ? 130 : 143;
   }
 
   const passed = results.filter((result) => result.status === "pass").length;
