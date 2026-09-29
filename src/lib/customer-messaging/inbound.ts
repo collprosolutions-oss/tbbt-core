@@ -184,6 +184,9 @@ export async function applyInboundConsentEvent(
     return applyConsentStatus(db, {
       businessId: business.id,
       customerId: customer.id,
+      fromDigits,
+      provider: inbound.provider,
+      providerEventId: inbound.providerEventId,
       status: "REVOKED",
       reason: "revoked",
     });
@@ -202,6 +205,9 @@ export async function applyInboundConsentEvent(
   return applyConsentStatus(db, {
     businessId: business.id,
     customerId: customer.id,
+    fromDigits,
+    provider: inbound.provider,
+    providerEventId: inbound.providerEventId,
     status: "GRANTED",
     reason: "granted",
   });
@@ -214,13 +220,20 @@ async function applyConsentStatus(
   input: {
     businessId: string;
     customerId: string;
+    fromDigits: string;
+    provider: string;
+    providerEventId: string;
     status: "REVOKED" | "GRANTED";
     reason: "revoked" | "granted";
   },
 ): Promise<InboundConsentResult> {
   try {
+    const firstWhere =
+      input.status === "GRANTED"
+        ? { id: input.customerId, businessId: input.businessId, smsConsentStatus: "REVOKED" }
+        : { id: input.customerId, businessId: input.businessId };
     const first = await db.customer.updateMany({
-      where: { id: input.customerId, businessId: input.businessId },
+      where: firstWhere,
       data: {
         smsConsentStatus: input.status,
         smsConsentUpdatedAt: new Date(),
@@ -250,20 +263,58 @@ async function applyConsentStatus(
         };
       }
       currentId = merge.survivorCustomerId;
+
+      if (input.status === "GRANTED") {
+        const survivor = await db.customer.findFirst({
+          where: { id: currentId, businessId: input.businessId },
+          select: { id: true, phone: true, smsConsentStatus: true },
+        });
+        if (
+          !survivor ||
+          survivor.smsConsentStatus !== "REVOKED" ||
+          normalizePhone(survivor.phone) !== input.fromDigits
+        ) {
+          return {
+            applied: false,
+            reason: "start_not_applicable",
+            businessId: input.businessId,
+            customerId: survivor?.id,
+            consentStatus: survivor?.smsConsentStatus,
+          };
+        }
+        const startHop = await db.customer.updateMany({
+          where: { id: currentId, businessId: input.businessId, smsConsentStatus: "REVOKED" },
+          data: {
+            smsConsentStatus: "GRANTED",
+            smsConsentUpdatedAt: new Date(),
+          },
+        });
+        if (startHop.count > 0) {
+          return {
+            applied: true,
+            reason: "granted",
+            businessId: input.businessId,
+            customerId: currentId,
+            consentStatus: "GRANTED",
+          };
+        }
+        continue;
+      }
+
       const hopUpdated = await db.customer.updateMany({
         where: { id: currentId, businessId: input.businessId },
         data: {
-          smsConsentStatus: input.status,
+          smsConsentStatus: "REVOKED",
           smsConsentUpdatedAt: new Date(),
         },
       });
       if (hopUpdated.count > 0) {
         return {
           applied: true,
-          reason: input.reason,
+          reason: "revoked",
           businessId: input.businessId,
           customerId: currentId,
-          consentStatus: input.status,
+          consentStatus: "REVOKED",
         };
       }
     }
@@ -273,13 +324,20 @@ async function applyConsentStatus(
       reason: "unknown_customer",
       businessId: input.businessId,
     };
-  } catch {
-    // The webhook row is already recorded. Throwing here would make
-    // Twilio's retry look like a duplicate and drop the consent change.
-    return {
-      applied: false,
-      reason: "unknown_customer",
+  } catch (error) {
+    console.error("Inbound consent write failed", {
       businessId: input.businessId,
-    };
+      providerEventId: input.providerEventId,
+      customerId: input.customerId,
+      status: input.status,
+    });
+    try {
+      await db.customerMessagingWebhookEvent.deleteMany({
+        where: { provider: input.provider, providerEventId: input.providerEventId },
+      });
+    } catch (cleanupError) {
+      console.error("Failed to delete inbound webhook after consent write error", cleanupError);
+    }
+    throw error;
   }
 }

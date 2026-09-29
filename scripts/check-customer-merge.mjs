@@ -373,7 +373,13 @@ try {
       inboundSrc.includes("absorbedCustomerId") &&
       inboundSrc.includes("smsConsentUpdatedAt") &&
       inboundSrc.includes("CONSENT_MERGE_HOPS") &&
-      !/customer\.update\(\s*\{/.test(inboundSrc),
+      inboundSrc.includes("fromDigits") &&
+      inboundSrc.includes('smsConsentStatus: "REVOKED"') &&
+      inboundSrc.includes("start_not_applicable") &&
+      inboundSrc.includes("customerMessagingWebhookEvent.deleteMany") &&
+      inboundSrc.includes("console.error") &&
+      !/customer\.update\(\s*\{/.test(inboundSrc) &&
+      !/catch\s*\{/.test(inboundSrc),
   );
   check(
     "Upload-create takes FOR KEY SHARE on the customer before inserting a StoredAsset",
@@ -1565,6 +1571,121 @@ try {
     (await prisma.customer.findUnique({ where: { id: stopAbsorb.id } })) === null,
   );
   await assertNoOrphans(stopAbsorb.id, "Merge vs STOP");
+
+  console.log("\nCONCURRENT — merge vs inbound START from the absorbed phone");
+  const startEmail = `start-${randomUUID().slice(0, 8)}@example.com`;
+  const startKeepPhone = "2395550182";
+  const startAbsorbPhone = "2395550183";
+  const startKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Start Keep",
+      email: startEmail,
+      phone: startKeepPhone,
+      smsConsentStatus: "REVOKED",
+    },
+  });
+  const startAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Start Absorb",
+      email: startEmail,
+      phone: startAbsorbPhone,
+      smsConsentStatus: "REVOKED",
+    },
+  });
+  const startBarrier = createCount2Barrier();
+  const startMergeClient = createTestClient();
+  const startInboundClient = createTestClient();
+  const startMergeP = mergeConfirmedCustomers(
+    startMergeClient,
+    alpha.owner,
+    { keepCustomerId: startKeep.id, absorbCustomerId: startAbsorb.id, confirmedSameCustomer: true },
+    { afterLocked: startBarrier.arrive },
+  );
+  const startMergeSettled = Promise.allSettled([startMergeP]);
+  await withTimeout(startBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-START entered write");
+  const startInboundP = applyInboundConsentEvent(startInboundClient, {
+    provider: "twilio",
+    providerEventId: `SM_merge_start_${randomUUID()}`,
+    from: `+1${startAbsorbPhone}`,
+    to: `+1${stopTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  const startInboundSettled = Promise.allSettled([startInboundP]);
+  await releaseAfterLock(lockAdmin, startBarrier, "merge vs inbound START");
+  const [startMergeResult] = await withTimeout(startMergeSettled, 25000, "merge vs START merge");
+  const [startInboundResult] = await withTimeout(startInboundSettled, 25000, "merge vs START inbound");
+  await Promise.all([disconnectClient(startMergeClient), disconnectClient(startInboundClient)]);
+  check("Merge vs START: merge succeeds", startMergeResult.status === "fulfilled");
+  check(
+    "Merge vs START: result is start_not_applicable",
+    startInboundResult.status === "fulfilled" &&
+      startInboundResult.value.applied === false &&
+      startInboundResult.value.reason === "start_not_applicable",
+  );
+  const startSurvivor = await prisma.customer.findUnique({ where: { id: startKeep.id } });
+  check("Merge vs START: survivor stays REVOKED", startSurvivor?.smsConsentStatus === "REVOKED");
+  check(
+    "Merge vs START: absorbed customer is gone",
+    (await prisma.customer.findUnique({ where: { id: startAbsorb.id } })) === null,
+  );
+  await assertNoOrphans(startAbsorb.id, "Merge vs START");
+
+  console.log("\nERROR — failed consent write deletes the webhook row");
+  const failPhone = "2395550184";
+  await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Consent Write Fail",
+      phone: failPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const failEventId = `SM_consent_fail_${randomUUID()}`;
+  const failClient = createTestClient();
+  const forcedWriteError = new Error("forced consent write failure");
+  const failDb = new Proxy(failClient, {
+    get(target, prop, receiver) {
+      if (prop === "customer") {
+        return new Proxy(target.customer, {
+          get(customer, key, customerReceiver) {
+            if (key === "updateMany") {
+              return async () => {
+                throw forcedWriteError;
+              };
+            }
+            const value = Reflect.get(customer, key, customerReceiver);
+            return typeof value === "function" ? value.bind(customer) : value;
+          },
+        });
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const failSettled = await Promise.allSettled([
+    applyInboundConsentEvent(failDb, {
+      provider: "twilio",
+      providerEventId: failEventId,
+      from: `+1${failPhone}`,
+      to: `+1${stopTo}`,
+      body: "STOP",
+      optOutType: "STOP",
+    }),
+  ]);
+  await disconnectClient(failClient);
+  check(
+    "Failed consent write rejects applyInboundConsentEvent",
+    failSettled[0].status === "rejected" && failSettled[0].reason === forcedWriteError,
+  );
+  check(
+    "Failed consent write deletes the webhook row",
+    (await prisma.customerMessagingWebhookEvent.count({
+      where: { provider: "twilio", providerEventId: failEventId },
+    })) === 0,
+  );
 } catch (error) {
   console.error(error);
   failures += 1;
