@@ -299,7 +299,10 @@ check(
     !nativeApiSrc.includes("recordNativeJobChecklistItem") &&
     offlineCheckSrc.includes("new PrismaClient({ datasourceUrl: testUrl })") &&
     offlineCheckSrc.includes("prismaRace") &&
-    offlineCheckSrc.includes("afterLock"),
+    offlineCheckSrc.includes("afterLock") &&
+    offlineCheckSrc.includes("wait_event_type = 'Lock'") &&
+    offlineCheckSrc.includes("Two-party barrier timed out") &&
+    offlineCheckSrc.includes("waitForOtherBackendLockWait(prismaRace)"),
 );
 
 function expectedFromItems(items) {
@@ -1247,19 +1250,55 @@ try {
       ),
   );
 
+  function createTwoPartyBarrier(timeoutMs = 10_000) {
+    let releaseBarrier;
+    let started = 0;
+    let settled = false;
+    const barrier = new Promise((resolve, reject) => {
+      releaseBarrier = resolve;
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Two-party barrier timed out after ${timeoutMs}ms.`));
+      }, timeoutMs);
+    });
+    return async function waitForPeer() {
+      started += 1;
+      if (started === 2) {
+        settled = true;
+        releaseBarrier();
+      }
+      await barrier;
+    };
+  }
+
+  async function waitForOtherBackendLockWait(db, timeoutMs = 10_000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const waiting = await db.$queryRaw`
+        SELECT pid
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+      `;
+      if (Array.isArray(waiting) && waiting.length > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(
+      `Timed out after ${timeoutMs}ms waiting for another backend to show wait_event_type = 'Lock'.`,
+    );
+  }
+
+  async function afterLockProveSyncWait(waitForPeer) {
+    await waitForPeer();
+    await waitForOtherBackendLockWait(prismaRace);
+  }
+
   const concurrentExpected = expectedFrom(
     await loadNativeAssignedJob(prisma, memberAccess.access, concurrentJob.id),
   );
-  let releaseBarrier;
-  let started = 0;
-  const barrier = new Promise((resolve) => {
-    releaseBarrier = resolve;
-  });
-  async function waitForPeer() {
-    started += 1;
-    if (started === 2) releaseBarrier();
-    await barrier;
-  }
+  const waitForPeer = createTwoPartyBarrier();
   const [left, right] = await Promise.all([
     syncNativeAssignedChecklistDraft(
       prisma,
@@ -1466,19 +1505,6 @@ try {
       thirtyAfterStaleItems.find((item) => item.key === thirtyItems[2].key)?.checked === true,
   );
 
-  function createTwoPartyBarrier() {
-    let releaseBarrier;
-    let started = 0;
-    const barrier = new Promise((resolve) => {
-      releaseBarrier = resolve;
-    });
-    return async function waitForPeer() {
-      started += 1;
-      if (started === 2) releaseBarrier();
-      await barrier;
-    };
-  }
-
   const outcomeRaceExpected = expectedFrom(
     await loadNativeAssignedJob(prisma, memberAccess.access, outcomeRaceJob.id),
   );
@@ -1499,7 +1525,7 @@ try {
       {
         jobId: outcomeRaceJob.id,
         outcomeStatus: "VISIT_COMPLETED",
-        afterLock: waitOutcome,
+        afterLock: () => afterLockProveSyncWait(waitOutcome),
       },
     )
       .then((value) => ({ ok: true, value }))
@@ -1542,7 +1568,7 @@ try {
         jobId: completeRaceJob.id,
         actorMembershipId: memberMem.id,
       },
-      { afterLock: waitComplete },
+      { afterLock: () => afterLockProveSyncWait(waitComplete) },
     ),
   ]);
   const completeRaceVisit = await prisma.jobCrewVisit.findFirst({
@@ -1582,7 +1608,7 @@ try {
     attachCleaningCrewChecklist(prismaRace, ownerA, {
       jobId: attachRaceJob.id,
       procedureId: attachProcedure.id,
-      afterLock: waitAttach,
+      afterLock: () => afterLockProveSyncWait(waitAttach),
     })
       .then((value) => ({ ok: true, value }))
       .catch((error) => ({ ok: false, error })),
