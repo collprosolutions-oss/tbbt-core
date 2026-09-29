@@ -209,6 +209,11 @@ await (async () => {
     const { createEstimateFromServiceRequest, estimateFromRequestTestHooks } = await import(
       "@/lib/estimate-from-request"
     );
+    const { createDraftEstimateWithOptionalTemplate } = await import(
+      "@/lib/estimate-line-template-ops"
+    );
+    const { opportunityKey, pickPrimaryEstimate } = await import("@/lib/pipeline");
+    const { buildRequestSourceProgression } = await import("@/lib/request-source-report");
     const { updateDraftEstimateLineIncludedWork, EstimateLineError } = await import(
       "@/lib/estimate-line-ops"
     );
@@ -324,9 +329,9 @@ await (async () => {
     }
 
     // ------------------------------------------------------------------
-    // Static — P1-11 uniqueness is not a conclusive product rule
+    // Static — P1-11 founder rule: no global unique; conversion stays locked
     // ------------------------------------------------------------------
-    console.log("\nSTATIC — P1-11 uniqueness requires founder confirmation");
+    console.log("\nSTATIC — P1-11 founder rule keeps Estimate.serviceRequestId non-unique");
     const reportsSrc = readRepo("src/components/reports/reports-workspace.tsx");
     const pipelineSrc = readRepo("src/lib/pipeline-data.ts");
     const schemaSrc = readRepo("prisma/schema.prisma");
@@ -353,7 +358,8 @@ await (async () => {
       "createEstimate conversion locks and re-reads without a unique index",
       requestConvertSrc.includes("FOR UPDATE") &&
         requestConvertSrc.includes("if (existing)") &&
-        requestConvertSrc.includes("does not impose a global one-estimate-per-request"),
+        requestConvertSrc.includes("does not impose a global one-estimate-per-request") &&
+        requestConvertSrc.includes("do not add a global unique constraint"),
     );
 
     // ------------------------------------------------------------------
@@ -660,6 +666,91 @@ await (async () => {
       check(
         "second createEstimate redirects to the existing estimate",
         redirectedTo?.includes(`/estimates/${created.id}`) === true,
+      );
+    }
+
+    console.log("\nTEST — P1-11 explicit second estimate and multi-estimate pipeline/reports");
+    {
+      const workspace = await seedWorkspace("P111 multi");
+      const request = await admin.serviceRequest.create({
+        data: {
+          businessId: workspace.business.id,
+          customerId: workspace.customer.id,
+          status: "OPEN",
+          summary: "Patio rebuild",
+          leadSource: "WEBSITE",
+        },
+      });
+      const conversion = await createEstimateFromServiceRequest(admin, workspace.access, {
+        serviceRequestId: request.id,
+        customerId: workspace.customer.id,
+        propertyId: null,
+        status: "OPEN",
+        leadSource: "WEBSITE",
+        campaignId: null,
+        sourceItems: [],
+        measurements: [],
+      });
+      const second = await createDraftEstimateWithOptionalTemplate(admin, workspace.access, {
+        customerId: workspace.customer.id,
+        serviceRequestId: request.id,
+        leadSource: "MANUAL",
+      });
+      await admin.estimate.update({
+        where: { id: second.estimateId },
+        data: { status: "SENT" },
+      });
+      const linked = await admin.estimate.findMany({
+        where: { businessId: workspace.business.id, serviceRequestId: request.id },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, status: true, createdAt: true, updatedAt: true },
+      });
+      check(
+        "P1-11 explicit template draft can attach a second estimate to the same request",
+        linked.length === 2 &&
+          linked[0].id === conversion.id &&
+          linked[1].id === second.estimateId &&
+          conversion.id !== second.estimateId,
+      );
+
+      const reuse = await createEstimateFromServiceRequest(admin, workspace.access, {
+        serviceRequestId: request.id,
+        customerId: workspace.customer.id,
+        propertyId: null,
+        status: "CONVERTED",
+        leadSource: "WEBSITE",
+        campaignId: null,
+        sourceItems: [],
+        measurements: [],
+      });
+      check(
+        "P1-11 later standard conversion still reuses the original conversion estimate",
+        reuse.id === conversion.id && reuse.created === false,
+      );
+
+      const primary = pickPrimaryEstimate(linked);
+      const pipelineKeys = [
+        opportunityKey({ serviceRequestId: request.id }),
+        opportunityKey({ serviceRequestId: request.id, estimateId: conversion.id }),
+        opportunityKey({ serviceRequestId: request.id, estimateId: second.estimateId }),
+      ];
+      check(
+        "P1-11 pipeline still keys one opportunity and picks one primary estimate",
+        primary?.id === linked[1].id &&
+          pipelineKeys.every((key) => key === `request:${request.id}`),
+      );
+
+      const report = buildRequestSourceProgression({
+        requests: [{ id: request.id, leadSource: "WEBSITE", originalLeadSource: null }],
+        estimates: linked.map((row) => ({ id: row.id, serviceRequestId: request.id })),
+        jobs: [],
+      });
+      check(
+        "P1-11 request-source report still counts two estimates as one request conversion",
+        report.rows.length === 1 &&
+          report.rows[0].requests === 1 &&
+          report.rows[0].estimates === 1 &&
+          report.rows[0].jobs === 0,
       );
     }
 

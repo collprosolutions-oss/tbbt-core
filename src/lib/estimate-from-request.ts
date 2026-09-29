@@ -1,11 +1,16 @@
 /**
  * ServiceRequest → Estimate conversion for createEstimate().
  *
- * This path is idempotent: concurrent conversions lock the request,
- * re-read, and return the existing estimate if one is already linked.
- * It does not impose a global one-estimate-per-request product rule —
- * other writers (manual / template drafts) may still attach the same
- * serviceRequestId. A unique index is a founder decision.
+ * Founder rule: do not add a global unique constraint on
+ * Estimate.serviceRequestId. Multiple estimates may legitimately
+ * attach to one ServiceRequest via an explicit separate workflow
+ * (createDraftEstimateWithOptionalTemplate and similar writers).
+ *
+ * The normal conversion action stays idempotent and concurrency-safe:
+ * it locks the ServiceRequest FOR UPDATE, re-reads, and returns the
+ * earliest existing linked estimate. Simultaneous conversion attempts
+ * converge on that row instead of creating duplicates. It does not
+ * impose a global one-estimate-per-request product rule.
  */
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
