@@ -5,6 +5,11 @@ import { isApiError, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { TodayScreen } from "./src/screens/TodayScreen";
+import { secureChecklistDraftStorage } from "./src/checklist-draft-storage";
+import {
+  applyChecklistDraftAccount,
+  clearAllChecklistDrafts,
+} from "./src/checklist-drafts";
 import { clearSessionToken, readSessionToken } from "./src/session";
 import type { NativeViewer, NativeWorkspace } from "./src/types";
 
@@ -30,8 +35,14 @@ export default function App() {
       const restored = await loadNativeSession(token);
       if (cancelled) return;
       if (isApiError(restored)) {
-        await clearSessionToken();
+        if (restored.status === 401 || restored.status === 403) {
+          await clearSessionToken();
+        }
       } else {
+        await applyChecklistDraftAccount(secureChecklistDraftStorage, {
+          businessId: restored.workspace.businessId,
+          membershipId: restored.workspace.membershipId,
+        });
         setSession({ token, viewer: restored.viewer, workspace: restored.workspace });
       }
       setReady(true);
@@ -46,6 +57,7 @@ export default function App() {
       await signOutNative(session.token);
     }
     await clearSessionToken();
+    await clearAllChecklistDrafts(secureChecklistDraftStorage);
     setJobId(null);
     setSession(null);
   }
@@ -71,7 +83,12 @@ export default function App() {
   if (jobId) {
     return (
       <>
-        <JobScreen jobId={jobId} onBack={() => setJobId(null)} token={session.token} />
+        <JobScreen
+          jobId={jobId}
+          onBack={() => setJobId(null)}
+          token={session.token}
+          workspace={session.workspace}
+        />
         <StatusBar style="light" />
       </>
     );

@@ -102,6 +102,7 @@ const checklistRouteSrc = readRepo(
   "src/app/api/native/v1/jobs/[jobId]/checklist/route.ts",
 );
 const jobScreenSrc = readRepo("apps/native/src/screens/JobScreen.tsx");
+const checklistSectionSrc = readRepo("apps/native/src/screens/JobChecklistSection.tsx");
 const nativeApiSrc = readRepo("apps/native/src/api.ts");
 const nativeTypesSrc = readRepo("apps/native/src/types.ts");
 const docsSrc = readRepo("docs/NATIVE_FIELD.md");
@@ -118,7 +119,7 @@ check(
     checklistOpsSrc.includes("afterInitialRead") &&
     checklistOpsSrc.includes("requireSaasOperatingEntitlement") &&
     checklistRouteSrc.includes("recordNativeAssignedChecklistItem") &&
-    !checklistOpsSrc.includes("$transaction") &&
+    checklistOpsSrc.includes("syncNativeAssignedChecklistDraft") &&
     !checklistOpsSrc.includes("job.create("),
 );
 check(
@@ -147,11 +148,10 @@ check(
 );
 check(
   "Native Job screen records checklist progress and reloads it",
-  jobScreenSrc.includes("recordNativeJobChecklistItem") &&
+  jobScreenSrc.includes("JobChecklistSection") &&
     jobScreenSrc.includes("reloadAssignedJob") &&
-    jobScreenSrc.includes("itemKey") &&
-    jobScreenSrc.includes("Mark done") &&
-    jobScreenSrc.includes("Crew checklist") &&
+    checklistSectionSrc.includes("Mark done") &&
+    checklistSectionSrc.includes("Crew checklist") &&
     nativeApiSrc.includes("/checklist") &&
     nativeTypesSrc.includes("checklist:") &&
     visitLibSrc.includes("checklist: view.checklist"),

@@ -146,6 +146,7 @@
     "test:native-field-photos": "node --experimental-strip-types scripts/check-native-field-photos.mjs",
     "test:native-field-visit": "node --experimental-strip-types scripts/check-native-field-visit.mjs",
     "test:native-field-checklist": "node --experimental-strip-types scripts/check-native-field-checklist.mjs",
+    "test:native-field-checklist-offline": "node --experimental-strip-types scripts/check-native-field-checklist-offline.mjs",
     "test:native-field-activity": "node --experimental-strip-types scripts/check-native-field-activity.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",

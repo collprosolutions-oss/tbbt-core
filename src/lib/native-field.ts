@@ -28,7 +28,7 @@ import { directionsUrl, telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
 import { formatAddress, formatDateTime } from "@/lib/format";
 import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
-import { START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
+import { parseChecklistJson, START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { startOfDay } from "@/lib/schedule";
@@ -203,6 +203,11 @@ export type NativeJobVisit = {
   recordReclean: NativeJobVisitAction;
 };
 
+export type NativeJobChecklist = {
+  procedureTitle: string | null;
+  items: NativeJobChecklistItem[];
+};
+
 export type NativeJobPhotos = {
   items: NativeJobPhoto[];
   count: number;
@@ -236,6 +241,7 @@ export type NativeJobDetail = NativeJobSummary & {
   stopPickupAction: NativeJobActivityAction;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
+  checklist: NativeJobChecklist | null;
 };
 
 export type NativeJobLoadOptions = {
@@ -312,6 +318,24 @@ export async function loadNativeAssignedJobVisit(
     checklist: view.checklist,
     recordCompleted: nativeVisitCompletedAction(job.status),
     recordReclean: nativeVisitRecleanAction(),
+  };
+}
+
+export async function loadNativeAssignedJobChecklist(
+  db: Db,
+  access: NativeFieldAccess,
+  job: { id: string },
+): Promise<NativeJobChecklist | null> {
+  const visit = await db.jobCrewVisit.findFirst({
+    where: { jobId: job.id, businessId: access.businessId },
+    include: { procedure: { select: { title: true } } },
+  });
+  if (!visit) return null;
+  const items = parseChecklistJson(visit.checklistJson);
+  if (items.length === 0) return null;
+  return {
+    procedureTitle: visit.procedure?.title ?? null,
+    items,
   };
 }
 
@@ -626,6 +650,7 @@ export async function loadNativeAssignedJob(
     stopPickupAction: nativeActivityStopAction(pickupTime.running),
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     visit: await loadNativeAssignedJobVisit(db, access, job),
+    checklist: await loadNativeAssignedJobChecklist(db, access, job),
   };
 }
 

@@ -1118,10 +1118,17 @@ export type CompleteJobWithRunningTimeSafetyResult =
 export async function completeJobWithRunningTimeSafetyInTransaction(
   tx: Db,
   input: CloseRunningJobTimeForCompletionInput,
+  options?: {
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
+  },
 ): Promise<CompleteJobWithRunningTimeSafetyResult> {
   const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
   if (!job) {
     return { ok: false, error: "That job could not be completed." };
+  }
+  if (options?.afterLock) {
+    await options.afterLock();
   }
 
   const lifecycle = evaluateCompleteJob(job.status);
@@ -1169,10 +1176,28 @@ export async function completeJobWithRunningTimeSafetyInTransaction(
 export async function completeJobWithRunningTimeSafety(
   db: PrismaClient,
   input: CloseRunningJobTimeForCompletionInput,
+  options?: {
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
+  },
 ): Promise<CompleteJobWithRunningTimeSafetyResult> {
+  const existing = await db.job.findFirst({
+    where: { id: input.jobId, businessId: input.businessId },
+    select: { id: true },
+  });
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+  if (!existing) {
+    return { ok: false, error: "That job could not be completed." };
+  }
   try {
     return await db.$transaction((tx) =>
-      completeJobWithRunningTimeSafetyInTransaction(tx, input),
+      completeJobWithRunningTimeSafetyInTransaction(tx, input, {
+        afterLock: options?.afterLock,
+      }),
     );
   } catch (error) {
     if (isTimeCardError(error) || error instanceof ForbiddenError) {
