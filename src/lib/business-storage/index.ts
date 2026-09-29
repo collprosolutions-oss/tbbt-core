@@ -57,6 +57,8 @@ export {
   StorageAccessError,
   StorageError,
   StorageQuotaError,
+  PROJECT_DOCUMENT_MAX_BYTES,
+  PROJECT_DOCUMENT_MAX_COUNT,
   REQUEST_PHOTO_MAX_BYTES,
   WEBSITE_PHOTO_MAX_BYTES,
 } from "@/lib/business-storage/types";
@@ -84,3 +86,21 @@ export {
   putAssignedFieldJobPhotoFromBytes,
   putManagementJobPhotoFromBytes,
 } from "@/lib/business-storage/field-job-photos";
+export {
+  PROJECT_DOCUMENT_PURPOSE,
+  abortProjectTokenDocument,
+  authorizeProjectTokenDocument,
+  countActiveProjectDocuments,
+  finalizeProjectTokenDocument,
+  inspectProjectDocumentUpload,
+  isProjectDocumentMimeType,
+  listProjectDocumentsForOwnerReview,
+  listProjectDocumentsForPortal,
+  projectDocumentMaxBytesLabel,
+  putProjectTokenDocumentFromBytes,
+  remainingProjectDocumentSlots,
+} from "@/lib/business-storage/project-documents";
+export type {
+  ProjectDocumentReceiptItem,
+  ProjectDocumentReviewItem,
+} from "@/lib/business-storage/project-documents";

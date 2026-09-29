@@ -1,0 +1,362 @@
+/**
+ * Customer Project Portal documents on the existing private R2
+ * authorize → PUT → finalize path. Authorization is the Job's own
+ * unguessable projectToken — never a client-supplied businessId or jobId.
+ *
+ * Upload stores a PRIVATE DOCUMENT for owner review. It does not approve,
+ * publish, message, invoice, or change Job status.
+ */
+import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  abortManagedUpload,
+  authorizeManagedUpload,
+  finalizeManagedUpload,
+  resolveStorageProvider,
+  type StorageServiceDeps,
+} from "@/lib/business-storage/service";
+import { inspectProjectDocumentUpload } from "@/lib/business-storage/project-document-rules";
+import { privateAssetPath } from "@/lib/business-storage/keys";
+import {
+  PROJECT_DOCUMENT_MAX_COUNT,
+  PROJECT_DOCUMENT_MAX_BYTES,
+  StorageAccessError,
+  StorageError,
+} from "@/lib/business-storage/types";
+
+export const PROJECT_DOCUMENT_PURPOSE = "project-portal-document";
+export { PROJECT_DOCUMENT_MAX_BYTES, PROJECT_DOCUMENT_MAX_COUNT };
+
+export {
+  inspectProjectDocumentUpload,
+  isProjectDocumentMimeType,
+  projectDocumentMaxBytesLabel,
+  resolveProjectDocumentMimeType,
+} from "@/lib/business-storage/project-document-rules";
+
+const PROJECT_LINK_UNAVAILABLE = "This project link is not available.";
+const NOT_PRIVATE_PROJECT_DOCUMENT = "That file is not a private project document.";
+const DOCUMENT_CANNOT_BE_PUBLISHED = "Project documents cannot be published.";
+const DOCUMENT_LIMIT_REACHED = `You can add up to ${PROJECT_DOCUMENT_MAX_COUNT} documents for this project.`;
+
+type Db = PrismaClient | Prisma.TransactionClient;
+
+type ProjectTokenJob = {
+  id: string;
+  businessId: string;
+  customerId: string | null;
+  propertyId: string | null;
+  status: string;
+  projectToken: string;
+};
+
+function isPrivateUnpublishedProjectDocument(asset: {
+  category: string;
+  purpose: string | null;
+  visibility: string;
+  publicPath: string | null;
+  deletedAt: Date | null;
+  status: string;
+  jobId: string | null;
+}) {
+  return (
+    asset.deletedAt == null &&
+    asset.status !== "DELETED" &&
+    asset.category === "DOCUMENT" &&
+    asset.purpose === PROJECT_DOCUMENT_PURPOSE &&
+    asset.visibility === "PRIVATE" &&
+    !asset.publicPath &&
+    Boolean(asset.jobId)
+  );
+}
+
+async function findJobByProjectToken(db: Db, token: string) {
+  const trimmed = token.trim();
+  if (!trimmed) return null;
+  return db.job.findUnique({
+    where: { projectToken: trimmed },
+    select: {
+      id: true,
+      businessId: true,
+      customerId: true,
+      propertyId: true,
+      status: true,
+      projectToken: true,
+    },
+  });
+}
+
+async function requireJobByProjectToken(db: Db, token: string): Promise<ProjectTokenJob> {
+  const job = await findJobByProjectToken(db, token);
+  if (!job) {
+    throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
+  }
+  return job;
+}
+
+export async function countActiveProjectDocuments(
+  db: Db,
+  input: { businessId: string; jobId: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  return db.storedAsset.count({
+    where: {
+      businessId: input.businessId,
+      jobId: input.jobId,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      visibility: "PRIVATE",
+      deletedAt: null,
+      OR: [
+        { status: "READY" },
+        {
+          status: "PENDING",
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+      ],
+    },
+  });
+}
+
+export function remainingProjectDocumentSlots(activeCount: number) {
+  const recorded = Number.isFinite(activeCount) ? Math.max(0, Math.floor(activeCount)) : 0;
+  return Math.max(0, PROJECT_DOCUMENT_MAX_COUNT - recorded);
+}
+
+export async function authorizeProjectTokenDocument(
+  deps: StorageServiceDeps,
+  token: string,
+  input: { originalFilename: string; mimeType: string; fileSizeBytes: number },
+) {
+  const job = await requireJobByProjectToken(deps.db, token);
+  const inspection = inspectProjectDocumentUpload({
+    type: input.mimeType,
+    name: input.originalFilename,
+    size: input.fileSizeBytes,
+  });
+  if (!inspection.ok) {
+    throw new StorageError(inspection.error);
+  }
+
+  const now = deps.now?.() ?? new Date();
+  const active = await countActiveProjectDocuments(deps.db, {
+    businessId: job.businessId,
+    jobId: job.id,
+    now,
+  });
+  if (remainingProjectDocumentSlots(active) <= 0) {
+    throw new StorageError(DOCUMENT_LIMIT_REACHED);
+  }
+
+  return authorizeManagedUpload(deps, job.businessId, {
+    category: "DOCUMENT",
+    purpose: PROJECT_DOCUMENT_PURPOSE,
+    originalFilename: inspection.fileName,
+    mimeType: inspection.mimeType,
+    fileSizeBytes: inspection.fileSizeBytes,
+    visibility: "PRIVATE",
+    jobId: job.id,
+    customerId: job.customerId,
+    propertyId: job.propertyId,
+  });
+}
+
+export async function finalizeProjectTokenDocument(
+  deps: StorageServiceDeps,
+  token: string,
+  assetId: string,
+) {
+  const job = await requireJobByProjectToken(deps.db, token);
+  const candidate = await deps.db.storedAsset.findFirst({
+    where: {
+      id: assetId,
+      businessId: job.businessId,
+      jobId: job.id,
+    },
+  });
+  if (!candidate) {
+    throw new StorageAccessError(NOT_PRIVATE_PROJECT_DOCUMENT);
+  }
+  if (candidate.publicPath) {
+    throw new StorageError(DOCUMENT_CANNOT_BE_PUBLISHED);
+  }
+  if (!isPrivateUnpublishedProjectDocument(candidate)) {
+    throw new StorageError(NOT_PRIVATE_PROJECT_DOCUMENT);
+  }
+  if (candidate.status === "READY") {
+    return candidate;
+  }
+
+  const now = deps.now?.() ?? new Date();
+  if (
+    candidate.status !== "PENDING" ||
+    (candidate.expiresAt != null && candidate.expiresAt.getTime() <= now.getTime())
+  ) {
+    throw new StorageError(NOT_PRIVATE_PROJECT_DOCUMENT);
+  }
+
+  const asset = await finalizeManagedUpload(deps, job.businessId, assetId);
+  if (
+    !isPrivateUnpublishedProjectDocument(asset) ||
+    asset.jobId !== job.id ||
+    asset.businessId !== job.businessId
+  ) {
+    throw new StorageError(NOT_PRIVATE_PROJECT_DOCUMENT);
+  }
+  return asset;
+}
+
+export async function abortProjectTokenDocument(
+  deps: StorageServiceDeps,
+  token: string,
+  assetId: string,
+) {
+  const job = await requireJobByProjectToken(deps.db, token);
+  const pending = await deps.db.storedAsset.findFirst({
+    where: {
+      id: assetId,
+      businessId: job.businessId,
+      jobId: job.id,
+    },
+    select: { id: true },
+  });
+  if (!pending) {
+    throw new StorageAccessError(NOT_PRIVATE_PROJECT_DOCUMENT);
+  }
+  return abortManagedUpload(deps, job.businessId, pending.id);
+}
+
+export async function putProjectTokenDocumentFromBytes(
+  deps: StorageServiceDeps,
+  token: string,
+  input: {
+    originalFilename: string;
+    mimeType: string;
+    body: Buffer | Uint8Array;
+  },
+) {
+  const authorized = await authorizeProjectTokenDocument(deps, token, {
+    originalFilename: input.originalFilename,
+    mimeType: input.mimeType,
+    fileSizeBytes: input.body.byteLength,
+  });
+  const provider = await resolveStorageProvider(deps);
+  try {
+    await provider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body: input.body,
+      contentType: input.mimeType,
+    });
+    return finalizeProjectTokenDocument(deps, token, authorized.asset.id);
+  } catch (error) {
+    await abortProjectTokenDocument(deps, token, authorized.asset.id);
+    throw error;
+  }
+}
+
+const PROJECT_DOCUMENT_SELECT = {
+  id: true,
+  originalFilename: true,
+  mimeType: true,
+  fileSizeBytes: true,
+  createdAt: true,
+  visibility: true,
+  publicPath: true,
+  status: true,
+  jobId: true,
+  businessId: true,
+} as const;
+
+export type ProjectDocumentReviewItem = {
+  id: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  createdAt: Date;
+  reviewHref: string;
+};
+
+function toReviewItem(asset: {
+  id: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  createdAt: Date;
+}): ProjectDocumentReviewItem {
+  return {
+    id: asset.id,
+    originalFilename: asset.originalFilename,
+    mimeType: asset.mimeType,
+    fileSizeBytes: asset.fileSizeBytes,
+    createdAt: asset.createdAt,
+    reviewHref: privateAssetPath(asset.id),
+  };
+}
+
+export type ProjectDocumentReceiptItem = {
+  id: string;
+  originalFilename: string;
+  fileSizeBytes: number;
+  createdAt: Date;
+};
+
+async function listReadyPrivateProjectDocuments(
+  db: Db,
+  input: { businessId: string; jobId: string },
+) {
+  return db.storedAsset.findMany({
+    where: {
+      businessId: input.businessId,
+      jobId: input.jobId,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      visibility: "PRIVATE",
+      status: "READY",
+      deletedAt: null,
+      publicPath: null,
+    },
+    orderBy: { createdAt: "asc" },
+    select: PROJECT_DOCUMENT_SELECT,
+  });
+}
+
+/**
+ * Customer-visible receipts for this project token. Filenames only —
+ * private bytes stay on the authenticated owner download path.
+ */
+export async function listProjectDocumentsForPortal(db: Db, token: string) {
+  const job = await findJobByProjectToken(db, token);
+  if (!job) return [];
+  const rows = await listReadyPrivateProjectDocuments(db, {
+    businessId: job.businessId,
+    jobId: job.id,
+  });
+  return rows.map(
+    (row): ProjectDocumentReceiptItem => ({
+      id: row.id,
+      originalFilename: row.originalFilename,
+      fileSizeBytes: row.fileSizeBytes,
+      createdAt: row.createdAt,
+    }),
+  );
+}
+
+/**
+ * Same-business owner/admin review list. The caller must already have
+ * resolved the workspace business; this never reads a browser businessId.
+ */
+export async function listProjectDocumentsForOwnerReview(
+  db: Db,
+  input: { businessId: string; jobId: string },
+) {
+  const job = await db.job.findFirst({
+    where: { id: input.jobId, businessId: input.businessId },
+    select: { id: true, businessId: true },
+  });
+  if (!job) return [];
+  const rows = await listReadyPrivateProjectDocuments(db, {
+    businessId: job.businessId,
+    jobId: job.id,
+  });
+  return rows.map(toReviewItem);
+}

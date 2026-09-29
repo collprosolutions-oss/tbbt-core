@@ -12,6 +12,8 @@ import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
+import { ProjectDocumentUpload } from "@/components/portal/project-document-upload";
+import { listProjectDocumentsForPortal } from "@/lib/business-storage/project-documents";
 import { loadCleaningRepeatVisitPublicView } from "@/lib/cleaning-repeat-visit-data";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
@@ -601,6 +603,23 @@ export default async function CustomerProjectPortalPage({
               alreadyRequested={repeatVisit.alreadyRequested}
             />
           ) : null}
+
+          <Card id="project-documents">
+            <CardHeader>
+              <CardTitle>Project Documents</CardTitle>
+              <CardDescription>
+                Upload a private document for this project. The owner will
+                review it. Uploading does not approve work, publish anything,
+                send a message, create an invoice, or change the job.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ProjectDocumentUpload
+                projectToken={token}
+                documents={await listProjectDocumentsForPortal(prisma, token)}
+              />
+            </CardContent>
+          </Card>
 
           <Card id="invoice" className="md:col-span-2 xl:col-span-1">
             <CardHeader>
