@@ -243,7 +243,10 @@ try {
   check("Targets are labeled targets, not forecasts", libSrc.includes(TARGET_NOT_FORECAST_MESSAGE) && TARGET_KIND === "target");
   check("Recorded facts stay recorded-fact", RECORDED_FACT_KIND === "recorded-fact");
   check("Bank balance is not claimed", libSrc.includes(TARGET_NOT_BANK_BALANCE_MESSAGE) && uiSrc.includes("TARGET_NOT_BANK_BALANCE_MESSAGE"));
-  check("Jobs completed use JOB_COMPLETED events", JOBS_COMPLETED_FACT_MESSAGE.includes("JOB_COMPLETED"));
+  check(
+    "Jobs completed use recorded completion events",
+    JOBS_COMPLETED_FACT_MESSAGE.includes("recorded completion") && dataSrc.includes('type: "JOB_COMPLETED"'),
+  );
   check("Invoices paid use paidAt", INVOICES_PAID_FACT_MESSAGE.includes("paidAt"));
   check(
     "Collected payments copy includes material deposits",
