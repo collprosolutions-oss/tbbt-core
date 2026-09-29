@@ -191,7 +191,7 @@ async function waitForTestDbLock(admin, label) {
   const started = Date.now();
   while (Date.now() - started < LOCK_POLL_MS) {
     const rows = await admin.$queryRaw`
-      SELECT pid, wait_event_type, wait_event
+      SELECT pid, wait_event_type, wait_event, state, left(query, 120) AS query
       FROM pg_stat_activity
       WHERE datname = ${testDbName}
         AND pid <> pg_backend_pid()
@@ -200,7 +200,15 @@ async function waitForTestDbLock(admin, label) {
     if (rows.length > 0) return rows;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`${label}: timed out waiting for wait_event_type=Lock on ${testDbName}`);
+  const snapshot = await admin.$queryRaw`
+    SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
+    FROM pg_stat_activity
+    WHERE datname = ${testDbName}
+      AND pid <> pg_backend_pid()
+  `;
+  throw new Error(
+    `${label}: timed out waiting for wait_event_type=Lock on ${testDbName}. activity=${JSON.stringify(snapshot)}`,
+  );
 }
 
 function memoryStorageProvider() {
@@ -247,6 +255,20 @@ function createTestClient() {
   const client = new PrismaClient({ datasourceUrl: testUrl });
   extraClients.push(client);
   return client;
+}
+
+async function disconnectClient(client) {
+  const index = extraClients.indexOf(client);
+  if (index >= 0) extraClients.splice(index, 1);
+  await client.$disconnect();
+}
+
+async function releaseAfterLock(admin, barrier, label) {
+  try {
+    await waitForTestDbLock(admin, label);
+  } finally {
+    await barrier.arrive();
+  }
 }
 
 try {
@@ -1122,7 +1144,9 @@ try {
     return { left, right, leftLinks, rightLinks };
   }
 
-  const lockAdmin = new PrismaClient({ datasourceUrl: baseUrl });
+  const lockAdminUrl = new URL(baseUrl);
+  lockAdminUrl.searchParams.set("connection_limit", "1");
+  const lockAdmin = new PrismaClient({ datasourceUrl: lockAdminUrl.toString() });
   extraClients.push(lockAdmin);
 
   console.log("\nCONCURRENT — A+B vs B+A with a count-2 barrier and separate clients");
@@ -1136,15 +1160,19 @@ try {
     { keepCustomerId: raceAB.left.id, absorbCustomerId: raceAB.right.id, confirmedSameCustomer: true },
     { afterLocked: abBarrier.arrive },
   );
+  const abHeldSettled = Promise.allSettled([abHeld]);
   await withTimeout(abBarrier.firstArrived, BARRIER_WAIT_MS, "A+B vs B+A entered write");
   const abContender = mergeConfirmedCustomers(
     abClientB,
     alpha.owner,
     { keepCustomerId: raceAB.right.id, absorbCustomerId: raceAB.left.id, confirmedSameCustomer: true },
   );
-  await waitForTestDbLock(lockAdmin, "A+B vs B+A");
-  await abBarrier.arrive();
-  const abResults = await withTimeout(Promise.allSettled([abHeld, abContender]), 25000, "A+B vs B+A");
+  const abContenderSettled = Promise.allSettled([abContender]);
+  await releaseAfterLock(lockAdmin, abBarrier, "A+B vs B+A");
+  const [abHeldResult] = await withTimeout(abHeldSettled, 25000, "A+B vs B+A held");
+  const [abContenderResult] = await withTimeout(abContenderSettled, 25000, "A+B vs B+A contender");
+  const abResults = [abHeldResult, abContenderResult];
+  await Promise.all([disconnectClient(abClientA), disconnectClient(abClientB)]);
   const abWins = abResults.filter((result) => result.status === "fulfilled");
   const abLosses = abResults.filter((result) => result.status === "rejected");
   check("A+B vs B+A has exactly one winner", abWins.length === 1 && abLosses.length === 1);
@@ -1189,19 +1217,19 @@ try {
     { keepCustomerId: customerA.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
     { afterLocked: triangleBarrier.arrive },
   );
+  const triangleHeldSettled = Promise.allSettled([triangleHeld]);
   await withTimeout(triangleBarrier.firstArrived, BARRIER_WAIT_MS, "A+B vs B+C entered write");
   const triangleContender = mergeConfirmedCustomers(
     triangleClientC,
     alpha.owner,
     { keepCustomerId: customerC.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
   );
-  await waitForTestDbLock(lockAdmin, "A+B vs B+C");
-  await triangleBarrier.arrive();
-  const triangleResults = await withTimeout(
-    Promise.allSettled([triangleHeld, triangleContender]),
-    25000,
-    "A+B vs B+C",
-  );
+  const triangleContenderSettled = Promise.allSettled([triangleContender]);
+  await releaseAfterLock(lockAdmin, triangleBarrier, "A+B vs B+C");
+  const [triangleHeldResult] = await withTimeout(triangleHeldSettled, 25000, "A+B vs B+C held");
+  const [triangleContenderResult] = await withTimeout(triangleContenderSettled, 25000, "A+B vs B+C contender");
+  const triangleResults = [triangleHeldResult, triangleContenderResult];
+  await Promise.all([disconnectClient(triangleClientA), disconnectClient(triangleClientC)]);
   const triangleWins = triangleResults.filter((result) => result.status === "fulfilled");
   const triangleLosses = triangleResults.filter((result) => result.status === "rejected");
   check("A+B vs B+C has exactly one winner", triangleWins.length === 1 && triangleLosses.length === 1);
@@ -1243,16 +1271,17 @@ try {
     { keepCustomerId: editPair.left.id, absorbCustomerId: editPair.right.id, confirmedSameCustomer: true },
     { afterLocked: editBarrier.arrive },
   );
+  const editMergeSettled = Promise.allSettled([editMergeP]);
   await withTimeout(editBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-edit entered write");
   const editP = editClient.customer.update({
     where: { id: editPair.right.id },
     data: { name: "Concurrent Edit" },
   });
-  await waitForTestDbLock(lockAdmin, "merge vs edit");
-  await editBarrier.arrive();
-  const editResults = await withTimeout(Promise.allSettled([editMergeP, editP]), 25000, "merge vs edit");
-  const editMergeResult = editResults[0];
-  const editWriteResult = editResults[1];
+  const editWriteSettled = Promise.allSettled([editP]);
+  await releaseAfterLock(lockAdmin, editBarrier, "merge vs edit");
+  const [editMergeResult] = await withTimeout(editMergeSettled, 25000, "merge vs edit merge");
+  const [editWriteResult] = await withTimeout(editWriteSettled, 25000, "merge vs edit write");
+  await Promise.all([disconnectClient(editMergeClient), disconnectClient(editClient)]);
   check("Merge vs edit: merge is the single winner", editMergeResult.status === "fulfilled");
   check(
     "Merge vs edit: edit loses with P2025",
@@ -1281,6 +1310,7 @@ try {
     { keepCustomerId: jobPair.left.id, absorbCustomerId: jobPair.right.id, confirmedSameCustomer: true },
     { afterLocked: jobBarrier.arrive },
   );
+  const jobMergeSettled = Promise.allSettled([jobMergeP]);
   await withTimeout(jobBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-job entered write");
   const jobCreateP = jobWriteClient.job.create({
     data: {
@@ -1290,9 +1320,12 @@ try {
       status: "UNSCHEDULED",
     },
   });
-  await waitForTestDbLock(lockAdmin, "merge vs Job");
-  await jobBarrier.arrive();
-  const jobRaceResults = await withTimeout(Promise.allSettled([jobMergeP, jobCreateP]), 25000, "merge vs Job");
+  const jobCreateSettled = Promise.allSettled([jobCreateP]);
+  await releaseAfterLock(lockAdmin, jobBarrier, "merge vs Job");
+  const [jobMergeResult] = await withTimeout(jobMergeSettled, 25000, "merge vs Job merge");
+  const [jobCreateResult] = await withTimeout(jobCreateSettled, 25000, "merge vs Job insert");
+  const jobRaceResults = [jobMergeResult, jobCreateResult];
+  await Promise.all([disconnectClient(jobMergeClient), disconnectClient(jobWriteClient)]);
   check("Merge vs Job: merge is the single winner", jobRaceResults[0].status === "fulfilled");
   check(
     "Merge vs Job: job insert loses with P2003",
@@ -1321,6 +1354,7 @@ try {
     { keepCustomerId: assetPair.left.id, absorbCustomerId: assetPair.right.id, confirmedSameCustomer: true },
     { afterLocked: assetBarrier.arrive },
   );
+  const assetMergeSettled = Promise.allSettled([assetMergeP]);
   await withTimeout(assetBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-asset entered write");
   const assetCountBefore = await prisma.storedAsset.count({
     where: { businessId: alpha.business.id, customerId: assetPair.right.id },
@@ -1341,13 +1375,12 @@ try {
       customerId: assetPair.right.id,
     },
   );
-  await waitForTestDbLock(lockAdmin, "merge vs StoredAsset");
-  await assetBarrier.arrive();
-  const assetRaceResults = await withTimeout(
-    Promise.allSettled([assetMergeP, assetUploadP]),
-    25000,
-    "merge vs StoredAsset",
-  );
+  const assetUploadSettled = Promise.allSettled([assetUploadP]);
+  await releaseAfterLock(lockAdmin, assetBarrier, "merge vs StoredAsset");
+  const [assetMergeResult] = await withTimeout(assetMergeSettled, 25000, "merge vs StoredAsset merge");
+  const [assetUploadResult] = await withTimeout(assetUploadSettled, 25000, "merge vs StoredAsset upload");
+  const assetRaceResults = [assetMergeResult, assetUploadResult];
+  await Promise.all([disconnectClient(assetMergeClient), disconnectClient(assetWriteClient)]);
   check("Merge vs StoredAsset: merge is the single winner", assetRaceResults[0].status === "fulfilled");
   check(
     "Merge vs StoredAsset: upload loses because the customer row is gone",
