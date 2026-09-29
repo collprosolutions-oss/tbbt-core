@@ -46,7 +46,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
  *   membership row is not locked yet, so a concurrent owner exception
  *   insert can commit before create.
  * - afterMembershipLock: membership row is locked; a concurrent
- *   deactivation must wait or already have committed.
+ *   deactivation must wait. ACCEPT refuses inactive; DECLINE may
+ *   still close the request.
  * - beforeRequestCreate: both creates have passed the pending lookup
  *   before either inserts.
  */
@@ -482,7 +483,7 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         requestId: request.id,
         membershipId: liveMembership.id,
       });
-      if (!liveMembership.active) {
+      if (decision === "ACCEPT" && !liveMembership.active) {
         throw new WorkforceError(AVAILABILITY_REQUEST_INACTIVE_MESSAGE);
       }
 

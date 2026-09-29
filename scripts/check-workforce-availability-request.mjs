@@ -132,6 +132,22 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
+async function waitForBackendLock(db, dbName, ms, label) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const rows = await db.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${dbName}
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if (Array.isArray(rows) && rows.length > 0) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`${label} timed out after ${ms}ms`);
+}
+
 const opsSrc = readRepo("src/lib/workforce-availability-request-ops.ts");
 const actionSrc = readRepo("src/app/actions/workforce.ts");
 const fieldUi = readRepo("src/components/field/availability-exception-request-form.tsx");
@@ -218,6 +234,17 @@ check(
   ) &&
     checkSrc.includes("if (prisma)") &&
     checkSrc.includes("DROP DATABASE IF EXISTS"),
+);
+check(
+  "Deactivate lock-held race waits for FOR UPDATE then polls pg_stat_activity Lock",
+  checkSrc.includes("waitForBackendLock") &&
+    checkSrc.includes("pg_stat_activity") &&
+    checkSrc.includes("wait_event_type = 'Lock'") &&
+    checkSrc.includes("accept locked the membership row"),
+);
+check(
+  "Inactive membership blocks ACCEPT only, so OWNER can still decline",
+  opsSrc.includes('if (decision === "ACCEPT" && !liveMembership.active)'),
 );
 check(
   "UI states that existing jobs are not cancelled, reassigned, or messaged",
@@ -837,6 +864,7 @@ try {
     toctouBarrier.release();
     toctouResult = await Promise.allSettled([acceptHeld]);
   } finally {
+    toctouBarrier.release();
     availabilityRequestTestHooks.afterExistingExceptionCheck = undefined;
     await ownerWriteClient.$disconnect();
   }
@@ -1027,6 +1055,7 @@ try {
     decideBarrier.release();
     decideRace = await Promise.allSettled([acceptHeld, declineHeld]);
   } finally {
+    decideBarrier.release();
     availabilityRequestTestHooks.beforeDecideClaims = undefined;
     await acceptClient.$disconnect();
     await declineClient.$disconnect();
@@ -1067,70 +1096,116 @@ try {
       jobAfterRace?.scheduledAt?.getTime() === jobBeforeRace?.scheduledAt?.getTime(),
   );
 
-  const deactivateDate = "2026-10-14";
-  const deactivateRequest = await requestMemberAvailabilityExceptionOp(prisma, helperA, {
+  const lockHeldDate = "2026-10-14";
+  const lockHeldRequest = await requestMemberAvailabilityExceptionOp(prisma, helperA, {
     membershipId: helperMem.id,
-    date: deactivateDate,
+    date: lockHeldDate,
     kind: "UNAVAILABLE",
     now: NOW,
   });
-  const deactivateBarrier = createCountBarrier(1);
-  availabilityRequestTestHooks.afterMembershipLock = deactivateBarrier.wait;
+  const lockHeldBarrier = createCountBarrier(1);
+  availabilityRequestTestHooks.afterMembershipLock = lockHeldBarrier.wait;
   const deactivateClient = new PrismaClient({ datasourceUrl: testUrl });
-  let deactivateAccept;
-  let deactivateUpdate;
+  const lockWatchClient = new PrismaClient({ datasourceUrl: testUrl });
+  let lockHeldAccept;
+  let lockHeldUpdate;
+  let acceptHeld;
+  let updateHeld;
   try {
-    const acceptHeld = decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
-      requestId: deactivateRequest.id,
+    acceptHeld = decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
+      requestId: lockHeldRequest.id,
       decision: "ACCEPT",
-      expectedUpdatedAt: deactivateRequest.updatedAt,
+      expectedUpdatedAt: lockHeldRequest.updatedAt,
       now: NOW,
     });
-    const updateHeld = deactivateClient.membership.update({
+    await withTimeout(lockHeldBarrier.arrived, 4000, "accept locked the membership row");
+    updateHeld = deactivateClient.membership.update({
       where: { id: helperMem.id },
       data: { active: false },
     });
-    await withTimeout(deactivateBarrier.arrived, 4000, "accept locked the membership row");
-    deactivateBarrier.release();
-    const settled = await Promise.allSettled([acceptHeld, updateHeld]);
-    deactivateAccept = settled[0];
-    deactivateUpdate = settled[1];
+    await waitForBackendLock(
+      lockWatchClient,
+      testDbName,
+      4000,
+      "deactivate update waited on Membership FOR UPDATE",
+    );
   } finally {
+    lockHeldBarrier.release();
     availabilityRequestTestHooks.afterMembershipLock = undefined;
+    const settled = await Promise.allSettled([acceptHeld, updateHeld].filter(Boolean));
+    lockHeldAccept = settled[0];
+    lockHeldUpdate = settled[1];
     await deactivateClient.$disconnect();
+    await lockWatchClient.$disconnect();
   }
-  const deactivateRow = await prisma.membershipAvailabilityExceptionRequest.findFirst({
-    where: { id: deactivateRequest.id, businessId: businessA.id },
+  const lockHeldRow = await prisma.membershipAvailabilityExceptionRequest.findFirst({
+    where: { id: lockHeldRequest.id, businessId: businessA.id },
   });
-  const deactivateException = await prisma.membershipAvailabilityException.findFirst({
-    where: { membershipId: helperMem.id, date: deactivateDate, businessId: businessA.id },
+  const lockHeldException = await prisma.membershipAvailabilityException.findFirst({
+    where: { membershipId: helperMem.id, date: lockHeldDate, businessId: businessA.id },
   });
-  const membershipAfterRace = await prisma.membership.findFirst({
+  const membershipAfterLockHeld = await prisma.membership.findFirst({
     where: { id: helperMem.id, businessId: businessA.id },
     select: { active: true },
   });
-  const acceptedThenDeactivated =
-    deactivateAccept.status === "fulfilled" &&
-    deactivateAccept.value.decision === "ACCEPT" &&
-    deactivateRow?.status === "ACCEPTED" &&
-    Boolean(deactivateException) &&
-    deactivateUpdate.status === "fulfilled" &&
-    membershipAfterRace?.active === false;
-  const refusedInactive =
-    deactivateAccept.status === "rejected" &&
-    deactivateAccept.reason instanceof WorkforceError &&
-    deactivateAccept.reason.message === AVAILABILITY_REQUEST_INACTIVE_MESSAGE &&
-    deactivateRow?.status === "PENDING" &&
-    deactivateException == null &&
-    deactivateUpdate.status === "fulfilled" &&
-    membershipAfterRace?.active === false;
   check(
-    "Deactivate-during-accept is accept-then-deactivate or refused as inactive",
-    acceptedThenDeactivated || refusedInactive,
+    "Lock-held deactivate waits, then accept commits before the membership update",
+    lockHeldAccept.status === "fulfilled" &&
+      lockHeldAccept.value.decision === "ACCEPT" &&
+      lockHeldRow?.status === "ACCEPTED" &&
+      Boolean(lockHeldException) &&
+      lockHeldUpdate.status === "fulfilled" &&
+      membershipAfterLockHeld?.active === false,
+  );
+
+  await prisma.membership.update({
+    where: { id: helperMem.id },
+    data: { active: true },
+  });
+  const deactivateFirstDate = "2026-10-16";
+  const deactivateFirstRequest = await requestMemberAvailabilityExceptionOp(prisma, helperA, {
+    membershipId: helperMem.id,
+    date: deactivateFirstDate,
+    kind: "UNAVAILABLE",
+    now: NOW,
+  });
+  await prisma.membership.update({
+    where: { id: helperMem.id },
+    data: { active: false },
+  });
+  await expectError(
+    "Deactivate-first accept refuses as inactive",
+    () =>
+      decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
+        requestId: deactivateFirstRequest.id,
+        decision: "ACCEPT",
+        expectedUpdatedAt: deactivateFirstRequest.updatedAt,
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof WorkforceError && error.message === AVAILABILITY_REQUEST_INACTIVE_MESSAGE,
   );
   check(
-    "Deactivate-during-accept has exactly one valid ordering",
-    Number(acceptedThenDeactivated) + Number(refusedInactive) === 1,
+    "Deactivate-first accept left the request pending and wrote no exception",
+    (await prisma.membershipAvailabilityExceptionRequest.findFirst({
+      where: { id: deactivateFirstRequest.id, businessId: businessA.id },
+    }))?.status === "PENDING" &&
+      (await prisma.membershipAvailabilityException.count({
+        where: { membershipId: helperMem.id, date: deactivateFirstDate, businessId: businessA.id },
+      })) === 0,
+  );
+  const declinedInactive = await decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
+    requestId: deactivateFirstRequest.id,
+    decision: "DECLINE",
+    expectedUpdatedAt: deactivateFirstRequest.updatedAt,
+    now: NOW,
+  });
+  check(
+    "OWNER can decline a pending request after the worker is deactivated",
+    declinedInactive.request.status === "DECLINED" &&
+      (await prisma.membershipAvailabilityException.count({
+        where: { membershipId: helperMem.id, date: deactivateFirstDate, businessId: businessA.id },
+      })) === 0,
   );
 
   await prisma.membership.update({
@@ -1160,6 +1235,7 @@ try {
     createBarrier.release();
     createRace = await Promise.allSettled([first, second]);
   } finally {
+    createBarrier.release();
     availabilityRequestTestHooks.beforeRequestCreate = undefined;
     await createA.$disconnect();
     await createB.$disconnect();

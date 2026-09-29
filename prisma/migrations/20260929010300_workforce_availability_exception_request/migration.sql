@@ -1,7 +1,8 @@
 -- Worker-requested dated availability exception / time off.
 -- Additive only. Preview shares Production and skips migrate, so every
 -- statement is IF NOT EXISTS. Pending requests do not write recorded
--- availability. Acceptance upserts MembershipAvailabilityException.
+-- availability. Acceptance creates MembershipAvailabilityException
+-- unless the owner confirms replace.
 -- These rows never cancel, reassign, or message Jobs.
 
 CREATE TABLE IF NOT EXISTS "MembershipAvailabilityExceptionRequest" (
