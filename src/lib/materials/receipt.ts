@@ -289,7 +289,11 @@ export async function recordPurchaseOrderReceipt(
         let nextStatus: PurchaseItemStatus | null = null;
         if (listItemFullyReceived) {
           nextStatus = "RECEIVED";
-        } else if (thisLine.quantityReceived.gt(0) && currentStatus !== "PURCHASED") {
+        } else if (
+          thisLine.quantityReceived.gt(0) &&
+          currentStatus !== "PURCHASED" &&
+          currentStatus !== "RECEIVED"
+        ) {
           nextStatus = "ORDERED";
         }
         if (!nextStatus || currentStatus === nextStatus) continue;

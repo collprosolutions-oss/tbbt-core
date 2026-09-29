@@ -43,6 +43,7 @@ const {
   purchaseOrderReceiptQuantities,
   purchaseOrderStatusFromReceipts,
   recordPurchaseOrderReceipt,
+  updatePurchaseListItem,
   updatePurchaseOrderStatus,
 } = await import("@/lib/materials");
 
@@ -89,6 +90,11 @@ const migrate = spawnSync(
 );
 if (migrate.status !== 0) {
   console.error("Failed to migrate the purchase-order receipt test database.");
+  try {
+    dropTestDatabase();
+  } catch (error) {
+    console.error(error);
+  }
   process.exit(migrate.status ?? 1);
 }
 
@@ -141,6 +147,54 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
+async function waitUntil(predicate, timeoutMs, message) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = await predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  throw new Error(message);
+}
+
+async function waitForGrantedPurchaseOrderLock(client) {
+  return waitUntil(
+    async () => {
+      const rows = await client.$queryRaw`
+        SELECT l.pid
+        FROM pg_locks l
+        JOIN pg_class c ON c.oid = l.relation
+        JOIN pg_stat_activity a ON a.pid = l.pid
+        WHERE c.relname = 'MaterialPurchaseOrder'
+          AND l.granted
+          AND a.datname = current_database()
+          AND a.pid <> pg_backend_pid()
+      `;
+      return rows[0]?.pid ?? null;
+    },
+    10000,
+    "Timed out waiting for contender A to hold the purchase-order lock",
+  );
+}
+
+async function waitForBlockedByPid(client, blockerPid) {
+  return waitUntil(
+    async () => {
+      const rows = await client.$queryRaw`
+        SELECT pid
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND wait_event_type = 'Lock'
+          AND pid <> pg_backend_pid()
+          AND ${blockerPid} = ANY (pg_blocking_pids(pid))
+      `;
+      return rows[0]?.pid ?? null;
+    },
+    10000,
+    `Timed out waiting for contender B to block on pid ${blockerPid}`,
+  );
+}
+
 async function waitForLockWaiters(client, minCount, timeoutMs = 10000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -162,7 +216,7 @@ async function withHeldLocks(lock, work, minWaiters) {
   const held = new Promise((resolve) => {
     markHeld = resolve;
   });
-  let release;
+  let release = () => {};
   const released = new Promise((resolve) => {
     release = resolve;
   });
@@ -174,15 +228,29 @@ async function withHeldLocks(lock, work, minWaiters) {
     },
     { maxWait: 15000, timeout: 20000 },
   );
-  await held;
-  const pending = work();
   try {
-    await waitForLockWaiters(prismaHold, minWaiters);
-  } finally {
+    await Promise.race([
+      held,
+      hold.then(() => {
+        throw new Error("hold ended before lock");
+      }),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Timed out waiting for hold lock")), 15000);
+      }),
+    ]);
+    const pending = work();
+    try {
+      await waitForLockWaiters(prismaHold, minWaiters);
+    } finally {
+      release();
+    }
+    await hold;
+    return pending;
+  } catch (error) {
     release();
+    await hold.catch(() => {});
+    throw error;
   }
-  await hold;
-  return pending;
 }
 
 function dropTestDatabase() {
@@ -252,6 +320,7 @@ try {
       purchaseSrc.includes("lockTenantOwnedPurchaseOrderItems") &&
       purchaseSrc.includes("lockPurchaseListItemsForUpdate") &&
       purchaseSrc.includes('NOT: { status: "RECEIVED" }') &&
+      receiptSrc.includes('currentStatus !== "RECEIVED"') &&
       typesSrc.includes('ORDERED_EXTERNALLY: ["ORDERED_EXTERNALLY", "CANCELLED"]') &&
       cardSrc.includes("Already recorded."),
   );
@@ -692,6 +761,49 @@ try {
     );
   }
 
+  console.log("\nTEST — Manual RECEIVED is not downgraded by a later partial receipt");
+  const receivedEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const receivedList = await ensurePurchaseList(prisma, ownerA, { estimateId: receivedEstimate.id });
+  const alreadyReceived = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: receivedList.id,
+    name: "Already received hinge",
+    quantityNeeded: "4",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  await updatePurchaseListItem(prisma, ownerA, {
+    itemId: alreadyReceived.id,
+    status: "RECEIVED",
+  });
+  const laterPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: receivedList.id,
+    supplierId: depot.id,
+    itemIds: [alreadyReceived.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: laterPo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: laterPo.id,
+    attemptKey: "receipt-keep-received",
+    items: [{ purchaseOrderItemId: laterPo.items[0].id, quantityReceived: "1" }],
+  });
+  const stillReceived = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: alreadyReceived.id },
+  });
+  check(
+    "Partial receipt on a new PO does not downgrade a RECEIVED list item",
+    stillReceived.status === "RECEIVED" && laterPo.items.length === 1,
+  );
+
   console.log("\nTEST — Same-line race that exceeds remaining uses separate clients");
   const raceEstimate = await prisma.estimate.create({
     data: {
@@ -719,26 +831,19 @@ try {
     status: "ORDERED_EXTERNALLY",
   });
   const raceLine = racePo.items[0];
-  const raceResults = await withHeldLocks(
-    async (tx) => {
-      await lockTenantOwnedPurchaseOrder(tx, businessA.id, racePo.id);
-      await lockTenantOwnedPurchaseOrderItems(tx, businessA.id, racePo.id);
-    },
-    () =>
-      Promise.allSettled([
-        recordPurchaseOrderReceipt(prisma, ownerA, {
-          purchaseOrderId: racePo.id,
-          attemptKey: "receipt-race-a",
-          items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
-        }),
-        recordPurchaseOrderReceipt(prismaRace, ownerA, {
-          purchaseOrderId: racePo.id,
-          attemptKey: "receipt-race-b",
-          items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
-        }),
-      ]),
-    2,
-  );
+  const raceA = recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: racePo.id,
+    attemptKey: "receipt-race-a",
+    items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
+  });
+  const raceAPid = await waitForGrantedPurchaseOrderLock(prismaHold);
+  const raceB = recordPurchaseOrderReceipt(prismaRace, ownerA, {
+    purchaseOrderId: racePo.id,
+    attemptKey: "receipt-race-b",
+    items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
+  });
+  const raceBPid = await waitForBlockedByPid(prismaHold, raceAPid);
+  const raceResults = await Promise.allSettled([raceA, raceB]);
   const raceOk = raceResults.filter((row) => row.status === "fulfilled");
   const raceFailed = raceResults.filter((row) => row.status === "rejected");
   const raceLineAfter = await prisma.materialPurchaseOrderItem.findUnique({
@@ -749,7 +854,10 @@ try {
     raceOk.length === 1 &&
       raceFailed.length === 1 &&
       /remaining ordered quantity/i.test(String(raceFailed[0].reason?.message ?? "")) &&
-      Number(raceLineAfter.quantityReceived.toString()) === 2,
+      Number(raceLineAfter.quantityReceived.toString()) === 2 &&
+      Number(raceAPid) > 0 &&
+      Number(raceBPid) > 0 &&
+      Number(raceBPid) !== Number(raceAPid),
   );
 
   console.log("\nTEST — Shared list item and cancel preserve RECEIVED lines");
