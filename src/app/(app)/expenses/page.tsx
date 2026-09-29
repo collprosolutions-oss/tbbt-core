@@ -41,7 +41,7 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
-import { isStorageConfigured } from "@/lib/storage";
+import { expenseReceiptHref, isBusinessStorageConfigured } from "@/lib/business-storage";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -335,8 +335,8 @@ export default async function ExpensesPage({
       jobLabel: expense.job ? jobLabel(expense.job) : null,
       customerId: expense.customerId,
       customerName: expense.customer?.name ?? null,
-      hasReceipt: Boolean(expense.receiptUrl),
-      receiptUrl: expense.receiptUrl,
+      hasReceipt: Boolean(expense.receiptStoredAssetId),
+      receiptHref: expenseReceiptHref(expense.receiptStoredAssetId),
       reimbursable: expense.reimbursable,
       customerBillable: expense.customerBillable,
       reimbursementStatus: expense.reimbursementStatus,
@@ -453,7 +453,7 @@ export default async function ExpensesPage({
       projectedDetail: projection.unavailableReason,
     },
     filters,
-    storageConfigured: isStorageConfigured(),
+    storageConfigured: isBusinessStorageConfigured(),
     defaultDate: formatISODate(now, timeZone),
     page,
     totalPages,

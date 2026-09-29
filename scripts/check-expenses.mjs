@@ -31,7 +31,6 @@ const {
   EXPENSE_CATEGORIES,
 } = await import("@/lib/expenses");
 const {
-  attachExpenseReceipt,
   createExpense,
   reviewExpense,
   updateExpense,
@@ -375,24 +374,6 @@ try {
   check("Edit can attach a job for later job-cost math", linked.jobId === job.id);
   check("Edit can mark customer-billable without invoicing", linked.customerBillable === true);
 
-  const receipt = await attachExpenseReceipt(prisma, ownerA, {
-    expenseId: lumber.id,
-    receiptUrl: "https://blob.example.test/expense-receipts/a/lumber.jpg",
-  });
-  check("Owner can attach a receipt URL on their expense", receipt.receiptUrl?.includes("expense-receipts") === true);
-
-  await expectError(
-    "Business B cannot attach a receipt to Business A expense",
-    () =>
-      attachExpenseReceipt(prisma, ownerB, {
-        expenseId: lumber.id,
-        receiptUrl: "https://blob.example.test/leaked.jpg",
-      }),
-    (error) => error instanceof Error,
-  );
-  const lumberAfterLeak = await prisma.expense.findUnique({ where: { id: lumber.id } });
-  check("Cross-tenant receipt attach did not change A's receipt", lumberAfterLeak?.receiptUrl === receipt.receiptUrl);
-
   await expectError(
     "Business B cannot edit Business A expense",
     () =>
@@ -532,6 +513,15 @@ try {
   check("List can filter by job and vendor", pageSource.includes('name="job"') && pageSource.includes('name="vendor"'));
   check("Workspace can edit and void an expense", workspaceSource.includes("voidExpenseAction") && workspaceSource.includes("Edit"));
   check("Receipt header opens receipt mode, not a new expense", workspaceSource.includes('onAdd("receipt")'));
+  check(
+    "Workspace never links a public receipt URL",
+    !workspaceSource.includes("expense.receiptUrl") &&
+      workspaceSource.includes("expense.receiptHref") &&
+      workspaceSource.includes("Remove receipt") &&
+      workspaceSource.includes("does not infer tax treatment"),
+  );
+  const pageStorage = pageSource.includes("isBusinessStorageConfigured") && !pageSource.includes("isStorageConfigured");
+  check("Expenses page uses private business storage, not Vercel Blob", pageStorage);
 
   console.log(
     failures === 0 ? "\nAll Expenses checks passed." : `\n${failures} Expenses check(s) failed.`,

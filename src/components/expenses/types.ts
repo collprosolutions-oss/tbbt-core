@@ -37,7 +37,7 @@ export type ExpenseListItem = {
   customerId: string | null;
   customerName: string | null;
   hasReceipt: boolean;
-  receiptUrl: string | null;
+  receiptHref: string | null;
   reimbursable: boolean;
   customerBillable: boolean;
   reimbursementStatus: string;

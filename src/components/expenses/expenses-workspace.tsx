@@ -15,6 +15,7 @@ import {
   Upload,
 } from "lucide-react";
 import {
+  removeExpenseReceiptAction,
   reviewExpenseAction,
   setReimbursementStatusAction,
   voidExpenseAction,
@@ -635,15 +636,18 @@ function ExpenseDetails({
         {expense.paymentMethodLabel ? <p>Paid with: {expense.paymentMethodLabel}</p> : null}
         {expense.taxCategoryLabel ? <p>Tax: {expense.taxCategoryLabel}</p> : null}
         {expense.notes ? <p>{expense.notes}</p> : null}
-        {expense.hasReceipt && expense.receiptUrl ? (
-          <a href={expense.receiptUrl} target="_blank" rel="noreferrer" className="text-primary underline">
+        {expense.hasReceipt && expense.receiptHref ? (
+          <a href={expense.receiptHref} className="text-primary underline">
             View receipt
           </a>
         ) : (
           <p className="text-muted-foreground">
-            {storageConfigured ? "No receipt attached." : "No receipt. Storage is not connected."}
+            {storageConfigured ? "No receipt attached." : "No receipt. Private storage is not connected."}
           </p>
         )}
+        <p className="text-xs text-muted-foreground">
+          Receipts stay private. TBBT does not infer tax treatment from the file.
+        </p>
 
         <div className="flex flex-wrap gap-2">
           {onEdit ? (
@@ -659,6 +663,7 @@ function ExpenseDetails({
             </Button>
           ) : null}
         </div>
+        {expense.hasReceipt ? <RemoveReceiptForm expenseId={expense.id} /> : null}
 
         <form action={reviewAction} className="flex flex-wrap gap-2">
           <input type="hidden" name="expenseId" value={expense.id} />
@@ -718,6 +723,27 @@ function ExpenseDetails({
         {voidState.message ? <p className="text-sm text-emerald-400">{voidState.message}</p> : null}
       </CardContent>
     </Card>
+  );
+}
+
+function RemoveReceiptForm({ expenseId }: { expenseId: string }) {
+  const [state, action, pending] = useActionState(removeExpenseReceiptAction, {} as ExpenseActionState);
+  return (
+    <form
+      action={action}
+      onSubmit={(event) => {
+        if (!window.confirm("Remove this receipt? The recorded expense amount does not change.")) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <input type="hidden" name="expenseId" value={expenseId} />
+      <Button type="submit" size="sm" variant="outline" disabled={pending}>
+        Remove receipt
+      </Button>
+      {state.error ? <p className="mt-2 text-sm text-destructive">{state.error}</p> : null}
+      {state.message ? <p className="mt-2 text-sm text-emerald-400">{state.message}</p> : null}
+    </form>
   );
 }
 

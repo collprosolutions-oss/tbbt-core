@@ -62,7 +62,6 @@ export type CreateExpenseInput = {
   recurringNote?: string;
   mileageMiles?: string;
   notes?: string;
-  receiptUrl?: string;
   customerBillable?: boolean;
 };
 
@@ -208,7 +207,6 @@ async function resolveExpenseFields(db: Db, access: BusinessAccess, input: Creat
     recurringNote: input.recurringNote?.trim() || null,
     mileageMiles,
     notes: input.notes?.trim() || null,
-    receiptUrl: input.receiptUrl?.trim() || null,
   };
 }
 
@@ -232,7 +230,6 @@ export async function createExpense(db: Db, access: BusinessAccess, input: Creat
       purchaserMembershipId: fields.purchaserMembershipId,
       jobId: fields.jobId,
       customerId: fields.customerId,
-      receiptUrl: fields.receiptUrl,
       reimbursable: fields.reimbursable,
       reimbursementStatus: defaultReimbursementStatus(fields.reimbursable),
       customerBillable: fields.customerBillable,
@@ -372,12 +369,12 @@ export async function setReimbursementStatus(
 export async function attachExpenseReceipt(
   db: Db,
   access: BusinessAccess,
-  input: { expenseId: string; receiptUrl: string },
+  input: { expenseId: string; storedAssetId: string },
 ) {
   await requireExpenseMutation(db, access);
-  const receiptUrl = input.receiptUrl.trim();
-  if (!receiptUrl) {
-    throw new ExpenseError("A receipt URL is required.");
+  const storedAssetId = input.storedAssetId.trim();
+  if (!storedAssetId) {
+    throw new ExpenseError("A private receipt file is required.");
   }
 
   const expense = requireActiveExpense(
@@ -388,10 +385,63 @@ export async function attachExpenseReceipt(
     ),
   );
 
-  return db.expense.update({
-    where: { id: expense.id },
-    data: { receiptUrl },
+  const asset = access.assertOwned(
+    await db.storedAsset.findFirst({
+      where: { id: storedAssetId, ...access.scope, deletedAt: null },
+    }),
+  );
+  if (asset.status !== "READY" || asset.visibility !== "PRIVATE" || asset.publicPath) {
+    throw new ExpenseError("That file is not a private receipt ready to attach.");
+  }
+  if (asset.category !== "ATTACHMENT" || asset.purpose !== "EXPENSE_RECEIPT") {
+    throw new ExpenseError("Only a private expense receipt can be attached here.");
+  }
+
+  const other = await db.expense.findFirst({
+    where: {
+      receiptStoredAssetId: asset.id,
+      businessId: access.businessId,
+      NOT: { id: expense.id },
+    },
+    select: { id: true },
   });
+  if (other) {
+    throw new ExpenseError("That receipt is already attached to another expense.");
+  }
+
+  const previousStoredAssetId = expense.receiptStoredAssetId;
+  const updated = await db.expense.update({
+    where: { id: expense.id },
+    data: {
+      receiptStoredAssetId: asset.id,
+      receiptUrl: null,
+    },
+  });
+  return { expense: updated, previousStoredAssetId };
+}
+
+export async function removeExpenseReceipt(
+  db: Db,
+  access: BusinessAccess,
+  input: { expenseId: string },
+) {
+  await requireExpenseMutation(db, access);
+  const expense = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
+  );
+  const previousStoredAssetId = expense.receiptStoredAssetId;
+  const updated = await db.expense.update({
+    where: { id: expense.id },
+    data: {
+      receiptStoredAssetId: null,
+      receiptUrl: null,
+    },
+  });
+  return { expense: updated, previousStoredAssetId };
 }
 
 export async function loadOwnedExpense(db: Db, access: BusinessAccess, expenseId: string) {

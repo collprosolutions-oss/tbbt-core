@@ -3,12 +3,19 @@
 /**
  * Expense server actions. Tenant scope always comes from
  * requireBusinessAccess() (session workspace), never from a client
- * businessId. OWNER/ADMIN only (MANAGE_EXPENSES).
+ * businessId. OWNER/ADMIN only (MANAGE_EXPENSES). Receipts use private
+ * managed storage — never a public file URL, and never used to infer
+ * tax treatment.
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
+import { isBusinessStorageConfigured } from "@/lib/business-storage/config";
 import {
-  attachExpenseReceipt,
+  inspectExpenseReceiptUpload,
+  putExpenseReceiptFromBytes,
+  removeExpenseReceiptAttachment,
+} from "@/lib/business-storage/expense-receipts";
+import {
   createExpense,
   expenseErrorMessage,
   reviewExpense,
@@ -17,12 +24,6 @@ import {
   voidExpense,
 } from "@/lib/expense-ops";
 import { prisma } from "@/lib/prisma";
-import {
-  isStorageConfigured,
-  isSupportedImageMimeType,
-  MAX_JOB_PHOTO_UPLOAD_BYTES,
-  uploadExpenseReceipt,
-} from "@/lib/storage";
 
 export type ExpenseActionState = {
   error?: string;
@@ -42,28 +43,35 @@ function revalidateExpenses() {
   revalidatePath("/expenses");
 }
 
-async function maybeUploadReceipt(accessBusinessId: string, expenseId: string, file: FormDataEntryValue | null) {
+async function maybeAttachReceipt(
+  access: Awaited<ReturnType<typeof requireOperatingBusinessAccess>>,
+  expenseId: string,
+  file: FormDataEntryValue | null,
+) {
   if (!(file instanceof File) || file.size === 0) {
     return null;
   }
-  if (!isSupportedImageMimeType(file.type)) {
-    throw new Error("Unsupported receipt type. Upload a JPEG, PNG, WebP, GIF, or HEIC image.");
+  const inspection = inspectExpenseReceiptUpload({
+    type: file.type,
+    name: file.name,
+    size: file.size,
+  });
+  if (!inspection.ok) {
+    throw new Error(inspection.error);
   }
-  if (file.size > MAX_JOB_PHOTO_UPLOAD_BYTES) {
-    const maxMb = (MAX_JOB_PHOTO_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
-    throw new Error(`That receipt is too large. The limit is ${maxMb} MB.`);
-  }
-  if (!isStorageConfigured()) {
+  if (!isBusinessStorageConfigured()) {
     throw new Error(
-      "Receipt storage isn't set up yet. Ask an admin to connect Vercel Blob (BLOB_READ_WRITE_TOKEN).",
+      "Receipt storage isn't set up yet. Ask an admin to connect private business file storage.",
     );
   }
-  const uploaded = await uploadExpenseReceipt({
-    businessId: accessBusinessId,
+  const body = Buffer.from(await file.arrayBuffer());
+  await putExpenseReceiptFromBytes({ db: prisma }, access, {
     expenseId,
-    file,
+    originalFilename: inspection.fileName,
+    mimeType: inspection.mimeType,
+    body,
   });
-  return uploaded.url;
+  return true;
 }
 
 export async function createExpenseAction(
@@ -93,10 +101,7 @@ export async function createExpenseAction(
 
     const file = formData.get("receipt");
     if (file instanceof File && file.size > 0) {
-      const receiptUrl = await maybeUploadReceipt(access.businessId, expense.id, file);
-      if (receiptUrl) {
-        await attachExpenseReceipt(prisma, access, { expenseId: expense.id, receiptUrl });
-      }
+      await maybeAttachReceipt(access, expense.id, file);
     }
 
     revalidateExpenses();
@@ -224,14 +229,29 @@ export async function attachExpenseReceiptAction(
     const access = await requireOperatingBusinessAccess();
     const expenseId = readString(formData, "expenseId");
     if (!expenseId) return { error: "That expense could not be found." };
-    const receiptUrl = await maybeUploadReceipt(access.businessId, expenseId, formData.get("receipt"));
-    if (!receiptUrl) {
-      return { error: "Choose a receipt image to upload." };
+    const attached = await maybeAttachReceipt(access, expenseId, formData.get("receipt"));
+    if (!attached) {
+      return { error: "Choose a receipt file to upload." };
     }
-    await attachExpenseReceipt(prisma, access, { expenseId, receiptUrl });
     revalidateExpenses();
     return { message: "Receipt attached." };
   } catch (error) {
     return { error: expenseErrorMessage(error, "Could not attach that receipt.") };
+  }
+}
+
+export async function removeExpenseReceiptAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    if (!expenseId) return { error: "That expense could not be found." };
+    await removeExpenseReceiptAttachment({ db: prisma }, access, expenseId);
+    revalidateExpenses();
+    return { message: "Receipt removed." };
+  } catch (error) {
+    return { error: expenseErrorMessage(error, "Could not remove that receipt.") };
   }
 }
