@@ -2,16 +2,21 @@
  * P1-1 password recovery + signed-in change-password proofs.
  *
  * Imports the real ops from src/lib/password-reset.ts (no next/headers).
- * Mail is injected so Resend is never called.
+ * Mail is injected so Resend is never called. Live proofs use a unique
+ * local disposable database; remote DATABASE_URL hosts are refused
+ * before Prisma, db push, or DROP.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-password-recovery.mjs
  */
-import { createRequire, register } from "node:module";
-import { spawnSync } from "node:child_process";
+import { register } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import bcrypt from "bcryptjs";
+import {
+  assertLocalDatabaseUrl,
+  openDisposableTestDatabase,
+} from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -34,8 +39,6 @@ const {
   CAPABILITIES,
   roleHasCapability,
 } = await import("@/lib/authorization");
-
-const require = createRequire(import.meta.url);
 
 let passed = 0;
 let failed = 0;
@@ -202,24 +205,13 @@ if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "password-recovery disposable database");
 
-const testDbName = "tbbt_password_recovery_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for password-recovery test database.");
-  process.exit(push.status ?? 1);
-}
-
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_password_recovery",
+});
+const prisma = session.prisma;
 
 async function snapshotAuthz(userId, businessId) {
   const user = await prisma.user.findUnique({
@@ -764,20 +756,7 @@ try {
       (await prisma.membership.findFirst({ where: { userId: member.id } })).role === "MEMBER",
   );
 } finally {
-  await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
-    );
-  } catch {
-    /* ignore */
-  }
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  await session.cleanup();
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

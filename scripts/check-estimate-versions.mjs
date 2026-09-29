@@ -3,9 +3,9 @@
  * src/lib/estimate-version.ts, src/app/actions/estimate.ts sendEstimate(),
  * and src/app/actions/public-estimate.ts approveEstimate()).
  *
- * Runs against a disposable sibling Postgres database (created by
- * `prisma db push` and dropped afterward), matching the existing
- * scripts/check-isolation.mjs pattern.
+ * Runs against a unique local disposable Postgres database created by
+ * scripts/disposable-test-database.mjs. Remote DATABASE_URL hosts are
+ * refused before Prisma, db push, or DROP.
  *
  * This script imports the real production snapshot helpers from
  * src/lib/estimate-version.ts directly (via Node's experimental TypeScript
@@ -21,8 +21,11 @@
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import {
+  assertLocalDatabaseUrl,
+  openDisposableTestDatabase,
+} from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -37,27 +40,16 @@ if (!baseUrl) {
   );
   process.exit(1);
 }
-
-const testDbName = "tbbt_estimate_version_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-
-if (push.status !== 0) {
-  console.error("Failed to push schema for estimate-version test database.");
-  process.exit(push.status ?? 1);
-}
+assertLocalDatabaseUrl(baseUrl, "estimate-version disposable database");
 
 const require = createRequire(import.meta.url);
-const { PrismaClient, Prisma } = require("@prisma/client");
+const { Prisma } = require("@prisma/client");
 
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_estimate_version",
+});
+const prisma = session.prisma;
 
 let failures = 0;
 function check(label, condition) {
@@ -441,13 +433,7 @@ try {
       : `\n${failures} estimate-version check(s) failed.`,
   );
 } finally {
-  await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  await session.cleanup();
 }
 
 process.exit(failures === 0 ? 0 : 1);

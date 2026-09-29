@@ -6,12 +6,14 @@
  * Preview and local `npm run build` skip migrate. Production migrate
  * runs only on the collpro-reno Vercel project, and only when local
  * migration folders are not already recorded in `_prisma_migrations`.
- * Prisma locking stays on for real pending migrations.
+ * Unavailable or checksum-divergent applied history fails closed
+ * before deploy. Prisma locking stays on for real pending migrations.
  */
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  listLocalMigrationChecksums,
   listLocalMigrationNames,
   planProductionMigrateDeploy,
   shouldRunProductionMigrate,
@@ -25,7 +27,7 @@ async function readAppliedMigrationRows() {
   const prisma = new PrismaClient();
   try {
     return await prisma.$queryRaw`
-      SELECT "migration_name", "finished_at", "rolled_back_at"
+      SELECT "migration_name", "checksum", "finished_at", "rolled_back_at"
       FROM "_prisma_migrations"
     `;
   } finally {
@@ -47,6 +49,7 @@ async function main() {
   }
 
   const localNames = listLocalMigrationNames(migrationsDir);
+  const localChecksums = listLocalMigrationChecksums(migrationsDir);
   let appliedRows;
   let appliedQueryError = false;
   try {
@@ -54,16 +57,19 @@ async function main() {
   } catch (error) {
     appliedQueryError = true;
     const detail = error instanceof Error ? error.message : String(error);
-    console.log(
-      `Could not read _prisma_migrations (${detail}). Falling through to prisma migrate deploy.`,
-    );
+    console.error(`Could not read _prisma_migrations (${detail}).`);
   }
 
   const plan = planProductionMigrateDeploy({
     localNames,
+    localChecksums,
     appliedRows,
     appliedQueryError,
   });
+  if (plan.blocked) {
+    console.error(`Refusing prisma migrate deploy (${plan.reason}).`);
+    process.exit(1);
+  }
   if (!plan.run) {
     console.log(`Skipping prisma migrate deploy (${plan.reason}).`);
     process.exit(0);

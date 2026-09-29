@@ -9,8 +9,10 @@ import { fileURLToPath } from "node:url";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
+  listLocalMigrationChecksums,
   listLocalMigrationNames,
   planProductionMigrateDeploy,
+  prismaMigrationChecksum,
   shouldRunProductionMigrate,
 } from "./production-migrate-policy.mjs";
 
@@ -48,6 +50,14 @@ check(
     runner.includes("_prisma_migrations") &&
     runner.includes("Skipping prisma migrate deploy (${plan.reason})") &&
     !runner.includes("prisma migrate status"),
+);
+check(
+  "Unavailable or divergent applied history fails closed before deploy",
+  runner.includes("listLocalMigrationChecksums") &&
+    runner.includes('"checksum"') &&
+    runner.includes("Refusing prisma migrate deploy (${plan.reason})") &&
+    runner.includes("plan.blocked") &&
+    !runner.includes("Falling through to prisma migrate deploy"),
 );
 check(
   "Intake measurement migration is still additive",
@@ -873,11 +883,12 @@ check(
   }).run === false,
 );
 
-const localNames = listLocalMigrationNames(
-  fileURLToPath(new URL("../prisma/migrations", import.meta.url)),
-);
+const migrationsDir = fileURLToPath(new URL("../prisma/migrations", import.meta.url));
+const localNames = listLocalMigrationNames(migrationsDir);
+const localChecksums = listLocalMigrationChecksums(migrationsDir);
 const appliedCurrent = localNames.map((migration_name) => ({
   migration_name,
+  checksum: localChecksums[migration_name],
   finished_at: "2026-09-01T00:00:00.000Z",
   rolled_back_at: null,
 }));
@@ -888,30 +899,58 @@ check(
     !localNames.includes("migration_lock.toml"),
 );
 check(
+  "Local checksums are Prisma sha256 hex of migration.sql bytes",
+  localChecksums[localNames[0]] ===
+    prismaMigrationChecksum(
+      readFileSync(new URL(`../prisma/migrations/${localNames[0]}/migration.sql`, import.meta.url)),
+    ) && /^[0-9a-f]{64}$/.test(localChecksums[localNames[0]]),
+);
+check(
   "Code-only production skips migrate deploy when _prisma_migrations is current",
-  planProductionMigrateDeploy({ localNames, appliedRows: appliedCurrent }).run === false &&
-    planProductionMigrateDeploy({ localNames, appliedRows: appliedCurrent }).reason ===
-      "no pending migrations",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: appliedCurrent,
+  }).run === false &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: appliedCurrent,
+    }).reason === "no pending migrations" &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: appliedCurrent,
+    }).blocked !== true,
 );
 check(
   "A real pending migration still runs prisma migrate deploy",
   planProductionMigrateDeploy({
     localNames: [...localNames, "20990101000000_future_schema"],
+    localChecksums,
     appliedRows: appliedCurrent,
   }).run === true &&
     planProductionMigrateDeploy({
       localNames: [...localNames, "20990101000000_future_schema"],
+      localChecksums,
       appliedRows: appliedCurrent,
-    }).reason.includes("20990101000000_future_schema"),
+    }).reason.includes("20990101000000_future_schema") &&
+    planProductionMigrateDeploy({
+      localNames: [...localNames, "20990101000000_future_schema"],
+      localChecksums,
+      appliedRows: appliedCurrent,
+    }).blocked !== true,
 );
 check(
   "Unfinished _prisma_migrations rows still run migrate deploy",
   planProductionMigrateDeploy({
     localNames,
+    localChecksums,
     appliedRows: [
       ...appliedCurrent.slice(0, -1),
       {
         migration_name: localNames.at(-1),
+        checksum: localChecksums[localNames.at(-1)],
         finished_at: null,
         rolled_back_at: null,
       },
@@ -919,13 +958,99 @@ check(
   }).run === true,
 );
 check(
-  "Unreadable _prisma_migrations falls through to migrate deploy instead of skipping",
+  "Unreadable _prisma_migrations fails closed before migrate deploy",
   planProductionMigrateDeploy({
     localNames,
+    localChecksums,
     appliedRows: undefined,
     appliedQueryError: true,
-  }).run === true &&
-    planProductionMigrateDeploy({ localNames }).run === true,
+  }).run === false &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+    }).blocked === true &&
+    planProductionMigrateDeploy({ localNames, localChecksums }).blocked === true &&
+    planProductionMigrateDeploy({ localNames, localChecksums }).run === false,
+);
+check(
+  "Applied migration missing locally fails closed before deploy",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: [
+      ...appliedCurrent,
+      {
+        migration_name: "20250101000000_applied_only_in_database",
+        checksum: "a".repeat(64),
+        finished_at: "2026-09-01T00:00:00.000Z",
+        rolled_back_at: null,
+      },
+    ],
+  }).run === false &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: [
+        ...appliedCurrent,
+        {
+          migration_name: "20250101000000_applied_only_in_database",
+          checksum: "a".repeat(64),
+          finished_at: "2026-09-01T00:00:00.000Z",
+          rolled_back_at: null,
+        },
+      ],
+    }).blocked === true &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: [
+        ...appliedCurrent,
+        {
+          migration_name: "20250101000000_applied_only_in_database",
+          checksum: "a".repeat(64),
+          finished_at: "2026-09-01T00:00:00.000Z",
+          rolled_back_at: null,
+        },
+      ],
+    }).reason.includes("20250101000000_applied_only_in_database"),
+);
+check(
+  "Same migration name with a divergent checksum fails closed before deploy",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: [
+      {
+        ...appliedCurrent[0],
+        checksum: "0".repeat(64),
+      },
+      ...appliedCurrent.slice(1),
+    ],
+  }).run === false &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: [
+        {
+          ...appliedCurrent[0],
+          checksum: "0".repeat(64),
+        },
+        ...appliedCurrent.slice(1),
+      ],
+    }).blocked === true &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: [
+        {
+          ...appliedCurrent[0],
+          checksum: "0".repeat(64),
+        },
+        ...appliedCurrent.slice(1),
+      ],
+    }).reason.includes(localNames[0]),
 );
 
 const financialIntelligenceMigration = readFileSync(

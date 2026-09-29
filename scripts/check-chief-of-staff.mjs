@@ -1,15 +1,20 @@
 /**
  * AI Chief of Staff PR1 proofs.
  *
+ * Live proofs use a unique local disposable database. Remote
+ * DATABASE_URL hosts are refused before Prisma, db push, or DROP.
+ *
  * Run with:
  *   node --experimental-strip-types scripts/check-chief-of-staff.mjs
  */
 import { register } from "node:module";
-import { createRequire } from "node:module";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import {
+  assertLocalDatabaseUrl,
+  openDisposableTestDatabase,
+} from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -72,21 +77,13 @@ if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "chief-of-staff disposable database");
 
-const testDbName = "tbbt_chief_of_staff_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) process.exit(push.status ?? 1);
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_chief_of_staff",
+});
+const prisma = session.prisma;
 
 let failures = 0;
 function check(label, condition) {
@@ -1788,7 +1785,7 @@ try {
   console.error(error);
   failures += 1;
 } finally {
-  await prisma.$disconnect();
+  await session.cleanup();
 }
 
 console.log(

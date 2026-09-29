@@ -79,6 +79,7 @@
     "test:client-portal-excellence": "node --experimental-strip-types scripts/check-client-portal-excellence.mjs",
     "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
+    "test:disposable-test-database": "node scripts/check-disposable-test-database.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:intake-conditionals": "node --experimental-strip-types scripts/check-intake-conditionals.mjs",
     "test:intake-snapshot-publish": "node --experimental-strip-types scripts/check-intake-snapshot-publish.mjs",
