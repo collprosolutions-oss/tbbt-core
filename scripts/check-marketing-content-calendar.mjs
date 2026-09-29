@@ -126,20 +126,11 @@ if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${create
   console.warn(createDb.stderr || createDb.stdout);
 }
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for marketing content calendar test database.");
-  process.exit(push.status ?? 1);
-}
-
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
+let prisma;
+const racingClients = [];
 let failures = 0;
 function check(label, condition) {
   if (condition) {
@@ -161,20 +152,32 @@ function makeAccess(businessId, role, membershipId) {
   };
 }
 
-function holdPlanClaim(db) {
-  let release;
+function createRacingClient() {
+  if (!isLocalDatabaseHost(testUrl)) {
+    throw new Error(
+      "Refusing to open a marketing content calendar race client unless DATABASE_URL is localhost or 127.0.0.1.",
+    );
+  }
+  const client = new PrismaClient({ datasourceUrl: testUrl });
+  racingClients.push(client);
+  return client;
+}
+
+function holdMarketingContentUpdateMany(match) {
+  let release = () => {};
   const gate = new Promise((resolve) => {
     release = resolve;
   });
-  let notifyReached;
+  let notifyReached = () => {};
   const reached = new Promise((resolve) => {
     notifyReached = resolve;
   });
-  const racingDb = db.$extends({
+  const client = createRacingClient();
+  const racingDb = client.$extends({
     query: {
       marketingContent: {
         async updateMany({ args, query }) {
-          if (args.data?.plannedFor) {
+          if (match(args)) {
             notifyReached();
             await gate;
           }
@@ -184,6 +187,76 @@ function holdPlanClaim(db) {
     },
   });
   return { racingDb, reached, release };
+}
+
+function holdPlanClaim() {
+  return holdMarketingContentUpdateMany((args) => Boolean(args.data?.plannedFor));
+}
+
+function holdStudioEditClaim() {
+  return holdMarketingContentUpdateMany((args) => args.data != null && !("plannedFor" in args.data));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function awaitBarrierReached(hold, handled, label) {
+  const outcome = await Promise.race([
+    hold.reached.then(() => "reached"),
+    Promise.resolve(handled).then(() => "settled"),
+    delay(8000).then(() => "timeout"),
+  ]);
+  if (outcome === "reached") return;
+  if (outcome === "timeout") {
+    throw new Error(`${label} did not reach the held write within 8s`);
+  }
+  const [result] = await handled;
+  if (result.status === "rejected") {
+    throw result.reason;
+  }
+  throw new Error(`${label} finished before reaching the held write`);
+}
+
+async function waitForTestDbLock(timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await prisma.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND wait_event_type = 'Lock'
+        AND pid <> pg_backend_pid()
+    `;
+    if (rows.length > 0) return true;
+    await delay(50);
+  }
+  return false;
+}
+
+function holdRowForUpdate(contentId) {
+  const client = createRacingClient();
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let notifyHeld = () => {};
+  const held = new Promise((resolve) => {
+    notifyHeld = resolve;
+  });
+  const finished = client.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "MarketingContent" WHERE id = ${contentId} FOR UPDATE
+      `;
+      notifyHeld();
+      await gate;
+    },
+    { timeout: 20000, maxWait: 10000 },
+  );
+  return { held, release, handled: Promise.allSettled([finished]) };
 }
 
 async function expectError(label, run, predicate) {
@@ -196,6 +269,16 @@ async function expectError(label, run, predicate) {
 }
 
 try {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    throw new Error("Failed to push schema for marketing content calendar test database.");
+  }
+  prisma = new PrismaClient({ datasourceUrl: testUrl });
+
   console.log("\nSTATIC — Content calendar helpers and limits");
   check("Calendar limit is 50", STUDIO_CONTENT_CALENDAR_LIMIT === 50);
   check("OWNER can plan a publication day", canPlanStudioPublicationDay("OWNER") === true);
@@ -777,13 +860,14 @@ try {
     jobId: job.id,
     photoIds: [photo.id],
   });
-  const hold = holdPlanClaim(prisma);
+  const hold = holdPlanClaim();
   const stalePlan = planStudioPublicationDay(hold.racingDb, ownerA, {
     contentId: racePackage.id,
     plannedFor: "2026-11-01",
     expectedUpdatedAt: racePackage.updatedAt,
   });
-  await hold.reached;
+  const stalePlanHandled = Promise.allSettled([stalePlan]);
+  await awaitBarrierReached(hold, stalePlanHandled, "stale concurrent plan");
   const winner = await planStudioPublicationDay(prisma, ownerA, {
     contentId: racePackage.id,
     plannedFor: "2026-11-03",
@@ -834,13 +918,14 @@ try {
     jobId: job.id,
     photoIds: [photo.id],
   });
-  const editHold = holdPlanClaim(prisma);
+  const editHold = holdPlanClaim();
   const staleEditPlan = planStudioPublicationDay(editHold.racingDb, ownerA, {
     contentId: editRace.id,
     plannedFor: "2026-12-01",
     expectedUpdatedAt: editRace.updatedAt,
   });
-  await editHold.reached;
+  const staleEditPlanHandled = Promise.allSettled([staleEditPlan]);
+  await awaitBarrierReached(editHold, staleEditPlanHandled, "stale plan after edit");
   const editWon = await updateMarketingStudioPackage(prisma, adminA, {
     contentId: editRace.id,
     title: "Edit wins before plan",
@@ -858,6 +943,65 @@ try {
   check(
     "Winning edit does not restore or assign a planned day",
     afterEditRace?.title === "Edit wins before plan" && afterEditRace.plannedFor == null,
+  );
+
+  const planVsEdit = await createMarketingStudioPackage(prisma, adminA, {
+    contentType: "COMPLETED_JOB",
+    title: "Plan versus edit",
+    body: "Recorded faucet repair only.",
+    jobId: job.id,
+    photoIds: [photo.id],
+  });
+  const planHoldEdit = holdStudioEditClaim();
+  const staleEdit = updateMarketingStudioPackage(planHoldEdit.racingDb, adminA, {
+    contentId: planVsEdit.id,
+    title: "Stale edit after plan",
+  });
+  const staleEditHandled = Promise.allSettled([staleEdit]);
+  await awaitBarrierReached(planHoldEdit, staleEditHandled, "stale studio edit");
+  const rowLock = holdRowForUpdate(planVsEdit.id);
+  let planWon = null;
+  try {
+    const lockOutcome = await Promise.race([
+      rowLock.held.then(() => "held"),
+      rowLock.handled.then(() => "settled"),
+      delay(8000).then(() => "timeout"),
+    ]);
+    if (lockOutcome !== "held") {
+      throw new Error("Row lock for the opposite edit-versus-plan race was not acquired.");
+    }
+    const planWinnerClient = createRacingClient();
+    const planWinner = planStudioPublicationDay(planWinnerClient, ownerA, {
+      contentId: planVsEdit.id,
+      plannedFor: "2026-12-15",
+      expectedUpdatedAt: planVsEdit.updatedAt,
+    });
+    const planWinnerHandled = Promise.allSettled([planWinner]);
+    check(
+      "Second contender waits on a row lock in the test database",
+      await waitForTestDbLock(3000),
+    );
+    rowLock.release();
+    await rowLock.handled;
+    const planWinnerResult = await planWinnerHandled;
+    planWon = planWinnerResult[0]?.status === "fulfilled" ? planWinnerResult[0].value : null;
+    check("Plan commits first while studio edit is held", planWon?.plannedDay === "2026-12-15");
+  } finally {
+    rowLock.release();
+  }
+  planHoldEdit.release();
+  await expectError(
+    "Stale studio edit fails after a plan wins",
+    () => staleEdit,
+    (error) => error instanceof MarketingError && error.message === STUDIO_PACKAGE_STALE_MESSAGE,
+  );
+  const afterPlanWins = await prisma.marketingContent.findFirst({
+    where: { id: planVsEdit.id, businessId: businessA.id },
+  });
+  check(
+    "Winning plan keeps plannedFor after the stale edit",
+    afterPlanWins?.title === "Plan versus edit" &&
+      afterPlanWins.plannedFor?.getTime() === planWon?.plannedFor.getTime(),
   );
 
   const missingId = randomUUID();
@@ -1013,8 +1157,10 @@ try {
       ? "\nAll marketing content calendar checks passed."
       : `\n${failures} marketing content calendar check(s) failed.`,
   );
+} catch (error) {
+  console.error(error);
+  failures += 1;
 } finally {
-  await prisma.$disconnect();
   if (!isLocalDatabaseHost(baseUrl)) {
     console.error("Refusing to terminate or drop a non-local marketing content calendar test database.");
     process.exit(1);
@@ -1026,6 +1172,20 @@ try {
     );
   } catch {
     /* ignore */
+  }
+  for (const client of racingClients) {
+    try {
+      await client.$disconnect();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (prisma) {
+    try {
+      await prisma.$disconnect();
+    } catch {
+      /* ignore */
+    }
   }
   try {
     await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
