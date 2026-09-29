@@ -384,6 +384,7 @@ model Business {
   membershipSkills         MembershipSkill[]
   membershipWeeklyAvailability MembershipWeeklyAvailability[]
   membershipAvailabilityExceptions MembershipAvailabilityException[]
+  membershipAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[]
   fillInBenchWorkers       FillInBenchWorker[]
   workforceOutreachTasks   WorkforceOutreachTask[]
   suppliers                  Supplier[]
@@ -618,6 +619,8 @@ model Membership {
   workforceSkills                 MembershipSkill[]
   weeklyAvailability              MembershipWeeklyAvailability[]
   availabilityExceptions          MembershipAvailabilityException[]
+  availabilityExceptionRequests   MembershipAvailabilityExceptionRequest[]
+  decidedAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[] @relation("AvailabilityRequestDecider")
   fillInBenchWorkers              FillInBenchWorker[]
   workforceOutreachCreated        WorkforceOutreachTask[]   @relation("WorkforceOutreachCreator")
   workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
@@ -3661,6 +3664,37 @@ model MembershipWeeklyAvailability {
 
   @@unique([membershipId, weekday])
   @@index([businessId])
+}
+
+/// Worker-requested dated availability exception or time off.
+/// PENDING until an OWNER accepts or declines. Only ACCEPT writes
+/// MembershipAvailabilityException. Decline does not change recorded
+/// availability. These rows never cancel, reassign, or message Jobs.
+model MembershipAvailabilityExceptionRequest {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  /// Business-timezone civil date. YYYY-MM-DD. Not a UTC instant.
+  date         String
+  /// AVAILABLE | UNAVAILABLE
+  kind         String
+  startMinutes Int?
+  endMinutes   Int?
+  note         String   @default("")
+  /// PENDING | ACCEPTED | DECLINED
+  status       String   @default("PENDING")
+  requestedAt  DateTime @default(now())
+  decidedAt    DateTime?
+  decidedByMembershipId String?
+  updatedAt    DateTime @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  decidedBy  Membership? @relation("AvailabilityRequestDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([membershipId, date])
+  @@index([decidedByMembershipId])
 }
 
 /// One-day availability exception for a membership. YYYY-MM-DD.

@@ -1337,6 +1337,38 @@ check(
       localNames.indexOf("20260928200000_estimate_line_template_archive"),
 );
 
+const availabilityRequestMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010000_workforce_availability_exception_request/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const availabilityRequestOps = readFileSync(
+  new URL("../src/lib/workforce-availability-request-ops.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce availability-request migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(availabilityRequestMigration) &&
+    availabilityRequestMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MembershipAvailabilityExceptionRequest"',
+    ) &&
+    availabilityRequestMigration.includes("WHERE \"status\" = 'PENDING'") &&
+    availabilityRequestMigration.includes("IF NOT EXISTS") &&
+    localNames.includes("20260929010000_workforce_availability_exception_request") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_workforce_availability_exception_request"),
+);
+check(
+  "Availability-request ops do not run request-time DDL and do not mutate Jobs",
+  !availabilityRequestOps.includes("$executeRawUnsafe") &&
+    !availabilityRequestOps.includes("CREATE TABLE") &&
+    !availabilityRequestOps.includes("ALTER TABLE") &&
+    !availabilityRequestOps.includes("assignedMembershipId:") &&
+    !availabilityRequestOps.includes("scheduledAt:"),
+);
+
 check(
   "OWNER studio reminder SMS destination migration is additive and after #204",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&

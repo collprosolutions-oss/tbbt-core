@@ -52,6 +52,38 @@ export type OutreachTaskKind = (typeof OUTREACH_TASK_KINDS)[number];
 export const OUTREACH_TASK_STATUSES = ["DRAFT", "APPROVED", "DISMISSED", "DONE"] as const;
 export type OutreachTaskStatus = (typeof OUTREACH_TASK_STATUSES)[number];
 
+export const AVAILABILITY_REQUEST_STATUSES = ["PENDING", "ACCEPTED", "DECLINED"] as const;
+export type AvailabilityRequestStatus = (typeof AVAILABILITY_REQUEST_STATUSES)[number];
+
+export const AVAILABILITY_REQUEST_DECISIONS = ["ACCEPT", "DECLINE"] as const;
+export type AvailabilityRequestDecision = (typeof AVAILABILITY_REQUEST_DECISIONS)[number];
+
+export const AVAILABILITY_REQUEST_STALE_MESSAGE =
+  "That request already changed. Refresh and decide again. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_PENDING_EXISTS_MESSAGE =
+  "You already have a pending request for that date. Wait for the owner to decide, or pick another date.";
+
+export const AVAILABILITY_REQUEST_INACTIVE_MESSAGE =
+  "That worker is no longer active on this team. TBBT did not change recorded availability or any job.";
+
+export type AvailabilityExceptionRequestRecord = {
+  id: string;
+  businessId: string;
+  membershipId: string;
+  workerName: string;
+  date: string;
+  kind: "AVAILABLE" | "UNAVAILABLE";
+  startMinutes: number | null;
+  endMinutes: number | null;
+  note: string;
+  status: AvailabilityRequestStatus;
+  requestedAt: Date;
+  decidedAt: Date | null;
+  decidedByMembershipId: string | null;
+  updatedAt: Date;
+};
+
 export const DEFAULT_FIRST_APPOINTMENT_MODE: AppointmentMode = "EXACT";
 export const DEFAULT_LATER_APPOINTMENT_MODE: AppointmentMode = "WINDOW";
 export const DEFAULT_ARRIVAL_WINDOW_MINUTES = 120;
@@ -312,6 +344,23 @@ export function requireIsoDate(value: string | null | undefined): string {
     throw new WorkforceValidationError("Choose a valid date.");
   }
   return value;
+}
+
+export function requireAvailabilityRequestDecision(
+  value: string | null | undefined,
+): AvailabilityRequestDecision {
+  if (!(AVAILABILITY_REQUEST_DECISIONS as readonly string[]).includes(value ?? "")) {
+    throw new WorkforceValidationError("Choose accept or decline.");
+  }
+  return value as AvailabilityRequestDecision;
+}
+
+export function parseExpectedUpdatedAt(value: string | null | undefined): Date | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 const OUTREACH_ATTEMPT_ID_PATTERN =
