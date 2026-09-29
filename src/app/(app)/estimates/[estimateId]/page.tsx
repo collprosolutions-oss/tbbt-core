@@ -48,6 +48,7 @@ import { RemoveLineItemButton } from "@/components/estimates/remove-line-item-bu
 import { LegacyUnversionedSentNotice } from "@/components/estimates/legacy-unversioned-sent-notice";
 import { SendEstimateButton } from "@/components/estimates/send-estimate-button";
 import { WaiveLaborMinimumButton } from "@/components/estimates/waive-labor-minimum-button";
+import { EstimateOptionsPanel } from "@/components/estimates/estimate-options-panel";
 import { CreateJobButton } from "@/components/jobs/create-job-button";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
@@ -139,6 +140,11 @@ import {
   canAccessEstimateLineTemplates,
   TEMPLATE_FUTURE_ONLY_MESSAGE,
 } from "@/lib/estimate-line-templates";
+import {
+  canManageEstimateOptions,
+  computeOptionCommercials,
+  resolveChosenCommercialScope,
+} from "@/lib/estimate-options";
 import {
   loadEstimateLineTemplateDirectory,
   loadEstimateLineTemplateOptions,
@@ -234,6 +240,8 @@ export default async function EstimateBuilderPage({
       },
       jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       lineItems: { orderBy: { createdAt: "asc" } },
+      options: { orderBy: { sortOrder: "asc" } },
+      approvedOption: { select: { id: true, name: true, total: true } },
       approvedVersion: {
         select: {
           total: true,
@@ -248,6 +256,10 @@ export default async function EstimateBuilderPage({
           total: true,
           sentAt: true,
           approvedAt: true,
+          options: {
+            orderBy: { sortOrder: "asc" },
+            select: { name: true, total: true },
+          },
         },
       },
     },
@@ -280,8 +292,21 @@ export default async function EstimateBuilderPage({
   const otherSubtotal = estimate.lineItems
     .filter((item) => item.type === "OTHER")
     .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0));
-  const depositLines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
-  const depositTotal = estimate.approvedVersion?.total ?? estimate.total;
+  const chosenDeposit = resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: estimate.approvedOption?.id ?? null,
+    approvedOption: estimate.approvedOption,
+    approvedVersion: estimate.approvedVersion,
+  });
+  const depositLines =
+    estimate.options.length >= 2 && !estimate.approvedOption
+      ? []
+      : chosenDeposit.lineItems;
+  const depositTotal =
+    estimate.options.length >= 2 && !estimate.approvedOption
+      ? new Prisma.Decimal(0)
+      : chosenDeposit.total;
   const materialDeposit = resolveMaterialDeposit({
     lines: depositLines,
     total: depositTotal,
@@ -319,7 +344,19 @@ export default async function EstimateBuilderPage({
   const sendState = draftEstimateSendState({
     status: estimate.status,
     lineItems: estimate.lineItems,
+    options: estimate.options,
   });
+  const canManageOptions = canManageEstimateOptions(access.workspace.role);
+  const optionCommercials = estimate.options.map((option) =>
+    computeOptionCommercials(
+      estimate.lineItems.filter((item) => item.optionId === option.id),
+      {
+        enabled: Boolean(business.laborMinimumEnabled),
+        amount: business.laborMinimumAmount,
+        waived: estimate.laborMinimumWaived,
+      },
+    ),
+  );
   const needsReissue = isSent && estimate.versions.length === 0;
   const fromCustomerRequest = Boolean(estimate.serviceRequestId);
   const hasOriginalWorkLine = estimate.lineItems.some(isOriginalEstimateWorkLine);
@@ -739,6 +776,10 @@ export default async function EstimateBuilderPage({
         <CardContent>
           <AddCatalogLineForm
             estimateId={estimate.id}
+            options={estimate.options.map((option) => ({
+              id: option.id,
+              name: option.name,
+            }))}
             items={addableCatalogItems.map((item) => ({
               id: item.id,
               name: item.name,
@@ -771,7 +812,13 @@ export default async function EstimateBuilderPage({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <AddCustomLineForm estimateId={estimate.id} />
+          <AddCustomLineForm
+            estimateId={estimate.id}
+            options={estimate.options.map((option) => ({
+              id: option.id,
+              name: option.name,
+            }))}
+          />
         </CardContent>
       </Card>
     </>
@@ -844,7 +891,18 @@ export default async function EstimateBuilderPage({
           <div className="flex flex-wrap items-center gap-2">
             <span>Estimate</span>
             <StatusBadge status={estimate.status} />
-            <span>{ownerAmountLabel(estimate.total)}</span>
+            <span>
+              {estimate.approvedOption
+                ? `${estimate.approvedOption.name} ${ownerAmountLabel(estimate.approvedOption.total)}`
+                : estimate.options.length >= 2
+                  ? estimate.options
+                      .map(
+                        (option, index) =>
+                          `${option.name} ${ownerAmountLabel(optionCommercials[index]!.total)}`,
+                      )
+                      .join(" · ")
+                  : ownerAmountLabel(estimate.total)}
+            </span>
           </div>
         }
       >
@@ -943,6 +1001,20 @@ export default async function EstimateBuilderPage({
           />
         </div>
       </PageHeader>
+
+      <EstimateOptionsPanel
+        estimateId={estimate.id}
+        isDraft={isDraft}
+        canManage={canManageOptions}
+        options={estimate.options.map((option, index) => ({
+          id: option.id,
+          name: option.name,
+          sortOrder: option.sortOrder,
+          totalLabel: ownerAmountLabel(optionCommercials[index]!.total),
+          lineCount: estimate.lineItems.filter((item) => item.optionId === option.id)
+            .length,
+        }))}
+      />
 
       {fromCustomerRequest ? (
         <RequestEstimateHandoff
@@ -1108,6 +1180,7 @@ export default async function EstimateBuilderPage({
         variance={purchaseWorkspace.variance}
         suppliers={purchaseWorkspace.suppliers}
         canConvertTakeoff
+        canRecordReceipt={access.workspace.role === "OWNER"}
       />
 
       {estimate.lineItems.length > 0 && composedTerms.length > 0 ? (

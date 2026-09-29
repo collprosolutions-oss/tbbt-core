@@ -49,6 +49,7 @@ export function AddExpenseSheet({
   customers,
   defaultDate,
   storageConfigured,
+  canChangeReceipts,
   attachExpenseId,
   editingExpense,
 }: {
@@ -60,6 +61,7 @@ export function AddExpenseSheet({
   customers: ExpenseCustomerOption[];
   defaultDate: string;
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   attachExpenseId?: string | null;
   editingExpense?: ExpenseListItem | null;
 }) {
@@ -96,6 +98,7 @@ export function AddExpenseSheet({
         onOpenChange={onOpenChange}
         expenseId={attachExpenseId}
         storageConfigured={storageConfigured}
+        canChangeReceipts={canChangeReceipts}
       />
     );
   }
@@ -121,6 +124,7 @@ export function AddExpenseSheet({
       customers={customers}
       defaultDate={defaultDate}
       storageConfigured={storageConfigured}
+      canChangeReceipts={canChangeReceipts}
       editingExpense={mode === "edit" ? editingExpense : null}
     />
   );
@@ -135,6 +139,7 @@ function ExpenseForm({
   customers,
   defaultDate,
   storageConfigured,
+  canChangeReceipts,
   editingExpense,
 }: {
   open: boolean;
@@ -145,6 +150,7 @@ function ExpenseForm({
   customers: ExpenseCustomerOption[];
   defaultDate: string;
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   editingExpense?: ExpenseListItem | null;
 }) {
   const editing = mode === "edit" && editingExpense;
@@ -304,14 +310,23 @@ function ExpenseForm({
           <Field label="Notes">
             <Input name="notes" placeholder="Optional notes" defaultValue={editingExpense?.notes ?? ""} />
           </Field>
-          {editing ? null : storageConfigured ? (
+          {editing ? null : canChangeReceipts && storageConfigured ? (
             <Field label="Receipt">
-              <Input type="file" name="receipt" accept="image/*" />
+              <Input
+                type="file"
+                name="receipt"
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf"
+              />
+              <p className="text-xs text-muted-foreground">
+                JPEG, PNG, WebP, GIF, HEIC, or PDF. Limit 4 MB. The file stays private and is not used to infer tax treatment.
+              </p>
             </Field>
-          ) : (
+          ) : editing ? null : canChangeReceipts ? (
             <p className="text-xs text-muted-foreground">
-              Receipt upload is unavailable until Vercel Blob storage is connected.
+              Receipt upload is unavailable until private business file storage is connected.
             </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Only the owner can change receipts</p>
           )}
           {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
           {state.message ? <p className="text-sm text-emerald-400">{state.message}</p> : null}
@@ -420,11 +435,13 @@ function AttachReceiptForm({
   onOpenChange,
   expenseId,
   storageConfigured,
+  canChangeReceipts,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   expenseId: string;
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
 }) {
   const [state, formAction, pending] = useActionState(attachExpenseReceiptAction, initialState);
 
@@ -433,13 +450,23 @@ function AttachReceiptForm({
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
         <SheetHeader>
           <SheetTitle>Upload Receipt</SheetTitle>
-          <SheetDescription>Attach a receipt image to this expense.</SheetDescription>
+          <SheetDescription>
+            Attach a private receipt to this expense. The recorded amount does not change, and TBBT does not infer tax treatment from the file.
+          </SheetDescription>
         </SheetHeader>
-        {storageConfigured ? (
+        {!canChangeReceipts ? (
+          <p className="mt-4 px-4 text-sm text-muted-foreground">Only the owner can change receipts</p>
+        ) : storageConfigured ? (
           <form action={formAction} className="mt-4 space-y-3 px-4 pb-6">
             <input type="hidden" name="expenseId" value={expenseId} />
-            <Field label="Receipt image">
-              <Input type="file" name="receipt" accept="image/*" required />
+            <Field label="Receipt file">
+              <Input
+                type="file"
+                name="receipt"
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf"
+                required
+              />
+              <p className="text-xs text-muted-foreground">JPEG, PNG, WebP, GIF, HEIC, or PDF. Limit 4 MB.</p>
             </Field>
             {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
             {state.message ? <p className="text-sm text-emerald-400">{state.message}</p> : null}
@@ -449,7 +476,7 @@ function AttachReceiptForm({
           </form>
         ) : (
           <p className="mt-4 px-4 text-sm text-muted-foreground">
-            Receipt storage isn&apos;t connected. Expenses can still be recorded without a receipt.
+            Private receipt storage isn&apos;t connected. Expenses can still be recorded without a receipt.
           </p>
         )}
       </SheetContent>

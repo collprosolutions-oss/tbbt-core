@@ -49,20 +49,26 @@ const PREVIEWABLE_PRIVATE_IMAGE_TYPES = new Set([
 ]);
 
 function headerFilename(name: string) {
-  const cleaned = name.replace(/[\r\n"]/g, "").trim() || "photo";
+  const cleaned =
+    name.replace(/[\r\n"\\]/g, "").replace(/[\u0000-\u001f\u007f]/g, "").trim() || "photo";
   return cleaned.slice(0, 120);
+}
+
+function contentDispositionFilename(name: string) {
+  const filename = headerFilename(name);
+  const ascii = filename.replace(/[^\x20-\x7E]/g, "_") || "photo";
+  return `filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 export function privateAssetContentDisposition(input: {
   mimeType?: string | null;
   originalFilename?: string | null;
 }) {
-  const filename = headerFilename(input.originalFilename ?? "photo");
   const mime = (input.mimeType ?? "").trim().toLowerCase();
   const disposition = PREVIEWABLE_PRIVATE_IMAGE_TYPES.has(mime)
     ? "inline"
     : "attachment";
-  return `${disposition}; filename="${filename}"`;
+  return `${disposition}; ${contentDispositionFilename(input.originalFilename ?? "photo")}`;
 }
 
 type AuthorizedPrivateAsset = {
@@ -151,6 +157,11 @@ export async function authorizePrivateStoredAssetDownload(
       bucket: authorized.asset.storageAccount.bucketName,
       key: authorized.asset.storageKey,
       expiresInSeconds: PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+      contentType: authorized.asset.mimeType,
+      contentDisposition: privateAssetContentDisposition({
+        mimeType: authorized.asset.mimeType,
+        originalFilename: authorized.asset.originalFilename,
+      }),
     });
     return {
       ok: true,

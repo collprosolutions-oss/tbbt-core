@@ -31,6 +31,7 @@ import {
 } from "@/lib/communications/timeline";
 import { customerInvoiceHistoryContext } from "@/lib/customer-invoice-history";
 import { requestNotesText } from "@/lib/work-area-intake";
+import { estimateListTotalLabel } from "@/lib/estimate-options";
 import { formatAddress, formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
@@ -52,7 +53,20 @@ export default async function CustomerProfilePage({
     include: {
       properties: { orderBy: { createdAt: "asc" } },
       serviceRequests: { orderBy: { createdAt: "desc" } },
-      estimates: { orderBy: { createdAt: "desc" } },
+      estimates: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          approvedOption: { select: { total: true } },
+          options: { select: { id: true } },
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+            select: {
+              options: { select: { total: true }, orderBy: { sortOrder: "asc" } },
+            },
+          },
+        },
+      },
       jobs: { orderBy: { createdAt: "desc" } },
       invoices: { orderBy: { createdAt: "desc" } },
       reviewRequests: { orderBy: { createdAt: "desc" }, take: 8 },
@@ -206,7 +220,9 @@ export default async function CustomerProfilePage({
                   title={
                     <>
                       <StatusBadge status={estimate.status} />
-                      <span className="text-foreground">{formatMoney(estimate.total)}</span>
+                      <span className="text-foreground">
+                        {estimateListTotalLabel(estimate, formatMoney)}
+                      </span>
                     </>
                   }
                   meta={<span>{formatDate(estimate.createdAt)}</span>}

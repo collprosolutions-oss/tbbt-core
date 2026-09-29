@@ -6,6 +6,7 @@ import {
   convertTakeoffToPurchaseListAction,
   createPurchaseOrderAction,
   recordPurchaseAction,
+  recordPurchaseOrderReceiptAction,
   updatePurchaseListItemAction,
   updatePurchaseOrderStatusAction,
   type MaterialsActionState,
@@ -21,6 +22,7 @@ import {
   PURCHASE_ORDER_STATUSES,
   PURCHASE_ORDER_STATUS_LABELS,
   PURCHASE_ORDER_TRANSITIONS,
+  canRecordPurchaseOrderReceipt,
   isPurchaseOrderStatus,
 } from "@/lib/materials/types";
 
@@ -48,6 +50,10 @@ export type PurchaseListItemView = {
   pickupLocationDescription: string | null;
   pickupDurationMinutes: number | null;
   pickupReady: boolean;
+  quantityPickedUp: string | null;
+  pickupException: string | null;
+  pickupExceptionNote: string | null;
+  pickupRecordedAt: string | null;
   status: string;
   supplierId: string | null;
   supplierName: string | null;
@@ -55,10 +61,21 @@ export type PurchaseListItemView = {
   notes: string | null;
 };
 
+export type PurchaseOrderItemView = {
+  id: string;
+  name: string;
+  unit: string;
+  quantityOrdered: string;
+  quantityReceived: string;
+  quantityRemaining: string;
+  fullyReceived: boolean;
+};
+
 export type PurchaseOrderView = {
   id: string;
   status: string;
   supplierName: string | null;
+  items: PurchaseOrderItemView[];
 };
 
 export type MaterialVarianceView = {
@@ -75,6 +92,13 @@ function FormStatus({ state }: { state: MaterialsActionState }) {
     return (
       <Alert variant="destructive">
         <AlertDescription>{state.error}</AlertDescription>
+      </Alert>
+    );
+  }
+  if (state.alreadyRecorded) {
+    return (
+      <Alert>
+        <AlertDescription>Already recorded.</AlertDescription>
       </Alert>
     );
   }
@@ -97,6 +121,7 @@ export function PurchaseListCard({
   variance,
   suppliers,
   canConvertTakeoff,
+  canRecordReceipt,
 }: {
   estimateId?: string | null;
   jobId?: string | null;
@@ -106,6 +131,7 @@ export function PurchaseListCard({
   variance: MaterialVarianceView[];
   suppliers: Array<{ id: string; name: string }>;
   canConvertTakeoff?: boolean;
+  canRecordReceipt?: boolean;
 }) {
   const [convertState, convertAction, converting] = useActionState(
     convertTakeoffToPurchaseListAction,
@@ -230,7 +256,13 @@ export function PurchaseListCard({
         ) : null}
 
         {orders.map((order) => (
-          <PurchaseOrderStatusForm key={order.id} order={order} jobId={jobId} />
+          <PurchaseOrderStatusForm
+            key={order.id}
+            order={order}
+            jobId={jobId}
+            estimateId={estimateId}
+            canRecordReceipt={Boolean(canRecordReceipt)}
+          />
         ))}
       </CardContent>
     </Card>
@@ -325,6 +357,18 @@ function PurchaseItemForm({
         Expense {item.financialCost ? formatMoney(item.financialCost) : "not linked"}
         {item.expenseId ? " (no double count)" : ""}
       </p>
+      {item.pickupRequired ? (
+        <p className="text-xs text-muted-foreground">
+          Field pickup{" "}
+          {item.quantityPickedUp
+            ? `${item.quantityPickedUp} ${item.unit}`
+            : item.pickupException
+              ? "exception recorded"
+              : "not recorded"}
+          {item.pickupException ? ` · ${item.pickupException}` : ""}
+          {item.pickupExceptionNote ? ` · ${item.pickupExceptionNote}` : ""}
+        </p>
+      ) : null}
       <form action={purchaseAction} className="flex flex-wrap items-end gap-2">
         <FormStatus state={purchaseState} />
         <input type="hidden" name="itemId" value={item.id} />
@@ -349,37 +393,110 @@ function PurchaseItemForm({
 function PurchaseOrderStatusForm({
   order,
   jobId,
+  estimateId,
+  canRecordReceipt,
 }: {
   order: PurchaseOrderView;
   jobId?: string | null;
+  estimateId?: string | null;
+  canRecordReceipt: boolean;
 }) {
   const [state, action, pending] = useActionState(updatePurchaseOrderStatusAction, initial);
+  const [receiptState, receiptAction, recording] = useActionState(
+    recordPurchaseOrderReceiptAction,
+    initial,
+  );
+  const [receiptAttemptId, setReceiptAttemptId] = useState(newAttemptId);
+  useEffect(() => {
+    if (
+      receiptState.message ||
+      receiptState.error ||
+      receiptState.alreadyRecorded ||
+      receiptState.attemptKey
+    ) {
+      setReceiptAttemptId(newAttemptId());
+    }
+  }, [receiptState]);
+  const canReceive = canRecordReceipt && canRecordPurchaseOrderReceipt(order.status);
   return (
-    <form action={action} className="flex flex-wrap items-center gap-2 text-sm">
-      <FormStatus state={state} />
-      <input type="hidden" name="purchaseOrderId" value={order.id} />
-      {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
-      <span>
-        PO {order.id.slice(-6).toUpperCase()}
-        {order.supplierName ? ` · ${order.supplierName}` : ""}
-      </span>
-      <select
-        name="status"
-        defaultValue={order.status}
-        className="h-8 rounded-md border bg-transparent px-2 text-sm"
-      >
-        {(isPurchaseOrderStatus(order.status)
-          ? PURCHASE_ORDER_TRANSITIONS[order.status]
-          : PURCHASE_ORDER_STATUSES
-        ).map((status) => (
-          <option key={status} value={status}>
-            {PURCHASE_ORDER_STATUS_LABELS[status]}
-          </option>
-        ))}
-      </select>
-      <Button type="submit" size="sm" variant="outline" disabled={pending}>
-        {pending ? "Saving…" : "Update PO"}
-      </Button>
-    </form>
+    <div className="space-y-2 rounded-lg border p-3">
+      <form action={action} className="flex flex-wrap items-center gap-2 text-sm">
+        <FormStatus state={state} />
+        <input type="hidden" name="purchaseOrderId" value={order.id} />
+        {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
+        <span>
+          PO {order.id.slice(-6).toUpperCase()}
+          {order.supplierName ? ` · ${order.supplierName}` : ""}
+        </span>
+        <select
+          name="status"
+          defaultValue={order.status}
+          className="h-8 rounded-md border bg-transparent px-2 text-sm"
+        >
+          {(isPurchaseOrderStatus(order.status)
+            ? PURCHASE_ORDER_TRANSITIONS[order.status]
+            : PURCHASE_ORDER_STATUSES
+          ).map((status) => (
+            <option key={status} value={status}>
+              {PURCHASE_ORDER_STATUS_LABELS[status]}
+            </option>
+          ))}
+        </select>
+        <Button type="submit" size="sm" variant="outline" disabled={pending}>
+          {pending ? "Saving…" : "Update PO"}
+        </Button>
+      </form>
+      {order.items.length > 0 ? (
+        <ul className="space-y-1 text-sm">
+          {order.items.map((item) => (
+            <li key={item.id} className="flex justify-between gap-3">
+              <span>{item.name}</span>
+              <span className="text-muted-foreground">
+                ordered {item.quantityOrdered} {item.unit}
+                {" · "}
+                received {item.quantityReceived} {item.unit}
+                {item.fullyReceived
+                  ? " · complete"
+                  : ` · remaining ${item.quantityRemaining} ${item.unit}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {canReceive ? (
+        <form action={receiptAction} className="space-y-2">
+          <FormStatus state={receiptState} />
+          <input type="hidden" name="purchaseOrderId" value={order.id} />
+          <input type="hidden" name="attemptId" value={receiptAttemptId} />
+          {jobId ? <input type="hidden" name="jobId" value={jobId} /> : null}
+          {estimateId ? <input type="hidden" name="estimateId" value={estimateId} /> : null}
+          <p className="text-xs text-muted-foreground">
+            Record quantities received on this delivery. Partial deliveries are allowed.
+            Duplicate submits reuse the same attempt. This does not create a payment,
+            expense, invoice, or supplier order.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {order.items.map((item) => (
+              <label key={item.id} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                <Input
+                  name={`receivedQuantity:${item.id}`}
+                  defaultValue=""
+                  placeholder="Received"
+                  className="w-24"
+                />
+              </label>
+            ))}
+          </div>
+          <Button type="submit" size="sm" disabled={recording}>
+            {recording ? "Recording…" : "Record received quantities"}
+          </Button>
+        </form>
+      ) : canRecordReceipt && (order.status === "DRAFT" || order.status === "READY") ? (
+        <p className="text-xs text-muted-foreground">
+          Mark the purchase order as ordered externally to record received quantities.
+        </p>
+      ) : null}
+    </div>
   );
 }

@@ -19,6 +19,9 @@ import {
   describeInvoiceLifecycleEvent,
   describeInvoicePaid,
   describeInvoiceRecorded,
+  describeJobCallbackOutcome,
+  describeJobCallbackRecorded,
+  describeJobCallbackReviewed,
   describeJobCompleted,
   describeJobRecorded,
   describeJobStarted,
@@ -479,6 +482,9 @@ async function collectWorkDrafts(
     additionalWorkReviewed,
     problemsCreated,
     problemsResolved,
+    callbacksCreated,
+    callbacksReviewed,
+    callbacksOutcome,
     timeEntriesStarted,
     timeEntriesEnded,
     jobEvents,
@@ -587,6 +593,55 @@ async function collectWorkDrafts(
           job: { select: { customerId: true } },
         },
         orderBy: [{ resolvedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.jobCallback.findMany({
+        where: {
+          businessId: input.businessId,
+          createdAt: { gte: input.since },
+          job: jobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          createdAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.jobCallback.findMany({
+        where: {
+          businessId: input.businessId,
+          reviewedAt: { gte: input.since },
+          job: jobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          reviewedAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ reviewedAt: "desc" }, { id: "desc" }],
+        take: input.take,
+      }),
+      db.jobCallback.findMany({
+        where: {
+          businessId: input.businessId,
+          outcomeAt: { gte: input.since },
+          job: jobScope,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          outcome: true,
+          outcomeAt: true,
+          job: { select: { customerId: true } },
+        },
+        orderBy: [{ outcomeAt: "desc" }, { id: "desc" }],
         take: input.take,
       }),
       db.timeEntry.findMany({
@@ -760,6 +815,59 @@ async function collectWorkDrafts(
         relatedJobId: row.jobId,
         relatedLabel: jobTimelineReference(row.jobId),
         sourceStatus: "RESOLVED",
+      }),
+    );
+  }
+  for (const row of callbacksCreated) {
+    drafts.push(
+      draft({
+        id: `job-callback:${row.id}:recorded`,
+        occurredAt: row.createdAt,
+        eventType: "JOB_CALLBACK_RECORDED",
+        category: "work",
+        description: describeJobCallbackRecorded(),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: row.status,
+      }),
+    );
+  }
+  for (const row of callbacksReviewed) {
+    if (!row.reviewedAt) continue;
+    drafts.push(
+      draft({
+        id: `job-callback:${row.id}:reviewed`,
+        occurredAt: row.reviewedAt,
+        eventType: "JOB_CALLBACK_REVIEWED",
+        category: "work",
+        description: describeJobCallbackReviewed(),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: row.status,
+      }),
+    );
+  }
+  for (const row of callbacksOutcome) {
+    if (!row.outcomeAt) continue;
+    drafts.push(
+      draft({
+        id: `job-callback:${row.id}:outcome`,
+        occurredAt: row.outcomeAt,
+        eventType: "JOB_CALLBACK_OUTCOME_RECORDED",
+        category: "work",
+        description: describeJobCallbackOutcome(row.outcome),
+        customerId: row.job.customerId,
+        relatedType: "JOB",
+        relatedId: row.jobId,
+        relatedJobId: row.jobId,
+        relatedLabel: jobTimelineReference(row.jobId),
+        sourceStatus: row.status,
       }),
     );
   }

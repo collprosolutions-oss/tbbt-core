@@ -99,6 +99,11 @@ export type NativeJobVisit = {
   recordReclean: NativeJobVisitAction;
 };
 
+export type NativeJobChecklist = {
+  procedureTitle: string | null;
+  items: NativeJobChecklistItem[];
+};
+
 export type NativeVisitOutcomeStatus = "VISIT_COMPLETED" | "RE_CLEAN_REQUESTED";
 
 export type NativeJobPhotos = {
@@ -109,6 +114,30 @@ export type NativeJobPhotos = {
   truncated: boolean;
   truncatedNotice: string | null;
   upload: NativeJobPhotoUploadAction;
+};
+
+export type NativePickupException =
+  | "UNAVAILABLE"
+  | "SHORT"
+  | "DAMAGED"
+  | "CLOSED"
+  | "OTHER";
+
+export type NativeJobPickupItem = {
+  id: string;
+  name: string;
+  quantityNeeded: string;
+  unit: string;
+  supplierName: string | null;
+  pickupLocationDescription: string | null;
+  pickupDurationMinutes: number | null;
+  pickupReady: boolean;
+  status: string;
+  quantityPickedUp: string | null;
+  pickupException: NativePickupException | string | null;
+  pickupExceptionLabel: string | null;
+  pickupExceptionNote: string | null;
+  pickupRecorded: boolean;
 };
 
 export type NativeJobDetail = NativeJobSummary & {
@@ -132,8 +161,10 @@ export type NativeJobDetail = NativeJobSummary & {
   stopTravelAction: NativeJobActivityAction;
   startPickupAction: NativeJobActivityAction;
   stopPickupAction: NativeJobActivityAction;
+  pickupItems: NativeJobPickupItem[];
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
+  checklist: NativeJobChecklist | null;
 };
 
 export type NativeJobPhotoAuthorizePayload = {

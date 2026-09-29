@@ -18,6 +18,7 @@ import {
 } from "@/lib/project-payments";
 import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
+import { resolveChosenCommercialScope } from "@/lib/estimate-options";
 import {
   connectedAccountReplacementBlockReason,
   isUnknownConnectedAccountError,
@@ -472,13 +473,15 @@ async function applyVerifiedDepositPayment(
       customerId: true,
       status: true,
       total: true,
+      approvedOptionId: true,
+      approvedOption: { select: { id: true, total: true } },
       approvedVersion: {
         select: {
           total: true,
-          lineItems: { select: { type: true, total: true, description: true } },
+          lineItems: { select: { type: true, total: true, description: true, optionId: true } },
         },
       },
-      lineItems: { select: { type: true, total: true, description: true } },
+      lineItems: { select: { type: true, total: true, description: true, optionId: true } },
       jobs: {
         select: { id: true, invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } } },
         take: 1,
@@ -503,8 +506,15 @@ async function applyVerifiedDepositPayment(
     return { applied: false, reason: "account_mismatch" };
   }
 
-  const lines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
-  const total = estimate.approvedVersion?.total ?? estimate.total;
+  const chosen = resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: estimate.approvedOptionId,
+    approvedOption: estimate.approvedOption,
+    approvedVersion: estimate.approvedVersion,
+  });
+  const lines = chosen.lineItems;
+  const total = chosen.total;
   const required = requiredDepositFromLines(lines, total);
   const existingPayments = await listProjectPayments(db, {
     businessId: estimate.businessId,
@@ -559,13 +569,15 @@ const DEPOSIT_ESTIMATE_SELECT = {
   business: { select: { slug: true } },
   status: true,
   total: true,
+  approvedOptionId: true,
+  approvedOption: { select: { id: true, total: true } },
   approvedVersion: {
     select: {
       total: true,
-      lineItems: { select: { type: true, total: true, description: true } },
+      lineItems: { select: { type: true, total: true, description: true, optionId: true } },
     },
   },
-  lineItems: { select: { type: true, total: true, description: true } },
+  lineItems: { select: { type: true, total: true, description: true, optionId: true } },
 } as const;
 
 async function loadDepositEstimateByCustomerToken(
@@ -608,8 +620,15 @@ export async function createCustomerDepositCheckout(
     throw new PaymentError("This deposit cannot be paid yet.");
   }
   const estimate = loaded.estimate;
-  const lines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
-  const total = estimate.approvedVersion?.total ?? estimate.total;
+  const chosen = resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: estimate.approvedOptionId,
+    approvedOption: estimate.approvedOption,
+    approvedVersion: estimate.approvedVersion,
+  });
+  const lines = chosen.lineItems;
+  const total = chosen.total;
   const required = requiredDepositFromLines(lines, total);
   const payments = await listProjectPayments(db, {
     businessId: estimate.businessId,
@@ -659,8 +678,15 @@ export async function reconcileEstimateDepositCheckout(
   if (!account) {
     return { applied: false, reason: "no_payment_account" };
   }
-  const lines = estimate.approvedVersion?.lineItems ?? estimate.lineItems;
-  const total = estimate.approvedVersion?.total ?? estimate.total;
+  const chosen = resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: estimate.approvedOptionId,
+    approvedOption: estimate.approvedOption,
+    approvedVersion: estimate.approvedVersion,
+  });
+  const lines = chosen.lineItems;
+  const total = chosen.total;
   const required = requiredDepositFromLines(lines, total);
   const payments = await listProjectPayments(db, {
     businessId: estimate.businessId,

@@ -19,18 +19,21 @@ export function ScheduleViewTabs({
   view,
   date,
   timeZone,
+  extraQuery = "",
 }: {
   view: ScheduleView;
   date: Date;
   timeZone?: string;
+  extraQuery?: string;
 }) {
   const iso = formatISODate(date, timeZone);
+  const suffix = extraQuery ? `&${extraQuery}` : "";
   return (
     <div className="flex flex-wrap gap-1 rounded-lg border bg-muted/30 p-1">
       {SCHEDULE_VIEWS.map((candidate) => (
         <Link
           key={candidate}
-          href={`/jobs?view=${candidate}&date=${iso}`}
+          href={`/jobs?view=${candidate}&date=${iso}${suffix}`}
           className={cn(
             "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
             candidate === view

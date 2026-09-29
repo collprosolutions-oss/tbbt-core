@@ -64,6 +64,15 @@ export function AssignedJobPickupCard({
                   {" · "}
                   {PURCHASE_ITEM_STATUS_LABELS[item.status]}
                 </p>
+                {item.pickupRecorded ? (
+                  <p className="text-muted-foreground">
+                    {item.quantityPickedUp
+                      ? `Picked up ${item.quantityPickedUp} ${item.unit}`
+                      : "Exception recorded"}
+                    {item.pickupExceptionLabel ? ` · ${item.pickupExceptionLabel}` : ""}
+                    {item.pickupExceptionNote ? ` · ${item.pickupExceptionNote}` : ""}
+                  </p>
+                ) : null}
               </div>
             ))}
           </CardContent>

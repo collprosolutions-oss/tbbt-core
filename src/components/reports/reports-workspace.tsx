@@ -9,6 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate, formatMoney } from "@/lib/format";
 import {
+  REQUEST_SOURCE_REPORT_CHILD_TRUNCATED_MESSAGE,
+  REQUEST_SOURCE_REPORT_MESSAGE,
+  REQUEST_SOURCE_REPORT_TRUNCATED_MESSAGE,
+} from "@/lib/request-source-report";
+import {
   REPORT_AREA_LABELS,
   REPORT_AREAS,
   type BuiltReport,
@@ -31,7 +36,15 @@ function Money({ value }: { value: number | null | undefined }) {
   return <span className="tabular-nums">{formatMoney(value)}</span>;
 }
 
-export function ReportsWorkspace({ area, rangePreset, from, to, report, intelligence }: ReportsWorkspaceProps) {
+export function ReportsWorkspace({
+  area,
+  rangePreset,
+  from,
+  to,
+  report,
+  intelligence,
+  sourceProgression,
+}: ReportsWorkspaceProps) {
   const otherParams = new URLSearchParams();
   if (rangePreset !== "month") otherParams.set("range", rangePreset);
   if (rangePreset === "custom" && from) otherParams.set("from", from);
@@ -131,7 +144,12 @@ export function ReportsWorkspace({ area, rangePreset, from, to, report, intellig
         </FounderRegion>
 
         <FounderRegion id="table">
-          <ReportBody area={area} report={report} intelligence={intelligence} />
+          <ReportBody
+            area={area}
+            report={report}
+            intelligence={intelligence}
+            sourceProgression={sourceProgression}
+          />
         </FounderRegion>
       </div>
 
@@ -263,7 +281,9 @@ function ReportCharts({ area, report }: { area: ReportArea; report: BuiltReport 
         <CardDescription>
           {area === "services"
             ? "Service charts appear only when a job can be attributed to one catalog item."
-            : "Use the table below for this report."}
+            : area === "request-sources"
+              ? "Request source counts are a table of recorded links, not a conversion or spend chart."
+              : "Use the table below for this report."}
         </CardDescription>
       </CardHeader>
     </Card>
@@ -274,10 +294,12 @@ function ReportBody({
   area,
   report,
   intelligence,
+  sourceProgression,
 }: {
   area: ReportArea;
   report: BuiltReport;
   intelligence?: ReportsWorkspaceProps["intelligence"];
+  sourceProgression?: ReportsWorkspaceProps["sourceProgression"];
 }) {
   if (area === "expenses") {
     return (
@@ -675,6 +697,41 @@ function ReportBody({
               <RecurringPatternReview key="r" row={row} />,
             ],
             mobile: `${row.description} · ${row.ownerStatus}`,
+          }))}
+        />
+      </div>
+    );
+  }
+
+  if (area === "request-sources") {
+    const rows = sourceProgression?.rows ?? [];
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recorded request sources</CardTitle>
+            <CardDescription>{REQUEST_SOURCE_REPORT_MESSAGE}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              {sourceProgression
+                ? `${sourceProgression.sampledRequestCount} request${sourceProgression.sampledRequestCount === 1 ? "" : "s"} in this bounded sample.`
+                : "No request source sample is loaded."}
+            </p>
+            {sourceProgression?.truncated ? <p>{REQUEST_SOURCE_REPORT_TRUNCATED_MESSAGE}</p> : null}
+            {sourceProgression?.childTruncated ? <p>{REQUEST_SOURCE_REPORT_CHILD_TRUNCATED_MESSAGE}</p> : null}
+          </CardContent>
+        </Card>
+        <ReportTable
+          title="Request → estimate → job"
+          description="Counts follow recorded request sources and actual linked estimates and jobs. A request with two estimates still counts once."
+          headers={["Source", "Requests", "With estimate", "With job"]}
+          empty="No recorded requests in this bounded sample."
+          rows={rows.map((row) => ({
+            key: row.source,
+            href: "/requests",
+            cells: [row.label, String(row.requests), String(row.estimates), String(row.jobs)],
+            mobile: `${row.label} · ${row.requests} requests · ${row.estimates} estimated · ${row.jobs} jobs`,
           }))}
         />
       </div>

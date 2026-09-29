@@ -1316,6 +1316,20 @@ const estimateLineTemplateArchiveMigration = readFileSync(
   ),
   "utf8",
 );
+const customerCsvImportMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010000_customer_csv_import/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const materialPickupRecordedMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929011100_material_pickup_recorded_quantities/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 check(
   "Estimate line template archive migration is additive and after owner SMS destination",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
@@ -1335,6 +1349,137 @@ check(
       localNames.indexOf("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") <
       localNames.indexOf("20260928200000_estimate_line_template_archive"),
+);
+check(
+  "Customer CSV import migration is additive and after estimate template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(customerCsvImportMigration) &&
+    customerCsvImportMigration.includes('CREATE TABLE IF NOT EXISTS "CustomerCsvImport"') &&
+    customerCsvImportMigration.includes('CREATE TABLE IF NOT EXISTS "CustomerCsvImportRow"') &&
+    customerCsvImportMigration.includes("reusedExistingCustomer") &&
+    customerCsvImportMigration.includes("possibleDuplicateCustomerId") &&
+    !customerCsvImportMigration.includes("smsConsentStatus") &&
+    localNames.includes("20260929010000_customer_csv_import") &&
+    !localNames.includes("20260928210000_customer_csv_import") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_customer_csv_import"),
+);
+
+const timeCorrectionRequestsMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010100_time_correction_requests/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Time correction request migration is additive and after estimate template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"TimeEntry"|UPDATE\s+"TimesheetWeek"|UPDATE\s+"PayrollRun"/i.test(
+    timeCorrectionRequestsMigration,
+  ) &&
+    timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionRequest"') &&
+    timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionDecision"') &&
+    timeCorrectionRequestsMigration.includes("TimeCorrectionRequest_timeEntryId_pending_key") &&
+    timeCorrectionRequestsMigration.includes("20260928200000_estimate_line_template_archive") &&
+    timeCorrectionRequestsMigration.includes("20260929010100") &&
+    localNames.includes("20260929010100_time_correction_requests") &&
+    !localNames.includes("20260929010000_time_correction_requests") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010100_time_correction_requests"),
+);
+
+const serviceCatalogImportMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010200_service_catalog_import/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Service catalog CSV import migration is additive and after estimate-template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"|UPDATE\s+"ServiceCatalogItem"/i.test(
+    serviceCatalogImportMigration,
+  ) &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImport"') &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow"') &&
+    serviceCatalogImportMigration.includes("ServiceCatalogImport_businessId_contentSha256_key") &&
+    serviceCatalogImportMigration.includes('"matchDecision" TEXT NOT NULL DEFAULT \'SKIP\'') &&
+    serviceCatalogImportMigration.includes('"confirmingAt" TIMESTAMP(3)') &&
+    serviceCatalogImportMigration.includes("never LineItem") &&
+    serviceCatalogImportMigration.includes("hourly") &&
+    serviceCatalogImportMigration.includes("20260929010200") &&
+    localNames.includes("20260929010200_service_catalog_import") &&
+    !localNames.includes("20260929010000_service_catalog_import") &&
+    !localNames.includes("20260928200000_service_catalog_import") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010200_service_catalog_import"),
+);
+
+const availabilityRequestMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010300_workforce_availability_exception_request/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const availabilityRequestOps = readFileSync(
+  new URL("../src/lib/workforce-availability-request-ops.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Workforce availability-request migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(availabilityRequestMigration) &&
+    availabilityRequestMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MembershipAvailabilityExceptionRequest"',
+    ) &&
+    availabilityRequestMigration.includes("WHERE \"status\" = 'PENDING'") &&
+    availabilityRequestMigration.includes("IF NOT EXISTS") &&
+    localNames.includes("20260929010300_workforce_availability_exception_request") &&
+    !localNames.includes("20260929010000_workforce_availability_exception_request") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010300_workforce_availability_exception_request"),
+);
+check(
+  "Availability-request ops do not run request-time DDL and do not mutate Jobs",
+  !availabilityRequestOps.includes("$executeRawUnsafe") &&
+    !availabilityRequestOps.includes("CREATE TABLE") &&
+    !availabilityRequestOps.includes("ALTER TABLE") &&
+    !availabilityRequestOps.includes("assignedMembershipId:") &&
+    !availabilityRequestOps.includes("scheduledAt:"),
+);
+
+const purchaseOrderReceiptMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929140000_purchase_order_received_quantities/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Purchase-order received-quantity migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(purchaseOrderReceiptMigration) &&
+    purchaseOrderReceiptMigration.includes(
+      'ADD COLUMN IF NOT EXISTS "quantityReceived"',
+    ) &&
+    purchaseOrderReceiptMigration.includes(
+      'ADD COLUMN IF NOT EXISTS "lastReceivedAt"',
+    ) &&
+    purchaseOrderReceiptMigration.includes("MaterialPurchaseOrderItem") &&
+    purchaseOrderReceiptMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceipt"',
+    ) &&
+    purchaseOrderReceiptMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceiptItem"',
+    ) &&
+    purchaseOrderReceiptMigration.includes('ADD COLUMN IF NOT EXISTS "payloadFingerprint"') &&
+    !purchaseOrderReceiptMigration.includes("quantityPickedUp") &&
+    !/DROP TABLE|DROP COLUMN/i.test(purchaseOrderReceiptMigration) &&
+    localNames.includes("20260929140000_purchase_order_received_quantities") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929140000_purchase_order_received_quantities"),
 );
 
 check(
@@ -1392,6 +1537,88 @@ check(
       .includes("sendOwnerSms"),
 );
 
+const jobCallbackMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010900_job_callback/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Job callback migration is additive and after estimate template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(jobCallbackMigration) &&
+    jobCallbackMigration.includes('CREATE TABLE IF NOT EXISTS "JobCallback"') &&
+    jobCallbackMigration.includes('CREATE TABLE IF NOT EXISTS "JobCallbackEvent"') &&
+    jobCallbackMigration.includes("JobCallback_open_job_key") &&
+    jobCallbackMigration.includes("WHERE \"status\" IN ('RECORDED', 'UNDER_REVIEW')") &&
+    !jobCallbackMigration.includes("CREATE TABLE \"Invoice\"") &&
+    localNames.includes("20260929010900_job_callback") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010900_job_callback"),
+);
+
+const estimateOptionsMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010400_estimate_options/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Estimate options migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
+    estimateOptionsMigration,
+  ) &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateOption"') &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateVersionOption"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedOptionId"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedEstimateOptionId"') &&
+    localNames.includes("20260929010400_estimate_options") &&
+    !localNames.includes("20260929010000_estimate_options") &&
+    !localNames.includes("20260928200000_estimate_options") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010400_estimate_options"),
+);
+
+const monthlyBusinessGoalMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010700_monthly_business_goal/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Monthly business goal migration is additive and IF NOT EXISTS",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(monthlyBusinessGoalMigration) &&
+    monthlyBusinessGoalMigration.includes('CREATE TABLE IF NOT EXISTS "MonthlyBusinessGoal"') &&
+    localNames.includes("20260929010700_monthly_business_goal"),
+);
+
+const collectionsWorkItemMigration = readFileSync(
+  new URL("../prisma/migrations/20260929011000_invoice_collection_work_item/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Invoice collection work-item migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"Invoice"|UPDATE\s+"Payment"/i.test(
+    collectionsWorkItemMigration,
+  ) &&
+    collectionsWorkItemMigration.includes('CREATE TABLE IF NOT EXISTS "InvoiceCollectionWorkItem"') &&
+    collectionsWorkItemMigration.includes("InvoiceCollectionWorkItem_businessId_invoiceId_key") &&
+    collectionsWorkItemMigration.includes("20260928200000_estimate_line_template_archive") &&
+    !collectionsWorkItemMigration.includes("ALTER TABLE \"Invoice\"") &&
+    localNames.includes("20260929011000_invoice_collection_work_item") &&
+    !localNames.includes("20260928200000_invoice_collection_work_item") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929011000_invoice_collection_work_item"),
+);
+
+check(
+  "Material pickup recorded-quantity migration is additive and after #210",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialPickupRecordedMigration) &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "quantityPickedUp"') &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "pickupException"') &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "pickupRecordedAt"') &&
+    materialPickupRecordedMigration.includes("20260928200000_estimate_line_template_archive") &&
+    materialPickupRecordedMigration.includes("IF NOT EXISTS") &&
+    localNames.includes("20260929011100_material_pickup_recorded_quantities") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929011100_material_pickup_recorded_quantities"),
+);
+
 const customerMergeMigration = readFileSync(
   new URL("../prisma/migrations/20260929020000_customer_merge/migration.sql", import.meta.url),
   "utf8",
@@ -1416,6 +1643,52 @@ check(
     !materialsSchema.includes("$executeRawUnsafe") &&
     !materialsSchema.includes("ensureMaterialsSuppliersTables") &&
     !materialsSchema.includes("CREATE TABLE IF NOT EXISTS"),
+);
+
+const jobMilestonesMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Job milestones migration is additive and does not alter Job columns",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(jobMilestonesMigration) &&
+    jobMilestonesMigration.includes('CREATE TABLE IF NOT EXISTS "JobMilestone"') &&
+    jobMilestonesMigration.includes('CREATE TABLE IF NOT EXISTS "JobMilestoneEvent"') &&
+    !jobMilestonesMigration.includes('ALTER TABLE "Job"') &&
+    !jobMilestonesMigration.includes('ADD COLUMN') &&
+    localNames.includes("20260929010600_job_milestones") &&
+    localNames.includes("20260928190000_owner_studio_reminder_sms_destination") &&
+    !localNames.includes("20260929010000_job_milestones") &&
+    !localNames.includes("20260928190000_job_milestones") &&
+    localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") <
+      localNames.indexOf("20260929010600_job_milestones"),
+);
+
+const ownerEquipmentRegisterMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010800_owner_equipment_register/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "OWNER equipment register migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"Expense"|UPDATE\s+"MaterialCatalogItem"/i.test(
+    ownerEquipmentRegisterMigration,
+  ) &&
+    ownerEquipmentRegisterMigration.includes('CREATE TABLE IF NOT EXISTS "EquipmentItem"') &&
+    ownerEquipmentRegisterMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "EquipmentMaintenanceEntry"',
+    ) &&
+    ownerEquipmentRegisterMigration.includes("purchaseExpenseId") &&
+    ownerEquipmentRegisterMigration.includes("attemptKey") &&
+    ownerEquipmentRegisterMigration.includes("20260928200000_estimate_line_template_archive") &&
+    !/ALTER TABLE "Expense"/.test(ownerEquipmentRegisterMigration) &&
+    !/ALTER TABLE "MaterialCatalogItem"/.test(ownerEquipmentRegisterMigration) &&
+    localNames.includes("20260929010800_owner_equipment_register") &&
+    !localNames.includes("20260928210000_owner_equipment_register") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010800_owner_equipment_register"),
 );
 
 console.log(

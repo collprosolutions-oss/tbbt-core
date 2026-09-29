@@ -81,6 +81,7 @@ const lifecycle = [
   ["Cleaning starter catalog", "src/lib/cleaning-starter-catalog.ts"],
   ["CRM customers", "src/app/(app)/customers/page.tsx"],
   ["Customer merge review", "src/app/(app)/customers/duplicates/page.tsx"],
+  ["Customer CSV import", "src/app/(app)/customers/import/page.tsx"],
   ["Requests", "src/app/(app)/requests/page.tsx"],
   ["Owner log lead", "src/app/(app)/requests/log-lead/page.tsx"],
   ["Request record", "src/app/(app)/requests/[requestId]/page.tsx"],

@@ -28,6 +28,7 @@ const COUNT_LABELS: Array<[keyof TestDataCleanupPreview["willDelete"], string]> 
   ["changeOrders", "Change orders"],
   ["additionalWorkRequests", "Additional-work requests"],
   ["jobProblemReports", "Job problem reports"],
+  ["jobCallbacks", "Customer-reported callbacks"],
   ["timeEntries", "Time entries"],
   ["timesheetWeeks", "Timesheet weeks"],
   ["payrollRuns", "Payroll runs"],

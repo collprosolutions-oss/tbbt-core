@@ -27,6 +27,7 @@ import {
   parseOwnerNextBookingStart,
   resolveCleaningJobTradeCode,
 } from "@/lib/cleaning-next-booking";
+import { resolveCopyableBusinessLocationId } from "@/lib/business-location-ops";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export class CleaningNextBookingError extends Error {
@@ -51,6 +52,7 @@ const SOURCE_JOB_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   scheduledDurationMinutes: true,
   leadSource: true,
   campaignId: true,
@@ -95,6 +97,7 @@ export type CreatedCleaningNextBooking = {
   propertyId: string | null;
   estimateId: string | null;
   approvedEstimateVersionId: string | null;
+  approvedEstimateOptionId: string | null;
   recurrenceSourceJobId: string | null;
   nextBookingSourceJobId: string | null;
   status: string;
@@ -113,6 +116,7 @@ const CREATED_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   recurrenceSourceJobId: true,
   nextBookingSourceJobId: true,
   status: true,
@@ -193,6 +197,7 @@ function selectedScopeBinding(job: SourceJob, businessId: string) {
   return {
     estimateId: estimate?.id ?? null,
     approvedEstimateVersionId: approvedVersion?.id ?? null,
+    approvedEstimateOptionId: approvedVersion ? job.approvedEstimateOptionId ?? null : null,
   };
 }
 
@@ -290,13 +295,18 @@ export async function createNextBookingFromCompletedCleaningJob(
           propertyId: property.id,
           estimateId: scope.estimateId,
           approvedEstimateVersionId: scope.approvedEstimateVersionId,
+          approvedEstimateOptionId: scope.approvedEstimateOptionId,
           projectToken: randomUUID(),
           status: "SCHEDULED",
           scheduledAt,
           scheduledDurationMinutes: fresh.scheduledDurationMinutes,
           leadSource: fresh.leadSource,
           campaignId: fresh.campaignId,
-          businessLocationId: fresh.businessLocationId,
+          businessLocationId: await resolveCopyableBusinessLocationId(
+            tx,
+            access.businessId,
+            fresh.businessLocationId,
+          ),
           serviceIntent: oneTime.serviceIntent,
           recurrenceCadence: oneTime.recurrenceCadence,
           recurrenceStatus: oneTime.recurrenceStatus,

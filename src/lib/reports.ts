@@ -36,6 +36,7 @@ export const REPORT_AREAS = [
   "pricing",
   "taxes",
   "vendor-spending",
+  "request-sources",
 ] as const;
 export type ReportArea = (typeof REPORT_AREAS)[number];
 
@@ -54,6 +55,7 @@ export const REPORT_AREA_LABELS: Record<ReportArea, string> = {
   pricing: "Pricing signals",
   taxes: "Taxes / Records",
   "vendor-spending": "Vendor Spending",
+  "request-sources": "Request sources",
 };
 
 export const TBBT_RECORDED_PL_LABEL = "TBBT-recorded P&L";

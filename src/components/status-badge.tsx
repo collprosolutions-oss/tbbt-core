@@ -34,6 +34,7 @@ const VARIANTS: Record<string, BadgeVariant> = {
   RECORDED: "outline",
   FLAGGED: "warning",
   PENDING: "warning",
+  ACCEPTED: "success",
   REIMBURSED: "success",
   NONE: "outline",
   PRIVATE: "outline",
@@ -52,6 +53,12 @@ const VARIANTS: Record<string, BadgeVariant> = {
   UNKNOWN: "outline",
   VISIT_COMPLETED: "success",
   RE_CLEAN_REQUESTED: "warning",
+  UNDER_REVIEW: "warning",
+  OUTCOME_RECORDED: "success",
+  WILL_FOLLOW_UP: "default",
+  NO_RETURN_VISIT: "outline",
+  CUSTOMER_WITHDREW: "outline",
+  RECORDED_ONLY: "outline",
 };
 
 const LABELS: Record<string, string> = {
@@ -68,6 +75,7 @@ const LABELS: Record<string, string> = {
   RECORDED: "Recorded",
   FLAGGED: "Flagged",
   PENDING: "Pending",
+  ACCEPTED: "Accepted",
   REIMBURSED: "Reimbursed",
   NONE: "No",
   PRIVATE: "Private",
@@ -86,6 +94,12 @@ const LABELS: Record<string, string> = {
   UNKNOWN: "Unknown",
   VISIT_COMPLETED: "Visit completed",
   RE_CLEAN_REQUESTED: "Re-clean requested",
+  UNDER_REVIEW: "Under review",
+  OUTCOME_RECORDED: "Outcome recorded",
+  WILL_FOLLOW_UP: "Will follow up later",
+  NO_RETURN_VISIT: "No return visit",
+  CUSTOMER_WITHDREW: "Customer withdrew",
+  RECORDED_ONLY: "Recorded only",
 };
 
 export function StatusBadge({ status }: { status: string }) {

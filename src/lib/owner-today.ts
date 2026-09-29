@@ -115,6 +115,7 @@ export const OWNER_TODAY_HANDOFF_SELECT = {
     },
   },
   estimate: { select: { total: true } },
+  approvedEstimateOption: { select: { total: true } },
   approvedEstimateVersion: { select: { total: true } },
 } as const;
 
@@ -507,6 +508,7 @@ export type OwnerTodayHandoffRecord = {
   invoices: readonly BillingInvoiceLike[];
   changeOrders: readonly BillingChangeOrderLike[];
   estimate?: { total: BillingInvoiceLike["total"] } | null;
+  approvedEstimateOption?: { total: BillingInvoiceLike["total"] } | null;
   approvedEstimateVersion?: { total: BillingInvoiceLike["total"] } | null;
 };
 
@@ -533,7 +535,10 @@ export function buildOwnerTodayHandoffItems(
     const attention = completedJobBillingAttention({
       jobStatus: job.status,
       originalApprovedTotal:
-        job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null,
+        job.approvedEstimateOption?.total ??
+        job.approvedEstimateVersion?.total ??
+        job.estimate?.total ??
+        null,
       invoices: job.invoices,
       changeOrders: job.changeOrders,
     });

@@ -62,7 +62,6 @@ export type CreateExpenseInput = {
   recurringNote?: string;
   mileageMiles?: string;
   notes?: string;
-  receiptUrl?: string;
   customerBillable?: boolean;
 };
 
@@ -208,12 +207,92 @@ async function resolveExpenseFields(db: Db, access: BusinessAccess, input: Creat
     recurringNote: input.recurringNote?.trim() || null,
     mileageMiles,
     notes: input.notes?.trim() || null,
-    receiptUrl: input.receiptUrl?.trim() || null,
   };
+}
+
+export const CONCURRENT_EXPENSE_RECEIPT_ERROR =
+  "That receipt changed concurrently. Retry.";
+
+/**
+ * Test-only barriers. Production never sets these.
+ * - afterPreviousIdRead: concurrent callers meet after both read the
+ *   previous receiptStoredAssetId and before either writes.
+ * - beforeSwap: concurrent callers meet immediately before the
+ *   compare-and-swap updateMany.
+ * - afterSwapBeforeRelease: inject a failure after the swap and before
+ *   the previous READY asset is claimed DELETED in the same transaction.
+ */
+export const expenseReceiptWriteTestHooks: {
+  afterPreviousIdRead?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+  }) => Promise<void> | void;
+  beforeSwap?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  }) => Promise<void> | void;
+  afterSwapBeforeRelease?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  }) => Promise<void> | void;
+} = {};
+
+export type ExpenseReceiptClaimAfter = (
+  tx: Db,
+  input: {
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  },
+) => Promise<void>;
+
+async function claimExpenseReceiptWrite(
+  db: Db,
+  businessId: string,
+  expenseId: string,
+  previousStoredAssetId: string | null,
+  data: { receiptStoredAssetId: string | null },
+  afterClaim?: ExpenseReceiptClaimAfter,
+) {
+  const run = async (tx: Db) => {
+    const claimed = await tx.expense.updateMany({
+      where: {
+        id: expenseId,
+        businessId,
+        receiptStoredAssetId: previousStoredAssetId,
+      },
+      data,
+    });
+    if (claimed.count !== 1) {
+      throw new ExpenseError(CONCURRENT_EXPENSE_RECEIPT_ERROR);
+    }
+    await expenseReceiptWriteTestHooks.afterSwapBeforeRelease?.({
+      expenseId,
+      previousStoredAssetId,
+      nextStoredAssetId: data.receiptStoredAssetId,
+    });
+    await afterClaim?.(tx, {
+      previousStoredAssetId,
+      nextStoredAssetId: data.receiptStoredAssetId,
+    });
+    return tx.expense.findFirstOrThrow({
+      where: { id: expenseId, businessId },
+    });
+  };
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction(run);
+  }
+  return run(db);
 }
 
 async function requireExpenseMutation(db: Db, access: BusinessAccess) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
+  await requireSaasOperatingEntitlement(db, access);
+}
+
+async function requireExpenseReceiptMutation(db: Db, access: BusinessAccess) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   await requireSaasOperatingEntitlement(db, access);
 }
 
@@ -232,7 +311,6 @@ export async function createExpense(db: Db, access: BusinessAccess, input: Creat
       purchaserMembershipId: fields.purchaserMembershipId,
       jobId: fields.jobId,
       customerId: fields.customerId,
-      receiptUrl: fields.receiptUrl,
       reimbursable: fields.reimbursable,
       reimbursementStatus: defaultReimbursementStatus(fields.reimbursable),
       customerBillable: fields.customerBillable,
@@ -372,12 +450,13 @@ export async function setReimbursementStatus(
 export async function attachExpenseReceipt(
   db: Db,
   access: BusinessAccess,
-  input: { expenseId: string; receiptUrl: string },
+  input: { expenseId: string; storedAssetId: string },
+  afterClaim?: ExpenseReceiptClaimAfter,
 ) {
-  await requireExpenseMutation(db, access);
-  const receiptUrl = input.receiptUrl.trim();
-  if (!receiptUrl) {
-    throw new ExpenseError("A receipt URL is required.");
+  await requireExpenseReceiptMutation(db, access);
+  const storedAssetId = input.storedAssetId.trim();
+  if (!storedAssetId) {
+    throw new ExpenseError("A private receipt file is required.");
   }
 
   const expense = requireActiveExpense(
@@ -388,10 +467,84 @@ export async function attachExpenseReceipt(
     ),
   );
 
-  return db.expense.update({
-    where: { id: expense.id },
-    data: { receiptUrl },
+  const asset = access.assertOwned(
+    await db.storedAsset.findFirst({
+      where: { id: storedAssetId, ...access.scope, deletedAt: null },
+    }),
+  );
+  if (asset.status !== "READY" || asset.visibility !== "PRIVATE" || asset.publicPath) {
+    throw new ExpenseError("That file is not a private receipt ready to attach.");
+  }
+  if (asset.category !== "ATTACHMENT" || asset.purpose !== "EXPENSE_RECEIPT") {
+    throw new ExpenseError("Only a private expense receipt can be attached here.");
+  }
+
+  const other = await db.expense.findFirst({
+    where: {
+      receiptStoredAssetId: asset.id,
+      businessId: access.businessId,
+      NOT: { id: expense.id },
+    },
+    select: { id: true },
   });
+  if (other) {
+    throw new ExpenseError("That receipt is already attached to another expense.");
+  }
+
+  const previousStoredAssetId = expense.receiptStoredAssetId;
+  await expenseReceiptWriteTestHooks.afterPreviousIdRead?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+  });
+  await expenseReceiptWriteTestHooks.beforeSwap?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+    nextStoredAssetId: asset.id,
+  });
+  const updated = await claimExpenseReceiptWrite(
+    db,
+    access.businessId,
+    expense.id,
+    previousStoredAssetId,
+    { receiptStoredAssetId: asset.id },
+    afterClaim,
+  );
+  return { expense: updated, previousStoredAssetId };
+}
+
+export async function removeExpenseReceipt(
+  db: Db,
+  access: BusinessAccess,
+  input: { expenseId: string },
+  afterClaim?: ExpenseReceiptClaimAfter,
+) {
+  await requireExpenseReceiptMutation(db, access);
+  const expense = requireActiveExpense(
+    access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: input.expenseId, ...access.scope },
+      }),
+    ),
+  );
+  const previousStoredAssetId = expense.receiptStoredAssetId;
+  await expenseReceiptWriteTestHooks.afterPreviousIdRead?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+  });
+  await expenseReceiptWriteTestHooks.beforeSwap?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+    nextStoredAssetId: null,
+  });
+  const updated = await claimExpenseReceiptWrite(
+    db,
+    access.businessId,
+    expense.id,
+    previousStoredAssetId,
+    { receiptStoredAssetId: null },
+    afterClaim,
+  );
+  return { expense: updated, previousStoredAssetId };
 }
 
 export async function loadOwnedExpense(db: Db, access: BusinessAccess, expenseId: string) {

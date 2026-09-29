@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { findCurrentEstimateVersion } from "@/lib/estimate-version";
+import {
+  MIN_ESTIMATE_OPTIONS,
+  OPTION_REQUIRED_MESSAGE,
+} from "@/lib/estimate-options";
 import { prisma } from "@/lib/prisma";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
@@ -15,9 +19,42 @@ const NOT_READY_ERROR = "This estimate is not ready to approve.";
 const STALE_VERSION_ERROR =
   "This estimate was updated since you opened this page. Refresh to see the latest version before approving.";
 
+type ApprovedOptionRef = {
+  approvedOptionId: string | null;
+  approvedOptionName: string | null;
+};
+
 type ApproveTransactionResult =
   | { ok: true }
-  | { ok: false; reason: "not_ready" | "stale" | "already_approved" };
+  | {
+      ok: false;
+      reason: "not_ready" | "stale" | "already_approved" | "option_required";
+      approvedOption?: ApprovedOptionRef;
+    };
+
+function alreadyApprovedDifferentOptionError(
+  submittedOptionId: string,
+  approved: ApprovedOptionRef,
+): string | null {
+  if (
+    submittedOptionId &&
+    approved.approvedOptionId &&
+    submittedOptionId !== approved.approvedOptionId
+  ) {
+    const name = approved.approvedOptionName?.trim() || "the previously chosen option";
+    return `This estimate was already approved with ${name}.`;
+  }
+  return null;
+}
+
+function alreadyApprovedResult(
+  submittedOptionId: string,
+  approved: ApprovedOptionRef,
+): ApproveEstimateResult {
+  const mismatch = alreadyApprovedDifferentOptionError(submittedOptionId, approved);
+  if (mismatch) return { error: mismatch };
+  return { status: "APPROVED" };
+}
 
 export async function approveEstimate(
   _prev: ApproveEstimateResult,
@@ -33,6 +70,12 @@ export async function approveEstimate(
   // is never trusted to select which version gets approved.
   const submittedVersionId =
     typeof rawVersionId === "string" ? rawVersionId.trim() : "";
+  const rawOptionId = formData.get("estimateOptionId");
+  // Required when the current SENT version has frozen priced options.
+  // Compared against EstimateVersionOption rows on the current version
+  // only — never trusted to select a historical or cross-tenant option.
+  const submittedOptionId =
+    typeof rawOptionId === "string" ? rawOptionId.trim() : "";
 
   if (!token) {
     return { error: GENERIC_ERROR };
@@ -40,7 +83,12 @@ export async function approveEstimate(
 
   const estimate = await prisma.estimate.findUnique({
     where: { publicToken: token },
-    select: { status: true, publicToken: true },
+    select: {
+      status: true,
+      publicToken: true,
+      approvedOptionId: true,
+      approvedOption: { select: { name: true } },
+    },
   });
 
   if (!estimate) {
@@ -48,7 +96,10 @@ export async function approveEstimate(
   }
 
   if (estimate.status === "APPROVED") {
-    return { status: estimate.status };
+    return alreadyApprovedResult(submittedOptionId, {
+      approvedOptionId: estimate.approvedOptionId,
+      approvedOptionName: estimate.approvedOption?.name ?? null,
+    });
   }
 
   if (estimate.status !== "SENT") {
@@ -57,9 +108,18 @@ export async function approveEstimate(
 
   const result = await prisma.$transaction(
     async (tx): Promise<ApproveTransactionResult> => {
+      await tx.$queryRaw`
+        SELECT id FROM "Estimate" WHERE "publicToken" = ${token} FOR UPDATE
+      `;
       const current = await tx.estimate.findFirst({
         where: { publicToken: token },
-        select: { id: true, status: true },
+        select: {
+          id: true,
+          businessId: true,
+          status: true,
+          approvedOptionId: true,
+          approvedOption: { select: { name: true } },
+        },
       });
 
       if (!current) {
@@ -67,7 +127,14 @@ export async function approveEstimate(
       }
 
       if (current.status === "APPROVED") {
-        return { ok: false, reason: "already_approved" };
+        return {
+          ok: false,
+          reason: "already_approved",
+          approvedOption: {
+            approvedOptionId: current.approvedOptionId,
+            approvedOptionName: current.approvedOption?.name ?? null,
+          },
+        };
       }
 
       if (current.status !== "SENT") {
@@ -96,11 +163,47 @@ export async function approveEstimate(
         return { ok: false, reason: "stale" };
       }
 
+      const versionOptions = await tx.estimateVersionOption.findMany({
+        where: {
+          estimateVersionId: currentVersion.id,
+          businessId: current.businessId,
+        },
+        orderBy: { sortOrder: "asc" },
+      });
+      let approvedOptionId: string | null = null;
+      let chosenTotal = currentVersion.total;
+      let chosenAdjustment = currentVersion.laborMinimumAdjustment;
+
+      if (versionOptions.length > 0) {
+        if (versionOptions.length < MIN_ESTIMATE_OPTIONS) {
+          return { ok: false, reason: "not_ready" };
+        }
+        if (!submittedOptionId) {
+          return { ok: false, reason: "option_required" };
+        }
+        const chosen = versionOptions.find((option) => option.id === submittedOptionId);
+        if (!chosen) {
+          return { ok: false, reason: "stale" };
+        }
+        approvedOptionId = chosen.id;
+        chosenTotal = chosen.total;
+        chosenAdjustment = chosen.laborMinimumAdjustment;
+      } else if (submittedOptionId) {
+        return { ok: false, reason: "stale" };
+      }
+
       const updated = await tx.estimate.updateMany({
-        where: { id: current.id, status: "SENT" },
+        where: {
+          id: current.id,
+          status: "SENT",
+          approvedVersionId: null,
+        },
         data: {
           status: "APPROVED",
           approvedVersionId: currentVersion.id,
+          approvedOptionId,
+          total: chosenTotal,
+          laborMinimumAdjustment: chosenAdjustment,
         },
       });
 
@@ -112,6 +215,12 @@ export async function approveEstimate(
         where: { id: currentVersion.id },
         data: { approvedAt: new Date() },
       });
+      if (approvedOptionId) {
+        await tx.estimateVersionOption.update({
+          where: { id: approvedOptionId },
+          data: { approvedAt: new Date() },
+        });
+      }
 
       return { ok: true };
     },
@@ -121,16 +230,32 @@ export async function approveEstimate(
     if (result.reason === "stale") {
       return { error: STALE_VERSION_ERROR };
     }
+    if (result.reason === "option_required") {
+      return { error: OPTION_REQUIRED_MESSAGE };
+    }
     if (result.reason === "already_approved") {
-      return { status: "APPROVED" };
+      return alreadyApprovedResult(
+        submittedOptionId,
+        result.approvedOption ?? {
+          approvedOptionId: null,
+          approvedOptionName: null,
+        },
+      );
     }
 
     const finalState = await prisma.estimate.findUnique({
       where: { publicToken: token },
-      select: { status: true },
+      select: {
+        status: true,
+        approvedOptionId: true,
+        approvedOption: { select: { name: true } },
+      },
     });
     if (finalState?.status === "APPROVED") {
-      return { status: "APPROVED" };
+      return alreadyApprovedResult(submittedOptionId, {
+        approvedOptionId: finalState.approvedOptionId,
+        approvedOptionName: finalState.approvedOption?.name ?? null,
+      });
     }
     return { error: NOT_READY_ERROR };
   }

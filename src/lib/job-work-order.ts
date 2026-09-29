@@ -54,12 +54,19 @@ export type ApprovedWorkOrderScope =
     };
 
 type JobForScopeResolution = {
+  approvedEstimateOptionId?: string | null;
+  approvedEstimateOption?: {
+    id: string;
+    name: string;
+    total: Prisma.Decimal;
+    laborMinimumAdjustment?: Prisma.Decimal;
+  } | null;
   approvedEstimateVersion: {
     versionNumber: number;
     total: Prisma.Decimal;
     laborMinimumAdjustment: Prisma.Decimal;
     approvedAt: Date | null;
-    lineItems: WorkOrderLineItem[];
+    lineItems: Array<WorkOrderLineItem & { optionId?: string | null }>;
   } | null;
   estimate: {
     total: Prisma.Decimal;
@@ -80,13 +87,20 @@ export function resolveApprovedWorkOrderScope(
 ): ApprovedWorkOrderScope {
   if (job.approvedEstimateVersion) {
     const version = job.approvedEstimateVersion;
+    const optionId =
+      job.approvedEstimateOptionId ?? job.approvedEstimateOption?.id ?? null;
+    const option = job.approvedEstimateOption;
+    const lineItems = optionId
+      ? version.lineItems.filter((line) => line.optionId === optionId)
+      : version.lineItems;
     return {
       source: "version",
       versionNumber: version.versionNumber,
-      total: version.total,
-      laborMinimumAdjustment: version.laborMinimumAdjustment,
+      total: option?.total ?? version.total,
+      laborMinimumAdjustment:
+        option?.laborMinimumAdjustment ?? version.laborMinimumAdjustment,
       approvedAt: version.approvedAt,
-      lineItems: version.lineItems,
+      lineItems,
     };
   }
 

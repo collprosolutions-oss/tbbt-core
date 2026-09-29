@@ -124,16 +124,29 @@ export const CAPABILITIES = {
    */
   AUTHORIZE_PAYROLL: "AUTHORIZE_PAYROLL",
   /**
+   * OWNER-only accept or decline of a worker time-correction request.
+   * ADMIN may manage time cards and see pending requests, but must not
+   * silently inherit this decision. Accept never rewrites an approved
+   * week or a locked payroll snapshot.
+   */
+  DECIDE_TIME_CORRECTIONS: "DECIDE_TIME_CORRECTIONS",
+  /**
    * Owner/admin Expenses management: record, review, and allocate
    * business-wide expenses. MEMBER must never receive this -- employee
    * field submission is a later, separately scoped feature.
    */
   MANAGE_EXPENSES: "MANAGE_EXPENSES",
   /**
-   * Read business-wide Reports (invoices, labor, customers, services).
-   * OWNER/ADMIN only. MEMBER must never receive this -- Reports hold
-   * private financial data for the whole business, not assigned-job
-   * field work.
+   * OWNER-only attach, replace, and remove of a private expense receipt.
+   * ADMIN keeps MANAGE_EXPENSES (record/review/edit) and may view or
+   * download same-business receipts, but must not mutate the file.
+   */
+  MANAGE_EXPENSE_RECEIPTS: "MANAGE_EXPENSE_RECEIPTS",
+  /**
+   * Read business-wide Reports (invoices, labor, customers, services)
+   * and monthly goal progress. OWNER/ADMIN only. MEMBER must never
+   * receive this -- Reports and monthly goals hold private financial
+   * data for the whole business, not assigned-job field work.
    */
   VIEW_REPORTS: "VIEW_REPORTS",
   /**
@@ -194,6 +207,13 @@ export const CAPABILITIES = {
    * not assigned-job field work.
    */
   MANAGE_BUSINESS_PROTECTION: "MANAGE_BUSINESS_PROTECTION",
+  /**
+   * Owner/admin Equipment register: tools and vehicles recorded for this
+   * business. ADMIN may read. OWNER records items and maintenance.
+   * MEMBER must never receive this -- the register is business-wide owner
+   * data, not assigned-job field work. MEMBER stays on field-access.ts.
+   */
+  MANAGE_EQUIPMENT: "MANAGE_EQUIPMENT",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -201,8 +221,10 @@ export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
 const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.AUTHORIZE_PAYROLL,
+  CAPABILITIES.DECIDE_TIME_CORRECTIONS,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
+  CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
 ]);
 
 /**
@@ -261,7 +283,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Materials, Jobs, Invoices,
- * Reports, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Business Protection, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Monthly goals, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Business Protection, Equipment, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

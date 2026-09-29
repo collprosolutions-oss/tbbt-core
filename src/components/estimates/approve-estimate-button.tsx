@@ -21,6 +21,7 @@ export function ApproveEstimateButton({
   depositStatus,
   paymentReady,
   remainingProjectBalance,
+  options,
 }: {
   publicToken: string;
   status: string;
@@ -31,6 +32,7 @@ export function ApproveEstimateButton({
   remainingProjectBalance?: string | null;
   depositStatus?: "none" | "due" | "partial" | "paid";
   paymentReady?: boolean;
+  options?: Array<{ id: string; name: string; totalLabel: string }>;
 }) {
   const [state, formAction, pending] = useActionState(
     approveEstimate,
@@ -122,6 +124,21 @@ export function ApproveEstimateButton({
         name="estimateVersionId"
         value={currentVersionId ?? ""}
       />
+      {options && options.length >= 2 ? (
+        <fieldset className="mb-3 space-y-2">
+          <legend className="mb-2 text-sm font-medium">
+            Choose one priced option
+          </legend>
+          {options.map((option) => (
+            <label key={option.id} className="flex items-start gap-2 text-sm">
+              <input type="radio" name="estimateOptionId" value={option.id} required />
+              <span>
+                {option.name} · {option.totalLabel}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
       {state.error ? (
         <Alert variant="destructive" className="mb-3">
           <AlertDescription>{state.error}</AlertDescription>

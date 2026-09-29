@@ -6,12 +6,16 @@ import {
   addWebsiteGalleryItemAction,
   publishWebsiteAction,
   removeWebsiteGalleryItemAction,
-  rollbackWebsiteAction,
+  restoreWebsiteAction,
   saveWebsiteLocalPageDraftAction,
   saveWebsiteSeoDraftAction,
   setReviewWebsiteSelectedAction,
   type WebsiteEngineActionState,
 } from "@/app/actions/website-engine";
+import {
+  WEBSITE_PUBLISH_RESTORE_CONFIRM_REQUIRED,
+  WEBSITE_PUBLISH_RESTORE_DESCRIPTION,
+} from "@/lib/website-engine/snapshot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +45,10 @@ function useFormAttemptKey(successToken?: string) {
 export function WebsitePublishPanel({
   slug,
   canEdit,
+  canRestore,
   hasUnpublishedChanges,
+  currentId,
+  historyLimit,
   currentVersion,
   versions,
   reviews,
@@ -52,7 +59,10 @@ export function WebsitePublishPanel({
 }: {
   slug: string;
   canEdit: boolean;
+  canRestore: boolean;
   hasUnpublishedChanges: boolean;
+  currentId: string | null;
+  historyLimit: number;
   currentVersion: number | null;
   versions: Array<{
     id: string;
@@ -81,7 +91,7 @@ export function WebsitePublishPanel({
   };
 }) {
   const [publishState, publishAction, publishing] = useActionState(publishWebsiteAction, initial);
-  const [rollbackState, rollbackAction, rolling] = useActionState(rollbackWebsiteAction, initial);
+  const [restoreState, restoreAction, restoring] = useActionState(restoreWebsiteAction, initial);
   const [seoState, seoAction, savingSeo] = useActionState(saveWebsiteSeoDraftAction, initial);
   const [galleryState, galleryAction, addingGallery] = useActionState(addWebsiteGalleryItemAction, initial);
   const [localState, localAction, savingLocal] = useActionState(saveWebsiteLocalPageDraftAction, initial);
@@ -96,7 +106,6 @@ export function WebsitePublishPanel({
     localPairs[0];
   const [localCopy, setLocalCopy] = useState(selectedLocalPair?.draftCopy ?? "");
   const publishKey = useFormAttemptKey(publishState.message);
-  const rollbackKey = useFormAttemptKey(rollbackState.message);
 
   return (
     <div className="space-y-6">
@@ -105,18 +114,19 @@ export function WebsitePublishPanel({
         {currentVersion
           ? `Current published version: ${currentVersion}.`
           : "This site still uses the live compatibility path until the first publish."}{" "}
-        Publishing captures the current intake snapshot for each trade. The live site keeps those exact versions until you publish again.{" "}
+        Publishing captures the current intake snapshot for each trade. The live site keeps those exact versions until you publish or restore.{" "}
         {hasUnpublishedChanges ? "There are unpublished draft changes." : "Draft matches the current publish."}
       </p>
-      {publishState.error || rollbackState.error || seoState.error || galleryState.error || localState.error ? (
+      <p className="text-sm text-muted-foreground">{WEBSITE_PUBLISH_RESTORE_DESCRIPTION}</p>
+      {publishState.error || restoreState.error || seoState.error || galleryState.error || localState.error ? (
         <Alert variant="destructive">
           <AlertDescription>
-            {publishState.error || rollbackState.error || seoState.error || galleryState.error || localState.error}
+            {publishState.error || restoreState.error || seoState.error || galleryState.error || localState.error}
           </AlertDescription>
         </Alert>
       ) : null}
-      {publishState.message || rollbackState.message || seoState.message ? (
-        <p className="text-sm">{publishState.message || rollbackState.message || seoState.message}</p>
+      {publishState.message || restoreState.message || seoState.message ? (
+        <p className="text-sm">{publishState.message || restoreState.message || seoState.message}</p>
       ) : null}
 
       {canEdit ? (
@@ -305,12 +315,16 @@ export function WebsitePublishPanel({
               <p className="text-muted-foreground">
                 {new Date(version.publishedAt).toLocaleString()} · {version.publishedByName || "Unknown"} · {version.summary}
               </p>
-              {canEdit && !version.isCurrent ? (
-                <form action={rollbackAction} className="mt-2">
+              {canRestore && currentId && !version.isCurrent ? (
+                <form action={restoreAction} className="mt-2 space-y-2">
                   <input type="hidden" name="publishId" value={version.id} />
-                  <input type="hidden" name="idempotencyKey" value={`${rollbackKey}:${version.id}`} />
-                  <Button type="submit" size="sm" variant="outline" disabled={rolling}>
-                    Roll back to this version
+                  <input type="hidden" name="expectedCurrentId" value={currentId} />
+                  <label className="flex items-start gap-2 text-sm">
+                    <input type="checkbox" name="confirmed" value="1" className="mt-1" />
+                    <span>{WEBSITE_PUBLISH_RESTORE_CONFIRM_REQUIRED}</span>
+                  </label>
+                  <Button type="submit" size="sm" variant="outline" disabled={restoring}>
+                    {restoring ? "Restoring…" : "Restore this version as current"}
                   </Button>
                 </form>
               ) : null}
@@ -318,6 +332,19 @@ export function WebsitePublishPanel({
           ))}
           {versions.length === 0 ? <li>No published versions yet.</li> : null}
         </ul>
+        {versions.length > 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Showing the newest {versions.length} published website versions
+            {versions.length === historyLimit ? ` (capped at ${historyLimit})` : ""}. Restore moves
+            the current public site. Captured intake versions are restored only when that publish
+            recorded them. Historical requests stay unchanged.
+          </p>
+        ) : null}
+        {canEdit && !canRestore ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Only the owner can restore a prior published website.
+          </p>
+        ) : null}
       </div>
     </div>
   );
