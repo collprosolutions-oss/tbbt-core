@@ -27,6 +27,7 @@ import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-b
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
+import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
@@ -115,6 +116,7 @@ import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-cle
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
+import { loadJobCallbackReview } from "@/lib/job-callback-data";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -407,6 +409,7 @@ export default async function JobPage({
   const cleaningNextBooking = isCompleted
     ? await loadCleaningNextBookingReview(prisma, access, job.id)
     : null;
+  const jobCallbackReview = await loadJobCallbackReview(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -1142,6 +1145,23 @@ export default async function JobPage({
           />
         </CardContent>
       </Card>
+
+      {jobCallbackReview ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Customer-reported callback</CardTitle>
+            <CardDescription>
+              OWNER record, review, and outcome for a customer-reported
+              callback on a completed same-business job. Shows recorded
+              warranty terms only. Does not invent coverage, create an
+              invoice, schedule a job, or message the customer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <JobCallbackPanel review={jobCallbackReview} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

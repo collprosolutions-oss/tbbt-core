@@ -309,6 +309,8 @@ model Business {
   additionalWorkRequests      AdditionalWorkRequest[]
   additionalWorkRequestItems  AdditionalWorkRequestItem[]
   jobProblemReports           JobProblemReport[]
+  jobCallbacks                JobCallback[]
+  jobCallbackEvents           JobCallbackEvent[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
   timeCorrectionRequests   TimeCorrectionRequest[]
@@ -697,6 +699,10 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedJobCallbacks         JobCallback[]          @relation("JobCallbackRecorder")
+  reviewedJobCallbacks         JobCallback[]          @relation("JobCallbackReviewer")
+  outcomeJobCallbacks          JobCallback[]          @relation("JobCallbackOutcome")
+  jobCallbackEvents            JobCallbackEvent[]     @relation("JobCallbackEventActor")
   createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
   createdEquipmentMaintenanceEntries EquipmentMaintenanceEntry[] @relation("EquipmentMaintenanceCreator")
   recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
@@ -744,6 +750,7 @@ model Customer {
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
   referralsReceived Referral[] @relation("ReferralReferredCustomer")
   growthActionRequests GrowthActionRequest[]
+  jobCallbacks         JobCallback[]
 
   @@index([businessId])
   @@index([firstCampaignId])
@@ -1611,6 +1618,7 @@ model Job {
   changeOrders            ChangeOrder[]
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
+  callbacks               JobCallback[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
   payments                Payment[]
@@ -2246,6 +2254,79 @@ model JobProblemReport {
   @@index([businessId])
   @@index([jobId])
   @@index([membershipId])
+}
+
+/// OWNER-recorded customer-reported callback against a completed
+/// same-business Job. Trade-neutral operational review only — never a
+/// warranty coverage or legal determination, and never an invoice,
+/// scheduled Job, or customer message by itself. Distinct from
+/// AdditionalWorkRequest (portal/field extra-work review) and
+/// JobProblemReport (assigned-member field issues).
+///
+/// Status: RECORDED -> UNDER_REVIEW -> OUTCOME_RECORDED.
+/// At most one open (RECORDED | UNDER_REVIEW) row per Job is enforced by
+/// a partial unique index in the migration, not here — Prisma cannot
+/// express that WHERE clause.
+model JobCallback {
+  id                       String    @id @default(cuid())
+  businessId               String
+  jobId                    String
+  customerId               String?
+  /// Customer-reported description as the OWNER recorded it.
+  description              String
+  /// PHONE | TEXT | EMAIL | IN_PERSON | PORTAL | OTHER
+  reportedVia              String
+  /// RECORDED | UNDER_REVIEW | OUTCOME_RECORDED
+  status                   String    @default("RECORDED")
+  /// WILL_FOLLOW_UP | NO_RETURN_VISIT | CUSTOMER_WITHDREW | RECORDED_ONLY
+  /// Operational outcome only — never COVERED / NOT_COVERED.
+  outcome                  String?
+  outcomeNotes             String?
+  recordedByMembershipId   String
+  reviewedByMembershipId   String?
+  outcomeByMembershipId    String?
+  recordedAt               DateTime  @default(now())
+  reviewedAt               DateTime?
+  outcomeAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  recordedBy Membership @relation("JobCallbackRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("JobCallbackReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  outcomeBy  Membership? @relation("JobCallbackOutcome", fields: [outcomeByMembershipId], references: [id], onDelete: SetNull)
+  events     JobCallbackEvent[]
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([businessId, status])
+  @@index([customerId])
+}
+
+/// Append-only status history for one JobCallback.
+/// Application code must never update or delete an existing row.
+model JobCallbackEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  callbackId        String
+  /// RECORDED | REVIEWED | OUTCOME_RECORDED
+  eventType         String
+  fromStatus        String?
+  toStatus          String
+  actorMembershipId String
+  /// Non-sensitive JSON (reportedVia, outcome, note length). Never a
+  /// coverage determination or customer message payload.
+  payload           String?
+  createdAt         DateTime @default(now())
+
+  business Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  callback JobCallback @relation(fields: [callbackId], references: [id], onDelete: Cascade)
+  actor    Membership  @relation("JobCallbackEventActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([callbackId, createdAt])
 }
 
 /// One clocked or manually-entered interval of labor time. This is the

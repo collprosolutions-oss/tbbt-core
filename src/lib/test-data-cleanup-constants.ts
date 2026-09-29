@@ -24,6 +24,7 @@ export type TestDataCleanupCounts = {
   changeOrders: number;
   additionalWorkRequests: number;
   jobProblemReports: number;
+  jobCallbacks: number;
   timeEntries: number;
   timesheetWeeks: number;
   payrollRuns: number;
