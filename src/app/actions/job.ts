@@ -22,6 +22,7 @@ import {
 import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
+import { OPTION_JOB_REQUIRED_MESSAGE } from "@/lib/estimate-options";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
@@ -182,6 +183,16 @@ export async function createJobFromEstimate(
     return { error: "Only an approved estimate can become a job." };
   }
 
+  const frozenOptions = await prisma.estimateVersionOption.count({
+    where: {
+      businessId: access.businessId,
+      estimateVersionId: estimate.approvedVersionId ?? "",
+    },
+  });
+  if (frozenOptions > 0 && !estimate.approvedOptionId) {
+    return { error: OPTION_JOB_REQUIRED_MESSAGE };
+  }
+
   const existing = await prisma.job.findFirst({
     where: {
       ...access.scope,
@@ -248,6 +259,7 @@ export async function createJobFromEstimate(
       // with no version on record -- resolveApprovedWorkOrderScope() in
       // src/lib/job-work-order.ts falls back safely for that case.
       approvedEstimateVersionId: estimate.approvedVersionId,
+      approvedEstimateOptionId: estimate.approvedOptionId,
       projectToken: randomUUID(),
       status: "UNSCHEDULED",
       leadSource: estimate.leadSource,

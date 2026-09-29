@@ -116,6 +116,7 @@ const LINE_ITEM_SELECT = {
   unitPrice: true,
   total: true,
   type: true,
+  optionId: true,
 } as const;
 
 export default async function JobPage({
@@ -152,6 +153,9 @@ export default async function JobPage({
       // from -- see resolveApprovedWorkOrderScope() in
       // src/lib/job-work-order.ts for why this is preferred over the (live,
       // mutable) `estimate` relation above.
+      approvedEstimateOption: {
+        select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
+      },
       approvedEstimateVersion: {
         select: {
           versionNumber: true,
@@ -277,9 +281,9 @@ export default async function JobPage({
     changeOrders: job.changeOrders,
   });
   const depositLines =
-    job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+    approvedScope.source === "none" ? [] : approvedScope.lineItems;
   const depositTotal =
-    job.approvedEstimateVersion?.total ?? job.estimate?.total ?? new Prisma.Decimal(0);
+    approvedScope.source === "none" ? new Prisma.Decimal(0) : approvedScope.total;
   const requiredDeposit = resolveMaterialDeposit({
     lines: depositLines,
     total: depositTotal,

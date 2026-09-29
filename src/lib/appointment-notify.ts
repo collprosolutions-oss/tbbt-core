@@ -57,21 +57,32 @@ export async function notifyCustomerAppointmentProposed(
           postalCode: true,
         },
       },
+      approvedEstimateOptionId: true,
+      approvedEstimateOption: {
+        select: {
+          businessId: true,
+          lineItems: {
+            take: 1,
+            orderBy: { createdAt: "asc" },
+            select: { description: true },
+          },
+        },
+      },
       estimate: {
         select: {
           lineItems: {
+            take: 8,
             orderBy: { createdAt: "asc" },
-            select: { description: true },
-            take: 1,
+            select: { description: true, optionId: true },
           },
         },
       },
       approvedEstimateVersion: {
         select: {
           lineItems: {
+            take: 8,
             orderBy: { createdAt: "asc" },
-            select: { description: true },
-            take: 1,
+            select: { description: true, optionId: true },
           },
         },
       },
@@ -158,7 +169,22 @@ export async function notifyCustomerAppointmentProposed(
     scheduledAt: input.scheduledAt,
     scheduledDurationMinutes: input.scheduledDurationMinutes,
     serviceDescription: appointmentServiceDescription(
-      job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems,
+      (() => {
+        const option = job.approvedEstimateOption;
+        const optionLine =
+          option && option.businessId === input.businessId
+            ? option.lineItems[0]
+            : undefined;
+        if (optionLine) return [optionLine];
+        const optionId = job.approvedEstimateOptionId ?? null;
+        const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
+        const estimateLines = job.estimate?.lineItems ?? [];
+        const source = versionLines.length > 0 ? versionLines : estimateLines;
+        const chosen = optionId
+          ? source.filter((line) => line.optionId === optionId)
+          : source;
+        return chosen.slice(0, 1);
+      })(),
     ),
     projectUrl:
       tenantProjectUrl(job.business.slug, job.projectToken) ??

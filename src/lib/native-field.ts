@@ -102,17 +102,18 @@ const NATIVE_FIELD_JOB_DETAIL_SELECT = {
     select: {
       lineItems: {
         orderBy: { createdAt: "asc" as const },
-        select: { description: true, quantity: true, type: true },
+        select: { description: true, quantity: true, type: true, optionId: true },
       },
     },
   },
+  approvedEstimateOptionId: true,
   approvedEstimateVersion: {
     select: {
       versionNumber: true,
       approvedAt: true,
       lineItems: {
         orderBy: { createdAt: "asc" as const },
-        select: { description: true, quantity: true, type: true },
+        select: { description: true, quantity: true, type: true, optionId: true },
       },
     },
   },
@@ -759,12 +760,23 @@ async function toNativeJobPhoto(
 }
 
 function fieldSafeScope(job: {
+  approvedEstimateOptionId?: string | null;
   approvedEstimateVersion: {
     versionNumber: number;
-    lineItems: Array<{ description: string; quantity: { toString(): string }; type: string }>;
+    lineItems: Array<{
+      description: string;
+      quantity: { toString(): string };
+      type: string;
+      optionId?: string | null;
+    }>;
   } | null;
   estimate: {
-    lineItems: Array<{ description: string; quantity: { toString(): string }; type: string }>;
+    lineItems: Array<{
+      description: string;
+      quantity: { toString(): string };
+      type: string;
+      optionId?: string | null;
+    }>;
   } | null;
 }): NativeJobDetail["scope"] {
   const toItems = (
@@ -777,10 +789,14 @@ function fieldSafeScope(job: {
     }));
 
   if (job.approvedEstimateVersion) {
+    const optionId = job.approvedEstimateOptionId ?? null;
+    const lines = optionId
+      ? job.approvedEstimateVersion.lineItems.filter((line) => line.optionId === optionId)
+      : job.approvedEstimateVersion.lineItems;
     return {
       source: "version",
       versionNumber: job.approvedEstimateVersion.versionNumber,
-      items: toItems(job.approvedEstimateVersion.lineItems),
+      items: toItems(lines),
     };
   }
   if (job.estimate) {

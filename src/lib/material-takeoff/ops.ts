@@ -292,6 +292,7 @@ export async function convertDraftMaterialTakeoff(
           unitPrice: row.unitPrice,
           total: row.total,
           type: "MATERIAL",
+          optionId: line.optionId ?? null,
         },
       });
       createdIds[row.itemId] = created.id;
@@ -796,10 +797,16 @@ async function createGenericCustomWorkLine(
   existing: Array<{ type: string; description: string }>,
 ) {
   if (existing.some(isOriginalEstimateWorkLine)) return 0;
+  const firstOption = await tx.estimateOption.findFirst({
+    where: { estimateId: estimate.id, businessId: access.businessId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true },
+  });
   await tx.lineItem.create({
     data: {
       businessId: access.businessId,
       estimateId: estimate.id,
+      optionId: firstOption?.id ?? null,
       description: joinLineDescription(`Custom work ${CUSTOM_QUOTE_DRAFT_MARKER}`),
       quantity: new Prisma.Decimal(1),
       unitPrice: new Prisma.Decimal(0),

@@ -13,6 +13,7 @@ export type EstimateVersionSummary = {
   total: { toString(): string };
   sentAt: Date;
   approvedAt: Date | null;
+  options?: Array<{ name: string; total: { toString(): string } }>;
 };
 
 /**
@@ -51,7 +52,11 @@ export function EstimateVersionHistory({
                 {formatDateTime(version.sentAt)}
               </span>
               <span className="flex items-center gap-2 text-muted-foreground">
-                {formatMoney(version.total)}
+                {version.options && version.options.length >= 2
+                  ? version.options
+                      .map((option) => `${option.name} ${formatMoney(option.total)}`)
+                      .join(" · ")
+                  : formatMoney(version.total)}
                 {version.approvedAt ? (
                   <span className="font-medium text-foreground">
                     Approved
