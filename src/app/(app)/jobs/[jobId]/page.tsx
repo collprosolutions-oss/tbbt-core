@@ -10,6 +10,8 @@ import {
 } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
+import { ProjectDocumentReviewList } from "@/components/jobs/project-document-review-list";
+import { listProjectDocumentsForOwnerReview } from "@/lib/business-storage/project-documents";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
 import { CleaningCorrectiveCleanForm } from "@/components/jobs/cleaning-corrective-clean-form";
@@ -1016,6 +1018,25 @@ export default async function JobPage({
         <CardContent className="space-y-4">
           <ChangeOrderList jobId={job.id} changeOrders={job.changeOrders} />
           <CreateChangeOrderForm jobId={job.id} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Customer Documents</CardTitle>
+          <CardDescription>
+            Private files the customer uploaded from their project portal.
+            OWNER and ADMIN can open them. Opening a file does not approve,
+            publish, message, invoice, or change this job.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ProjectDocumentReviewList
+            documents={await listProjectDocumentsForOwnerReview(prisma, {
+              businessId: access.businessId,
+              jobId: job.id,
+            })}
+          />
         </CardContent>
       </Card>
 
