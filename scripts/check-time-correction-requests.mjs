@@ -10,7 +10,7 @@
  * dedicated localhost test DB.
  *
  * Run with:
- *   node --experimental-strip-types scripts/check-time-correction-requests.mjs
+ *   TZ=UTC node --experimental-strip-types scripts/check-time-correction-requests.mjs
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
@@ -29,6 +29,7 @@ const {
 const {
   canRequestTimeCorrection,
   hoursBetween,
+  parseDateTimeInput,
   weekRange,
 } = await import("@/lib/time-cards");
 const {
@@ -377,6 +378,16 @@ try {
       correctActionSrc.includes("timeZone"),
   );
   check(
+    "Manual/correction/request parse civil input after resolving Business timezone",
+    requestActionSrc.includes("parseBusinessDateTimeInput") &&
+      requestActionSrc.indexOf("resolveBusinessTimeZone") <
+        requestActionSrc.indexOf("parseBusinessDateTimeInput") &&
+      manualActionSrc.indexOf("resolveBusinessTimeZone") <
+        manualActionSrc.indexOf("parseBusinessDateTimeInput") &&
+      correctActionSrc.indexOf("resolveBusinessTimeZone") <
+        correctActionSrc.indexOf("parseBusinessDateTimeInput"),
+  );
+  check(
     "Migration is additive, uniquely pending, and uses 20260929010100",
     migrationSrc.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionRequest"') &&
       migrationSrc.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionDecision"') &&
@@ -516,6 +527,36 @@ try {
       afterRequest.endedAt.getTime() === memberEntry.endedAt.getTime() &&
       afterRequest.note === "Mia recorded 2h" &&
       afterRequest.status === "READY",
+  );
+
+  const civilOriginalStart = parseDateTimeInput("2026-09-20", "01:00", NY);
+  const civilOriginalEnd = parseDateTimeInput("2026-09-20", "05:00", NY);
+  const civilProposedStart = parseDateTimeInput("2026-09-20", "02:00", NY);
+  const civilProposedEnd = parseDateTimeInput("2026-09-20", "06:00", NY);
+  const civilEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: memberMem.id,
+    activityType: "JOB",
+    jobId: jobA.id,
+    startedAt: civilOriginalStart,
+    endedAt: civilOriginalEnd,
+    note: "Early Sunday NY civil entry",
+    timeZone: NY,
+  });
+  const civilRequested = await requestCorrection(prisma, memberA, {
+    timeEntryId: civilEntry.id,
+    reason: "Correct 01:00–05:00 to 02:00–06:00 NY",
+    proposedStartedAt: civilProposedStart,
+    proposedEndedAt: civilProposedEnd,
+  });
+  const civilStored = await prisma.timeEntry.findUnique({ where: { id: civilEntry.id } });
+  check(
+    "P1-07 correction request persists America/New_York civil times as UTC instants",
+    civilStored.startedAt.toISOString() === "2026-09-20T05:00:00.000Z" &&
+      civilStored.endedAt.toISOString() === "2026-09-20T09:00:00.000Z" &&
+      civilRequested.request.originalStartedAt.toISOString() === "2026-09-20T05:00:00.000Z" &&
+      civilRequested.request.proposedStartedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      civilRequested.request.proposedEndedAt.toISOString() === "2026-09-20T10:00:00.000Z" &&
+      weekRange(civilStored.startedAt, NY).start.toISOString() === "2026-09-20T04:00:00.000Z",
   );
   await expectError(
     "Worker cannot request a correction on another worker's entry",

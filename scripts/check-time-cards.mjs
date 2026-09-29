@@ -7,7 +7,7 @@
  * constructed the same way scripts/check-authorization.mjs does.
  *
  * Run with:
- *   node --experimental-strip-types scripts/check-time-cards.mjs
+ *   TZ=UTC node --experimental-strip-types scripts/check-time-cards.mjs
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
@@ -31,6 +31,11 @@ const {
   canRequestTimeCorrection,
   coerceHourlyWage,
   estimateLaborCost,
+  WEEK_BOUNDARY_CROSSING_POLICY,
+  WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR,
+  businessWeekStartsTouchedByEntry,
+  entryCrossesBusinessWeekBoundary,
+  entryOverlapsWeek,
   formatDateInput,
   formatDurationClock,
   formatTimeInput,
@@ -39,9 +44,12 @@ const {
   intervalsOverlap,
   isPaidActivity,
   missingApprovalSnapshotPatch,
+  NONEXISTENT_CIVIL_TIME_ERROR,
   paidHours,
+  parseBusinessDateTimeInput,
   parseDateTimeInput,
   parseHourlyWage,
+  resolveWeekBoundaryCrossingPolicy,
   weekRange,
 } = await import("@/lib/time-cards");
 const {
@@ -65,16 +73,53 @@ const { createExpense } = await import("@/lib/expense-ops");
 const { buildReport, resolveReportRange } = await import("@/lib/reports");
 const { loadReportSource } = await import("@/lib/reports-data");
 
+const NY = "America/New_York";
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
 
-const testDbName = "tbbt_time_cards_test";
 const parsed = new URL(baseUrl);
+if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+  console.error(
+    "Refusing to run: DATABASE_URL host must be localhost or 127.0.0.1 because this script runs prisma db push --accept-data-loss.",
+  );
+  process.exit(1);
+}
+
+const testDbName = "tbbt_time_cards_test";
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+
+const require = createRequire(import.meta.url);
+const { PrismaClient, Prisma } = require("@prisma/client");
+
+async function dropTestDatabase() {
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
+await dropTestDatabase();
+
+const adminUrl = new URL(baseUrl);
+adminUrl.search = "";
+const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+  encoding: "utf8",
+});
+if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+  console.error(createDb.stderr || createDb.stdout);
+  await dropTestDatabase();
+  process.exit(createDb.status ?? 1);
+}
 
 const push = spawnSync(
   "npx",
@@ -83,12 +128,15 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for time-cards test database.");
+  await dropTestDatabase();
   process.exit(push.status ?? 1);
 }
 
-const require = createRequire(import.meta.url);
-const { PrismaClient, Prisma } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+
+function civil(date, time) {
+  return parseDateTimeInput(date, time, NY);
+}
 
 let failures = 0;
 function check(label, condition) {
@@ -109,10 +157,10 @@ async function expectError(label, fn, predicate) {
   }
 }
 
-function makeAccess(businessId, role, membershipId) {
+function makeAccess(businessId, role, membershipId, timezone = NY) {
   return {
     businessId,
-    workspace: { role, membership: { id: membershipId } },
+    workspace: { role, membership: { id: membershipId }, business: { timezone } },
     scope: { businessId },
     assertOwned(record) {
       if (!record || record.businessId !== businessId) {
@@ -141,20 +189,83 @@ try {
   ));
   check("2 hours is 2.00", hoursBetween(new Date("2026-08-30T09:00:00"), new Date("2026-08-30T11:00:00")) === 2);
   const nineToFive = {
-    startedAt: parseDateTimeInput("2026-08-24", "09:00"),
-    endedAt: parseDateTimeInput("2026-08-24", "17:00"),
+    startedAt: civil("2026-08-24", "09:00"),
+    endedAt: civil("2026-08-24", "17:00"),
   };
-  check("9 AM–5 PM parses to the same civil day", nineToFive.startedAt?.toISOString() === "2026-08-24T09:00:00.000Z" && nineToFive.endedAt?.toISOString() === "2026-08-24T17:00:00.000Z");
+  check("9 AM–5 PM America/New_York persists 13:00Z–21:00Z (EDT)", nineToFive.startedAt?.toISOString() === "2026-08-24T13:00:00.000Z" && nineToFive.endedAt?.toISOString() === "2026-08-24T21:00:00.000Z");
   check("9 AM–5 PM = 8 hours", hoursBetween(nineToFive.startedAt, nineToFive.endedAt) === 8);
-  check("9 AM–5 PM with seconds still 8 hours", hoursBetween(parseDateTimeInput("2026-08-24", "09:00:00"), parseDateTimeInput("2026-08-24", "17:00:00")) === 8);
+  check("9 AM–5 PM with seconds still 8 hours", hoursBetween(civil("2026-08-24", "09:00:00"), civil("2026-08-24", "17:00:00")) === 8);
+  check(
+    "Winter EST 09:00 America/New_York persists 14:00Z",
+    civil("2026-01-15", "09:00")?.toISOString() === "2026-01-15T14:00:00.000Z",
+  );
+  check(
+    "Host timezone cannot hide the NY offset (09:00 is not 09:00Z)",
+    civil("2026-08-24", "09:00")?.toISOString() !== "2026-08-24T09:00:00.000Z",
+  );
+  const sundayEarly = civil("2026-09-20", "01:00");
+  const sundayWeek = weekRange(sundayEarly, NY);
+  check(
+    "Early Sunday 01:00 America/New_York classifies into the Sep 20 week, not Sep 13",
+    sundayEarly?.toISOString() === "2026-09-20T05:00:00.000Z" &&
+      sundayWeek.start.toISOString() === "2026-09-20T04:00:00.000Z",
+  );
+  check("DST-gap 2026-03-08 02:30 America/New_York is rejected", civil("2026-03-08", "02:30") === null);
+  const dstGap = parseBusinessDateTimeInput("2026-03-08", "02:30", NY);
+  check(
+    "DST-gap parse reports the nonexistent civil-time error",
+    !dstGap.ok && dstGap.error === NONEXISTENT_CIVIL_TIME_ERROR,
+  );
+  const editRoundTrip = parseDateTimeInput(
+    formatDateInput(nineToFive.startedAt, NY),
+    formatTimeInput(nineToFive.startedAt, NY),
+    NY,
+  );
+  check(
+    "UI/edit round-trip keeps the same UTC instant",
+    editRoundTrip?.toISOString() === nineToFive.startedAt.toISOString(),
+  );
+  check("parseDateTimeInput requires a resolved IANA timezone", parseDateTimeInput("2026-08-24", "09:00", "Not/AZone") === null);
+  const crossing = {
+    startedAt: civil("2026-09-19", "22:00"),
+    endedAt: civil("2026-09-20", "02:00"),
+    activityType: "JOB",
+  };
+  const weekA = weekRange(civil("2026-09-19", "12:00"), NY);
+  const weekB = weekRange(civil("2026-09-20", "12:00"), NY);
+  check(
+    "P1-08 fixture: Sat 22:00–Sun 02:00 America/New_York is 4 hours and crosses the week",
+    crossing.startedAt?.toISOString() === "2026-09-20T02:00:00.000Z" &&
+      crossing.endedAt?.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      hoursBetween(crossing.startedAt, crossing.endedAt) === 4 &&
+      entryCrossesBusinessWeekBoundary(crossing, NY) &&
+      businessWeekStartsTouchedByEntry(crossing, NY).length === 2 &&
+      entryOverlapsWeek(crossing, weekA.start, weekA.end) &&
+      entryOverlapsWeek(crossing, weekB.start, weekB.end),
+  );
+  check(
+    "P1-08 current defect: full 4h is credited to both overlapping weeks",
+    paidHours([crossing]) === 4 &&
+      paidHours([crossing]) === hoursBetween(crossing.startedAt, crossing.endedAt),
+  );
+  check("P1-08 policy is unset until the founder chooses A or B", WEEK_BOUNDARY_CROSSING_POLICY === null);
+  try {
+    resolveWeekBoundaryCrossingPolicy();
+    check("P1-08 seam refuses to choose a policy", false);
+  } catch (error) {
+    check(
+      "P1-08 seam refuses to choose a policy",
+      error instanceof Error && error.message === WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR,
+    );
+  }
   check("8 hours × $30 = $240", estimateLaborCost(8, 30) === 240);
   check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
   check("Labor cost is not invented from a placeholder", coerceHourlyWage("") === null && coerceHourlyWage(undefined) === null);
   check("Prisma Decimal $25 is a usable wage", coerceHourlyWage(new Prisma.Decimal(25)) === 25);
   const oneHourJob = approvalSnapshot({
-    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
-    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "10:00"),
     activityType: "JOB",
     hourlyWage: new Prisma.Decimal("25.00"),
   });
@@ -165,8 +276,8 @@ try {
       oneHourJob.approvedLaborCost === 25,
   );
   const noWageSnap = approvalSnapshot({
-    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
-    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "10:00"),
     activityType: "JOB",
     hourlyWage: null,
   });
@@ -177,8 +288,8 @@ try {
       noWageSnap.approvedLaborCost === null,
   );
   const repairExact = missingApprovalSnapshotPatch({
-    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
-    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "10:00"),
     activityType: "JOB",
     approvedHours: 1,
     approvedHourlyWage: null,
@@ -193,8 +304,8 @@ try {
       repairExact.patch.approvedLaborCost === 25,
   );
   const keepExisting = missingApprovalSnapshotPatch({
-    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
-    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "10:00"),
     activityType: "JOB",
     approvedHours: 1,
     approvedHourlyWage: 25,
@@ -206,8 +317,8 @@ try {
     !keepExisting.changed && keepExisting.wage === 25 && keepExisting.cost === 25,
   );
   const noWageRepair = missingApprovalSnapshotPatch({
-    startedAt: parseDateTimeInput("2026-09-19", "09:00"),
-    endedAt: parseDateTimeInput("2026-09-19", "10:00"),
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "10:00"),
     activityType: "JOB",
     approvedHours: 1,
     approvedHourlyWage: null,
@@ -233,10 +344,10 @@ try {
   );
   check(
     "ISO date + local 17:00 is not used for form format (would be 32h in US timezones)",
-    formatDateInput(nineToFive.endedAt) === "2026-08-24" && formatTimeInput(nineToFive.endedAt) === "17:00",
+    formatDateInput(nineToFive.endedAt, NY) === "2026-08-24" && formatTimeInput(nineToFive.endedAt, NY) === "17:00",
   );
-  const danielHours = hoursBetween(parseDateTimeInput("2026-08-24", "09:00"), parseDateTimeInput("2026-08-24", "17:00"));
-  const peterHours = hoursBetween(parseDateTimeInput("2026-08-24", "09:00"), parseDateTimeInput("2026-08-24", "17:00"));
+  const danielHours = hoursBetween(civil("2026-08-24", "09:00"), civil("2026-08-24", "17:00"));
+  const peterHours = hoursBetween(civil("2026-08-24", "09:00"), civil("2026-08-24", "17:00"));
   check("Two 8-hour workers = 16 total hours", danielHours + peterHours === 16);
   check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
@@ -287,12 +398,47 @@ try {
     completeInvoiceSrc.includes("completeJobWithRunningTimeSafety") &&
       /actorMembershipId:\s*access\.workspace\.membership\.id/.test(markJobSrc),
   );
+  const timeCardsLibSrc = readFileSync(new URL("../src/lib/time-cards.ts", import.meta.url), "utf8");
+  const timeCardActionSrc = readFileSync(new URL("../src/app/actions/time-cards.ts", import.meta.url), "utf8");
+  const fieldPageSrc = readFileSync(new URL("../src/app/field/page.tsx", import.meta.url), "utf8");
+  function actionResolvesZoneBeforeParse(src, fnName) {
+    const slice = src.slice(src.indexOf(`export async function ${fnName}`));
+    const zoneAt = slice.indexOf("resolveBusinessTimeZone");
+    const parseAt = slice.indexOf("parseBusinessDateTimeInput");
+    return zoneAt >= 0 && parseAt >= 0 && zoneAt < parseAt;
+  }
+  check(
+    "parseDateTimeInput converts through zonedCivilToUtc and rejects DST gaps",
+    timeCardsLibSrc.includes("zonedCivilToUtc") &&
+      timeCardsLibSrc.includes("zonedDateParts") &&
+      timeCardsLibSrc.includes("NONEXISTENT_CIVIL_TIME_ERROR") &&
+      !/new Date\(Date\.UTC\(year, month - 1, day, hour/.test(timeCardsLibSrc),
+  );
+  check(
+    "Manual/correction/request actions resolve Business timezone before parsing civil input",
+    actionResolvesZoneBeforeParse(timeCardActionSrc, "createManualTimeEntryAction") &&
+      actionResolvesZoneBeforeParse(timeCardActionSrc, "correctTimeEntryAction") &&
+      actionResolvesZoneBeforeParse(timeCardActionSrc, "requestTimeCorrectionAction"),
+  );
+  check(
+    "Editable values round-trip through the same business timezone",
+    wagePageSrc.includes("toEntryDateInput(entry.startedAt, timeZone)") &&
+      wagePageSrc.includes("toEntryTimeInput(entry.startedAt, timeZone)") &&
+      fieldPageSrc.includes("formatDateInput(entry.startedAt, timeZone)") &&
+      fieldPageSrc.includes("formatTimeInput(entry.startedAt, timeZone)"),
+  );
+  check(
+    "P1-08 approve path is not wired to a guessed week-boundary policy",
+    WEEK_BOUNDARY_CROSSING_POLICY === null &&
+      !timeCardOpsSrc.includes("resolveWeekBoundaryCrossingPolicy") &&
+      !timeCardOpsSrc.includes("WEEK_BOUNDARY_CROSSING_POLICY"),
+  );
 
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Time", slug: "alpha-time-cards", tradeCode: "HANDYMAN" },
+    data: { name: "Alpha Time", slug: "alpha-time-cards", tradeCode: "HANDYMAN", timezone: NY },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Time", slug: "beta-time-cards", tradeCode: "HANDYMAN" },
+    data: { name: "Beta Time", slug: "beta-time-cards", tradeCode: "HANDYMAN", timezone: NY },
   });
 
   const ownerUser = await prisma.user.create({
@@ -515,8 +661,8 @@ try {
       assignedMembershipId: peterMem.id,
     },
   });
-  const dayShiftStart = parseDateTimeInput("2026-08-17", "09:00");
-  const dayShiftEnd = parseDateTimeInput("2026-08-17", "17:00");
+  const dayShiftStart = civil("2026-08-17", "09:00");
+  const dayShiftEnd = civil("2026-08-17", "17:00");
   const danielEntry = await createManualTimeEntry(prisma, ownerA, {
     membershipId: danielMem.id,
     activityType: "JOB",
@@ -537,7 +683,7 @@ try {
   const peterStored = await prisma.timeEntry.findUnique({ where: { id: peterEntry.id } });
   const danielStoredHours = hoursBetween(danielStored.startedAt, danielStored.endedAt);
   const peterStoredHours = hoursBetween(peterStored.startedAt, peterStored.endedAt);
-  check("Stored Daniel start/end stay 09:00Z–17:00Z", danielStored.startedAt.toISOString() === "2026-08-17T09:00:00.000Z" && danielStored.endedAt.toISOString() === "2026-08-17T17:00:00.000Z");
+  check("Stored Daniel start/end stay 13:00Z–21:00Z for 09:00–17:00 America/New_York", danielStored.startedAt.toISOString() === "2026-08-17T13:00:00.000Z" && danielStored.endedAt.toISOString() === "2026-08-17T21:00:00.000Z");
   check("Stored Daniel 9 AM–5 PM = 8 hours, not 32", danielStoredHours === 8);
   check("Stored Peter 9 AM–5 PM = 8 hours, not 32", peterStoredHours === 8);
   const crewDay = [
@@ -548,10 +694,142 @@ try {
   check("Aggregation does not multiply entries", paidHours(crewDay) === danielStoredHours + peterStoredHours);
   check("Daniel 8 hours × $30 = $240, not $960", estimateLaborCost(danielStoredHours, 30) === 240);
   const danielRoundTrip = hoursBetween(
-    parseDateTimeInput(formatDateInput(danielStored.startedAt), formatTimeInput(danielStored.startedAt)),
-    parseDateTimeInput(formatDateInput(danielStored.endedAt), formatTimeInput(danielStored.endedAt)),
+    parseDateTimeInput(formatDateInput(danielStored.startedAt, NY), formatTimeInput(danielStored.startedAt, NY), NY),
+    parseDateTimeInput(formatDateInput(danielStored.endedAt, NY), formatTimeInput(danielStored.endedAt, NY), NY),
   );
   check("Correction form round-trip stays 8 hours", danielRoundTrip === 8);
+  check(
+    "Persisted Daniel UTC instant is 13:00Z–21:00Z, not UTC wall-clock 09:00Z–17:00Z",
+    danielStored.startedAt.toISOString() === "2026-08-17T13:00:00.000Z" &&
+      peterStored.startedAt.toISOString() === "2026-08-17T13:00:00.000Z",
+  );
+
+  console.log("\nTEST — P1-07 manual entry, correction, week class, DST gap");
+  const tzUser = await prisma.user.create({
+    data: { name: "Tess Timezone", email: "tz-time@example.com", passwordHash: "x" },
+  });
+  const tzMem = await prisma.membership.create({
+    data: { userId: tzUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(20) },
+  });
+  const tzJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: tzMem.id,
+    },
+  });
+  const tzManual = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: tzMem.id,
+    activityType: "JOB",
+    jobId: tzJob.id,
+    startedAt: civil("2026-09-20", "01:00"),
+    endedAt: civil("2026-09-20", "05:00"),
+    note: "Early Sunday NY",
+    timeZone: NY,
+  });
+  const tzStored = await prisma.timeEntry.findUnique({ where: { id: tzManual.id } });
+  check(
+    "Manual early-Sunday 01:00–05:00 America/New_York persists 05:00Z–09:00Z",
+    tzStored.startedAt.toISOString() === "2026-09-20T05:00:00.000Z" &&
+      tzStored.endedAt.toISOString() === "2026-09-20T09:00:00.000Z",
+  );
+  check(
+    "Persisted early Sunday belongs to the Sep 20 business week",
+    weekRange(tzStored.startedAt, NY).start.toISOString() === "2026-09-20T04:00:00.000Z",
+  );
+  check(
+    "Edit fields round-trip the persisted Sunday instant back to 01:00",
+    formatDateInput(tzStored.startedAt, NY) === "2026-09-20" &&
+      formatTimeInput(tzStored.startedAt, NY) === "01:00" &&
+      parseDateTimeInput(formatDateInput(tzStored.startedAt, NY), formatTimeInput(tzStored.startedAt, NY), NY)
+        ?.toISOString() === tzStored.startedAt.toISOString(),
+  );
+  const tzCorrected = await correctTimeEntry(prisma, ownerA, {
+    timeEntryId: tzManual.id,
+    startedAt: civil("2026-09-20", "02:00"),
+    endedAt: civil("2026-09-20", "06:00"),
+    reason: "Corrected to 02:00–06:00 NY",
+    timeZone: NY,
+  });
+  const tzCorrectedStored = await prisma.timeEntry.findUnique({ where: { id: tzCorrected.id } });
+  check(
+    "Correction 02:00–06:00 America/New_York persists 06:00Z–10:00Z",
+    tzCorrectedStored.startedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      tzCorrectedStored.endedAt.toISOString() === "2026-09-20T10:00:00.000Z" &&
+      hoursBetween(tzCorrectedStored.startedAt, tzCorrectedStored.endedAt) === 4,
+  );
+  check(
+    "Correction edit round-trip stays 02:00–06:00 America/New_York",
+    formatDateInput(tzCorrectedStored.startedAt, NY) === "2026-09-20" &&
+      formatTimeInput(tzCorrectedStored.startedAt, NY) === "02:00" &&
+      formatDateInput(tzCorrectedStored.endedAt, NY) === "2026-09-20" &&
+      formatTimeInput(tzCorrectedStored.endedAt, NY) === "06:00",
+  );
+  const dstReject = parseBusinessDateTimeInput("2026-03-08", "02:30", NY);
+  check(
+    "Manual/correction civil parser rejects the America/New_York DST gap",
+    !dstReject.ok && dstReject.error === NONEXISTENT_CIVIL_TIME_ERROR && civil("2026-03-08", "02:30") === null,
+  );
+
+  console.log("\nTEST — P1-08 overlapping-week double credit (policy blocked)");
+  const crossUser = await prisma.user.create({
+    data: { name: "Casey Cross", email: "cross-time@example.com", passwordHash: "x" },
+  });
+  const crossMem = await prisma.membership.create({
+    data: { userId: crossUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(25) },
+  });
+  const crossJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: crossMem.id,
+    },
+  });
+  const crossEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: crossMem.id,
+    activityType: "JOB",
+    jobId: crossJob.id,
+    startedAt: civil("2026-09-19", "22:00"),
+    endedAt: civil("2026-09-20", "02:00"),
+    note: "Overnight across the Sunday week boundary",
+    timeZone: NY,
+  });
+  const crossStored = await prisma.timeEntry.findUnique({ where: { id: crossEntry.id } });
+  const priorWeek = weekRange(civil("2026-09-19", "12:00"), NY);
+  const nextWeek = weekRange(civil("2026-09-20", "12:00"), NY);
+  check(
+    "Boundary-crossing entry persists Sat 22:00–Sun 02:00 America/New_York (02:00Z–06:00Z)",
+    crossStored.startedAt.toISOString() === "2026-09-20T02:00:00.000Z" &&
+      crossStored.endedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      hoursBetween(crossStored.startedAt, crossStored.endedAt) === 4 &&
+      entryCrossesBusinessWeekBoundary(crossStored, NY),
+  );
+  const weekAApproved = await approveTimesheetWeek(prisma, ownerA, {
+    membershipId: crossMem.id,
+    weekStartedAt: priorWeek.start,
+    timeZone: NY,
+  });
+  const weekBApproved = await approveTimesheetWeek(prisma, ownerA, {
+    membershipId: crossMem.id,
+    weekStartedAt: nextWeek.start,
+    timeZone: NY,
+  });
+  check(
+    "P1-08 reproduction: both business-local weeks snapshot the full 4 hours",
+    Number(weekAApproved.approvedHours) === 4 &&
+      Number(weekBApproved.approvedHours) === 4 &&
+      Number(weekAApproved.approvedHours) + Number(weekBApproved.approvedHours) === 8,
+  );
+  check(
+    "P1-08 remains blocked: seam is present and policy is still undecided",
+    WEEK_BOUNDARY_CROSSING_POLICY === null &&
+      businessWeekStartsTouchedByEntry(crossStored, NY).map((start) => start.toISOString()).join(",") ===
+        `${priorWeek.start.toISOString()},${nextWeek.start.toISOString()}`,
+  );
 
   console.log("\nTEST — OWNER/ADMIN manual entry, wage, and MEMBER denial");
   const manual = await createManualTimeEntry(prisma, ownerA, {
@@ -770,8 +1048,8 @@ try {
       paymentMethod: "CASH",
     },
   });
-  const hourStart = parseDateTimeInput("2026-09-19", "09:00");
-  const hourEnd = parseDateTimeInput("2026-09-19", "10:00");
+  const hourStart = civil("2026-09-19", "09:00");
+  const hourEnd = civil("2026-09-19", "10:00");
   check("Acceptance-test hour timestamps parsed", Boolean(hourStart && hourEnd));
   const joeEntry = await createManualTimeEntry(prisma, joeAccess, {
     membershipId: joeMem.id,
@@ -844,8 +1122,8 @@ try {
   );
 
   console.log("\nTEST — Explicit re-approval repairs already-APPROVED missing snapshots");
-  const legacyStart = parseDateTimeInput("2026-09-19", "13:00");
-  const legacyEnd = parseDateTimeInput("2026-09-19", "14:00");
+  const legacyStart = civil("2026-09-19", "13:00");
+  const legacyEnd = civil("2026-09-19", "14:00");
   const legacyEntry = await prisma.timeEntry.create({
     data: {
       businessId: handy.id,
@@ -976,8 +1254,8 @@ try {
       paymentMethod: "CASH",
     },
   });
-  const persistStart = parseDateTimeInput("2026-09-19", "09:00");
-  const persistEnd = parseDateTimeInput("2026-09-19", "10:00");
+  const persistStart = civil("2026-09-19", "09:00");
+  const persistEnd = civil("2026-09-19", "10:00");
   const persistEntry = await createManualTimeEntry(prisma, persistAccess, {
     membershipId: persistMem.id,
     activityType: "JOB",
@@ -1733,15 +2011,7 @@ try {
   );
 } finally {
   await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
-    );
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  await dropTestDatabase();
 }
 
 process.exit(failures === 0 ? 0 : 1);

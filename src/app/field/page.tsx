@@ -209,10 +209,10 @@ export default async function FieldHomePage() {
                 ],
               jobLabel: entry.job?.customer?.name ?? entry.job?.property?.addressLine1 ?? null,
               clockLabel: `${formatTime(entry.startedAt, timeZone)} – ${formatTime(entry.endedAt, timeZone)}`,
-              startDate: formatDateInput(entry.startedAt),
-              startTime: formatTimeInput(entry.startedAt),
-              endDate: formatDateInput(entry.endedAt),
-              endTime: formatTimeInput(entry.endedAt),
+              startDate: formatDateInput(entry.startedAt, timeZone),
+              startTime: formatTimeInput(entry.startedAt, timeZone),
+              endDate: formatDateInput(entry.endedAt, timeZone),
+              endTime: formatTimeInput(entry.endedAt, timeZone),
               canRequest,
               blockedReason: canRequest
                 ? null

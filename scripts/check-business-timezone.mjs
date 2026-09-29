@@ -6,7 +6,7 @@
  * offset), and a Pacific tenant's stored timezone stays isolated.
  *
  * Run with:
- *   node --experimental-strip-types scripts/check-business-timezone.mjs
+ *   TZ=UTC node --experimental-strip-types scripts/check-business-timezone.mjs
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
@@ -114,12 +114,14 @@ check(
     eightPmSep19Ny >= timeCardsWeek.start &&
     eightPmSep19Ny < timeCardsWeek.end,
 );
-const nineToFiveStart = parseDateTimeInput("2026-09-19", "09:00");
-const nineToFiveEnd = parseDateTimeInput("2026-09-19", "17:00");
+const nineToFiveStart = parseDateTimeInput("2026-09-19", "09:00", NY);
+const nineToFiveEnd = parseDateTimeInput("2026-09-19", "17:00", NY);
 check(
-  "parseDateTimeInput wall-clock storage is unchanged (9–17 is 8 hours)",
+  "parseDateTimeInput 9–17 America/New_York is 8 hours at 13:00Z–21:00Z",
   nineToFiveStart instanceof Date &&
     nineToFiveEnd instanceof Date &&
+    nineToFiveStart.toISOString() === "2026-09-19T13:00:00.000Z" &&
+    nineToFiveEnd.toISOString() === "2026-09-19T21:00:00.000Z" &&
     hoursBetween(nineToFiveStart, nineToFiveEnd) === 8,
 );
 
