@@ -191,7 +191,7 @@ async function applyRecordedInboundConsent(
     };
   }
 
-  let customer = matches[0] ?? null;
+  let customer: { id: string; smsConsentStatus: string } | null = matches[0] ?? null;
   if (!customer && inbound.optOutType === "STOP") {
     const absorbed = await findUnambiguousSurvivorForAbsorbedPhone(
       db,
