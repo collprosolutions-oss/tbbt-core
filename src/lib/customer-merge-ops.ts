@@ -6,7 +6,7 @@
  * deletes the absorbed row inside one transaction. Browser-supplied
  * businessId is never authorization.
  */
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { requireBusinessRole } from "@/lib/authorization";
 import { resolveStoredSmsConsent } from "@/lib/customer-messaging/consent";
@@ -404,7 +404,17 @@ function clientDelegateName(modelName: string) {
   return modelName.slice(0, 1).toLowerCase() + modelName.slice(1);
 }
 
-type CountDelegate = { count: (args: { where: Record<string, string> }) => Promise<number> };
+type RowDelegate = {
+  count: (args: { where: Record<string, unknown> }) => Promise<number>;
+  findMany: (args: { where: Record<string, unknown>; select: { id: true } }) => Promise<Array<{ id: string }>>;
+  findUnique: (args: { where: { id: string } }) => Promise<Record<string, unknown> | null>;
+};
+
+type SoftLeftover = {
+  delegate: keyof Tx;
+  field: string;
+  extraWhere?: Record<string, unknown>;
+};
 
 export function customerFkFieldsFromDmmf(dmmf: typeof Prisma.dmmf = Prisma.dmmf) {
   const fields: Array<{ model: string; field: string; delegate: string }> = [];
@@ -554,36 +564,69 @@ async function reassignCustomerId(
   }
 }
 
-async function assertNoLeftoverCustomerReferences(tx: Tx, absorbId: string) {
-  const leftovers: string[] = [];
-  const delegates = tx as unknown as Record<string, CountDelegate | undefined>;
+const SOFT_CUSTOMER_REFS: SoftLeftover[] = [
+  { delegate: "storedAsset", field: "customerId" },
+  { delegate: "externalLeadImportRow", field: "possibleDuplicateCustomerId" },
+  { delegate: "leadAttributionCorrection", field: "recordId", extraWhere: { recordType: "CUSTOMER" } },
+];
+
+async function leftoverRows(reader: Tx | Db, absorbId: string) {
+  const rows: Array<{ delegate: string; field: string; id: string }> = [];
+  const delegates = reader as unknown as Record<string, RowDelegate | undefined>;
   for (const ref of customerFkFieldsFromDmmf()) {
     const delegate = delegates[ref.delegate];
-    if (!delegate?.count) continue;
-    const count = await delegate.count({ where: { [ref.field]: absorbId } });
-    if (count > 0) leftovers.push(`${ref.model}.${ref.field}`);
+    if (!delegate?.findMany) continue;
+    const found = await delegate.findMany({
+      where: { [ref.field]: absorbId },
+      select: { id: true },
+    });
+    for (const row of found) rows.push({ delegate: ref.delegate, field: ref.field, id: row.id });
   }
-  const storedAssets = await tx.storedAsset.count({ where: { customerId: absorbId } });
-  if (storedAssets > 0) leftovers.push("StoredAsset.customerId");
-  const importRows = await tx.externalLeadImportRow.count({
-    where: { possibleDuplicateCustomerId: absorbId },
-  });
-  if (importRows > 0) leftovers.push("ExternalLeadImportRow.possibleDuplicateCustomerId");
-  const corrections = await tx.leadAttributionCorrection.count({
-    where: { recordType: "CUSTOMER", recordId: absorbId },
-  });
-  if (corrections > 0) leftovers.push("LeadAttributionCorrection.recordId");
-  const events = await tx.businessEvent.count({
+  for (const ref of SOFT_CUSTOMER_REFS) {
+    const delegate = delegates[String(ref.delegate)];
+    if (!delegate?.findMany) continue;
+    const found = await delegate.findMany({
+      where: { ...(ref.extraWhere ?? {}), [ref.field]: absorbId },
+      select: { id: true },
+    });
+    for (const row of found) rows.push({ delegate: String(ref.delegate), field: ref.field, id: row.id });
+  }
+  const events = await reader.businessEvent.findMany({
     where: {
       OR: [
         { payload: { path: ["customerId"], equals: absorbId } },
         { subjectType: "CUSTOMER", subjectId: absorbId },
       ],
     },
+    select: { id: true },
   });
-  if (events > 0) leftovers.push("BusinessEvent.payload.customerId");
-  if (leftovers.length > 0) {
+  for (const event of events) {
+    rows.push({ delegate: "businessEvent", field: "payload.customerId", id: event.id });
+  }
+  return rows;
+}
+
+async function assertNoLeftoverCustomerReferences(
+  tx: Tx,
+  absorbId: string,
+  knownAbsorbRefs: Set<string>,
+) {
+  const inTx = await leftoverRows(tx, absorbId);
+  if (inTx.length > 0) {
     throw new CustomerMergeError(MERGE_LEFTOVER_REFERENCES_MESSAGE);
+  }
+
+  const reader = new PrismaClient();
+  try {
+    const committed = await leftoverRows(reader, absorbId);
+    for (const row of committed) {
+      const key = `${row.delegate}:${row.id}`;
+      if (!knownAbsorbRefs.has(key)) {
+        throw new CustomerMergeError(MERGE_LEFTOVER_REFERENCES_MESSAGE);
+      }
+    }
+  } finally {
+    await reader.$disconnect();
   }
 }
 
@@ -719,13 +762,17 @@ async function mergeConfirmedCustomersOnce(
         await afterLocked(tx);
       }
 
+      const knownAbsorbRefs = new Set(
+        (await leftoverRows(tx, absorb.id)).map((row) => `${row.delegate}:${row.id}`),
+      );
+
       await reassignCustomerId(tx, access.businessId, absorbId, keepId);
 
       if (afterRelationsMoved) {
         await afterRelationsMoved(tx);
       }
 
-      await assertNoLeftoverCustomerReferences(tx, absorb.id);
+      await assertNoLeftoverCustomerReferences(tx, absorb.id, knownAbsorbRefs);
 
       const nextConsent = mergeSmsConsentStates(keep.smsConsentStatus, absorb.smsConsentStatus);
       const keepConsent = resolveStoredSmsConsent(keep.smsConsentStatus);

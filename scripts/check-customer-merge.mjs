@@ -107,6 +107,7 @@ const parsed = assertLocalDatabaseUrl(baseUrl, "DATABASE_URL");
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 assertLocalDatabaseUrl(testUrl, "customer-merge test DATABASE_URL");
+process.env.DATABASE_URL = testUrl;
 
 let failures = 0;
 function check(label, condition) {
@@ -1224,7 +1225,7 @@ try {
     { afterRelationsMoved: lateBarrier.arrive },
   );
   await withTimeout(lateBarrier.firstArrived, 8000, "merge-versus-insert entered after remap");
-  const lateJob = await lateWriteClient.job.create({
+  const lateJobP = lateWriteClient.job.create({
     data: {
       businessId: alpha.business.id,
       customerId: latePair.right.id,
@@ -1246,14 +1247,17 @@ try {
   });
   await lateBarrier.arrive();
   const lateMergeResult = await withTimeout(Promise.allSettled([lateMergeP]), 25000, "merge vs insert");
+  const lateJobResult = await withTimeout(Promise.allSettled([lateJobP]), 25000, "blocked job insert");
   check(
     "Merge vs new Job/StoredAsset: insert wins and merge loses with leftover-reference error",
     lateMergeResult[0].status === "rejected" &&
       lateMergeResult[0].reason instanceof CustomerMergeError &&
-      lateMergeResult[0].reason.message === MERGE_LEFTOVER_REFERENCES_MESSAGE,
+      lateMergeResult[0].reason.message === MERGE_LEFTOVER_REFERENCES_MESSAGE &&
+      lateJobResult[0].status === "fulfilled",
   );
+  const lateJob = lateJobResult[0].status === "fulfilled" ? lateJobResult[0].value : null;
   const lateAbsorb = await prisma.customer.findUnique({ where: { id: latePair.right.id } });
-  const lateJobAfter = await prisma.job.findUnique({ where: { id: lateJob.id } });
+  const lateJobAfter = lateJob ? await prisma.job.findUnique({ where: { id: lateJob.id } }) : null;
   const lateAssetAfter = await prisma.storedAsset.findUnique({ where: { id: lateAsset.id } });
   check("Absorbed customer still exists after leftover abort", Boolean(lateAbsorb));
   check("Concurrent job is not orphaned", lateJobAfter?.customerId === latePair.right.id);
