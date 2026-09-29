@@ -2,8 +2,9 @@
 -- and an append-only OWNER decision. Additive only. Preview shares
 -- Production and skips migrate, so every statement is IF NOT EXISTS.
 -- Does not rewrite TimeEntry, TimesheetWeek, or PayrollRun rows.
--- Timestamp is 20260929010000 so it stays after
--- 20260928200000_estimate_line_template_archive (#210).
+-- Timestamp is 20260929010100 so it stays after
+-- 20260928200000_estimate_line_template_archive (#210) and avoids the
+-- 20260929010000 collision used by other open PRs.
 
 CREATE TABLE IF NOT EXISTS "TimeCorrectionRequest" (
     "id" TEXT NOT NULL,
@@ -45,6 +46,10 @@ CREATE INDEX IF NOT EXISTS "TimeCorrectionRequest_businessId_status_idx"
 
 CREATE INDEX IF NOT EXISTS "TimeCorrectionRequest_requestedByMembershipId_idx"
   ON "TimeCorrectionRequest"("requestedByMembershipId");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "TimeCorrectionRequest_timeEntryId_pending_key"
+  ON "TimeCorrectionRequest" ("timeEntryId")
+  WHERE status = 'PENDING';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "TimeCorrectionDecision_requestId_key"
   ON "TimeCorrectionDecision"("requestId");

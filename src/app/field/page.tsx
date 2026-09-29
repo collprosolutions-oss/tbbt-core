@@ -95,7 +95,9 @@ export default async function FieldHomePage() {
     where: {
       businessId: field.businessId,
       membershipId: field.membershipId,
+      weekStartedAt: { gte: recentStart },
     },
+    take: 12,
   });
   const running = await prisma.timeEntry.findFirst({
     where: {

@@ -71,6 +71,7 @@ export type TimeCardCorrectionRequest = {
   proposedHoursLabel: string;
   createdAtLabel: string;
   decisionLabel: string | null;
+  weekApproved: boolean;
 };
 
 export type TimeCardKpi = {

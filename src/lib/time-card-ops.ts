@@ -95,6 +95,8 @@ const DUPLICATE_PENDING_CORRECTION_ERROR =
 const DUPLICATE_CORRECTION_DECISION_ERROR =
   "That correction request already has an owner decision.";
 const MISSING_CORRECTION_REQUEST_ERROR = "That correction request could not be found.";
+export const ENTRY_CHANGED_SINCE_REQUEST_ERROR =
+  "The entry changed since this request. Ask the worker to resubmit.";
 
 type TenantTimeCorrectionRequestRow = {
   id: string;
@@ -171,6 +173,114 @@ export async function lockTenantOwnedJob(
     FOR UPDATE
   `;
   return rows[0] ?? null;
+}
+
+export function workerTimesheetWeekLockKey(
+  businessId: string,
+  membershipId: string,
+  weekStartedAt: Date,
+) {
+  return `time-cards-week:${businessId}:${membershipId}:${weekStartedAt.toISOString()}`;
+}
+
+/**
+ * Shared per-worker-week lock for approve and accept. Taken first in both
+ * paths so an approval that commits first makes accept refuse, and an
+ * accept that commits first is included in the approval snapshot.
+ */
+export async function lockWorkerTimesheetWeek(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  weekStartedAt: Date,
+) {
+  const lockKey = workerTimesheetWeekLockKey(businessId, membershipId, weekStartedAt);
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+}
+
+async function lockWorkerTimesheetWeeks(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  at: readonly Date[],
+) {
+  const starts = [
+    ...new Map(
+      at.map((value) => {
+        const start = weekRange(value).start;
+        return [start.toISOString(), start] as const;
+      }),
+    ).values(),
+  ].sort((left, right) => left.getTime() - right.getTime());
+  for (const start of starts) {
+    await lockWorkerTimesheetWeek(db, businessId, membershipId, start);
+  }
+}
+
+type TenantTimeEntryLockRow = {
+  id: string;
+  businessId: string;
+  membershipId: string;
+};
+
+async function lockTenantOwnedTimeEntry(
+  db: Db,
+  businessId: string,
+  timeEntryId: string,
+): Promise<TenantTimeEntryLockRow | null> {
+  const rows = await db.$queryRaw<TenantTimeEntryLockRow[]>`
+    SELECT id, "businessId", "membershipId"
+    FROM "TimeEntry"
+    WHERE id = ${timeEntryId}
+      AND "businessId" = ${businessId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+async function lockWorkerWeekTimeEntries(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  start: Date,
+  end: Date,
+) {
+  const rows = await db.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM "TimeEntry"
+    WHERE "businessId" = ${businessId}
+      AND "membershipId" = ${membershipId}
+      AND "startedAt" < ${end}
+      AND ("endedAt" IS NULL OR "endedAt" > ${start})
+    ORDER BY id
+    FOR UPDATE
+  `;
+  if (rows.length === 0) return [];
+  return db.timeEntry.findMany({
+    where: {
+      businessId,
+      membershipId,
+      id: { in: rows.map((row) => row.id) },
+    },
+  });
+}
+
+function isPendingCorrectionUniqueError(error: unknown) {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return true;
+  }
+  return error instanceof Error && /TimeCorrectionRequest_timeEntryId_pending/i.test(error.message);
+}
+
+function entryTimesMatchRequest(
+  entry: { startedAt: Date; endedAt: Date | null },
+  request: { originalStartedAt: Date; originalEndedAt: Date },
+) {
+  return (
+    entry.startedAt.getTime() === request.originalStartedAt.getTime() &&
+    entry.endedAt != null &&
+    entry.endedAt.getTime() === request.originalEndedAt.getTime()
+  );
 }
 
 async function assertJobClockAccess(input: {
@@ -690,8 +800,12 @@ export async function requestTimeCorrection(
   const actorMembershipId = access.workspace.membership.id;
 
   return db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedTimeEntry(tx, access.businessId, input.timeEntryId);
+    if (!locked) {
+      throw new TimeCardError("That time entry could not be found.");
+    }
     const entry = await tx.timeEntry.findFirst({
-      where: { id: input.timeEntryId, businessId: access.businessId },
+      where: { id: locked.id, businessId: access.businessId },
     });
     if (!entry) {
       throw new TimeCardError("That time entry could not be found.");
@@ -744,19 +858,27 @@ export async function requestTimeCorrection(
     }
 
     const previous = toAuditSnapshot(entry);
-    const request = await tx.timeCorrectionRequest.create({
-      data: {
-        businessId: access.businessId,
-        timeEntryId: entry.id,
-        requestedByMembershipId: actorMembershipId,
-        status: "PENDING",
-        reason,
-        originalStartedAt: entry.startedAt,
-        originalEndedAt: entry.endedAt,
-        proposedStartedAt: input.proposedStartedAt,
-        proposedEndedAt: input.proposedEndedAt,
-      },
-    });
+    let request;
+    try {
+      request = await tx.timeCorrectionRequest.create({
+        data: {
+          businessId: access.businessId,
+          timeEntryId: entry.id,
+          requestedByMembershipId: actorMembershipId,
+          status: "PENDING",
+          reason,
+          originalStartedAt: entry.startedAt,
+          originalEndedAt: entry.endedAt,
+          proposedStartedAt: input.proposedStartedAt,
+          proposedEndedAt: input.proposedEndedAt,
+        },
+      });
+    } catch (error) {
+      if (isPendingCorrectionUniqueError(error)) {
+        throw new TimeCardError(DUPLICATE_PENDING_CORRECTION_ERROR);
+      }
+      throw error;
+    }
     await writeAdjustment(tx, {
       businessId: access.businessId,
       timeEntryId: entry.id,
@@ -848,12 +970,34 @@ export async function decideTimeCorrectionRequest(
     access.assertOwned(entry);
 
     if (decision === "ACCEPTED") {
-      if (!canEditTimeEntry(entry.status)) {
+      await lockWorkerTimesheetWeeks(tx, access.businessId, entry.membershipId, [
+        request.originalStartedAt,
+        request.proposedStartedAt,
+        entry.startedAt,
+      ]);
+      const lockedEntry = await lockTenantOwnedTimeEntry(tx, access.businessId, entry.id);
+      if (!lockedEntry) {
+        throw new TimeCardError("That time entry could not be found.");
+      }
+      const current = await tx.timeEntry.findFirst({
+        where: { id: entry.id, businessId: access.businessId },
+      });
+      if (!current) {
+        throw new TimeCardError("That time entry could not be found.");
+      }
+      access.assertOwned(current);
+      if (current.status === "RUNNING" || current.endedAt == null) {
+        throw new TimeCardError(ENTRY_CHANGED_SINCE_REQUEST_ERROR);
+      }
+      if (!entryTimesMatchRequest(current, request)) {
+        throw new TimeCardError(ENTRY_CHANGED_SINCE_REQUEST_ERROR);
+      }
+      if (!canEditTimeEntry(current.status)) {
         throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
       }
       try {
-        await assertWeekEditable(tx, access.businessId, entry.membershipId, entry.startedAt);
-        await assertWeekEditable(tx, access.businessId, entry.membershipId, request.proposedStartedAt);
+        await assertWeekEditable(tx, access.businessId, current.membershipId, current.startedAt);
+        await assertWeekEditable(tx, access.businessId, current.membershipId, request.proposedStartedAt);
       } catch (error) {
         if (isTimeCardError(error)) {
           throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
@@ -866,23 +1010,44 @@ export async function decideTimeCorrectionRequest(
       const overlaps = await overlappingEntries(
         tx,
         access.businessId,
-        entry.membershipId,
+        current.membershipId,
         request.proposedStartedAt,
         request.proposedEndedAt,
-        entry.id,
+        current.id,
       );
       if (overlaps.length > 0) {
         throw new TimeCardError("That correction would overlap another entry.");
       }
 
-      const previous = toAuditSnapshot(entry);
-      const updated = await tx.timeEntry.update({
-        where: { id: entry.id },
+      const previous = toAuditSnapshot(current);
+      const applied = await tx.timeEntry.updateMany({
+        where: {
+          id: current.id,
+          businessId: access.businessId,
+          startedAt: request.originalStartedAt,
+          endedAt: request.originalEndedAt,
+          status: { notIn: ["APPROVED", "RUNNING"] },
+        },
         data: {
           startedAt: request.proposedStartedAt,
           endedAt: request.proposedEndedAt,
         },
       });
+      if (applied.count !== 1) {
+        const fresh = await tx.timeEntry.findFirst({
+          where: { id: current.id, businessId: access.businessId },
+        });
+        if (fresh?.status === "APPROVED") {
+          throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
+        }
+        throw new TimeCardError(ENTRY_CHANGED_SINCE_REQUEST_ERROR);
+      }
+      const updated = await tx.timeEntry.findFirst({
+        where: { id: current.id, businessId: access.businessId },
+      });
+      if (!updated) {
+        throw new TimeCardError("That time entry could not be found.");
+      }
       await writeAdjustment(tx, {
         businessId: access.businessId,
         timeEntryId: updated.id,
@@ -962,15 +1127,15 @@ export async function approveTimesheetWeek(
   return db.$transaction(async (tx) => {
     const membership = await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
     access.assertOwned(membership);
+    await lockWorkerTimesheetWeek(tx, access.businessId, input.membershipId, start);
 
-    const entries = await tx.timeEntry.findMany({
-      where: {
-        businessId: access.businessId,
-        membershipId: input.membershipId,
-        startedAt: { lt: end },
-        OR: [{ endedAt: null }, { endedAt: { gt: start } }],
-      },
-    });
+    const entries = await lockWorkerWeekTimeEntries(
+      tx,
+      access.businessId,
+      input.membershipId,
+      start,
+      end,
+    );
     const gate = canApproveWeek(entries);
     if (!gate.ok) {
       throw new TimeCardError(gate.error ?? "This week is not ready to approve.");

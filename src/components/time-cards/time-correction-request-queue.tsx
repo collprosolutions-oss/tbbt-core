@@ -49,7 +49,15 @@ export function TimeCorrectionRequestQueue({
               <StatusBadge status={request.status} />
             </div>
             {canDecide ? (
-              <DecideForms requestId={request.id} />
+              <DecideForms
+                requestId={request.id}
+                acceptDisabled={request.weekApproved}
+                acceptDisabledReason={
+                  request.weekApproved
+                    ? "That week is approved. Reopen it before accepting a time correction."
+                    : null
+                }
+              />
             ) : (
               <p className="text-xs text-muted-foreground">Owner decision required.</p>
             )}
@@ -60,7 +68,15 @@ export function TimeCorrectionRequestQueue({
   );
 }
 
-function DecideForms({ requestId }: { requestId: string }) {
+function DecideForms({
+  requestId,
+  acceptDisabled = false,
+  acceptDisabledReason = null,
+}: {
+  requestId: string;
+  acceptDisabled?: boolean;
+  acceptDisabledReason?: string | null;
+}) {
   const [acceptState, acceptAction, acceptPending] = useActionState(
     decideTimeCorrectionRequestAction,
     initialState,
@@ -78,9 +94,12 @@ function DecideForms({ requestId }: { requestId: string }) {
       <form action={acceptAction} className="space-y-2">
         <input type="hidden" name="requestId" value={requestId} />
         <input type="hidden" name="decision" value="ACCEPTED" />
-        <Button type="submit" size="sm" disabled={pending} className="w-full">
+        <Button type="submit" size="sm" disabled={pending || acceptDisabled} className="w-full">
           {acceptPending ? "Accepting…" : "Accept correction"}
         </Button>
+        {acceptDisabled && acceptDisabledReason ? (
+          <p className="text-xs text-muted-foreground">{acceptDisabledReason}</p>
+        ) : null}
       </form>
       <form action={declineAction} className="space-y-2">
         <input type="hidden" name="requestId" value={requestId} />

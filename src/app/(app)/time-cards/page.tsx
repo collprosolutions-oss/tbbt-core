@@ -94,7 +94,8 @@ export default async function TimeCardsPage({
     : null;
   const founderTokens = sanitizeFounderPageTokens("time-cards", founderOverride?.tokens ?? {});
 
-  const [memberships, jobs, entries, weeks, adjustments, correctionRequests] = await Promise.all([
+  const [memberships, jobs, entries, weeks, adjustments, pendingCorrectionRequests, decidedCorrectionRequests] =
+    await Promise.all([
     prisma.membership.findMany({
       where: access.scope,
       include: { user: { select: { name: true } } },
@@ -151,6 +152,23 @@ export default async function TimeCardsPage({
     prisma.timeCorrectionRequest.findMany({
       where: {
         ...access.scope,
+        status: "PENDING",
+      },
+      include: {
+        requestedBy: { include: { user: { select: { name: true } } } },
+        decisions: {
+          include: { actor: { include: { user: { select: { name: true } } } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 80,
+    }),
+    prisma.timeCorrectionRequest.findMany({
+      where: {
+        ...access.scope,
+        status: { not: "PENDING" },
         originalStartedAt: { lt: weekEnd },
         originalEndedAt: { gt: weekStart },
       },
@@ -163,8 +181,37 @@ export default async function TimeCardsPage({
         },
       },
       orderBy: { createdAt: "desc" },
+      take: 80,
     }),
   ]);
+
+  const pendingWeekKeys = new Map<
+    string,
+    { membershipId: string; weekStartedAt: Date }
+  >();
+  for (const request of pendingCorrectionRequests) {
+    for (const at of [request.originalStartedAt, request.proposedStartedAt]) {
+      const start = weekRange(at, timeZone).start;
+      pendingWeekKeys.set(`${request.requestedByMembershipId}:${start.toISOString()}`, {
+        membershipId: request.requestedByMembershipId,
+        weekStartedAt: start,
+      });
+    }
+  }
+  const pendingWeeks =
+    pendingWeekKeys.size === 0
+      ? []
+      : await prisma.timesheetWeek.findMany({
+          where: {
+            businessId: access.businessId,
+            OR: [...pendingWeekKeys.values()],
+          },
+        });
+  const approvedWeekKeys = new Set(
+    [...weeks, ...pendingWeeks]
+      .filter((week) => week.status === "APPROVED")
+      .map((week) => `${week.membershipId}:${week.weekStartedAt.toISOString()}`),
+  );
 
   const weekByMembership = new Map(weeks.map((week) => [week.membershipId, week]));
   const jobOptions: TimeCardJobOption[] = jobs.map((job) => ({
@@ -238,9 +285,14 @@ export default async function TimeCardsPage({
     actorName: item.actor.user.name,
   }));
 
-  const correctionRequestDtos: TimeCardCorrectionRequest[] = correctionRequests.map((request) => {
+  const correctionRequestDtos: TimeCardCorrectionRequest[] = [
+    ...pendingCorrectionRequests,
+    ...decidedCorrectionRequests,
+  ].map((request) => {
     const status = isTimeCorrectionRequestStatus(request.status) ? request.status : "PENDING";
     const decision = request.decisions[0];
+    const originalWeekKey = `${request.requestedByMembershipId}:${weekRange(request.originalStartedAt, timeZone).start.toISOString()}`;
+    const proposedWeekKey = `${request.requestedByMembershipId}:${weekRange(request.proposedStartedAt, timeZone).start.toISOString()}`;
     return {
       id: request.id,
       timeEntryId: request.timeEntryId,
@@ -261,6 +313,7 @@ export default async function TimeCardsPage({
       decisionLabel: decision
         ? `${decision.decision} by ${decision.actor.user.name}`
         : null,
+      weekApproved: approvedWeekKeys.has(originalWeekKey) || approvedWeekKeys.has(proposedWeekKey),
     };
   });
 

@@ -2109,6 +2109,8 @@ model TimeEntryAdjustment {
 /// times and the original clock live here so an OWNER decision never
 /// silently rewrites the entry, an approved week, or a payroll result.
 /// status: PENDING | ACCEPTED | DECLINED
+/// One PENDING row per timeEntryId is enforced by a partial unique
+/// index in the migration (TimeCorrectionRequest_timeEntryId_pending_key).
 model TimeCorrectionRequest {
   id                      String   @id @default(cuid())
   businessId              String

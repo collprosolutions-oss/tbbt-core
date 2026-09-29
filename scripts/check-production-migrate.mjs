@@ -1339,7 +1339,7 @@ check(
 
 const timeCorrectionRequestsMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260929010000_time_correction_requests/migration.sql",
+    "../prisma/migrations/20260929010100_time_correction_requests/migration.sql",
     import.meta.url,
   ),
   "utf8",
@@ -1351,11 +1351,14 @@ check(
   ) &&
     timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionRequest"') &&
     timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionDecision"') &&
+    timeCorrectionRequestsMigration.includes("TimeCorrectionRequest_timeEntryId_pending_key") &&
     timeCorrectionRequestsMigration.includes("20260928200000_estimate_line_template_archive") &&
-    localNames.includes("20260929010000_time_correction_requests") &&
+    timeCorrectionRequestsMigration.includes("20260929010100") &&
+    localNames.includes("20260929010100_time_correction_requests") &&
+    !localNames.includes("20260929010000_time_correction_requests") &&
     localNames.includes("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_time_correction_requests"),
+      localNames.indexOf("20260929010100_time_correction_requests"),
 );
 
 check(
