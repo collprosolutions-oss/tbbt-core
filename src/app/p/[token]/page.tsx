@@ -13,7 +13,11 @@ import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
 import { ProjectDocumentUpload } from "@/components/portal/project-document-upload";
-import { listProjectDocumentsForPortal } from "@/lib/business-storage/project-documents";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
+import {
+  isProjectDocumentUploadOpen,
+  listProjectDocumentsForPortal,
+} from "@/lib/business-storage/project-documents";
 import { loadCleaningRepeatVisitPublicView } from "@/lib/cleaning-repeat-visit-data";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
@@ -604,6 +608,8 @@ export default async function CustomerProjectPortalPage({
             />
           ) : null}
 
+          {isBusinessStorageConfigured() &&
+          isProjectDocumentUploadOpen(job.status) ? (
           <Card id="project-documents">
             <CardHeader>
               <CardTitle>Project Documents</CardTitle>
@@ -620,6 +626,7 @@ export default async function CustomerProjectPortalPage({
               />
             </CardContent>
           </Card>
+          ) : null}
 
           <Card id="invoice" className="md:col-span-2 xl:col-span-1">
             <CardHeader>

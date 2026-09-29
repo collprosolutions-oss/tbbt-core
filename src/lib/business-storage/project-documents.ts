@@ -50,6 +50,16 @@ const DOCUMENT_LIMIT_REACHED = `You can add up to ${PROJECT_DOCUMENT_MAX_COUNT} 
 
 const CLOSED_OR_CANCELLED_JOB_STATUSES = new Set(["CANCELLED", "CLOSED", "COMPLETED"]);
 
+/**
+ * Test-only barriers. Production never sets these.
+ * afterJobLock runs inside authorize's beforeCreate immediately after
+ * lockJobForProjectDocument (Job FOR UPDATE) and before the in-transaction
+ * recount. The default is undefined, so production is a no-op.
+ */
+export const projectDocumentTestHooks: {
+  afterJobLock?: () => Promise<void> | void;
+} = {};
+
 type Db = PrismaClient | Prisma.TransactionClient;
 
 type ProjectTokenJob = {
@@ -63,6 +73,10 @@ type ProjectTokenJob = {
 
 function isClosedOrCancelledJobStatus(status: string) {
   return CLOSED_OR_CANCELLED_JOB_STATUSES.has(status.trim().toUpperCase());
+}
+
+export function isProjectDocumentUploadOpen(status: string) {
+  return !isClosedOrCancelledJobStatus(status);
 }
 
 function isPrivateUnpublishedProjectDocument(asset: {
@@ -196,6 +210,7 @@ export async function authorizeProjectTokenDocument(
     {
       async beforeCreate(tx) {
         await lockJobForProjectDocument(tx, job);
+        await projectDocumentTestHooks.afterJobLock?.();
         const active = await countActiveProjectDocuments(tx, {
           businessId: job.businessId,
           jobId: job.id,

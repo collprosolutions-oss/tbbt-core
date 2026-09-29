@@ -12,39 +12,6 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
-
-const {
-  MemoryStorageProvider,
-  PROJECT_DOCUMENT_MAX_BYTES,
-  PROJECT_DOCUMENT_MAX_COUNT,
-  PROJECT_DOCUMENT_MAX_FILENAME_LENGTH,
-  PROJECT_DOCUMENT_PURPOSE,
-  PROJECT_DOCUMENT_TYPE_MISMATCH,
-  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
-  StorageAccessError,
-  StorageError,
-  abortProjectTokenDocument,
-  authorizeProjectTokenDocument,
-  authorizePrivateStoredAssetDownload,
-  finalizeProjectTokenDocument,
-  inspectProjectDocumentUpload,
-  listProjectDocumentsForOwnerReview,
-  listProjectDocumentsForPortal,
-  privateAssetPath,
-  projectDocumentBytesMatchMime,
-  putProjectTokenDocumentFromBytes,
-  remainingProjectDocumentSlots,
-  sanitizeProjectDocumentFilename,
-  servePublicStoredAsset,
-} = await import("@/lib/business-storage/index");
-const { servePrivateStoredAsset } = await import(
-  "@/lib/business-storage/private-serve"
-);
-const { authorizeManagedUpload, finalizeManagedUpload } = await import(
-  "@/lib/business-storage/service"
-);
-
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
@@ -63,6 +30,63 @@ const testDbName = "tbbt_project_documents_test";
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const {
+  MemoryStorageProvider,
+  PROJECT_DOCUMENT_MAX_BYTES,
+  PROJECT_DOCUMENT_MAX_COUNT,
+  PROJECT_DOCUMENT_MAX_FILENAME_LENGTH,
+  PROJECT_DOCUMENT_PURPOSE,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
+  PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+  StorageAccessError,
+  StorageError,
+  abortProjectTokenDocument,
+  authorizeProjectTokenDocument,
+  authorizePrivateStoredAssetDownload,
+  countActiveProjectDocuments,
+  finalizeProjectTokenDocument,
+  inspectProjectDocumentUpload,
+  listProjectDocumentsForOwnerReview,
+  listProjectDocumentsForPortal,
+  privateAssetPath,
+  projectDocumentBytesMatchMime,
+  projectDocumentTestHooks,
+  putProjectTokenDocumentFromBytes,
+  remainingProjectDocumentSlots,
+  sanitizeProjectDocumentFilename,
+  servePublicStoredAsset,
+} = await import("@/lib/business-storage/index");
+const { servePrivateStoredAsset } = await import(
+  "@/lib/business-storage/private-serve"
+);
+const { authorizeManagedUpload, finalizeManagedUpload } = await import(
+  "@/lib/business-storage/service"
+);
+
+const require = createRequire(import.meta.url);
+const { PrismaClient } = require("@prisma/client");
+
+async function dropProjectDocumentsTestDb() {
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$queryRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      testDbName,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
+await dropProjectDocumentsTestDb();
+
 const push = spawnSync(
   "npx",
   ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
@@ -70,11 +94,10 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for project document test database.");
+  await dropProjectDocumentsTestDb();
   process.exit(push.status ?? 1);
 }
 
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
@@ -94,6 +117,38 @@ async function expectThrow(label, fn, match) {
   } catch (error) {
     check(label, match(error));
   }
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForTestDbLockWaiter(admin, ms) {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    const waiting = await admin.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if (waiting.length > 0) return waiting;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(
+    `Timed out after ${ms}ms waiting for wait_event_type=Lock in ${testDbName}`,
+  );
 }
 
 const pdfOk = inspectProjectDocumentUpload({
@@ -694,60 +749,115 @@ try {
       afterLimit.messages === 0,
   );
 
-  console.log("\nDB — Atomic cap under parallel authorize");
-  const parallel = await Promise.allSettled(
-    Array.from({ length: 8 }, (_, index) =>
-      authorizeProjectTokenDocument(deps, parallelJob.projectToken, {
-        originalFilename: `race-${index}.pdf`,
-        mimeType: "application/pdf",
-        fileSizeBytes: pdfBytes.byteLength,
-      }),
-    ),
-  );
-  const parallelOk = parallel.filter((result) => result.status === "fulfilled");
-  const parallelDenied = parallel.filter(
-    (result) =>
-      result.status === "rejected" &&
-      result.reason instanceof StorageError &&
-      String(result.reason.message).includes("up to"),
-  );
-  const pendingOnParallel = await prisma.storedAsset.count({
-    where: {
-      jobId: parallelJob.id,
-      purpose: PROJECT_DOCUMENT_PURPOSE,
-      status: "PENDING",
-    },
+  console.log("\nDB — Atomic cap under two-client lock barrier");
+  for (let i = 0; i < PROJECT_DOCUMENT_MAX_COUNT - 1; i += 1) {
+    await putProjectTokenDocumentFromBytes(deps, parallelJob.projectToken, {
+      originalFilename: `seed-${i}.pdf`,
+      mimeType: "application/pdf",
+      body: pdfBytes,
+    });
+  }
+  const seededActive = await countActiveProjectDocuments(prisma, {
+    businessId: businessA.id,
+    jobId: parallelJob.id,
   });
   check(
-    "At most 5 of 8 parallel authorizes succeed",
-    parallelOk.length <= PROJECT_DOCUMENT_MAX_COUNT &&
-      parallelOk.length + parallelDenied.length === 8 &&
-      pendingOnParallel <= PROJECT_DOCUMENT_MAX_COUNT,
+    "Race job is seeded with 4 documents and 1 slot left",
+    seededActive === PROJECT_DOCUMENT_MAX_COUNT - 1,
   );
-  check(
-    "Exactly 5 parallel authorizes succeed against the locked job row",
-    parallelOk.length === PROJECT_DOCUMENT_MAX_COUNT &&
-      parallelDenied.length === 3 &&
-      pendingOnParallel === PROJECT_DOCUMENT_MAX_COUNT,
-  );
+
+  const raceProvider = new MemoryStorageProvider();
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const raceAdmin = new PrismaClient({ datasourceUrl: testUrl });
+  const raceDepsA = {
+    db: raceClientA,
+    provider: raceProvider,
+    bucketName: "tbbt-project-docs-test",
+    defaultLimitBytes: 50 * 1024 * 1024,
+  };
+  const raceDepsB = {
+    db: raceClientB,
+    provider: raceProvider,
+    bucketName: "tbbt-project-docs-test",
+    defaultLimitBytes: 50 * 1024 * 1024,
+  };
+
+  let hookCalls = 0;
+  let releaseHook = () => undefined;
+  const hookHeld = new Promise((resolve) => {
+    releaseHook = resolve;
+  });
+  let signalHookArrived = () => undefined;
+  const hookArrived = new Promise((resolve) => {
+    signalHookArrived = resolve;
+  });
+  projectDocumentTestHooks.afterJobLock = async () => {
+    hookCalls += 1;
+    signalHookArrived();
+    await hookHeld;
+  };
+
+  let promiseA;
+  let promiseB;
+  try {
+    let barrierError;
+    try {
+      promiseA = authorizeProjectTokenDocument(raceDepsA, parallelJob.projectToken, {
+        originalFilename: "race-a.pdf",
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBytes.byteLength,
+      });
+      await withTimeout(hookArrived, 4000, "contender A afterJobLock");
+      promiseB = authorizeProjectTokenDocument(raceDepsB, parallelJob.projectToken, {
+        originalFilename: "race-b.pdf",
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBytes.byteLength,
+      });
+      await waitForTestDbLockWaiter(raceAdmin, 4000);
+      check("afterJobLock ran exactly once while B waited on Lock", hookCalls === 1);
+    } catch (error) {
+      barrierError = error;
+    } finally {
+      releaseHook();
+    }
+
+    const pending = [promiseA, promiseB].filter(Boolean);
+    const settled = pending.length
+      ? await withTimeout(Promise.allSettled(pending), 4000, "race authorizes finish")
+      : [];
+    if (barrierError) throw barrierError;
+    const raceOk = settled.filter((result) => result.status === "fulfilled");
+    const raceDenied = settled.filter(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof StorageError &&
+        String(result.reason.message).includes("You can add up to 5 documents"),
+    );
+    const activeAfterRace = await countActiveProjectDocuments(prisma, {
+      businessId: businessA.id,
+      jobId: parallelJob.id,
+    });
+    check(
+      "Exactly one authorize succeeds and the loser hits the document cap",
+      raceOk.length === 1 && raceDenied.length === 1,
+    );
+    check(
+      "Race leaves 5 active documents on the project",
+      activeAfterRace === PROJECT_DOCUMENT_MAX_COUNT,
+    );
+  } finally {
+    projectDocumentTestHooks.afterJobLock = undefined;
+    await raceClientA.$disconnect();
+    await raceClientB.$disconnect();
+    await raceAdmin.$disconnect();
+  }
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
   await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
-    );
-  } catch {
-    /* ignore */
-  }
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  await dropProjectDocumentsTestDb();
 }
 
 if (failures > 0) {
