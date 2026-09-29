@@ -124,6 +124,13 @@ export const CAPABILITIES = {
    */
   AUTHORIZE_PAYROLL: "AUTHORIZE_PAYROLL",
   /**
+   * OWNER-only accept or decline of a worker time-correction request.
+   * ADMIN may manage time cards and see pending requests, but must not
+   * silently inherit this decision. Accept never rewrites an approved
+   * week or a locked payroll snapshot.
+   */
+  DECIDE_TIME_CORRECTIONS: "DECIDE_TIME_CORRECTIONS",
+  /**
    * Owner/admin Expenses management: record, review, and allocate
    * business-wide expenses. MEMBER must never receive this -- employee
    * field submission is a later, separately scoped feature.
@@ -207,6 +214,7 @@ export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
 const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.AUTHORIZE_PAYROLL,
+  CAPABILITIES.DECIDE_TIME_CORRECTIONS,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
