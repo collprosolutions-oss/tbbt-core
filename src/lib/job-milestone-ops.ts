@@ -35,6 +35,16 @@ import {
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+async function withWriteTx<T>(
+  db: Db,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  if ("$transaction" in db) {
+    return db.$transaction(fn);
+  }
+  return fn(db);
+}
+
 export class JobMilestoneError extends Error {
   constructor(message: string) {
     super(message);
@@ -239,7 +249,7 @@ export async function recordJobMilestones(
   const job = await requireOwnedJob(db, access, input.jobId);
   const actorId = actorMembershipId(access);
 
-  const created = await db.$transaction(async (tx) => {
+  const created = await withWriteTx(db, async (tx) => {
     const existing = await tx.jobMilestone.findMany({
       where: { jobId: job.id, businessId: access.businessId },
       select: { sortOrder: true, titleKey: true },

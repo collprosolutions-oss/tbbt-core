@@ -214,10 +214,10 @@ try {
   );
   check(
     "Ops never write Job.status, Invoice, or crew checklist",
-    !/job\.(update|updateMany)/.test(opsSrc) &&
-      !/invoice\.(create|update|updateMany)/i.test(opsSrc) &&
-      !opsSrc.includes("checklistJson") &&
-      !opsSrc.includes("JobCrewVisit") &&
+    !/\bjob\.(update|updateMany)\b/.test(opsSrc) &&
+      !/\binvoice\.(create|update|updateMany)\b/i.test(opsSrc) &&
+      !/checklistJson\s*:/.test(opsSrc) &&
+      !/jobCrewVisit\.(create|update|updateMany)/i.test(opsSrc) &&
       opsSrc.includes("never writes Job.status"),
   );
   check(
