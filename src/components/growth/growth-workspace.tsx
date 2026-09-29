@@ -106,7 +106,13 @@ function AttributionBody({ source }: { source: GrowthWorkspaceProps["source"] })
     <Card>
       <CardHeader>
         <CardTitle>Lead source attribution</CardTitle>
-        <CardDescription>{ORIGINAL_SOURCE_PRESERVED_MESSAGE}</CardDescription>
+        <CardDescription>
+          {ORIGINAL_SOURCE_PRESERVED_MESSAGE}{" "}
+          <Link href="/reports?area=request-sources" className="underline underline-offset-2">
+            Recorded request → estimate → job counts
+          </Link>{" "}
+          stay on Reports. Growth does not invent conversion credit, ad spend, or tracking cookies.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="overflow-x-auto">
