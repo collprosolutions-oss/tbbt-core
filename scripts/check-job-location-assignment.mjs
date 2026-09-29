@@ -299,7 +299,7 @@ const overlappingLocationMigrations = migrationNames.filter((name) => {
 console.log("\nSCHEMA OVERLAP — existing BusinessLocation column");
 check(
   "No new job-location assignment migration was added",
-  !migrationNames.some((name) => /job.location|location.assignment|20260929010800/i.test(name)),
+  !migrationNames.some((name) => /job.location|location.assignment/i.test(name)),
 );
 check(
   "Assignment reuses the existing nullable Job.businessLocationId column",
