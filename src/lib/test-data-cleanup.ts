@@ -193,6 +193,8 @@ export async function executeOperationalTestDataCleanup(
       await tx.payrollRunItem.deleteMany({ where: { businessId } });
       await tx.payrollRun.deleteMany({ where: { businessId } });
 
+      await tx.timeCorrectionDecision.deleteMany({ where: { businessId } });
+      await tx.timeCorrectionRequest.deleteMany({ where: { businessId } });
       await tx.timeEntryAdjustment.deleteMany({ where: { businessId } });
       await tx.timeEntry.deleteMany({ where: { businessId } });
       await tx.timesheetWeek.deleteMany({ where: { businessId } });

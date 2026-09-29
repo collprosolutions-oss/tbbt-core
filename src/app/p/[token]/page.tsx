@@ -8,10 +8,17 @@ import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
 import { ProjectHomeSummary } from "@/components/portal/project-home-summary";
 import { PortalAdditionalWorkHistory } from "@/components/portal/portal-additional-work-history";
 import { PortalCommunicationsCard } from "@/components/portal/portal-communications-card";
+import { ProjectMilestonesList } from "@/components/portal/project-milestones-list";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
+import { ProjectDocumentUpload } from "@/components/portal/project-document-upload";
+import { isBusinessStorageConfigured } from "@/lib/business-storage";
+import {
+  isProjectDocumentUploadOpen,
+  listProjectDocumentsForPortal,
+} from "@/lib/business-storage/project-documents";
 import { loadCleaningRepeatVisitPublicView } from "@/lib/cleaning-repeat-visit-data";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import {
@@ -33,6 +40,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import { loadCustomerVisibleMilestonesForProjectToken } from "@/lib/job-milestone-ops";
 import {
   customerFacingJobStatusLabel,
   resolveProjectProgressStep,
@@ -241,6 +249,11 @@ export default async function CustomerProjectPortalPage({
       </main>
     );
   }
+
+  const customerMilestones = await loadCustomerVisibleMilestonesForProjectToken(
+    prisma,
+    token,
+  );
 
   if (query.checkout === "return") {
     await reconcileEstimateDepositCheckout(prisma, token, query.session_id);
@@ -481,6 +494,18 @@ export default async function CustomerProjectPortalPage({
             </CardHeader>
             <CardContent className="space-y-3">
               <ProjectProgressBar currentStep={progressStep} />
+              {customerMilestones &&
+              customerMilestones.jobId === job.id &&
+              customerMilestones.businessId === job.business.id &&
+              customerMilestones.milestones.length > 0 ? (
+                <div className="space-y-2 pt-2">
+                  <p className="text-sm font-medium">Owner-shared milestones</p>
+                  <ProjectMilestonesList
+                    milestones={customerMilestones.milestones}
+                    timeZone={timeZone}
+                  />
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -600,6 +625,26 @@ export default async function CustomerProjectPortalPage({
               projectToken={token}
               alreadyRequested={repeatVisit.alreadyRequested}
             />
+          ) : null}
+
+          {isBusinessStorageConfigured() &&
+          isProjectDocumentUploadOpen(job.status) ? (
+          <Card id="project-documents">
+            <CardHeader>
+              <CardTitle>Project Documents</CardTitle>
+              <CardDescription>
+                Upload a private document for this project. Files stay private
+                to the business. Uploading does not approve work, publish
+                anything, send a message, create an invoice, or change the job.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ProjectDocumentUpload
+                projectToken={token}
+                documents={await listProjectDocumentsForPortal(prisma, token)}
+              />
+            </CardContent>
+          </Card>
           ) : null}
 
           <Card id="invoice" className="md:col-span-2 xl:col-span-1">
