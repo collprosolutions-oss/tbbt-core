@@ -66,10 +66,9 @@ if (!baseUrl) {
 const testDbName = "tbbt_website_publish_restore_test";
 const parsedUrl = new URL(baseUrl);
 const host = parsedUrl.hostname;
-const allowRemoteTestDb = process.env.TBBT_ALLOW_REMOTE_TEST_DB === "1";
-if (!allowRemoteTestDb && host !== "localhost" && host !== "127.0.0.1") {
+if (host !== "localhost" && host !== "127.0.0.1") {
   console.error(
-    `Refusing prisma db push --accept-data-loss against host ${host}. Use localhost/127.0.0.1 or set TBBT_ALLOW_REMOTE_TEST_DB=1.`,
+    `Refusing prisma db push --accept-data-loss against host ${host}. Use localhost or 127.0.0.1.`,
   );
   process.exit(1);
 }
@@ -77,16 +76,14 @@ parsedUrl.pathname = `/${testDbName}`;
 const testUrl = parsedUrl.toString();
 process.env.DATABASE_URL = testUrl;
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) process.exit(push.status ?? 1);
-
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const testClients = [];
+function createTestClient() {
+  const client = new PrismaClient({ datasourceUrl: testUrl });
+  testClients.push(client);
+  return client;
+}
 
 let passed = 0;
 let failed = 0;
@@ -130,30 +127,51 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-async function runOrderedPointerWrites(first, second) {
+function settle(run) {
+  return run.then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]);
+}
+
+async function runOrderedPointerWrites(first, second, { releaseFirst = true } = {}) {
   const firstAtHold = deferred();
   const secondAtHold = deferred();
-  const releaseFirst = deferred();
-  const releaseSecond = deferred();
+  const releaseA = deferred();
+  const releaseB = deferred();
   const firstRun = first(async () => {
     firstAtHold.resolve();
-    await releaseFirst.promise;
+    await releaseA.promise;
   });
   const secondRun = second(async () => {
     secondAtHold.resolve();
-    await releaseSecond.promise;
+    await releaseB.promise;
   });
-  await Promise.all([firstAtHold.promise, secondAtHold.promise]);
-  releaseFirst.resolve();
-  const firstResult = await firstRun.then(
-    (value) => ({ status: "fulfilled", value }),
-    (reason) => ({ status: "rejected", reason }),
+  await withTimeout(
+    Promise.all([firstAtHold.promise, secondAtHold.promise]),
+    8000,
+    "pointer-write racers reached the in-transaction hold",
   );
-  releaseSecond.resolve();
-  const secondResult = await secondRun.then(
-    (value) => ({ status: "fulfilled", value }),
-    (reason) => ({ status: "rejected", reason }),
-  );
+  if (releaseFirst) {
+    releaseA.resolve();
+    const firstResult = await settle(firstRun);
+    releaseB.resolve();
+    const secondResult = await settle(secondRun);
+    return { firstResult, secondResult };
+  }
+  releaseB.resolve();
+  const secondResult = await settle(secondRun);
+  releaseA.resolve();
+  const firstResult = await settle(firstRun);
   return { firstResult, secondResult };
 }
 
@@ -335,10 +353,14 @@ check(
   featureFiles.every((file) => !DANGEROUS.test(read(file))),
 );
 check(
-  "Dedicated test DB push is host-guarded",
-  read("scripts/check-website-publish-restore.mjs").includes("TBBT_ALLOW_REMOTE_TEST_DB") &&
+  "Dedicated test DB is localhost-only and dropped on every path",
+  read("scripts/check-website-publish-restore.mjs").includes('host !== "localhost"') &&
     read("scripts/check-website-publish-restore.mjs").includes('host !== "127.0.0.1"') &&
-    read("scripts/check-website-publish-restore.mjs").includes("--accept-data-loss"),
+    read("scripts/check-website-publish-restore.mjs").includes("DROP DATABASE IF EXISTS") &&
+    read("scripts/check-website-publish-restore.mjs").includes("WITH (FORCE)") &&
+    read("scripts/check-website-publish-restore.mjs").includes("--accept-data-loss") &&
+    read("scripts/check-website-publish-restore.mjs").includes("createTestClient") &&
+    !read("scripts/check-website-publish-restore.mjs").includes("TBBT_ALLOW_" + "REMOTE_TEST_DB"),
 );
 check(
   "Restore copy distinguishes captured intake from legacy publishes",
@@ -350,6 +372,16 @@ check(
 );
 
 try {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for website-publish-restore test database.");
+    failed += 1;
+  } else {
+  const prisma = createTestClient();
   console.log("\nDB — OWNER auth, isolation, restore, stale/concurrent, old-form submit");
   const cleanA = await prisma.business.create({
     data: {
@@ -641,15 +673,22 @@ try {
   });
   check("Opened V2 form can be prepared before restore", openedV2.ok === true);
 
-  async function restoreV1Held(beforePointerWrite) {
-    return restoreOwnedWebsitePublish(prisma, ownerA, {
-      publishId: websiteV1.id,
-      confirmed: true,
-      expectedCurrentId: websiteV2.id,
-      beforePointerWrite,
-    });
+  const restoreRacerA = createTestClient();
+  const restoreRacerB = createTestClient();
+  function restoreV1From(client) {
+    return (beforePointerWrite) =>
+      restoreOwnedWebsitePublish(client, ownerA, {
+        publishId: websiteV1.id,
+        confirmed: true,
+        expectedCurrentId: websiteV2.id,
+        beforePointerWrite,
+      });
   }
-  const firstOrder = await runOrderedPointerWrites(restoreV1Held, restoreV1Held);
+  const firstOrder = await runOrderedPointerWrites(
+    restoreV1From(restoreRacerA),
+    restoreV1From(restoreRacerB),
+    { releaseFirst: true },
+  );
   check(
     "Restore-vs-restore order A-then-B: first wins and second is stale",
     firstOrder.firstResult.status === "fulfilled" &&
@@ -676,13 +715,18 @@ try {
         "Restored captured intake for 1 trade",
       ),
   );
-  const secondOrder = await runOrderedPointerWrites(restoreV1Held, restoreV1Held);
+  const secondOrder = await runOrderedPointerWrites(
+    restoreV1From(restoreRacerA),
+    restoreV1From(restoreRacerB),
+    { releaseFirst: false },
+  );
   check(
     "Restore-vs-restore order B-then-A: first wins and second is stale",
-    secondOrder.firstResult.status === "fulfilled" &&
-      secondOrder.secondResult.status === "rejected" &&
-      secondOrder.secondResult.reason instanceof WebsitePublishError &&
-      secondOrder.secondResult.reason.message === WEBSITE_PUBLISH_RESTORE_STALE,
+    secondOrder.secondResult.status === "fulfilled" &&
+      secondOrder.secondResult.value.restoredIntakeCount === 1 &&
+      secondOrder.firstResult.status === "rejected" &&
+      secondOrder.firstResult.reason instanceof WebsitePublishError &&
+      secondOrder.firstResult.reason.message === WEBSITE_PUBLISH_RESTORE_STALE,
   );
   const afterConcurrent = await prisma.business.findFirst({
     where: { id: cleanA.id },
@@ -799,19 +843,22 @@ try {
     where: { businessId: cleanA.id, tradeCode: "CLEANING" },
     select: { publishedIntakeSnapshotId: true },
   });
+  const publishRacer = createTestClient();
+  const restoreVsPublishRacer = createTestClient();
   const publishRace = await runOrderedPointerWrites(
     (beforePointerWrite) =>
-      publishWebsite(prisma, ownerA, {
+      publishWebsite(publishRacer, ownerA, {
         idempotencyKey: `race-pub-${randomUUID().slice(0, 8)}`,
         beforePointerWrite,
       }),
     (beforePointerWrite) =>
-      restoreOwnedWebsitePublish(prisma, ownerA, {
+      restoreOwnedWebsitePublish(restoreVsPublishRacer, ownerA, {
         publishId: websiteV1.id,
         confirmed: true,
         expectedCurrentId: websiteV2.id,
         beforePointerWrite,
       }),
+    { releaseFirst: true },
   );
   const afterPublishRace = await prisma.business.findFirst({
     where: { id: cleanA.id },
@@ -1062,11 +1109,20 @@ try {
       !boundHistory.versions.some((row) => row.id === boundFirst.id) &&
       Boolean(boundCatalog.id),
   );
+  }
 } catch (error) {
   console.error(error);
-  process.exit(1);
+  failed += 1;
 } finally {
-  await prisma.$disconnect();
+  await Promise.all(testClients.map((client) => client.$disconnect().catch(() => {})));
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`);
+  } catch {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
 }
 
 if (failed > 0) {
