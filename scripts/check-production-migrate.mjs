@@ -1337,6 +1337,30 @@ check(
       localNames.indexOf("20260928200000_estimate_line_template_archive"),
 );
 
+const serviceCatalogImportMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010000_service_catalog_import/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Service catalog CSV import migration is additive and after estimate-template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"|UPDATE\s+"ServiceCatalogItem"/i.test(
+    serviceCatalogImportMigration,
+  ) &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImport"') &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow"') &&
+    serviceCatalogImportMigration.includes("ServiceCatalogImport_businessId_contentSha256_key") &&
+    serviceCatalogImportMigration.includes("never LineItem") &&
+    serviceCatalogImportMigration.includes("hourly") &&
+    localNames.includes("20260929010000_service_catalog_import") &&
+    !localNames.includes("20260928200000_service_catalog_import") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_service_catalog_import"),
+);
+
 check(
   "OWNER studio reminder SMS destination migration is additive and after #204",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&
