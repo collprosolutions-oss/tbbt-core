@@ -53,40 +53,36 @@ const growthSrc = readSrc("src/components/growth/growth-workspace.tsx");
 const publicIntakeSrc = readSrc("src/lib/public-intake.ts");
 const importOpsSrc = readSrc("src/lib/external-lead-import-ops.ts");
 
+const LOCAL_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function localDatabaseHost(hostname) {
+  return LOCAL_DATABASE_HOSTS.has((hostname ?? "").replace(/^\[|\]$/g, "").toLowerCase());
+}
+
 const baseUrl = process.env.DATABASE_URL;
+let baseParsed = null;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  try {
+    baseParsed = new URL(baseUrl);
+  } catch {
+    console.error("DATABASE_URL must be a valid URL to run this check.");
+    process.exitCode = 1;
+  }
+}
+
+if (baseParsed && !localDatabaseHost(baseParsed.hostname)) {
+  console.error(
+    `Refusing to run against DATABASE_URL host "${baseParsed.hostname}". This check only accepts localhost, 127.0.0.1, or ::1.`,
+  );
+  process.exitCode = 1;
+  baseParsed = null;
 }
 
 const testDbName = "tbbt_request_source_report_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-
-const adminUrl = new URL(baseUrl);
-adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for request-source report test database.");
-  process.exit(push.status ?? 1);
-}
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
-
+let prisma = null;
 let failures = 0;
 function check(label, condition) {
   if (condition) {
@@ -108,7 +104,16 @@ function row(report, source) {
   return report.rows.find((item) => item.source === source) ?? null;
 }
 
-try {
+if (baseParsed) {
+  const parsed = new URL(baseUrl);
+  parsed.pathname = `/${testDbName}`;
+  const testUrl = parsed.toString();
+  const adminUrl = new URL(baseUrl);
+  adminUrl.search = "";
+  const require = createRequire(import.meta.url);
+  const { PrismaClient } = require("@prisma/client");
+
+  try {
   console.log("\nSTATIC — recorded sources, honesty, and OWNER/ADMIN gate");
   check("Public intake default source is WEBSITE", PUBLIC_DEFAULT_LEAD_SOURCE === "WEBSITE");
   check("Imported / owner-entered default source is MANUAL", OWNER_DEFAULT_LEAD_SOURCE === "MANUAL");
@@ -194,6 +199,29 @@ try {
     csv.headers.join(",") === "Source,Requests,With estimate,With job" &&
       csv.rows[0].join(",") === "unknown,1,0,0",
   );
+
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  let testDbReady = createDb.status === 0 || /already exists/i.test(`${createDb.stderr}${createDb.stdout}`);
+  if (!testDbReady) {
+    console.error(createDb.stderr || createDb.stdout);
+    failures += 1;
+  } else {
+    const push = spawnSync(
+      "npx",
+      ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+      { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+    );
+    if (push.status !== 0) {
+      console.error("Failed to push schema for request-source report test database.");
+      failures += 1;
+      testDbReady = false;
+    }
+  }
+
+  if (testDbReady) {
+  prisma = new PrismaClient({ datasourceUrl: testUrl });
 
   console.log("\nDB — counts, tenant isolation, query bounds, MEMBER deny");
   const businessA = await prisma.business.create({
@@ -553,27 +581,34 @@ try {
       row(childReport, "OTHER")?.requests === 1 &&
       row(childReport, "OTHER")?.estimates === 1,
   );
+  }
 
   console.log(
     failures === 0
       ? "\nAll request-source report checks passed."
       : `\n${failures} request-source report check(s) failed.`,
   );
-} finally {
-  await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
-    );
-  } catch {
-    /* ignore */
-  }
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } catch (error) {
+    console.error(error);
+    failures += 1;
   } finally {
-    await cleanup.$disconnect();
+    if (prisma) {
+      await prisma.$disconnect();
+      prisma = null;
+    }
+    const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+    try {
+      await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`);
+    } catch (error) {
+      console.error(error);
+      failures += 1;
+    } finally {
+      await cleanup.$disconnect();
+    }
   }
-}
 
-process.exit(failures === 0 ? 0 : 1);
+  if (failures > 0 && process.exitCode !== 1) {
+    console.error(`\n${failures} request-source report check(s) failed.`);
+  }
+  process.exitCode = failures === 0 ? 0 : 1;
+}
