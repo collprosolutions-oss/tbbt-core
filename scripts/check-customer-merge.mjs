@@ -187,6 +187,38 @@ function isUnavailableOrTryAgain(error) {
   );
 }
 
+async function waitForTestDbLockOrNowait(admin, label) {
+  const started = Date.now();
+  while (Date.now() - started < LOCK_POLL_MS) {
+    const locks = await admin.$queryRaw`
+      SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if (locks.length > 0) return { kind: "lock", rows: locks };
+    const nowait = await admin.$queryRaw`
+      SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND pid <> pg_backend_pid()
+        AND query ILIKE '%FOR UPDATE NOWAIT%'
+    `;
+    if (nowait.length > 0) return { kind: "nowait", rows: nowait };
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const snapshot = await admin.$queryRaw`
+    SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
+    FROM pg_stat_activity
+    WHERE datname = ${testDbName}
+      AND pid <> pg_backend_pid()
+  `;
+  throw new Error(
+    `${label}: timed out waiting for wait_event_type=Lock or FOR UPDATE NOWAIT on ${testDbName}. activity=${JSON.stringify(snapshot)}`,
+  );
+}
+
 async function waitForTestDbLock(admin, label) {
   const started = Date.now();
   while (Date.now() - started < LOCK_POLL_MS) {
@@ -283,10 +315,11 @@ try {
       !readSrc("src/lib/nav.ts").includes("duplicates"),
   );
   check(
-    "Ops require OWNER and lock both customers in one serializable transaction",
+    "Ops require OWNER and lock both customers in one ReadCommitted transaction",
     opsSrc.includes('requireBusinessRole(access, "OWNER")') &&
       opsSrc.includes("FOR UPDATE") &&
-      opsSrc.includes("Serializable"),
+      opsSrc.includes("ReadCommitted") &&
+      !opsSrc.includes("Serializable"),
   );
   check(
     "Merge remaps jobs, estimates, invoices, properties, and communications",
@@ -1177,8 +1210,10 @@ try {
   const abLosses = abResults.filter((result) => result.status === "rejected");
   check("A+B vs B+A has exactly one winner", abWins.length === 1 && abLosses.length === 1);
   check(
-    "A+B vs B+A loser is not-available or try-again",
-    abLosses[0] && isUnavailableOrTryAgain(abLosses[0].reason),
+    "A+B vs B+A loser is not-available",
+    abLosses[0] &&
+      abLosses[0].reason instanceof CustomerMergeError &&
+      abLosses[0].reason.message === CUSTOMERS_NOT_AVAILABLE_MESSAGE,
   );
   const abLeft = await prisma.customer.findUnique({ where: { id: raceAB.left.id } });
   const abRight = await prisma.customer.findUnique({ where: { id: raceAB.right.id } });
@@ -1234,8 +1269,10 @@ try {
   const triangleLosses = triangleResults.filter((result) => result.status === "rejected");
   check("A+B vs B+C has exactly one winner", triangleWins.length === 1 && triangleLosses.length === 1);
   check(
-    "A+B vs B+C loser is not-available or try-again",
-    triangleLosses[0] && isUnavailableOrTryAgain(triangleLosses[0].reason),
+    "A+B vs B+C loser is not-available",
+    triangleLosses[0] &&
+      triangleLosses[0].reason instanceof CustomerMergeError &&
+      triangleLosses[0].reason.message === CUSTOMERS_NOT_AVAILABLE_MESSAGE,
   );
   const afterA = await prisma.customer.findUnique({ where: { id: customerA.id } });
   const afterB = await prisma.customer.findUnique({ where: { id: customerB.id } });
@@ -1408,6 +1445,80 @@ try {
       assetCountBefore === 1,
   );
   await assertNoOrphans(assetPair.right.id, "Merge vs StoredAsset");
+
+  console.log("\nCONCURRENT — reverse-order upload then merge");
+  const reversePair = await seedPair("reverse", `reverse-${randomUUID().slice(0, 8)}@example.com`);
+  const reverseBarrier = createCount2Barrier();
+  const reverseUploadClient = createTestClient();
+  const reverseMergeClient = createTestClient();
+  const reverseUploadP = reverseUploadClient.$transaction(
+    async (tx) => {
+      const locked = await tx.$queryRaw`
+        SELECT id FROM "Customer"
+        WHERE id = ${reversePair.right.id} AND "businessId" = ${alpha.business.id}
+        FOR KEY SHARE
+      `;
+      if (locked.length === 0) {
+        throw new Error("reverse-order upload could not key-share the absorbed customer");
+      }
+      const created = await tx.storedAsset.create({
+        data: {
+          businessId: alpha.business.id,
+          storageAccountId: alpha.storage.id,
+          customerId: reversePair.right.id,
+          category: "CUSTOMER_PHOTO",
+          originalFilename: "reverse-race.jpg",
+          storageKey: `reverse-${randomUUID()}`,
+          mimeType: "image/jpeg",
+          fileSizeBytes: 32,
+        },
+      });
+      await reverseBarrier.arrive();
+      return created;
+    },
+    { timeout: 25_000, maxWait: 10_000 },
+  );
+  const reverseUploadSettled = Promise.allSettled([reverseUploadP]);
+  await withTimeout(reverseBarrier.firstArrived, BARRIER_WAIT_MS, "reverse-order upload entered write");
+  const reverseMergeP = mergeConfirmedCustomers(reverseMergeClient, alpha.owner, {
+    keepCustomerId: reversePair.left.id,
+    absorbCustomerId: reversePair.right.id,
+    confirmedSameCustomer: true,
+  });
+  const reverseMergeSettled = Promise.allSettled([reverseMergeP]);
+  try {
+    await waitForTestDbLockOrNowait(lockAdmin, "reverse-order merge");
+  } finally {
+    await reverseBarrier.arrive();
+  }
+  const [reverseUploadResult] = await withTimeout(reverseUploadSettled, 25000, "reverse-order upload");
+  const [reverseMergeResult] = await withTimeout(reverseMergeSettled, 25000, "reverse-order merge");
+  await Promise.all([disconnectClient(reverseUploadClient), disconnectClient(reverseMergeClient)]);
+  check("Reverse-order upload committed", reverseUploadResult.status === "fulfilled");
+  const reverseMergeOk =
+    reverseMergeResult.status === "fulfilled" ||
+    (reverseMergeResult.status === "rejected" &&
+      reverseMergeResult.reason instanceof CustomerMergeError &&
+      reverseMergeResult.reason.message === MERGE_TRY_AGAIN_MESSAGE);
+  check("Reverse-order merge remaps the new asset or asks to try again", reverseMergeOk);
+  const reverseLeftoverAssets = await prisma.storedAsset.findMany({
+    where: { customerId: reversePair.right.id },
+  });
+  check("Reverse-order leaves no StoredAsset on the absorbed id", reverseLeftoverAssets.length === 0);
+  if (reverseMergeResult.status === "fulfilled" && reverseUploadResult.status === "fulfilled") {
+    const reverseMoved = await prisma.storedAsset.findUnique({
+      where: { id: reverseUploadResult.value.id },
+    });
+    check(
+      "Reverse-order moves the raced asset onto the survivor",
+      reverseMoved?.customerId === reversePair.left.id,
+    );
+    check(
+      "Reverse-order deletes the absorbed customer",
+      (await prisma.customer.findUnique({ where: { id: reversePair.right.id } })) === null,
+    );
+  }
+  await assertNoOrphans(reversePair.right.id, "Reverse-order upload then merge");
 } catch (error) {
   console.error(error);
   failures += 1;

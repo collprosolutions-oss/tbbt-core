@@ -808,7 +808,12 @@ async function mergeConfirmedCustomersOnce(
       };
     },
     {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      // Mutual exclusion comes from the Customer FOR UPDATE locks.
+      // ReadCommitted is required so remap and leftover checks see
+      // StoredAsset rows committed by an upload that held FOR KEY SHARE
+      // while this transaction waited. A Serializable snapshot is taken
+      // when the first lock statement starts and would miss that insert.
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
       maxWait: MERGE_TRANSACTION_MAX_WAIT_MS,
       timeout: MERGE_TRANSACTION_TIMEOUT_MS,
     },
