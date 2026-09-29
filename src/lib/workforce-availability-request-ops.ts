@@ -42,6 +42,10 @@ type Db = PrismaClient | Prisma.TransactionClient;
  * Test-only barriers. Production never sets these.
  * - beforeDecideClaims: both decide transactions have read PENDING
  *   before either writes.
+ * - afterMembershipLock: membership row is locked; a concurrent
+ *   deactivation must wait or already have committed.
+ * - afterExistingExceptionCheck: existence read finished; a concurrent
+ *   owner exception write can still commit before create.
  * - beforeRequestCreate: both creates have passed the pending lookup
  *   before either inserts.
  */
@@ -50,8 +54,32 @@ export const availabilityRequestTestHooks: {
     requestId: string;
     decision: AvailabilityRequestDecision;
   }) => Promise<void> | void;
+  afterMembershipLock?: (input: {
+    requestId: string;
+    membershipId: string;
+  }) => Promise<void> | void;
+  afterExistingExceptionCheck?: (input: {
+    requestId: string;
+    membershipId: string;
+    date: string;
+  }) => Promise<void> | void;
   beforeRequestCreate?: (input: { membershipId: string; date: string }) => Promise<void> | void;
 } = {};
+
+function isExceptionDateConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+    return false;
+  }
+  if (error.meta?.modelName === "MembershipAvailabilityException") return true;
+  const target = error.meta?.target;
+  if (Array.isArray(target)) {
+    return target.includes("membershipId") && target.includes("date");
+  }
+  if (typeof target === "string") {
+    return target.includes("membershipId") && target.includes("date");
+  }
+  return false;
+}
 
 function asRequestWriteError(error: unknown): never {
   if (error instanceof WorkforceError) throw error;
@@ -63,6 +91,9 @@ function asRequestWriteError(error: unknown): never {
 
 function asDecideWriteError(error: unknown): never {
   if (error instanceof WorkforceError) throw error;
+  if (isExceptionDateConflict(error)) {
+    throw new WorkforceError(AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE);
+  }
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     throw new WorkforceError(AVAILABILITY_REQUEST_DECIDE_CONFLICT_MESSAGE);
   }
@@ -387,13 +418,6 @@ export async function decideMemberAvailabilityExceptionRequestOp(
       });
       if (!request) throw new ForbiddenError();
       access.assertOwned(request);
-
-      const membership = await tx.membership.findFirst({
-        where: { id: request.membershipId, businessId: access.businessId },
-        select: { id: true, businessId: true, active: true },
-      });
-      if (!membership) throw new ForbiddenError();
-      access.assertOwned(membership);
       if (request.status !== "PENDING") {
         throw new WorkforceError(AVAILABILITY_REQUEST_STALE_MESSAGE);
       }
@@ -406,12 +430,21 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         decision,
       });
 
-      const liveMembership = await tx.membership.findFirst({
-        where: { id: request.membershipId, businessId: access.businessId },
-        select: { id: true, businessId: true, active: true },
-      });
+      const locked = await tx.$queryRaw<Array<{ id: string; businessId: string; active: boolean }>>`
+        SELECT id, "businessId", active
+        FROM "Membership"
+        WHERE id = ${request.membershipId}
+          AND "businessId" = ${access.businessId}
+        FOR UPDATE
+      `;
+      const liveMembership = locked[0];
       if (!liveMembership) throw new ForbiddenError();
       access.assertOwned(liveMembership);
+
+      await availabilityRequestTestHooks.afterMembershipLock?.({
+        requestId: request.id,
+        membershipId: liveMembership.id,
+      });
       if (!liveMembership.active) {
         throw new WorkforceError(AVAILABILITY_REQUEST_INACTIVE_MESSAGE);
       }
@@ -445,6 +478,11 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         if (existing && !input.replaceExisting) {
           throw new WorkforceError(AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE);
         }
+        await availabilityRequestTestHooks.afterExistingExceptionCheck?.({
+          requestId: request.id,
+          membershipId: liveMembership.id,
+          date: request.date,
+        });
       }
 
       const claimed = await tx.membershipAvailabilityExceptionRequest.updateMany({
@@ -466,24 +504,36 @@ export async function decideMemberAvailabilityExceptionRequestOp(
       }
 
       if (decision === "ACCEPT") {
-        await tx.membershipAvailabilityException.upsert({
-          where: { membershipId_date: { membershipId: liveMembership.id, date: request.date } },
-          create: {
-            businessId: access.businessId,
-            membershipId: liveMembership.id,
-            date: request.date,
-            kind: request.kind === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
-            startMinutes: request.startMinutes,
-            endMinutes: request.endMinutes,
-            note: request.note,
-          },
-          update: {
-            kind: request.kind === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
-            startMinutes: request.startMinutes,
-            endMinutes: request.endMinutes,
-            note: request.note,
-          },
-        });
+        const exceptionData = {
+          businessId: access.businessId,
+          membershipId: liveMembership.id,
+          date: request.date,
+          kind: request.kind === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
+          startMinutes: request.startMinutes,
+          endMinutes: request.endMinutes,
+          note: request.note,
+        } as const;
+        if (input.replaceExisting) {
+          await tx.membershipAvailabilityException.upsert({
+            where: { membershipId_date: { membershipId: liveMembership.id, date: request.date } },
+            create: exceptionData,
+            update: {
+              kind: exceptionData.kind,
+              startMinutes: exceptionData.startMinutes,
+              endMinutes: exceptionData.endMinutes,
+              note: exceptionData.note,
+            },
+          });
+        } else {
+          try {
+            await tx.membershipAvailabilityException.create({ data: exceptionData });
+          } catch (error) {
+            if (isExceptionDateConflict(error)) {
+              throw new WorkforceError(AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE);
+            }
+            throw error;
+          }
+        }
       }
 
       const updated = await tx.membershipAvailabilityExceptionRequest.findFirst({

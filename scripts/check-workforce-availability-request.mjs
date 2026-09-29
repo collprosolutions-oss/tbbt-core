@@ -47,7 +47,7 @@ const {
   AVAILABILITY_REQUEST_SELF_LIST_LIMIT,
   AVAILABILITY_REQUEST_STALE_MESSAGE,
 } = await import("@/lib/workforce");
-const { WorkforceError } = await import("@/lib/workforce-ops");
+const { setMemberAvailabilityExceptionOp, WorkforceError } = await import("@/lib/workforce-ops");
 const {
   availabilityRequestTestHooks,
   decideMemberAvailabilityExceptionRequestOp,
@@ -165,9 +165,11 @@ check(
     opsSrc.includes("never cancel, reassign, or message"),
 );
 check(
-  "OWNER accept is the only path that upserts recorded availability",
+  "OWNER accept is the only path that writes recorded availability",
   opsSrc.includes("membershipAvailabilityException.upsert") &&
+    opsSrc.includes("membershipAvailabilityException.create") &&
     opsSrc.includes('decision === "ACCEPT"') &&
+    opsSrc.includes("FOR UPDATE") &&
     actionSrc.includes("Recorded availability now includes that date") &&
     actionSrc.includes("Recorded availability is unchanged"),
 );
@@ -210,6 +212,12 @@ check(
     checkSrc.includes("Preview shares DATABASE_URL with live Production"),
 );
 check(
+  "Dedicated test DB drop is in finally and push failure throws instead of exiting",
+  checkSrc.includes('throw new Error("Failed to push schema') &&
+    !checkSrc.includes("process.exit(push.status") &&
+    checkSrc.includes("DROP DATABASE IF EXISTS"),
+);
+check(
   "UI states that existing jobs are not cancelled, reassigned, or messaged",
   fieldUi.includes("Existing jobs are not cancelled, reassigned") &&
     teamUi.includes("does not cancel, reassign, or message") &&
@@ -249,30 +257,9 @@ const testUrl = parsed.toString();
   await admin.$disconnect();
 }
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for availability-request test database.");
-  process.exit(push.status ?? 1);
-}
-
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
-
-const pendingUniqueSql = [
-  `CREATE UNIQUE INDEX IF NOT EXISTS "MembershipAvailabilityExceptionRequest_pending_membership_date_key"`,
-  `  ON "MembershipAvailabilityExceptionRequest"("membershipId", "date")`,
-  `  WHERE "status" = 'PENDING'`,
-].join("\n");
-await prisma.$executeRawUnsafe(pendingUniqueSql);
-check(
-  "Applied the migration pending-unique index after db push",
-  migration.includes(pendingUniqueSql.split("\n")[0]),
-);
+let prisma = null;
 
 function makeAccess(businessId, role, membershipId) {
   return {
@@ -291,6 +278,28 @@ function makeAccess(businessId, role, membershipId) {
 const NOW = new Date("2026-09-29T16:00:00.000Z");
 
 try {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    throw new Error("Failed to push schema for availability-request test database.");
+  }
+
+  prisma = new PrismaClient({ datasourceUrl: testUrl });
+
+  const pendingUniqueSql = [
+    `CREATE UNIQUE INDEX IF NOT EXISTS "MembershipAvailabilityExceptionRequest_pending_membership_date_key"`,
+    `  ON "MembershipAvailabilityExceptionRequest"("membershipId", "date")`,
+    `  WHERE "status" = 'PENDING'`,
+  ].join("\n");
+  await prisma.$executeRawUnsafe(pendingUniqueSql);
+  check(
+    "Applied the migration pending-unique index after db push",
+    migration.includes(pendingUniqueSql.split("\n")[0]),
+  );
+
   console.log("\nPRISMA — MEMBER request, OWNER decide, isolation, concurrency, timezone");
 
   const businessA = await prisma.business.create({
@@ -704,6 +713,32 @@ try {
       availableException.startMinutes === 9 * 60 &&
       availableException.endMinutes === 15 * 60,
   );
+  const availableDay = new Date("2026-10-07T16:00:00.000Z");
+  const availableWindow = memberWindowForDay(
+    availableDay,
+    DEFAULT_AVAILABILITY_SETTINGS,
+    {
+      ...memberSnapshot,
+      membershipId: helperMem.id,
+      name: "Ned Helper",
+      exceptions: [
+        {
+          date: availableException.date,
+          kind: availableException.kind,
+          startMinutes: availableException.startMinutes,
+          endMinutes: availableException.endMinutes,
+        },
+      ],
+    },
+    DEFAULT_BUSINESS_TIMEZONE,
+  );
+  check(
+    "AVAILABLE accept is the member window hours for that civil date",
+    formatISODateInTimeZone(availableDay, DEFAULT_BUSINESS_TIMEZONE) === "2026-10-07" &&
+      availableWindow.available === true &&
+      availableWindow.startMinutes === 9 * 60 &&
+      availableWindow.endMinutes === 15 * 60,
+  );
 
   await prisma.membershipAvailabilityException.create({
     data: {
@@ -769,6 +804,61 @@ try {
       replacedException?.kind === "AVAILABLE" &&
       replacedException.startMinutes === 10 * 60 &&
       replacedException.endMinutes === 14 * 60,
+  );
+
+  const toctouDate = "2026-10-12";
+  const toctouRequest = await requestMemberAvailabilityExceptionOp(prisma, memberA, {
+    membershipId: memberMem.id,
+    date: toctouDate,
+    kind: "AVAILABLE",
+    startMinutes: 8 * 60,
+    endMinutes: 12 * 60,
+    now: NOW,
+  });
+  const toctouBarrier = createCountBarrier(1);
+  availabilityRequestTestHooks.afterExistingExceptionCheck = toctouBarrier.wait;
+  const ownerWriteClient = new PrismaClient({ datasourceUrl: testUrl });
+  let toctouResult;
+  try {
+    const acceptHeld = decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
+      requestId: toctouRequest.id,
+      decision: "ACCEPT",
+      expectedUpdatedAt: toctouRequest.updatedAt,
+      now: NOW,
+    });
+    await withTimeout(toctouBarrier.arrived, 4000, "accept passed the exception existence check");
+    await setMemberAvailabilityExceptionOp(ownerWriteClient, ownerA, {
+      membershipId: memberMem.id,
+      date: toctouDate,
+      kind: "UNAVAILABLE",
+    });
+    toctouBarrier.release();
+    toctouResult = await Promise.allSettled([acceptHeld]);
+  } finally {
+    availabilityRequestTestHooks.afterExistingExceptionCheck = undefined;
+    await ownerWriteClient.$disconnect();
+  }
+  const toctouError = toctouResult[0];
+  const toctouException = await prisma.membershipAvailabilityException.findFirst({
+    where: { membershipId: memberMem.id, date: toctouDate, businessId: businessA.id },
+  });
+  check(
+    "Concurrent owner exception during accept refuses without replace",
+    toctouError.status === "rejected" &&
+      toctouError.reason instanceof WorkforceError &&
+      toctouError.reason.message === AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE,
+  );
+  check(
+    "Concurrent owner exception is unchanged after the refused accept",
+    toctouException?.kind === "UNAVAILABLE" &&
+      toctouException.startMinutes == null &&
+      toctouException.endMinutes == null,
+  );
+  check(
+    "Concurrent owner exception left the request pending",
+    (await prisma.membershipAvailabilityExceptionRequest.findFirst({
+      where: { id: toctouRequest.id, businessId: businessA.id },
+    }))?.status === "PENDING",
   );
 
   const pastAcceptRequest = await requestMemberAvailabilityExceptionOp(prisma, helperA, {
@@ -983,9 +1073,10 @@ try {
     now: NOW,
   });
   const deactivateBarrier = createCountBarrier(1);
-  availabilityRequestTestHooks.beforeDecideClaims = deactivateBarrier.wait;
+  availabilityRequestTestHooks.afterMembershipLock = deactivateBarrier.wait;
   const deactivateClient = new PrismaClient({ datasourceUrl: testUrl });
-  let deactivateResult;
+  let deactivateAccept;
+  let deactivateUpdate;
   try {
     const acceptHeld = decideMemberAvailabilityExceptionRequestOp(prisma, ownerA, {
       requestId: deactivateRequest.id,
@@ -993,35 +1084,51 @@ try {
       expectedUpdatedAt: deactivateRequest.updatedAt,
       now: NOW,
     });
-    await withTimeout(deactivateBarrier.arrived, 4000, "deactivate-during-accept entered write");
-    await deactivateClient.membership.update({
+    const updateHeld = deactivateClient.membership.update({
       where: { id: helperMem.id },
       data: { active: false },
     });
+    await withTimeout(deactivateBarrier.arrived, 4000, "accept locked the membership row");
     deactivateBarrier.release();
-    deactivateResult = await Promise.allSettled([acceptHeld]);
+    const settled = await Promise.allSettled([acceptHeld, updateHeld]);
+    deactivateAccept = settled[0];
+    deactivateUpdate = settled[1];
   } finally {
-    availabilityRequestTestHooks.beforeDecideClaims = undefined;
+    availabilityRequestTestHooks.afterMembershipLock = undefined;
     await deactivateClient.$disconnect();
   }
-  const deactivateError = deactivateResult[0];
+  const deactivateRow = await prisma.membershipAvailabilityExceptionRequest.findFirst({
+    where: { id: deactivateRequest.id, businessId: businessA.id },
+  });
+  const deactivateException = await prisma.membershipAvailabilityException.findFirst({
+    where: { membershipId: helperMem.id, date: deactivateDate, businessId: businessA.id },
+  });
+  const membershipAfterRace = await prisma.membership.findFirst({
+    where: { id: helperMem.id, businessId: businessA.id },
+    select: { active: true },
+  });
+  const acceptedThenDeactivated =
+    deactivateAccept.status === "fulfilled" &&
+    deactivateAccept.value.decision === "ACCEPT" &&
+    deactivateRow?.status === "ACCEPTED" &&
+    Boolean(deactivateException) &&
+    deactivateUpdate.status === "fulfilled" &&
+    membershipAfterRace?.active === false;
+  const refusedInactive =
+    deactivateAccept.status === "rejected" &&
+    deactivateAccept.reason instanceof WorkforceError &&
+    deactivateAccept.reason.message === AVAILABILITY_REQUEST_INACTIVE_MESSAGE &&
+    deactivateRow?.status === "PENDING" &&
+    deactivateException == null &&
+    deactivateUpdate.status === "fulfilled" &&
+    membershipAfterRace?.active === false;
   check(
-    "Deactivate-during-accept refuses after both sides have entered the commit",
-    deactivateError.status === "rejected" &&
-      deactivateError.reason instanceof WorkforceError &&
-      deactivateError.reason.message === AVAILABILITY_REQUEST_INACTIVE_MESSAGE,
+    "Deactivate-during-accept is accept-then-deactivate or refused as inactive",
+    acceptedThenDeactivated || refusedInactive,
   );
   check(
-    "Deactivate-during-accept did not write recorded availability",
-    (await prisma.membershipAvailabilityException.count({
-      where: { membershipId: helperMem.id, date: deactivateDate, businessId: businessA.id },
-    })) === 0,
-  );
-  check(
-    "Deactivate-during-accept left the request pending",
-    (await prisma.membershipAvailabilityExceptionRequest.findFirst({
-      where: { id: deactivateRequest.id, businessId: businessA.id },
-    }))?.status === "PENDING",
+    "Deactivate-during-accept has exactly one valid ordering",
+    Number(acceptedThenDeactivated) + Number(refusedInactive) === 1,
   );
 
   await prisma.membership.update({
@@ -1092,8 +1199,12 @@ try {
   console.error("FAIL - workforce availability-request Prisma harness threw", error);
 } finally {
   availabilityRequestTestHooks.beforeDecideClaims = undefined;
+  availabilityRequestTestHooks.afterMembershipLock = undefined;
+  availabilityRequestTestHooks.afterExistingExceptionCheck = undefined;
   availabilityRequestTestHooks.beforeRequestCreate = undefined;
-  await prisma.$disconnect();
+  if (prisma) {
+    await prisma.$disconnect();
+  }
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {
     await cleanup.$executeRawUnsafe(
