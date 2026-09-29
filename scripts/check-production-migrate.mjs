@@ -1354,8 +1354,15 @@ check(
       'ADD COLUMN IF NOT EXISTS "lastReceivedAt"',
     ) &&
     purchaseOrderReceiptMigration.includes("MaterialPurchaseOrderItem") &&
+    purchaseOrderReceiptMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceipt"',
+    ) &&
+    purchaseOrderReceiptMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceiptItem"',
+    ) &&
+    purchaseOrderReceiptMigration.includes('ADD COLUMN IF NOT EXISTS "payloadFingerprint"') &&
     !purchaseOrderReceiptMigration.includes("quantityPickedUp") &&
-    !purchaseOrderReceiptMigration.includes("CREATE TABLE") &&
+    !/DROP TABLE|DROP COLUMN/i.test(purchaseOrderReceiptMigration) &&
     localNames.includes("20260929140000_purchase_order_received_quantities") &&
     localNames.includes("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <

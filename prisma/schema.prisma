@@ -393,6 +393,8 @@ model Business {
   materialPurchaseListItems  MaterialPurchaseListItem[]
   materialPurchaseOrders     MaterialPurchaseOrder[]
   materialPurchaseOrderItems MaterialPurchaseOrderItem[]
+  materialPurchaseOrderReceipts MaterialPurchaseOrderReceipt[]
+  materialPurchaseOrderReceiptItems MaterialPurchaseOrderReceiptItem[]
   materialOperationAttempts  MaterialOperationAttempt[]
   vaultRecords             BusinessVaultRecord[]
   agreements               BusinessAgreement[]
@@ -641,6 +643,7 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedPurchaseOrderReceipts MaterialPurchaseOrderReceipt[] @relation("PurchaseOrderReceiptRecorder")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -3944,6 +3947,7 @@ model MaterialPurchaseOrder {
   supplier     Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   job          Job?                        @relation(fields: [jobId], references: [id], onDelete: SetNull)
   items        MaterialPurchaseOrderItem[]
+  receipts     MaterialPurchaseOrderReceipt[]
 
   @@index([businessId])
   @@index([purchaseListId])
@@ -3970,11 +3974,51 @@ model MaterialPurchaseOrderItem {
   business         Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
   purchaseOrder    MaterialPurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   purchaseListItem MaterialPurchaseListItem @relation(fields: [purchaseListItemId], references: [id], onDelete: Cascade)
+  receiptItems     MaterialPurchaseOrderReceiptItem[]
 
   @@unique([purchaseOrderId, purchaseListItemId])
   @@index([businessId])
   @@index([purchaseOrderId])
   @@index([purchaseListItemId])
+}
+
+/// One OWNER-recorded delivery against an existing purchase order.
+/// `MaterialPurchaseOrderItem.quantityReceived` stays the running total.
+/// OWNER reversal of a recorded delivery is a follow-up and is not built here.
+model MaterialPurchaseOrderReceipt {
+  id                     String   @id @default(cuid())
+  businessId             String
+  purchaseOrderId        String
+  attemptKey             String
+  recordedByMembershipId String?
+  createdAt              DateTime @default(now())
+
+  business      Business                         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder MaterialPurchaseOrder            @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  recordedBy    Membership?                      @relation("PurchaseOrderReceiptRecorder", fields: [recordedByMembershipId], references: [id], onDelete: SetNull)
+  items         MaterialPurchaseOrderReceiptItem[]
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([purchaseOrderId])
+  @@index([recordedByMembershipId])
+}
+
+model MaterialPurchaseOrderReceiptItem {
+  id                  String  @id @default(cuid())
+  businessId          String
+  receiptId           String
+  purchaseOrderItemId String
+  /// Quantity on this delivery, not the running PO-item total.
+  quantity            Decimal
+
+  business          Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  receipt           MaterialPurchaseOrderReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem MaterialPurchaseOrderItem   @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([receiptId])
+  @@index([purchaseOrderItemId])
 }
 
 /// Browser/form retry identity for convert-takeoff, draft PO,
@@ -3991,6 +4035,8 @@ model MaterialOperationAttempt {
   purchaseListItemId String?
   expenseId          String?
   createdCount       Int?
+  /// Stable hash of the claimed payload. Receipt retries compare this.
+  payloadFingerprint String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

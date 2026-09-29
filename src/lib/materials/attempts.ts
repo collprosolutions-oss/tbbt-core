@@ -46,6 +46,7 @@ export async function finishMaterialAttempt(
     purchaseListItemId?: string | null;
     expenseId?: string | null;
     createdCount?: number | null;
+    payloadFingerprint?: string | null;
   },
 ) {
   return db.materialOperationAttempt.update({
@@ -61,6 +62,7 @@ export async function finishMaterialAttempt(
       purchaseListItemId: input.purchaseListItemId ?? undefined,
       expenseId: input.expenseId ?? undefined,
       createdCount: input.createdCount ?? undefined,
+      payloadFingerprint: input.payloadFingerprint ?? undefined,
     },
   });
 }
@@ -73,7 +75,7 @@ export async function finishMaterialAttempt(
 export async function withMaterialAttempt<T>(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { attemptKey: string; kind: MaterialAttemptKind },
+  input: { attemptKey: string; kind: MaterialAttemptKind; payloadFingerprint?: string },
   work: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<{ status: "claimed"; result: T } | { status: "replay"; attempt: NonNullable<
   Awaited<ReturnType<typeof findMaterialAttempt>>
@@ -92,6 +94,7 @@ export async function withMaterialAttempt<T>(
           businessId: access.businessId,
           attemptKey: input.attemptKey,
           kind: input.kind,
+          payloadFingerprint: input.payloadFingerprint,
         },
       });
       return work(tx);

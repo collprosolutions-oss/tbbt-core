@@ -23,6 +23,8 @@ import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce
 export type MaterialsActionState = {
   error?: string;
   message?: string;
+  alreadyRecorded?: boolean;
+  attemptKey?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -355,18 +357,23 @@ export async function recordPurchaseOrderReceiptAction(
       if (!purchaseOrderItemId || !quantityReceived) continue;
       items.push({ purchaseOrderItemId, quantityReceived });
     }
-    await recordPurchaseOrderReceipt(prisma, operating.access, {
+    const attemptKey = readString(formData, "attemptId");
+    const result = await recordPurchaseOrderReceipt(prisma, operating.access, {
       purchaseOrderId: readString(formData, "purchaseOrderId"),
-      attemptKey: readString(formData, "attemptId"),
+      attemptKey,
       items,
     });
     revalidateMaterials([
       jobId ? `/jobs/${jobId}` : "",
       readString(formData, "estimateId") ? `/estimates/${readString(formData, "estimateId")}` : "",
     ].filter(Boolean));
+    if (result.replayed) {
+      return { alreadyRecorded: true, attemptKey };
+    }
     return {
       message:
         "Received quantities recorded. No payment, expense, invoice, or supplier order was created.",
+      attemptKey,
     };
   } catch (error) {
     return { error: materialsErrorMessage(error, "Those received quantities could not be recorded.") };

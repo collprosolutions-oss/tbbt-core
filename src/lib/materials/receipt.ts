@@ -2,13 +2,15 @@
  * OWNER-recorded receipts against an existing MaterialPurchaseOrder.
  *
  * This is operational receiving only:
- *   - increments MaterialPurchaseOrderItem.quantityReceived
+ *   - increments MaterialPurchaseOrderItem.quantityReceived (running total)
+ *   - appends one MaterialPurchaseOrderReceipt per delivery
  *   - shows ordered-versus-received remaining
  *   - handles partial deliveries and duplicate/concurrent retries
  *
  * It never creates a Payment, Expense, Invoice, or supplier order.
  * It does not write quantityPurchased, actualCost, price history, or
  * worker pickup quantities on MaterialPurchaseListItem.
+ * OWNER reversal of a recorded delivery is a follow-up.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -23,8 +25,11 @@ import {
 } from "@/lib/materials/attempts";
 import { MaterialsError } from "@/lib/materials/errors";
 import { decimalQuantity } from "@/lib/materials/money";
+import { lockTenantOwnedPurchaseOrder } from "@/lib/materials/po-lock";
 import {
   canRecordPurchaseOrderReceipt,
+  parseReceiptDeliveryQuantity,
+  purchaseOrderReceiptFingerprint,
   purchaseOrderReceiptQuantities,
   purchaseOrderStatusFromReceipts,
   type PurchaseItemStatus,
@@ -32,15 +37,6 @@ import {
 } from "@/lib/materials/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
-
-type LockedPurchaseOrderRow = {
-  id: string;
-  businessId: string;
-  purchaseListId: string;
-  status: string;
-  orderedAt: Date | null;
-  receivedAt: Date | null;
-};
 
 const RECEIPT_PO_INCLUDE = {
   items: {
@@ -61,19 +57,27 @@ export type PurchaseOrderReceiptInput = {
   }>;
 };
 
-export async function lockTenantOwnedPurchaseOrder(
-  db: Db,
-  businessId: string,
-  purchaseOrderId: string,
-): Promise<LockedPurchaseOrderRow | null> {
-  const rows = await db.$queryRaw<LockedPurchaseOrderRow[]>`
-    SELECT id, "businessId", "purchaseListId", status, "orderedAt", "receivedAt"
-    FROM "MaterialPurchaseOrder"
-    WHERE id = ${purchaseOrderId}
-      AND "businessId" = ${businessId}
-    FOR UPDATE
-  `;
-  return rows[0] ?? null;
+export type PurchaseOrderReceiptResult = {
+  replayed: boolean;
+  order: Prisma.MaterialPurchaseOrderGetPayload<{ include: typeof RECEIPT_PO_INCLUDE }>;
+};
+
+const RECEIPT_MISMATCH_ERROR =
+  "That retry token was already used for a different receipt.";
+
+function assertMatchingReceiptAttempt(
+  attempt: {
+    purchaseOrderId: string | null;
+    payloadFingerprint: string | null;
+  },
+  input: { purchaseOrderId: string; payloadFingerprint: string },
+) {
+  if (attempt.purchaseOrderId && attempt.purchaseOrderId !== input.purchaseOrderId) {
+    throw new MaterialsError(RECEIPT_MISMATCH_ERROR);
+  }
+  if (attempt.payloadFingerprint && attempt.payloadFingerprint !== input.payloadFingerprint) {
+    throw new MaterialsError(RECEIPT_MISMATCH_ERROR);
+  }
 }
 
 async function loadOwnedReceiptOrder(db: Db, access: BusinessAccess, purchaseOrderId: string) {
@@ -92,7 +96,12 @@ function parseReceiptIncrements(input: PurchaseOrderReceiptInput["items"]) {
     if (!id) {
       throw new MaterialsError("Every received quantity must belong to a purchase-order item.");
     }
-    const quantity = decimalQuantity(row.quantityReceived);
+    const parsed = parseReceiptDeliveryQuantity(row.quantityReceived);
+    if (parsed.status === "skip") continue;
+    if (parsed.status === "invalid") {
+      throw new MaterialsError("Enter a received quantity as a plain decimal.");
+    }
+    const quantity = decimalQuantity(parsed.normalized);
     if (!quantity) {
       throw new MaterialsError("Enter a received quantity greater than zero.");
     }
@@ -109,22 +118,39 @@ export async function recordPurchaseOrderReceipt(
   db: PrismaClient,
   access: BusinessAccess,
   input: PurchaseOrderReceiptInput,
-) {
+): Promise<PurchaseOrderReceiptResult> {
   requireOwnerPurchaseReceipt(access);
   const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
   const increments = parseReceiptIncrements(input.items);
+  const payloadFingerprint = purchaseOrderReceiptFingerprint(
+    input.purchaseOrderId,
+    [...increments.entries()].map(([purchaseOrderItemId, quantity]) => ({
+      purchaseOrderItemId,
+      quantity: quantity.toFixed(4),
+    })),
+  );
 
-  const replay = async (attempt: { purchaseOrderId: string | null }) => {
+  const replay = async (attempt: {
+    purchaseOrderId: string | null;
+    payloadFingerprint: string | null;
+  }) => {
+    assertMatchingReceiptAttempt(attempt, {
+      purchaseOrderId: input.purchaseOrderId,
+      payloadFingerprint,
+    });
     if (!attempt.purchaseOrderId) {
       throw new MaterialsError("That receipt is already being recorded. Retry.");
     }
-    return loadOwnedReceiptOrder(db, access, attempt.purchaseOrderId);
+    return {
+      replayed: true as const,
+      order: await loadOwnedReceiptOrder(db, access, attempt.purchaseOrderId),
+    };
   };
 
   const outcome = await withMaterialAttempt(
     db,
     access,
-    { attemptKey, kind: "RECORD_PO_RECEIPT" },
+    { attemptKey, kind: "RECORD_PO_RECEIPT", payloadFingerprint },
     async (tx) => {
       const locked = await lockTenantOwnedPurchaseOrder(tx, access.businessId, input.purchaseOrderId);
       if (!locked || locked.businessId !== access.businessId) {
@@ -180,12 +206,46 @@ export async function recordPurchaseOrderReceipt(
         nextReceived.set(itemId, already.plus(increment));
       }
 
+      const submittedListItemIds = [
+        ...new Set(
+          [...increments.keys()].map((itemId) => itemsById.get(itemId)?.purchaseListItemId).filter(
+            (id): id is string => Boolean(id),
+          ),
+        ),
+      ].sort((left, right) => left.localeCompare(right));
+      if (submittedListItemIds.length > 0) {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "MaterialPurchaseListItem"
+          WHERE "businessId" = ${access.businessId}
+            AND id IN (${Prisma.join(submittedListItemIds)})
+          ORDER BY id
+          FOR UPDATE
+        `;
+      }
+
       for (const [itemId, quantityReceived] of nextReceived) {
         await tx.materialPurchaseOrderItem.update({
           where: { id: itemId },
           data: { quantityReceived, lastReceivedAt: now },
         });
       }
+
+      await tx.materialPurchaseOrderReceipt.create({
+        data: {
+          businessId: access.businessId,
+          purchaseOrderId: existing.id,
+          attemptKey,
+          recordedByMembershipId: access.workspace.membership?.id ?? null,
+          items: {
+            create: [...increments.entries()].map(([purchaseOrderItemId, quantity]) => ({
+              businessId: access.businessId,
+              purchaseOrderItemId,
+              quantity,
+            })),
+          },
+        },
+      });
 
       const receiptLines = existing.items.map((item) =>
         purchaseOrderReceiptQuantities({
@@ -204,18 +264,44 @@ export async function recordPurchaseOrderReceipt(
         include: RECEIPT_PO_INCLUDE,
       });
 
+      const siblingLines = submittedListItemIds.length
+        ? await tx.materialPurchaseOrderItem.findMany({
+            where: {
+              businessId: access.businessId,
+              purchaseListItemId: { in: submittedListItemIds },
+              purchaseOrder: { status: { not: "CANCELLED" } },
+            },
+            select: {
+              id: true,
+              purchaseListItemId: true,
+              quantity: true,
+              quantityReceived: true,
+            },
+          })
+        : [];
+
       for (const item of updated.items) {
+        if (!increments.has(item.id)) continue;
         const currentStatus = item.purchaseListItem.status;
         if (currentStatus === "CANCELLED") continue;
-        const line = purchaseOrderReceiptQuantities({
+        const related = siblingLines.filter(
+          (line) => line.purchaseListItemId === item.purchaseListItemId,
+        );
+        const listItemFullyReceived =
+          related.length > 0 &&
+          related.every((line) => {
+            const received = nextReceived.get(line.id) ?? line.quantityReceived;
+            return received.gte(line.quantity);
+          });
+        const thisLine = purchaseOrderReceiptQuantities({
           quantityOrdered: item.quantity.toString(),
           quantityReceived: item.quantityReceived.toString(),
         });
         let nextStatus: PurchaseItemStatus | null = null;
-        if (line.fullyReceived) {
+        if (listItemFullyReceived) {
           nextStatus = "RECEIVED";
         } else if (
-          line.quantityReceived > 0 &&
+          thisLine.quantityReceived > 0 &&
           (currentStatus === "NEEDED" || currentStatus === "PLANNED" || currentStatus === "ORDERED")
         ) {
           nextStatus = "ORDERED";
@@ -231,6 +317,7 @@ export async function recordPurchaseOrderReceipt(
         attemptKey,
         purchaseListId: existing.purchaseListId,
         purchaseOrderId: existing.id,
+        payloadFingerprint,
       });
       return updated;
     },
@@ -239,5 +326,5 @@ export async function recordPurchaseOrderReceipt(
   if (outcome.status === "replay") {
     return replay(outcome.attempt);
   }
-  return outcome.result;
+  return { replayed: false, order: outcome.result };
 }

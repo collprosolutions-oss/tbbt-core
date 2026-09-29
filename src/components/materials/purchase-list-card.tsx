@@ -385,8 +385,15 @@ function PurchaseOrderStatusForm({
   );
   const [receiptAttemptId, setReceiptAttemptId] = useState(newAttemptId);
   useEffect(() => {
-    if (receiptState.message) setReceiptAttemptId(newAttemptId());
-  }, [receiptState.message]);
+    if (
+      receiptState.message ||
+      receiptState.error ||
+      receiptState.alreadyRecorded ||
+      receiptState.attemptKey
+    ) {
+      setReceiptAttemptId(newAttemptId());
+    }
+  }, [receiptState]);
   const canReceive = canRecordReceipt && canRecordPurchaseOrderReceipt(order.status);
   return (
     <div className="space-y-2 rounded-lg border p-3">
@@ -451,7 +458,7 @@ function PurchaseOrderStatusForm({
                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
                 <Input
                   name={`receivedQuantity:${item.id}`}
-                  defaultValue={item.fullyReceived ? "" : item.quantityRemaining}
+                  defaultValue=""
                   placeholder="Received"
                   className="w-24"
                 />

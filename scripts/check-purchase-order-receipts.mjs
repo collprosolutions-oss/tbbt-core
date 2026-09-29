@@ -1,9 +1,10 @@
 /**
  * OWNER purchase-order receipt recording.
  *
- * Proves authorization, tenant isolation, partial delivery, and
- * concurrent retry on a dedicated test database. Recording a receipt
- * must not create a payment, expense, invoice, or supplier order.
+ * Proves authorization, tenant isolation, partial delivery, sequential
+ * receipts, mismatched replay, and a real same-line race on a dedicated
+ * local test database. Recording a receipt must not create a payment,
+ * expense, invoice, or supplier order.
  *
  * Run with:
  *   npm run test:purchase-order-receipts
@@ -23,6 +24,7 @@ const {
   createSupplier,
   ensurePurchaseList,
   MATERIALS_SUPPLIERS_SCHEMA_SOURCE,
+  parseReceiptDeliveryQuantity,
   purchaseOrderReceiptQuantities,
   purchaseOrderStatusFromReceipts,
   recordPurchaseOrderReceipt,
@@ -35,34 +37,62 @@ if (!baseUrl) {
   process.exit(1);
 }
 
-const testDbName = "tbbt_purchase_order_receipt_test";
 const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
+if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
+  console.error("Refusing to run purchase-order receipt checks against a non-local DATABASE_URL host.");
+  process.exit(1);
+}
+
+const testDbName = "tbbt_purchase_order_receipt_test";
+const testParsed = new URL(baseUrl);
+testParsed.pathname = `/${testDbName}`;
+const testUrl = testParsed.toString();
 process.env.DATABASE_URL = testUrl;
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
+const terminateExisting = spawnSync(
+  "psql",
+  [
+    adminUrl.toString(),
+    "-c",
+    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+  ],
+  { encoding: "utf8" },
+);
+if (terminateExisting.status !== 0) {
+  console.warn(terminateExisting.stderr || terminateExisting.stdout);
+}
+const dropExisting = spawnSync(
+  "psql",
+  [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}"`],
+  { encoding: "utf8" },
+);
+if (dropExisting.status !== 0) {
+  console.warn(dropExisting.stderr || dropExisting.stdout);
+}
 const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
   encoding: "utf8",
 });
 if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
+  console.error(createDb.stderr || createDb.stdout);
+  process.exit(createDb.status ?? 1);
 }
 
-const push = spawnSync(
+const migrate = spawnSync(
   "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+  ["prisma", "migrate", "deploy"],
   { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
 );
-if (push.status !== 0) {
-  console.error("Failed to push schema for purchase-order receipt test database.");
-  process.exit(push.status ?? 1);
+if (migrate.status !== 0) {
+  console.error("Failed to migrate the purchase-order receipt test database.");
+  process.exit(migrate.status ?? 1);
 }
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const prismaRace = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -107,31 +137,55 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
+function dropTestDatabase() {
+  const terminate = spawnSync(
+    "psql",
+    [
+      adminUrl.toString(),
+      "-c",
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    ],
+    { encoding: "utf8" },
+  );
+  if (terminate.status !== 0) {
+    throw new Error(terminate.stderr || terminate.stdout || "Failed to terminate test-db connections.");
+  }
+  const drop = spawnSync(
+    "psql",
+    [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}"`],
+    { encoding: "utf8" },
+  );
+  if (drop.status !== 0) {
+    throw new Error(drop.stderr || drop.stdout || "Failed to drop the purchase-order receipt test database.");
+  }
+}
+
 try {
   console.log("\nSTATIC — Receipt path stays separate from pickup, payments, and DDL");
   const receiptSrc = readRepo("src/lib/materials/receipt.ts");
-  const schema = readRepo("prisma/schema.prisma");
+  const cardSrc = readRepo("src/components/materials/purchase-list-card.tsx");
+  const actionsSrc = readRepo("src/app/actions/materials.ts");
+  const typesSrc = readRepo("src/lib/materials/types.ts");
+  const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
+  const pickupSrc = readRepo("src/lib/materials/pickup.ts");
   const migration = readRepo(
     "prisma/migrations/20260929140000_purchase_order_received_quantities/migration.sql",
   );
-  const pickupSrc = readRepo("src/lib/materials/pickup.ts");
-  const actionsSrc = readRepo("src/app/actions/materials.ts");
   check(
     "Receipt writes quantityReceived on PO items, not quantityPickedUp",
     receiptSrc.includes("quantityReceived") &&
       receiptSrc.includes("RECORD_PO_RECEIPT") &&
       !receiptSrc.includes("quantityPickedUp") &&
-      schema.includes("quantityReceived") &&
-      !schema.includes("quantityPickedUp") &&
       pickupSrc.includes("pickupRequired"),
   );
   check(
     "Receipt migration is additive and does not share pickup columns",
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration) &&
       migration.includes('ADD COLUMN IF NOT EXISTS "quantityReceived"') &&
+      migration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceipt"') &&
+      migration.includes('CREATE TABLE IF NOT EXISTS "MaterialPurchaseOrderReceiptItem"') &&
       !migration.includes("quantityPickedUp") &&
-      !migration.includes("pickupException") &&
-      !migration.includes("CREATE TABLE"),
+      !migration.includes("pickupException"),
   );
   check(
     "Receipt request path creates no payment, expense, invoice, or supplier order",
@@ -144,7 +198,11 @@ try {
       !receiptSrc.includes("$executeRawUnsafe") &&
       !receiptSrc.includes("CREATE TABLE") &&
       MATERIALS_SUPPLIERS_SCHEMA_SOURCE === "prisma-migrate" &&
-      !actionsSrc.includes('readString(formData, "businessId")'),
+      !actionsSrc.includes('readString(formData, "businessId")') &&
+      actionsSrc.includes("alreadyRecorded") &&
+      cardSrc.includes("[receiptState]") &&
+      purchaseSrc.includes("lockTenantOwnedPurchaseOrder") &&
+      typesSrc.includes('ORDERED_EXTERNALLY: ["ORDERED_EXTERNALLY", "CANCELLED"]'),
   );
   const remaining = purchaseOrderReceiptQuantities({
     quantityOrdered: "10",
@@ -159,7 +217,13 @@ try {
       purchaseOrderStatusFromReceipts([remaining]) === "PARTIALLY_RECEIVED" &&
       purchaseOrderStatusFromReceipts([
         purchaseOrderReceiptQuantities({ quantityOrdered: 2, quantityReceived: 2 }),
-      ]) === "RECEIVED",
+      ]) === "RECEIVED" &&
+      parseReceiptDeliveryQuantity("").status === "skip" &&
+      parseReceiptDeliveryQuantity("0").status === "skip" &&
+      parseReceiptDeliveryQuantity("2.5").status === "ok" &&
+      parseReceiptDeliveryQuantity("0.00001").status === "invalid" &&
+      parseReceiptDeliveryQuantity("0x5").status === "invalid" &&
+      parseReceiptDeliveryQuantity("-1").status === "invalid",
   );
 
   const ownerUser = await prisma.user.create({
@@ -226,6 +290,14 @@ try {
     plannedUnitCost: "8.00",
     supplierId: depot.id,
   });
+  const shared = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: list.id,
+    name: "Shared hinge",
+    quantityNeeded: "6",
+    unit: "ea",
+    plannedUnitCost: "1.25",
+    supplierId: depot.id,
+  });
   const draftPo = await createPurchaseOrder(prisma, ownerA, {
     purchaseListId: list.id,
     supplierId: depot.id,
@@ -277,7 +349,16 @@ try {
         attemptKey: "receipt-cross-tenant",
         items: [{ purchaseOrderItemId: lumberLine.id, quantityReceived: "1" }],
       }),
-    (error) => error instanceof Error,
+    (error) => /not found in this business/i.test(String(error.message)),
+  );
+  await expectError(
+    "Manual RECEIVED is rejected so empty receipts cannot block receiving",
+    () =>
+      updatePurchaseOrderStatus(prisma, adminA, {
+        purchaseOrderId: draftPo.id,
+        status: "RECEIVED",
+      }),
+    (error) => /cannot move from ORDERED_EXTERNALLY to RECEIVED/i.test(String(error.message)),
   );
   const afterDenied = await prisma.materialPurchaseOrderItem.findUnique({
     where: { id: lumberLine.id },
@@ -296,20 +377,28 @@ try {
     attemptKey: "receipt-partial-1",
     items: [{ purchaseOrderItemId: lumberLine.id, quantityReceived: "4" }],
   });
-  const firstLumber = firstReceipt.items.find((row) => row.id === lumberLine.id);
-  const firstScrews = firstReceipt.items.find((row) => row.id === screwLine.id);
+  const firstLumber = firstReceipt.order.items.find((row) => row.id === lumberLine.id);
+  const firstScrews = firstReceipt.order.items.find((row) => row.id === screwLine.id);
   const firstDiff = purchaseOrderReceiptQuantities({
     quantityOrdered: firstLumber.quantity.toString(),
     quantityReceived: firstLumber.quantityReceived.toString(),
   });
+  const firstAudit = await prisma.materialPurchaseOrderReceipt.findMany({
+    where: { businessId: businessA.id, purchaseOrderId: draftPo.id },
+    include: { items: true },
+  });
   check(
     "Partial delivery records 4 of 10 and leaves the other line unordered-received",
-    firstReceipt.status === "PARTIALLY_RECEIVED" &&
+    firstReceipt.replayed === false &&
+      firstReceipt.order.status === "PARTIALLY_RECEIVED" &&
       firstDiff.quantityOrdered === 10 &&
       firstDiff.quantityReceived === 4 &&
       firstDiff.quantityRemaining === 6 &&
       Number(firstScrews.quantityReceived.toString()) === 0 &&
-      firstReceipt.receivedAt == null,
+      firstReceipt.order.receivedAt == null &&
+      firstAudit.length === 1 &&
+      firstAudit[0].recordedByMembershipId === ownerMem.id &&
+      Number(firstAudit[0].items[0].quantity.toString()) === 4,
   );
   const lumberListAfterPartial = await prisma.materialPurchaseListItem.findUnique({
     where: { id: lumber.id },
@@ -339,11 +428,16 @@ try {
   const retryLumber = await prisma.materialPurchaseOrderItem.findUnique({
     where: { id: lumberLine.id },
   });
+  const retryAudits = await prisma.materialPurchaseOrderReceipt.count({
+    where: { businessId: businessA.id, attemptKey: retryKey },
+  });
   check(
     "Duplicate concurrent submit records the increment once",
-    retryOne.id === retryTwo.id &&
-      retryOne.status === "PARTIALLY_RECEIVED" &&
-      Number(retryLumber.quantityReceived.toString()) === 7,
+    retryOne.order.id === retryTwo.order.id &&
+      retryOne.replayed !== retryTwo.replayed &&
+      retryOne.order.status === "PARTIALLY_RECEIVED" &&
+      Number(retryLumber.quantityReceived.toString()) === 7 &&
+      retryAudits === 1,
   );
 
   console.log("\nTEST — Concurrent distinct deliveries serialize on the PO");
@@ -367,8 +461,8 @@ try {
   const concurrentScrews = afterConcurrent.items.find((row) => row.id === screwLine.id);
   check(
     "Two different deliveries add without double-counting",
-    secondDelivery.id === draftPo.id &&
-      thirdDelivery.id === draftPo.id &&
+    secondDelivery.order.id === draftPo.id &&
+      thirdDelivery.order.id === draftPo.id &&
       Number(concurrentLumber.quantityReceived.toString()) === 9 &&
       Number(concurrentScrews.quantityReceived.toString()) === 4 &&
       afterConcurrent.status === "PARTIALLY_RECEIVED",
@@ -378,7 +472,7 @@ try {
     () =>
       recordPurchaseOrderReceipt(prisma, ownerA, {
         purchaseOrderId: draftPo.id,
-        attemptKey: "receipt-over",
+        attemptKey: "receipt-over-qty",
         items: [{ purchaseOrderItemId: lumberLine.id, quantityReceived: "2" }],
       }),
     (error) => /remaining ordered quantity/i.test(String(error.message)),
@@ -386,17 +480,17 @@ try {
 
   const completed = await recordPurchaseOrderReceipt(prisma, ownerA, {
     purchaseOrderId: draftPo.id,
-    attemptKey: "receipt-final",
+    attemptKey: "receipt-final-1",
     items: [{ purchaseOrderItemId: lumberLine.id, quantityReceived: "1" }],
   });
-  const completedLumber = completed.items.find((row) => row.id === lumberLine.id);
+  const completedLumber = completed.order.items.find((row) => row.id === lumberLine.id);
   const completedList = await prisma.materialPurchaseListItem.findUnique({
     where: { id: lumber.id },
   });
   check(
     "Final remaining quantity marks the PO and list item received",
-    completed.status === "RECEIVED" &&
-      completed.receivedAt != null &&
+    completed.order.status === "RECEIVED" &&
+      completed.order.receivedAt != null &&
       Number(completedLumber.quantityReceived.toString()) === 10 &&
       completedList.status === "RECEIVED" &&
       completedList.expenseId == null &&
@@ -411,6 +505,276 @@ try {
         items: [{ purchaseOrderItemId: lumberLine.id, quantityReceived: "1" }],
       }),
     (error) => /already fully received/i.test(String(error.message)),
+  );
+
+  console.log("\nTEST — Sequential receipts, mismatched replay, and invalid input");
+  const seqEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const seqList = await ensurePurchaseList(prisma, ownerA, { estimateId: seqEstimate.id });
+  const seqItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: seqList.id,
+    name: "Sequential pipe",
+    quantityNeeded: "10",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const otherPoItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: seqList.id,
+    name: "Other PO only",
+    quantityNeeded: "5",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const seqPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: seqList.id,
+    supplierId: depot.id,
+    itemIds: [seqItem.id],
+  });
+  const foreignPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: seqList.id,
+    supplierId: depot.id,
+    itemIds: [otherPoItem.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: seqPo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: foreignPo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  const seqLine = seqPo.items[0];
+  const foreignLine = foreignPo.items[0];
+  const firstSeq = await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: seqPo.id,
+    attemptKey: "receipt-seq-1",
+    items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: "2" }],
+  });
+  const secondSeq = await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: seqPo.id,
+    attemptKey: "receipt-seq-2",
+    items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: "2" }],
+  });
+  const thirdSeq = await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: seqPo.id,
+    attemptKey: "receipt-seq-3",
+    items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: "2" }],
+  });
+  const afterSequential = await prisma.materialPurchaseOrderItem.findUnique({
+    where: { id: seqLine.id },
+  });
+  const seqReceipts = await prisma.materialPurchaseOrderReceipt.count({
+    where: { businessId: businessA.id, purchaseOrderId: seqPo.id },
+  });
+  check(
+    "Three sequential receipts each increment with a new attempt key",
+    firstSeq.replayed === false &&
+      secondSeq.replayed === false &&
+      thirdSeq.replayed === false &&
+      Number(afterSequential.quantityReceived.toString()) === 6 &&
+      seqReceipts === 3,
+  );
+  await expectError(
+    "Mismatched replay of an earlier attempt key is rejected",
+    () =>
+      recordPurchaseOrderReceipt(prisma, ownerA, {
+        purchaseOrderId: seqPo.id,
+        attemptKey: "receipt-seq-1",
+        items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: "3" }],
+      }),
+    (error) => /already used for a different receipt/i.test(String(error.message)),
+  );
+  const matchedReplay = await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: seqPo.id,
+    attemptKey: "receipt-seq-1",
+    items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: "2" }],
+  });
+  const afterReplay = await prisma.materialPurchaseOrderItem.findUnique({
+    where: { id: seqLine.id },
+  });
+  check(
+    "Matching replay does not increment again",
+    matchedReplay.replayed === true &&
+      Number(afterReplay.quantityReceived.toString()) === 6,
+  );
+  await expectError(
+    "Line id from another PO in the same business is rejected",
+    () =>
+      recordPurchaseOrderReceipt(prisma, ownerA, {
+        purchaseOrderId: seqPo.id,
+        attemptKey: "receipt-foreign-line",
+        items: [{ purchaseOrderItemId: foreignLine.id, quantityReceived: "1" }],
+      }),
+    (error) => /belong to this purchase order and business/i.test(String(error.message)),
+  );
+  for (const [label, value] of [
+    ["negative", "-1"],
+    ["NaN", "NaN"],
+    ["too many decimals", "0.00001"],
+    ["hex", "0x5"],
+  ]) {
+    await expectError(
+      `Invalid ${label} quantity is rejected`,
+      () =>
+        recordPurchaseOrderReceipt(prisma, ownerA, {
+          purchaseOrderId: seqPo.id,
+          attemptKey: `receipt-bad-${label.replace(/\s+/g, "")}`,
+          items: [{ purchaseOrderItemId: seqLine.id, quantityReceived: value }],
+        }),
+      (error) => /plain decimal|greater than zero|at least one received/i.test(String(error.message)),
+    );
+  }
+
+  console.log("\nTEST — Same-line race that exceeds remaining uses separate clients");
+  const raceEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const raceList = await ensurePurchaseList(prisma, ownerA, { estimateId: raceEstimate.id });
+  const raceItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: raceList.id,
+    name: "Race lumber",
+    quantityNeeded: "3",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const racePo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: raceList.id,
+    supplierId: depot.id,
+    itemIds: [raceItem.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: racePo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  const raceLine = racePo.items[0];
+  const raceResults = await Promise.allSettled([
+    recordPurchaseOrderReceipt(prisma, ownerA, {
+      purchaseOrderId: racePo.id,
+      attemptKey: "receipt-race-a",
+      items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
+    }),
+    recordPurchaseOrderReceipt(prismaRace, ownerA, {
+      purchaseOrderId: racePo.id,
+      attemptKey: "receipt-race-b",
+      items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
+    }),
+  ]);
+  const raceOk = raceResults.filter((row) => row.status === "fulfilled");
+  const raceFailed = raceResults.filter((row) => row.status === "rejected");
+  const raceLineAfter = await prisma.materialPurchaseOrderItem.findUnique({
+    where: { id: raceLine.id },
+  });
+  check(
+    "Exactly one same-line over-remaining race succeeds",
+    raceOk.length === 1 &&
+      raceFailed.length === 1 &&
+      /remaining ordered quantity/i.test(String(raceFailed[0].reason?.message ?? "")) &&
+      Number(raceLineAfter.quantityReceived.toString()) === 2,
+  );
+
+  console.log("\nTEST — Shared list item and cancel preserve RECEIVED lines");
+  const sharedPoOne = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: list.id,
+    supplierId: depot.id,
+    itemIds: [shared.id],
+  });
+  const sharedPoTwo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: list.id,
+    supplierId: depot.id,
+    itemIds: [shared.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: sharedPoOne.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: sharedPoTwo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: sharedPoOne.id,
+    attemptKey: "receipt-shared-one",
+    items: [{ purchaseOrderItemId: sharedPoOne.items[0].id, quantityReceived: "6" }],
+  });
+  const sharedAfterOne = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: shared.id },
+  });
+  check(
+    "List item stays ORDERED while another non-cancelled PO line is outstanding",
+    sharedAfterOne.status === "ORDERED",
+  );
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: sharedPoTwo.id,
+    attemptKey: "receipt-shared-two",
+    items: [{ purchaseOrderItemId: sharedPoTwo.items[0].id, quantityReceived: "6" }],
+  });
+  const sharedAfterTwo = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: shared.id },
+  });
+  check("List item becomes RECEIVED only after every open PO line is filled", sharedAfterTwo.status === "RECEIVED");
+
+  const cancelEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const cancelList = await ensurePurchaseList(prisma, ownerA, { estimateId: cancelEstimate.id });
+  const keepItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: cancelList.id,
+    name: "Keep received",
+    quantityNeeded: "2",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const dropItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: cancelList.id,
+    name: "Cancel leftover",
+    quantityNeeded: "2",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const cancelPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: cancelList.id,
+    supplierId: depot.id,
+    itemIds: [keepItem.id, dropItem.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: cancelPo.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  const keepLine = cancelPo.items.find((row) => row.purchaseListItemId === keepItem.id);
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: cancelPo.id,
+    attemptKey: "receipt-cancel-keep",
+    items: [{ purchaseOrderItemId: keepLine.id, quantityReceived: "2" }],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: cancelPo.id,
+    status: "CANCELLED",
+  });
+  const keepAfterCancel = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: keepItem.id },
+  });
+  const dropAfterCancel = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: dropItem.id },
+  });
+  check(
+    "Cancelling a partly received PO does not mark already-RECEIVED list items cancelled",
+    keepAfterCancel.status === "RECEIVED" && dropAfterCancel.status === "CANCELLED",
   );
 
   const expensesAfter = await prisma.expense.count({ where: { businessId: businessA.id } });
@@ -434,12 +798,20 @@ try {
 
   if (failures > 0) {
     console.error(`\n${failures} purchase-order receipt check(s) failed.`);
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    console.log("\nAll purchase-order receipt checks passed.");
   }
-  console.log("\nAll purchase-order receipt checks passed.");
 } catch (error) {
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 } finally {
   await prisma.$disconnect();
+  await prismaRace.$disconnect();
+  try {
+    dropTestDatabase();
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
 }
