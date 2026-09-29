@@ -325,7 +325,7 @@ export async function loadMarketingSource(
     approvalQueue: {
       ...studioApprovalQueueMeta(approvalQueueTotal),
       message: WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
-      items: approvalQueueRows.map((content) => ({)
+      items: approvalQueueRows.map((content) => ({
         id: content.id,
         contentType: content.contentType,
         title: content.title,
