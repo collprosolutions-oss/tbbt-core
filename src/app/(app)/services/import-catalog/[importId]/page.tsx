@@ -93,6 +93,7 @@ export default async function ImportCatalogPreviewPage({
         invalidCount={preview.invalidCount}
         nameMatchCount={preview.nameMatchCount}
         writtenCount={preview.writtenCount}
+        confirmingRecoverable={preview.confirmingRecoverable}
         rows={preview.rows.map((row) => {
           const current = row.matchedCatalogItemId
             ? currentById.get(row.matchedCatalogItemId)

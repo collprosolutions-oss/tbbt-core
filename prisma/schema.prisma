@@ -4508,6 +4508,9 @@ model ServiceCatalogImport {
   createdByMembershipId   String
   confirmedAt             DateTime?
   confirmedByMembershipId String?
+  /// Set when status is CONFIRMING. Re-upload and a second confirm may
+  /// recover only after CATALOG_IMPORT_CONFIRMING_LEASE_MS.
+  confirmingAt            DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

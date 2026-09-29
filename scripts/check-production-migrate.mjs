@@ -1353,6 +1353,7 @@ check(
     serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow"') &&
     serviceCatalogImportMigration.includes("ServiceCatalogImport_businessId_contentSha256_key") &&
     serviceCatalogImportMigration.includes('"matchDecision" TEXT NOT NULL DEFAULT \'SKIP\'') &&
+    serviceCatalogImportMigration.includes('"confirmingAt" TIMESTAMP(3)') &&
     serviceCatalogImportMigration.includes("never LineItem") &&
     serviceCatalogImportMigration.includes("hourly") &&
     serviceCatalogImportMigration.includes("20260929010200") &&

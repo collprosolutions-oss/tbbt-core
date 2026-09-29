@@ -73,11 +73,30 @@ export const CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE =
 export const CATALOG_IMPORT_NAME_MATCH_MESSAGE =
   "Same-business name matches are shown before writing. Matched services change only when you pick update. Blank cells keep the existing description, category, recurrence, unit label, and active status.";
 
+export const CATALOG_IMPORT_CONFIRMING_LEASE_MS = 60_000;
+
 export const CATALOG_IMPORT_IN_PROGRESS_MESSAGE =
   "This catalog import is already being confirmed.";
 
+export const CATALOG_IMPORT_INTERRUPTED_MESSAGE =
+  "The last confirm was interrupted. Review the updated preview and confirm again. A failed confirm does not keep partial catalog writes.";
+
+export const CATALOG_IMPORT_CONFIRM_FAILED_MESSAGE =
+  "The catalog import could not be completed. Nothing was written. Review the preview and confirm again.";
+
 export const CATALOG_IMPORT_STALE_MATCHES_MESSAGE =
   "The catalog changed after this preview. Review the updated name matches before confirming.";
+
+export function isCatalogImportConfirmingLeaseStale(
+  confirmingAt: Date | string | null | undefined,
+  nowMs = Date.now(),
+) {
+  if (confirmingAt == null || confirmingAt === "") return true;
+  const started =
+    typeof confirmingAt === "string" ? Date.parse(confirmingAt) : confirmingAt.getTime();
+  if (Number.isNaN(started)) return true;
+  return nowMs - started >= CATALOG_IMPORT_CONFIRMING_LEASE_MS;
+}
 
 export const CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE =
   "That service website slug is already used on this business. Review the preview and confirm again.";

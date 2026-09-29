@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS "ServiceCatalogImport" (
     "createdByMembershipId" TEXT NOT NULL,
     "confirmedAt" TIMESTAMP(3),
     "confirmedByMembershipId" TEXT,
+    "confirmingAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     CONSTRAINT "ServiceCatalogImport_pkey" PRIMARY KEY ("id")
@@ -111,3 +112,5 @@ BEGIN
       ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
+
+ALTER TABLE "ServiceCatalogImport" ADD COLUMN IF NOT EXISTS "confirmingAt" TIMESTAMP(3);

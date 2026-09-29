@@ -10,6 +10,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE,
+  CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
+  CATALOG_IMPORT_INTERRUPTED_MESSAGE,
   CATALOG_IMPORT_NAME_MATCH_MESSAGE,
   CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE,
   CATALOG_IMPORT_NO_HOURLY_MESSAGE,
@@ -63,6 +65,7 @@ export function ImportCatalogPreview({
   invalidCount,
   nameMatchCount,
   writtenCount,
+  confirmingRecoverable = false,
   rows,
 }: {
   importId: string;
@@ -74,6 +77,7 @@ export function ImportCatalogPreview({
   invalidCount: number;
   nameMatchCount: number;
   writtenCount: number;
+  confirmingRecoverable?: boolean;
   rows: CatalogImportPreviewRow[];
 }) {
   const [state, action, pending] = useActionState(
@@ -81,6 +85,9 @@ export function ImportCatalogPreview({
     initialState,
   );
   const confirmed = status === "CONFIRMED";
+  const confirming = status === "CONFIRMING";
+  const inProgress = confirming && !confirmingRecoverable;
+  const canConfirm = !confirmed && !inProgress;
   const invalidRows = rows.filter((row) => row.previewStatus === "INVALID");
   const matchRows = rows.filter((row) => row.previewStatus === "NAME_MATCH");
   const validRows = rows.filter((row) => row.previewStatus === "VALID");
@@ -129,15 +136,17 @@ export function ImportCatalogPreview({
         {CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE}{" "}
         {confirmed
           ? "This preview was already confirmed."
-          : invalidCount > 0
-            ? CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE
-            : CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE}
+          : confirmingRecoverable
+            ? CATALOG_IMPORT_INTERRUPTED_MESSAGE
+            : inProgress
+              ? CATALOG_IMPORT_IN_PROGRESS_MESSAGE
+              : invalidCount > 0
+                ? CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE
+                : CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE}
       </p>
 
       <PreviewTable title="Ready to add" rows={validRows} />
-      {confirmed ? (
-        <MatchTable rows={matchRows} confirmed />
-      ) : (
+      {canConfirm ? (
         <form action={action} className="space-y-6">
           <input type="hidden" name="importId" value={importId} />
           <MatchTable rows={matchRows} confirmed={false} />
@@ -153,15 +162,23 @@ export function ImportCatalogPreview({
             </p>
           </div>
         </form>
-      )}
-      {confirmed ? (
+      ) : (
         <>
+          <MatchTable rows={matchRows} confirmed={confirmed} />
           <PreviewTable title="Validation errors" rows={invalidRows} />
-          <Button asChild>
-            <Link href="/services">Back to Services</Link>
-          </Button>
+          {confirmed ? (
+            <Button asChild>
+              <Link href="/services">Back to Services</Link>
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              <Link href={SERVICE_CATALOG_IMPORT_ROUTE} className="underline">
+                Upload a different CSV
+              </Link>
+            </p>
+          )}
         </>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -272,7 +289,7 @@ function MatchTable({
                   <label className="flex items-start gap-2 text-sm">
                     <input
                       type="radio"
-                      name={`matchDecision:${row.id}`}
+                      name={`matchDecision:${row.rowNumber}`}
                       value="SKIP"
                       defaultChecked={
                         row.matchDecision !== "UPDATE" &&
@@ -284,7 +301,7 @@ function MatchTable({
                   <label className="flex items-start gap-2 text-sm">
                     <input
                       type="radio"
-                      name={`matchDecision:${row.id}`}
+                      name={`matchDecision:${row.rowNumber}`}
                       value="UPDATE"
                       defaultChecked={row.matchDecision === "UPDATE"}
                     />
@@ -293,7 +310,7 @@ function MatchTable({
                   <label className="flex items-start gap-2 text-sm">
                     <input
                       type="radio"
-                      name={`matchDecision:${row.id}`}
+                      name={`matchDecision:${row.rowNumber}`}
                       value="ADD_NEW"
                       defaultChecked={row.matchDecision === "ADD_NEW"}
                     />

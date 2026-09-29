@@ -41,7 +41,10 @@ export {
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
   CATALOG_IMPORT_INVALID_MESSAGE,
   CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE,
+  CATALOG_IMPORT_CONFIRM_FAILED_MESSAGE,
+  CATALOG_IMPORT_CONFIRMING_LEASE_MS,
   CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
+  CATALOG_IMPORT_INTERRUPTED_MESSAGE,
   CATALOG_IMPORT_NAME_MATCH_MESSAGE,
   CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE,
   CATALOG_IMPORT_NO_HOURLY_MESSAGE,
@@ -53,6 +56,7 @@ export {
   CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE,
   CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
   CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE,
+  isCatalogImportConfirmingLeaseStale,
   SERVICE_CATALOG_IMPORT_MATCH_DECISIONS,
   catalogImportMatchDecisionLabel,
   catalogImportOverLengthMessage,
@@ -604,7 +608,10 @@ export function catalogRowBecameStale(
   },
 ) {
   if (stored.previewStatus === "INVALID") return false;
-  if (stored.previewStatus === "VALID" && live.previewStatus === "NAME_MATCH") {
+  if (
+    stored.previewStatus === "VALID" &&
+    (live.previewStatus === "NAME_MATCH" || live.previewStatus === "INVALID")
+  ) {
     return true;
   }
   if (stored.previewStatus === "NAME_MATCH") {

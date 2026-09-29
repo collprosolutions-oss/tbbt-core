@@ -8,13 +8,54 @@
  * Run with:
  *   node --experimental-strip-types scripts/check-service-catalog-import.mjs
  */
-import { register } from "node:module";
-import { createRequire } from "node:module";
+import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+function isLocalDatabaseHost(urlString) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    try {
+      parsedUrl = new URL(urlString.replace(/@\//, "@localhost/"));
+    } catch {
+      return false;
+    }
+  }
+  const protocol = parsedUrl.protocol.replace(/:$/, "").toLowerCase();
+  if (protocol !== "postgres" && protocol !== "postgresql") return false;
+  const hostParam = (parsedUrl.searchParams.get("host") || "")
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase();
+  if (hostParam) {
+    return (
+      hostParam === "localhost" ||
+      hostParam === "127.0.0.1" ||
+      hostParam === "::1" ||
+      hostParam.startsWith("/")
+    );
+  }
+  const host = (parsedUrl.hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (host.startsWith("/")) return true;
+  return !host;
+}
+
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error("DATABASE_URL must be set to run this check.");
+  process.exit(1);
+}
+if (!isLocalDatabaseHost(baseUrl)) {
+  console.error(
+    "Refusing pg_terminate_backend / DROP DATABASE / prisma migrate deploy: DATABASE_URL host is not localhost, 127.0.0.1, ::1, or a local socket. Preview shares Production's DATABASE_URL.",
+  );
+  process.exit(1);
+}
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -35,6 +76,7 @@ const {
   CATALOG_IMPORT_CSV_REQUIRED_MESSAGE,
   CATALOG_IMPORT_EMPTY_MESSAGE,
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
+  CATALOG_IMPORT_CONFIRMING_LEASE_MS,
   CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
   CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE,
   CATALOG_IMPORT_NAME_MATCH_MESSAGE,
@@ -47,8 +89,10 @@ const {
   CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE,
   CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
   CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE,
+  isCatalogImportConfirmingLeaseStale,
   catalogImportOverLengthMessage,
   catalogImportRowFingerprint,
+  catalogRowBecameStale,
   catalogNameKey,
   decodeCatalogCsvBytes,
   evaluateCatalogImportRow,
@@ -110,59 +154,44 @@ const migrationSource = readSrc(
 );
 const scriptSource = readSrc("scripts/check-service-catalog-import.mjs");
 
-function isLocalDatabaseHost(urlString) {
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(urlString);
-  } catch {
-    return false;
-  }
-  const protocol = parsedUrl.protocol.replace(/:$/, "").toLowerCase();
-  if (protocol !== "postgres" && protocol !== "postgresql") return false;
-  const host = (parsedUrl.hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
-  if (!host) return true;
-  if (host.startsWith("/")) return true;
-  const socketHost = parsedUrl.searchParams.get("host") || "";
-  return socketHost.startsWith("/");
-}
-
-const baseUrl = process.env.DATABASE_URL;
-if (!baseUrl) {
-  console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
-}
-if (!isLocalDatabaseHost(baseUrl)) {
-  console.error(
-    "Refusing pg_terminate_backend / DROP DATABASE / prisma db push --accept-data-loss: DATABASE_URL host is not localhost, 127.0.0.1, ::1, or a local socket. Preview shares Production's DATABASE_URL.",
-  );
-  process.exit(1);
-}
-
 const testDbName = "tbbt_service_catalog_import_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 
+async function dropTestDatabase() {
+  const { PrismaClient: AdminPrisma } = createRequire(import.meta.url)("@prisma/client");
+  const admin = new AdminPrisma({ datasourceUrl: baseUrl });
+  try {
+    await admin.$queryRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      testDbName,
+    );
+    await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await admin.$disconnect();
+  }
+}
+
+await dropTestDatabase();
 {
   const { PrismaClient: AdminPrisma } = createRequire(import.meta.url)("@prisma/client");
   const admin = new AdminPrisma({ datasourceUrl: baseUrl });
-  await admin.$queryRawUnsafe(
-    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-    testDbName,
-  );
-  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  await admin.$disconnect();
+  try {
+    await admin.$executeRawUnsafe(`CREATE DATABASE "${testDbName}"`);
+  } finally {
+    await admin.$disconnect();
+  }
 }
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for service catalog import test database.");
-  process.exit(push.status ?? 1);
+const migrate = spawnSync("npx", ["prisma", "migrate", "deploy"], {
+  stdio: "inherit",
+  env: { ...process.env, DATABASE_URL: testUrl },
+});
+if (migrate.status !== 0) {
+  console.error("Failed to migrate the service catalog import test database.");
+  await dropTestDatabase();
+  process.exit(migrate.status ?? 1);
 }
 
 const require = createRequire(import.meta.url);
@@ -306,6 +335,7 @@ try {
       previewUiSource.includes('value="SKIP"') &&
       previewUiSource.includes('value="UPDATE"') &&
       previewUiSource.includes('value="ADD_NEW"') &&
+      previewUiSource.includes("matchDecision:${row.rowNumber}") &&
       previewUiSource.includes("Current") &&
       previewUiSource.includes("Incoming") &&
       previewUiSource.includes("Keep existing"),
@@ -318,20 +348,20 @@ try {
       CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE.includes("except for Custom Quote"),
   );
   check(
-    "Confirm claims PREVIEW to CONFIRMING and writes nothing when count is 0",
-    opsSource.includes('status: "PREVIEW"') &&
-      opsSource.includes('data: { status: "CONFIRMING" }') &&
-      opsSource.includes("claimed.count !== 1") &&
-      opsSource.includes("CATALOG_IMPORT_IN_PROGRESS_MESSAGE") &&
+    "Confirm claims with a lease and writes every row in one transaction",
+    opsSource.includes("confirmingAt") &&
+      opsSource.includes("pg_advisory_xact_lock") &&
+      opsSource.includes("CATALOG_IMPORT_CONFIRM_FAILED_MESSAGE") &&
       opsSource.includes("writeEligibleRow") &&
-      opsSource.includes("writtenCatalogItemId: null"),
+      opsSource.includes("claimed.count !== 1") &&
+      opsSource.includes("finished.count !== 1"),
   );
   check(
-    "Confirm rematches live catalog and recovers CONFIRMING on re-upload",
+    "Confirm rematches live catalog and recovers only stale CONFIRMING leases",
     opsSource.includes("catalogRowBecameStale") &&
       opsSource.includes("CATALOG_IMPORT_STALE_MATCHES_MESSAGE") &&
-      opsSource.includes('status: "CONFIRMING"') &&
-      opsSource.includes("refreshPreviewMatches") &&
+      opsSource.includes("isCatalogImportConfirmingLeaseStale") &&
+      opsSource.includes("refreshPreviewMatchesTx") &&
       opsSource.includes("$transaction"),
   );
   check(
@@ -345,19 +375,25 @@ try {
       parseSource.includes("createdAt") &&
       typeof pickDeterministicCatalogMatch === "function",
   );
+  const generateAt = scriptSource.indexOf('spawnSync("npx", ["prisma", "generate"]');
   const terminateAt = scriptSource.indexOf("pg_terminate_backend");
   const dropAt = scriptSource.indexOf("DROP DATABASE");
-  const pushAt = scriptSource.indexOf("accept-data-loss");
+  const migrateAt = scriptSource.indexOf('["prisma", "migrate", "deploy"]');
   const guardAt = scriptSource.indexOf("isLocalDatabaseHost(baseUrl)");
   check(
-    "Destructive test DB steps refuse unless DATABASE_URL is local",
+    "Destructive test DB steps refuse unless DATABASE_URL is local, before Prisma",
     guardAt > 0 &&
+      generateAt > guardAt &&
       terminateAt > guardAt &&
       dropAt > guardAt &&
-      pushAt > guardAt &&
-      scriptSource.includes('host === "localhost"') &&
-      scriptSource.includes("127.0.0.1") &&
-      scriptSource.includes("::1"),
+      migrateAt > guardAt &&
+      scriptSource.includes('["prisma", "migrate", "deploy"]') &&
+      scriptSource.includes("dropTestDatabase") &&
+      isLocalDatabaseHost("postgresql://tbbt:tbbt@127.0.0.1:5432/tbbt") &&
+      isLocalDatabaseHost("postgresql://tbbt:tbbt@/tbbt?host=/var/run/postgresql") &&
+      !isLocalDatabaseHost("postgresql://tbbt:tbbt@/tbbt?host=db.example.com") &&
+      !isLocalDatabaseHost("postgresql://tbbt:tbbt@127.0.0.1/tbbt?host=db.example.com") &&
+      !isLocalDatabaseHost("postgresql://tbbt:tbbt@db.example.com:5432/tbbt"),
   );
   check(
     "Migration timestamp is 20260929010200 and names matchDecision skip default",
@@ -647,6 +683,13 @@ try {
     },
   );
   check(
+    "VALID becoming INVALID is stale",
+    catalogRowBecameStale(
+      { previewStatus: "VALID", matchedCatalogItemId: null },
+      { previewStatus: "INVALID", matchedCatalogItemId: null },
+    ),
+  );
+  check(
     "Duplicate catalog names match the oldest createdAt then id",
     duplicateCatalogMatches[0].previewStatus === "NAME_MATCH" &&
       duplicateCatalogMatches[0].matchedCatalogItemId === "cat-older" &&
@@ -926,7 +969,7 @@ try {
   );
   const updatedConfirm = await confirmServiceCatalogImport(prisma, ownerA, {
     importId: updatePreview.id,
-    matchDecisions: updateRow ? { [updateRow.id]: "UPDATE" } : {},
+    matchDecisions: updateRow ? { [updateRow.rowNumber]: "UPDATE" } : {},
   });
   const updated = await prisma.serviceCatalogItem.findFirst({
     where: { id: existingA.id },
@@ -1024,7 +1067,7 @@ try {
   );
   await confirmServiceCatalogImport(prisma, ownerA, {
     importId: blankKeepPreview.id,
-    matchDecisions: blankKeepRow ? { [blankKeepRow.id]: "UPDATE" } : {},
+    matchDecisions: blankKeepRow ? { [blankKeepRow.rowNumber]: "UPDATE" } : {},
   });
   const archivedAfter = await prisma.serviceCatalogItem.findFirst({
     where: { id: archived.id, businessId: businessA.id },
@@ -1075,6 +1118,62 @@ try {
       ),
   );
 
+  await prisma.businessTrade.create({
+    data: { businessId: businessA.id, tradeCode: "PRESSURE_WASHING", status: "ACTIVE" },
+  });
+  const inactiveTradeBytes = Buffer.from(
+    csv(["Gutter Soft Wash,Wash,FIXED,120,Exterior,PRESSURE_WASHING,,,yes"]),
+  );
+  const inactiveTradePreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "gutter-wash.csv",
+    bytes: inactiveTradeBytes,
+  });
+  check(
+    "Pressure-washing row is VALID while that trade is active",
+    inactiveTradePreview.rows.some(
+      (row) => row.name === "Gutter Soft Wash" && row.previewStatus === "VALID",
+    ),
+  );
+  await prisma.businessTrade.updateMany({
+    where: { businessId: businessA.id, tradeCode: "PRESSURE_WASHING" },
+    data: { status: "INACTIVE" },
+  });
+  await expectError(
+    "VALID row whose trade became inactive is stale instead of writing",
+    () => confirmServiceCatalogImport(prisma, ownerA, { importId: inactiveTradePreview.id }),
+    (error) =>
+      error instanceof ServiceCatalogImportError &&
+      error.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+  );
+  const gutterCount = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id, name: "Gutter Soft Wash" },
+  });
+  const gutterAfter = await loadOwnedCatalogImport(prisma, ownerA, inactiveTradePreview.id);
+  check("Inactive-trade rematch writes no catalog row", gutterCount === 0);
+  check(
+    "Inactive-trade rematch returns a reviewable PREVIEW INVALID row",
+    gutterAfter.status === "PREVIEW" &&
+      gutterAfter.rows.some(
+        (row) => row.name === "Gutter Soft Wash" && row.previewStatus === "INVALID",
+      ),
+  );
+
+  const unknownDecisionPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "unknown-decision.csv",
+    bytes: Buffer.from(csv(["Decision Fan,Install,FIXED,22,Fans & Fixtures,HANDYMAN,,,yes"])),
+  });
+  await expectError(
+    "Unknown matchDecision rowNumber is a stale preview, not a silent skip",
+    () =>
+      confirmServiceCatalogImport(prisma, ownerA, {
+        importId: unknownDecisionPreview.id,
+        matchDecisions: { 9999: "UPDATE" },
+      }),
+    (error) =>
+      error instanceof ServiceCatalogImportError &&
+      error.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+  );
+
   const recoverBytes = Buffer.from(
     csv(["Recover Fan,Install,FIXED,40,Fans & Fixtures,HANDYMAN,,,yes"]),
   );
@@ -1084,47 +1183,146 @@ try {
   });
   await prisma.serviceCatalogImport.update({
     where: { id: recoverPreview.id },
-    data: { status: "CONFIRMING" },
+    data: { status: "CONFIRMING", confirmingAt: new Date() },
+  });
+  await expectError(
+    "Re-upload of a fresh CONFIRMING lease is refused",
+    () =>
+      previewServiceCatalogCsvUpload(prisma, ownerA, {
+        filename: "recover-again.csv",
+        bytes: recoverBytes,
+      }),
+    (error) =>
+      error instanceof ServiceCatalogImportError &&
+      error.message === CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
+  );
+  const freshLock = await loadOwnedCatalogImport(prisma, ownerA, recoverPreview.id);
+  check(
+    "Fresh CONFIRMING lease is not reset by re-upload",
+    freshLock.status === "CONFIRMING" && !freshLock.confirmingRecoverable,
+  );
+  await prisma.serviceCatalogImport.update({
+    where: { id: recoverPreview.id },
+    data: {
+      status: "CONFIRMING",
+      confirmingAt: new Date(Date.now() - 2 * CATALOG_IMPORT_CONFIRMING_LEASE_MS),
+    },
   });
   const recovered = await previewServiceCatalogCsvUpload(prisma, ownerA, {
-    filename: "recover-again.csv",
+    filename: "recover-stale.csv",
     bytes: recoverBytes,
   });
   check(
-    "Re-upload of a CONFIRMING import resets to PREVIEW and refreshes matches",
+    "Re-upload resets only a stale CONFIRMING lease to PREVIEW",
     recovered.id === recoverPreview.id && recovered.status === "PREVIEW",
   );
 
-  const concurrentBytes = Buffer.from(
+  const crashBytes = Buffer.from(
     csv([
-      "Concurrent One,Install,FIXED,15,Fans & Fixtures,HANDYMAN,,,yes",
-      "Concurrent Two,Install,FIXED,16,Fans & Fixtures,HANDYMAN,,,yes",
+      "Crash Alpha,Install,FIXED,15,Fans & Fixtures,HANDYMAN,,,yes",
+      "Crash Beta,Install,FIXED,16,Fans & Fixtures,HANDYMAN,,,yes",
     ]),
   );
-  const concurrentPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
-    filename: "concurrent.csv",
-    bytes: concurrentBytes,
+  const crashPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "crash.csv",
+    bytes: crashBytes,
   });
+  await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Crash Alpha",
+      description: "Partial write leftover",
+      pricingMode: "FIXED",
+      price: new Prisma.Decimal(15),
+      category: "Fans & Fixtures",
+      tradeCode: "HANDYMAN",
+    },
+  });
+  await prisma.serviceCatalogImport.update({
+    where: { id: crashPreview.id },
+    data: {
+      status: "CONFIRMING",
+      confirmingAt: new Date(Date.now() - 2 * CATALOG_IMPORT_CONFIRMING_LEASE_MS),
+    },
+  });
+  await expectError(
+    "Crash-midway stale confirm rematches instead of duplicating Crash Alpha",
+    () => confirmServiceCatalogImport(prisma, ownerA, { importId: crashPreview.id }),
+    (error) =>
+      error instanceof ServiceCatalogImportError &&
+      error.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+  );
+  const crashAlpha = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id, name: "Crash Alpha" },
+  });
+  const crashBeta = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id, name: "Crash Beta" },
+  });
+  const crashAfter = await loadOwnedCatalogImport(prisma, ownerA, crashPreview.id);
+  check("Crash-midway recovery does not create a second Crash Alpha", crashAlpha === 1);
+  check("Crash-midway recovery does not write Crash Beta before review", crashBeta === 0);
+  check(
+    "Crash-midway import is reviewable PREVIEW with Crash Alpha matched",
+    crashAfter.status === "PREVIEW" &&
+      crashAfter.confirmingRecoverable === false &&
+      crashAfter.rows.some(
+        (row) => row.name === "Crash Alpha" && row.previewStatus === "NAME_MATCH",
+      ),
+  );
+  check(
+    "Stale confirmingAt is treated as expired",
+    isCatalogImportConfirmingLeaseStale(
+      new Date(Date.now() - 2 * CATALOG_IMPORT_CONFIRMING_LEASE_MS),
+    ),
+  );
+
+  function raceTogether(fns) {
+    let remaining = fns.length;
+    let release;
+    const barrier = new Promise((resolve) => {
+      release = resolve;
+    });
+    return Promise.allSettled(
+      fns.map(async (fn) => {
+        remaining -= 1;
+        if (remaining === 0) release();
+        await barrier;
+        return fn();
+      }),
+    );
+  }
+
   const prismaRace = new PrismaClient({ datasourceUrl: testUrl });
   try {
-    const [firstRace, secondRace] = await Promise.allSettled([
-      confirmServiceCatalogImport(prisma, ownerA, { importId: concurrentPreview.id }),
-      confirmServiceCatalogImport(prismaRace, ownerA, {
-        importId: concurrentPreview.id,
-      }),
+    const concurrentBytes = Buffer.from(
+      csv([
+        "Concurrent One,Install,FIXED,15,Fans & Fixtures,HANDYMAN,,,yes",
+        "Concurrent Two,Install,FIXED,16,Fans & Fixtures,HANDYMAN,,,yes",
+      ]),
+    );
+    const concurrentPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+      filename: "concurrent.csv",
+      bytes: concurrentBytes,
+    });
+    const sameImportRace = await raceTogether([
+      () => confirmServiceCatalogImport(prisma, ownerA, { importId: concurrentPreview.id }),
+      () =>
+        confirmServiceCatalogImport(prismaRace, ownerA, { importId: concurrentPreview.id }),
     ]);
-    const fulfilled = [firstRace, secondRace].filter((result) => result.status === "fulfilled");
-    const rejected = [firstRace, secondRace].filter((result) => result.status === "rejected");
+    const sameWriters = sameImportRace.filter(
+      (result) => result.status === "fulfilled" && result.value.reused === false,
+    );
+    const sameOther = sameImportRace.filter(
+      (result) =>
+        (result.status === "fulfilled" && result.value.reused === true) ||
+        (result.status === "rejected" &&
+          result.reason instanceof ServiceCatalogImportError &&
+          result.reason.message === CATALOG_IMPORT_IN_PROGRESS_MESSAGE),
+    );
+    check("Same-import barrier race has exactly one writer", sameWriters.length === 1);
     check(
-      "Two simultaneous confirms leave one writer and one in-progress or reused result",
-      fulfilled.length >= 1 &&
-        (rejected.length === 0 ||
-          rejected.every(
-            (result) =>
-              result.reason instanceof ServiceCatalogImportError &&
-              (result.reason.message === CATALOG_IMPORT_IN_PROGRESS_MESSAGE ||
-                result.reason.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE),
-          )),
+      "Same-import barrier race has exactly one reused or in-progress loser",
+      sameOther.length === 1,
     );
     const concurrentOne = await prisma.serviceCatalogItem.count({
       where: { businessId: businessA.id, name: "Concurrent One" },
@@ -1136,6 +1334,75 @@ try {
       "Two simultaneous confirms leave exactly one new item per VALID row",
       concurrentOne === 1 && concurrentTwo === 1,
     );
+
+    const sharedOneBytes = Buffer.from(
+      csv(["Shared Race,First,FIXED,10,Other Services,HANDYMAN,,,yes"]),
+    );
+    const sharedTwoBytes = Buffer.from(
+      csv(["Shared Race,Second,FIXED,11,Other Services,HANDYMAN,,,yes"]),
+    );
+    const sharedOne = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+      filename: "shared-one.csv",
+      bytes: sharedOneBytes,
+    });
+    const sharedTwo = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+      filename: "shared-two.csv",
+      bytes: sharedTwoBytes,
+    });
+    const sharedRace = await raceTogether([
+      () => confirmServiceCatalogImport(prisma, ownerA, { importId: sharedOne.id }),
+      () => confirmServiceCatalogImport(prismaRace, ownerA, { importId: sharedTwo.id }),
+    ]);
+    const sharedWriters = sharedRace.filter(
+      (result) => result.status === "fulfilled" && result.value.reused === false,
+    );
+    const sharedStale = sharedRace.filter(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof ServiceCatalogImportError &&
+        result.reason.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+    );
+    const sharedCount = await prisma.serviceCatalogItem.count({
+      where: { businessId: businessA.id, name: "Shared Race" },
+    });
+    check(
+      "Two-import same-name barrier race has exactly one writer",
+      sharedWriters.length === 1,
+    );
+    check("Two-import same-name barrier race rematches the loser", sharedStale.length === 1);
+    check("Two-import same-name barrier race leaves exactly one Shared Race", sharedCount === 1);
+
+    const reloadBytes = Buffer.from(
+      csv(["Reload Fan,Install,FIXED,18,Fans & Fixtures,HANDYMAN,,,yes"]),
+    );
+    const reloadPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+      filename: "reload.csv",
+      bytes: reloadBytes,
+    });
+    await raceTogether([
+      () => confirmServiceCatalogImport(prisma, ownerA, { importId: reloadPreview.id }),
+      () =>
+        previewServiceCatalogCsvUpload(prismaRace, ownerA, {
+          filename: "reload-again.csv",
+          bytes: reloadBytes,
+        }),
+    ]);
+    const reloadCount = await prisma.serviceCatalogItem.count({
+      where: { businessId: businessA.id, name: "Reload Fan" },
+    });
+    const reloadAfter = await loadOwnedCatalogImport(prisma, ownerA, reloadPreview.id);
+    check("Re-upload during in-flight confirm leaves exactly one Reload Fan", reloadCount === 1);
+    check(
+      "Re-upload during in-flight confirm does not leave a torn CONFIRMING import",
+      reloadAfter.status === "CONFIRMED" || reloadAfter.status === "PREVIEW",
+    );
+    if (reloadAfter.status === "PREVIEW") {
+      await confirmServiceCatalogImport(prisma, ownerA, { importId: reloadPreview.id });
+      const reloadFinal = await prisma.serviceCatalogItem.count({
+        where: { businessId: businessA.id, name: "Reload Fan" },
+      });
+      check("Follow-up confirm after raced re-upload still writes one Reload Fan", reloadFinal === 1);
+    }
   } finally {
     await prismaRace.$disconnect();
   }
@@ -1145,10 +1412,21 @@ try {
       ? "\nAll service catalog import checks passed."
       : `\n${failures} service catalog import check(s) failed.`,
   );
-  process.exit(failures === 0 ? 0 : 1);
 } catch (error) {
   console.error(error);
-  process.exit(1);
+  failures += 1;
 } finally {
-  await prisma.$disconnect();
+  try {
+    await prisma.$disconnect();
+  } catch {
+    // The dedicated client may already be closed.
+  }
+  try {
+    await dropTestDatabase();
+  } catch (error) {
+    console.error(error);
+    failures += 1;
+  }
 }
+
+process.exit(failures === 0 ? 0 : 1);
