@@ -33,7 +33,9 @@ import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import {
   JOB_LOCATION_FILTER_ALL,
+  JOB_LOCATION_FILTER_UNKNOWN_MESSAGE,
   jobLocationFilterWhere,
+  ownerScheduleLocationFilterFellBack,
   ownerScheduleLocationQuery,
   resolveOwnerScheduleLocationFilter,
 } from "@/lib/job-location";
@@ -217,9 +219,11 @@ export default async function JobsPage({
   const tab = parseTab(params.status);
   const crew = params.crew;
   const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
-  const locationFilter = resolveOwnerScheduleLocationFilter(
+  const knownLocationIds = locationDirectory.locations.map((location) => location.id);
+  const locationFilter = resolveOwnerScheduleLocationFilter(params.location, knownLocationIds);
+  const locationFilterFellBack = ownerScheduleLocationFilterFellBack(
     params.location,
-    locationDirectory.locations.map((location) => location.id),
+    knownLocationIds,
   );
   const locationWhere = jobLocationFilterWhere(locationFilter);
   const rangePreset = params.range && params.range !== "all" ? params.range : undefined;
@@ -316,7 +320,11 @@ export default async function JobsPage({
     jobsRaw,
   ] = await Promise.all([
     prisma.job.count({
-      where: { ...access.scope, scheduledAt: { gte: todayRange.start, lt: todayRange.end } },
+      where: {
+        ...access.scope,
+        ...locationWhere,
+        scheduledAt: { gte: todayRange.start, lt: todayRange.end },
+      },
     }),
     prisma.job.findMany({
       where: { ...access.scope, status: "UNSCHEDULED", ...locationWhere },
@@ -329,7 +337,11 @@ export default async function JobsPage({
     prisma.job.count({ where: { ...access.scope, status: "IN_PROGRESS", ...locationWhere } }),
     prisma.job.count({ where: { ...access.scope, status: "COMPLETED", ...locationWhere } }),
     prisma.job.findMany({
-      where: { ...access.scope, scheduledAt: { gte: thisWeek.start, lt: thisWeek.end } },
+      where: {
+        ...access.scope,
+        ...locationWhere,
+        scheduledAt: { gte: thisWeek.start, lt: thisWeek.end },
+      },
       select: {
         approvedEstimateVersion: { select: { total: true } },
         estimate: { select: { total: true } },
@@ -339,6 +351,7 @@ export default async function JobsPage({
     prisma.job.findMany({
       where: {
         ...access.scope,
+        ...locationWhere,
         status: "COMPLETED",
         updatedAt: { gte: thisWeek.start, lt: thisWeek.end },
       },
@@ -526,6 +539,12 @@ export default async function JobsPage({
       <Link href={`/jobs?view=day&date=${todayIso}`} className="underline underline-offset-4">
         View today
       </Link>
+      {locationFilterFellBack ? (
+        <>
+          {" "}
+          {JOB_LOCATION_FILTER_UNKNOWN_MESSAGE}
+        </>
+      ) : null}
     </span>
   );
 
@@ -745,7 +764,8 @@ export default async function JobsPage({
       </FounderRegion>
 
       <FounderRegion id="tabs" className="tbbt-founder-box">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3 pt-2">
+      <div className="border-b border-border/60 pb-3 pt-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <nav className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
           {tabs.map((tabItem) => {
             const linkParams = new URLSearchParams(otherParams);
@@ -789,6 +809,12 @@ export default async function JobsPage({
           ) : null}
           <DateFilterSelect value={rangePreset ?? "all"} />
         </div>
+      </div>
+      {locationFilterFellBack ? (
+        <p className="pt-2 text-sm text-muted-foreground" role="status">
+          {JOB_LOCATION_FILTER_UNKNOWN_MESSAGE}
+        </p>
+      ) : null}
       </div>
       </FounderRegion>
     </>

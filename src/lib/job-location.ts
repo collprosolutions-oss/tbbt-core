@@ -75,6 +75,9 @@ export function parseOwnerScheduleLocationFilter(
   return JOB_LOCATION_FILTER_ALL;
 }
 
+export const JOB_LOCATION_FILTER_UNKNOWN_MESSAGE =
+  "That location is not on this business. Showing all locations.";
+
 export function resolveOwnerScheduleLocationFilter(
   raw: string | string[] | undefined,
   knownLocationIds: readonly string[],
@@ -87,6 +90,18 @@ export function resolveOwnerScheduleLocationFilter(
     return parsed;
   }
   return JOB_LOCATION_FILTER_ALL;
+}
+
+/** True when `?location=` was present but did not resolve, so the page shows all. */
+export function ownerScheduleLocationFilterFellBack(
+  raw: string | string[] | undefined,
+  knownLocationIds: readonly string[],
+): boolean {
+  const value = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
+  if (!value || value === JOB_LOCATION_FILTER_ALL || value === JOB_LOCATION_FILTER_UNASSIGNED) {
+    return false;
+  }
+  return resolveOwnerScheduleLocationFilter(raw, knownLocationIds) === JOB_LOCATION_FILTER_ALL;
 }
 
 export function jobLocationFilterWhere(filter: OwnerScheduleLocationFilter): {

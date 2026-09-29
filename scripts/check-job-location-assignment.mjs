@@ -58,6 +58,7 @@ const {
   jobLocationFilterWhere,
   jobLocationSnapshotsEqual,
   parseOwnerScheduleLocationFilter,
+  ownerScheduleLocationFilterFellBack,
   resolveOwnerScheduleLocationFilter,
 } = await import("@/lib/job-location");
 const { JobLocationError, assignJobBusinessLocation } = await import("@/lib/job-location-ops");
@@ -98,8 +99,9 @@ function dropTestDatabase() {
   }
 }
 
+dropTestDatabase();
 const createDb = runPsql(`CREATE DATABASE "${testDbName}"`);
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+if (createDb.status !== 0) {
   console.error(createDb.stderr || createDb.stdout);
   console.error("Failed to create dedicated job-location assignment test database.");
   process.exit(1);
@@ -116,11 +118,75 @@ if (push.status !== 0) {
   process.exit(push.status ?? 1);
 }
 
+function withPrismaParams(urlString, params) {
+  const url = new URL(urlString);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 const holder = new PrismaClient({ datasourceUrl: testUrl });
-const racer = new PrismaClient({ datasourceUrl: testUrl });
+const racer = new PrismaClient({
+  datasourceUrl: withPrismaParams(testUrl, {
+    connection_limit: "1",
+    application_name: "job-location-racer",
+  }),
+});
+const pendingRacerSettlements = [];
+
+function createDeferred() {
+  let resolveFn;
+  let rejectFn;
+  let settled = false;
+  const promise = new Promise((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+  return {
+    promise,
+    resolve(value) {
+      if (settled) return;
+      settled = true;
+      resolveFn(value);
+    },
+    reject(error) {
+      if (settled) return;
+      settled = true;
+      rejectFn(error);
+    },
+  };
+}
+
+function startRacerAssign(gate, run) {
+  const settled = gate.promise.then(run).then(
+    (v) => ({ ok: true, v }),
+    (e) => ({ ok: false, e }),
+  );
+  pendingRacerSettlements.push(settled);
+  return settled;
+}
+
+async function holdRowAndReleaseRacer(gate, work) {
+  try {
+    return await holder.$transaction(async (tx) => {
+      try {
+        return await work(tx);
+      } catch (error) {
+        gate.reject(error);
+        throw error;
+      } finally {
+        gate.reject(new Error("Holder transaction ended before releasing the assigner."));
+      }
+    }, { timeout: 15000 });
+  } catch (error) {
+    gate.reject(error);
+    throw error;
+  }
+}
 
 let failures = 0;
 function check(label, condition) {
@@ -158,15 +224,26 @@ function readRepo(relPath) {
   return readFileSync(new URL(`../${relPath}`, import.meta.url), "utf8");
 }
 
-async function waitUntilPeerLockWait(timeoutMs = 8000) {
+async function readBackendPid(client) {
+  const rows = await client.$queryRaw`SELECT pg_backend_pid()::int AS pid`;
+  return Number(rows[0]?.pid);
+}
+
+async function waitUntilPeerLockWait(racerPid, timeoutMs = 8000) {
+  if (!Number.isInteger(racerPid) || racerPid <= 0) {
+    throw new Error("Racer backend pid is required to wait on a row lock.");
+  }
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const rows = await prisma.$queryRaw`
       SELECT COUNT(*)::int AS n
       FROM pg_stat_activity
       WHERE datname = current_database()
-        AND pid <> pg_backend_pid()
         AND wait_event_type = 'Lock'
+        AND (
+          pid = ${racerPid}
+          OR application_name = 'job-location-racer'
+        )
     `;
     if ((rows[0]?.n ?? 0) > 0) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -296,7 +373,37 @@ check(
   "Failed checks set exitCode and always drop the test database",
   thisScript.includes("process.exitCode = 1") &&
     thisScript.includes("pg_terminate_backend") &&
-    thisScript.includes("dropTestDatabase()"),
+    thisScript.includes("dropTestDatabase()") &&
+    thisScript.includes("pendingRacerSettlements"),
+);
+const createDbSlice = thisScript.slice(
+  thisScript.indexOf("const createDb = runPsql"),
+  thisScript.indexOf("const push = spawnSync"),
+);
+check(
+  "CREATE DATABASE fails hard; leftover test DB is dropped first",
+  thisScript.indexOf("dropTestDatabase();") < thisScript.indexOf("const createDb = runPsql") &&
+    /if \(createDb\.status !== 0\) \{/.test(createDbSlice),
+);
+check(
+  "Barrier uses a deferred gate, settled racer promises, and 15s holder timeout",
+  thisScript.includes("createDeferred()") &&
+    thisScript.includes("(v) => ({ ok: true, v })") &&
+    thisScript.includes("(e) => ({ ok: false, e })") &&
+    thisScript.includes("timeout: 15000") &&
+    !thisScript.includes("let assignStarted") &&
+    !thisScript.includes("archiveAssignStarted"),
+);
+check(
+  "Lock-wait poll is scoped to the racer session",
+  thisScript.includes("readBackendPid(racer)") &&
+    thisScript.includes("pid = ${racerPid}") &&
+    thisScript.includes("application_name = 'job-location-racer'"),
+);
+check(
+  "Today and this-week KPIs apply the location filter",
+  jobsPage.includes("...locationWhere,") &&
+    jobsPage.includes("JOB_LOCATION_FILTER_UNKNOWN_MESSAGE"),
 );
 check("Additive copy is present", /does not change timezone, Stripe/.test(JOB_LOCATION_ADDITIVE_MESSAGE));
 check(
@@ -309,7 +416,11 @@ check(
   "Unknown well-formed location id fails closed to all instead of zero jobs",
   resolveOwnerScheduleLocationFilter("clocationunknown", ["clocationknown"]) ===
     JOB_LOCATION_FILTER_ALL &&
-    resolveOwnerScheduleLocationFilter("clocationknown", ["clocationknown"]) === "clocationknown",
+    resolveOwnerScheduleLocationFilter("clocationknown", ["clocationknown"]) === "clocationknown" &&
+    ownerScheduleLocationFilterFellBack("clocationunknown", ["clocationknown"]) &&
+    !ownerScheduleLocationFilterFellBack("clocationknown", ["clocationknown"]) &&
+    !ownerScheduleLocationFilterFellBack(undefined, ["clocationknown"]) &&
+    !ownerScheduleLocationFilterFellBack("all", ["clocationknown"]),
 );
 check(
   "Location filter where matches unassigned and a specific id",
@@ -814,36 +925,34 @@ try {
     },
   });
   const raceSnapshot = raceJob.updatedAt.toISOString();
-  let assignStarted = false;
-  const assignPromise = (async () => {
-    while (!assignStarted) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    return assignJobBusinessLocation(racer, ownerA, {
+  const raceGate = createDeferred();
+  const racerPid = await readBackendPid(racer);
+  const assignSettled = startRacerAssign(raceGate, () =>
+    assignJobBusinessLocation(racer, ownerA, {
       jobId: raceJob.id,
       locationId: locationA1.id,
       expectedUpdatedAt: raceSnapshot,
-    });
-  })();
-  await holder.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT id FROM "Job"
-      WHERE id = ${raceJob.id} AND "businessId" = ${businessA.id}
-      FOR UPDATE
-    `;
-    assignStarted = true;
-    await waitUntilPeerLockWait();
-    await tx.job.update({
-      where: { id: raceJob.id },
-      data: { scheduledDurationMinutes: 45 },
-    });
-  });
-  let raceError = null;
+    }),
+  );
   try {
-    await assignPromise;
+    await holdRowAndReleaseRacer(raceGate, async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "Job"
+        WHERE id = ${raceJob.id} AND "businessId" = ${businessA.id}
+        FOR UPDATE
+      `;
+      raceGate.resolve();
+      await waitUntilPeerLockWait(racerPid);
+      await tx.job.update({
+        where: { id: raceJob.id },
+        data: { scheduledDurationMinutes: 45 },
+      });
+    });
   } catch (error) {
-    raceError = error;
+    console.error("Assign-vs-edit holder barrier failed:", error);
   }
+  const assignResult = await assignSettled;
+  const raceError = assignResult.ok ? null : assignResult.e;
   const raceFinal = await prisma.job.findFirstOrThrow({ where: { id: raceJob.id } });
   check(
     "Real two-client barrier: waiting assign sees the held-lock edit as stale",
@@ -882,36 +991,34 @@ try {
       projectToken: randomUUID(),
     },
   });
-  let archiveAssignStarted = false;
-  const archiveAssignPromise = (async () => {
-    while (!archiveAssignStarted) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    return assignJobBusinessLocation(racer, ownerA, {
+  const archiveGate = createDeferred();
+  const archiveRacerPid = await readBackendPid(racer);
+  const archiveAssignSettled = startRacerAssign(archiveGate, () =>
+    assignJobBusinessLocation(racer, ownerA, {
       jobId: archiveTarget.id,
       locationId: locationA2.id,
       expectedUpdatedAt: archiveTarget.updatedAt.toISOString(),
-    });
-  })();
-  await holder.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT id FROM "BusinessLocation"
-      WHERE id = ${locationA2.id} AND "businessId" = ${businessA.id}
-      FOR UPDATE
-    `;
-    archiveAssignStarted = true;
-    await waitUntilPeerLockWait();
-    await tx.businessLocation.update({
-      where: { id: locationA2.id },
-      data: { status: "ARCHIVED" },
-    });
-  });
-  let archiveAssignError = null;
+    }),
+  );
   try {
-    await archiveAssignPromise;
+    await holdRowAndReleaseRacer(archiveGate, async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "BusinessLocation"
+        WHERE id = ${locationA2.id} AND "businessId" = ${businessA.id}
+        FOR UPDATE
+      `;
+      archiveGate.resolve();
+      await waitUntilPeerLockWait(archiveRacerPid);
+      await tx.businessLocation.update({
+        where: { id: locationA2.id },
+        data: { status: "ARCHIVED" },
+      });
+    });
   } catch (error) {
-    archiveAssignError = error;
+    console.error("Archive-vs-assign holder barrier failed:", error);
   }
+  const archiveAssignResult = await archiveAssignSettled;
+  const archiveAssignError = archiveAssignResult.ok ? null : archiveAssignResult.e;
   const archiveTargetAfter = await prisma.job.findFirstOrThrow({ where: { id: archiveTarget.id } });
   const locationA2After = await prisma.businessLocation.findFirstOrThrow({
     where: { id: locationA2.id },
@@ -970,6 +1077,7 @@ try {
   console.error(error);
   process.exitCode = 1;
 } finally {
+  await Promise.allSettled(pendingRacerSettlements);
   await Promise.allSettled([prisma.$disconnect(), holder.$disconnect(), racer.$disconnect()]);
   dropTestDatabase();
 }
