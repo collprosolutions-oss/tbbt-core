@@ -19,8 +19,9 @@ import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement"
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
   abortManagedUpload,
-  finalizeManagedUpload,
   authorizeManagedUpload,
+  bestEffortCleanupOwnedObject,
+  finalizeManagedUpload,
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
@@ -58,6 +59,48 @@ export function isExpenseReceiptMimeType(value: string) {
   return RECEIPT_MIME_TYPES.has(value.trim().toLowerCase());
 }
 
+function asciiAt(bytes: Uint8Array, start: number, length: number) {
+  if (start + length > bytes.length) return "";
+  return String.fromCharCode(...bytes.subarray(start, start + length));
+}
+
+function detectHeifBrand(bytes: Uint8Array) {
+  if (bytes.length < 12 || asciiAt(bytes, 4, 4) !== "ftyp") return null;
+  const brands = [asciiAt(bytes, 8, 4)];
+  for (let offset = 16; offset + 4 <= Math.min(bytes.length, 64); offset += 4) {
+    brands.push(asciiAt(bytes, offset, 4));
+  }
+  if (brands.some((brand) => brand === "heic" || brand === "heix")) return "image/heic";
+  if (brands.some((brand) => brand === "mif1" || brand === "msf1")) return "image/heif";
+  return null;
+}
+
+export function detectExpenseReceiptMimeType(body: Buffer | Uint8Array) {
+  const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 4 && asciiAt(bytes, 0, 4) === "GIF8") {
+    return "image/gif";
+  }
+  if (bytes.length >= 12 && asciiAt(bytes, 0, 4) === "RIFF" && asciiAt(bytes, 8, 4) === "WEBP") {
+    return "image/webp";
+  }
+  if (bytes.length >= 5 && asciiAt(bytes, 0, 5) === "%PDF-") {
+    return "application/pdf";
+  }
+  return detectHeifBrand(bytes);
+}
+
 export function resolveExpenseReceiptMimeType(file: {
   type?: string | null;
   name?: string | null;
@@ -80,24 +123,52 @@ export function inspectExpenseReceiptUpload(file: {
   type?: string | null;
   name?: string | null;
   size: number;
+  body?: Buffer | Uint8Array;
 }) {
-  const mimeType = resolveExpenseReceiptMimeType(file);
-  if (!mimeType) {
-    return {
-      ok: false as const,
-      error: "Unsupported receipt type. Upload a JPEG, PNG, WebP, GIF, HEIC, or PDF file.",
-    };
-  }
   if (file.size <= 0 || file.size > EXPENSE_RECEIPT_MAX_BYTES) {
     return {
       ok: false as const,
       error: `That receipt is too large. The limit is ${expenseReceiptMaxBytesLabel()}.`,
     };
   }
+  const declared = resolveExpenseReceiptMimeType(file);
+  if (file.body) {
+    if (file.body.byteLength !== file.size) {
+      return {
+        ok: false as const,
+        error: "That receipt file does not match the declared size.",
+      };
+    }
+    const detected = detectExpenseReceiptMimeType(file.body);
+    if (!detected) {
+      return {
+        ok: false as const,
+        error: "Unsupported receipt type. Upload a JPEG, PNG, WebP, GIF, HEIC, or PDF file.",
+      };
+    }
+    if (declared && declared !== detected) {
+      return {
+        ok: false as const,
+        error: "That file does not match the declared receipt type.",
+      };
+    }
+    return {
+      ok: true as const,
+      mimeType: detected,
+      fileName: (file.name || "").trim() || (detected === "application/pdf" ? "receipt.pdf" : "receipt"),
+      fileSizeBytes: file.size,
+    };
+  }
+  if (!declared) {
+    return {
+      ok: false as const,
+      error: "Unsupported receipt type. Upload a JPEG, PNG, WebP, GIF, HEIC, or PDF file.",
+    };
+  }
   return {
     ok: true as const,
-    mimeType,
-    fileName: (file.name || "").trim() || (mimeType === "application/pdf" ? "receipt.pdf" : "receipt"),
+    mimeType: declared,
+    fileName: (file.name || "").trim() || (declared === "application/pdf" ? "receipt.pdf" : "receipt"),
     fileSizeBytes: file.size,
   };
 }
@@ -132,6 +203,7 @@ export async function authorizeExpenseReceiptUpload(
     originalFilename: string;
     mimeType: string;
     fileSizeBytes: number;
+    body?: Buffer | Uint8Array;
   },
 ) {
   await requireReceiptMutation(deps.db, access);
@@ -140,6 +212,7 @@ export async function authorizeExpenseReceiptUpload(
     type: input.mimeType,
     name: input.originalFilename,
     size: input.fileSizeBytes,
+    body: input.body,
   });
   if (!inspection.ok) {
     throw new StorageError(inspection.error);
@@ -210,28 +283,33 @@ export async function releaseUnreferencedExpenseReceiptAsset(
     await abortManagedUpload(deps, access.businessId, asset.id);
     return { released: true as const, reason: "aborted", assetId: asset.id };
   }
-  try {
-    const provider = await resolveStorageProvider(deps);
-    await provider.deleteObject({
-      bucket: asset.storageAccount.bucketName,
-      key: asset.storageKey,
-    }).catch(() => undefined);
-  } catch {
-    // Provider absence still allows the tenant-scoped DB cleanup below.
-  }
-  await deps.db.$transaction(async (tx) => {
-    await tx.storedAsset.update({
-      where: { id: asset.id },
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const updated = await tx.storedAsset.updateMany({
+      where: {
+        id: asset.id,
+        businessId: access.businessId,
+        purpose: EXPENSE_RECEIPT_PURPOSE,
+        status: "READY",
+      },
       data: { status: "DELETED", deletedAt: now, publicPath: null },
     });
-    if (asset.status === "READY" && asset.fileSizeBytes > 0) {
+    if (updated.count !== 1) return false;
+    if (asset.fileSizeBytes > 0) {
       await tx.businessStorageAccount.update({
         where: { id: asset.storageAccountId },
         data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
       });
     }
+    return true;
   });
-  return { released: true as const, reason: "deleted", assetId: asset.id };
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, access.businessId, {
+      bucket: asset.storageAccount.bucketName,
+      storageKey: asset.storageKey,
+    });
+    return { released: true as const, reason: "deleted", assetId: asset.id };
+  }
+  return { released: false as const, reason: "already_deleted", assetId: asset.id };
 }
 
 async function assertPrivateExpenseReceiptAsset(
@@ -288,11 +366,21 @@ export async function putExpenseReceiptFromBytes(
     body: Buffer | Uint8Array;
   },
 ) {
+  const inspection = inspectExpenseReceiptUpload({
+    type: input.mimeType,
+    name: input.originalFilename,
+    size: input.body.byteLength,
+    body: input.body,
+  });
+  if (!inspection.ok) {
+    throw new StorageError(inspection.error);
+  }
   const authorized = await authorizeExpenseReceiptUpload(deps, access, {
     expenseId: input.expenseId,
-    originalFilename: input.originalFilename,
-    mimeType: input.mimeType,
-    fileSizeBytes: input.body.byteLength,
+    originalFilename: inspection.fileName,
+    mimeType: inspection.mimeType,
+    fileSizeBytes: inspection.fileSizeBytes,
+    body: input.body,
   });
   const provider = await resolveStorageProvider(deps);
   try {
@@ -302,7 +390,7 @@ export async function putExpenseReceiptFromBytes(
       body: input.body,
       contentType: authorized.asset.mimeType,
     });
-    return finalizeAndAttachExpenseReceipt(deps, access, {
+    return await finalizeAndAttachExpenseReceipt(deps, access, {
       expenseId: input.expenseId,
       assetId: authorized.asset.id,
     });

@@ -103,6 +103,8 @@ export interface StorageProvider {
     bucket: string;
     key: string;
     expiresInSeconds: number;
+    contentType?: string;
+    contentDisposition?: string;
   }): Promise<PresignedDownload>;
 }
 

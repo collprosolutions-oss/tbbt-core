@@ -210,6 +210,38 @@ async function resolveExpenseFields(db: Db, access: BusinessAccess, input: Creat
   };
 }
 
+export const CONCURRENT_EXPENSE_RECEIPT_ERROR =
+  "That receipt changed concurrently. Retry.";
+
+async function claimExpenseReceiptWrite(
+  db: Db,
+  businessId: string,
+  expenseId: string,
+  previousStoredAssetId: string | null,
+  data: { receiptStoredAssetId: string | null },
+) {
+  const run = async (tx: Db) => {
+    const claimed = await tx.expense.updateMany({
+      where: {
+        id: expenseId,
+        businessId,
+        receiptStoredAssetId: previousStoredAssetId,
+      },
+      data,
+    });
+    if (claimed.count !== 1) {
+      throw new ExpenseError(CONCURRENT_EXPENSE_RECEIPT_ERROR);
+    }
+    return tx.expense.findFirstOrThrow({
+      where: { id: expenseId, businessId },
+    });
+  };
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction(run);
+  }
+  return run(db);
+}
+
 async function requireExpenseMutation(db: Db, access: BusinessAccess) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_EXPENSES);
   await requireSaasOperatingEntitlement(db, access);
@@ -410,12 +442,8 @@ export async function attachExpenseReceipt(
   }
 
   const previousStoredAssetId = expense.receiptStoredAssetId;
-  const updated = await db.expense.update({
-    where: { id: expense.id },
-    data: {
-      receiptStoredAssetId: asset.id,
-      receiptUrl: null,
-    },
+  const updated = await claimExpenseReceiptWrite(db, access.businessId, expense.id, previousStoredAssetId, {
+    receiptStoredAssetId: asset.id,
   });
   return { expense: updated, previousStoredAssetId };
 }
@@ -434,12 +462,8 @@ export async function removeExpenseReceipt(
     ),
   );
   const previousStoredAssetId = expense.receiptStoredAssetId;
-  const updated = await db.expense.update({
-    where: { id: expense.id },
-    data: {
-      receiptStoredAssetId: null,
-      receiptUrl: null,
-    },
+  const updated = await claimExpenseReceiptWrite(db, access.businessId, expense.id, previousStoredAssetId, {
+    receiptStoredAssetId: null,
   });
   return { expense: updated, previousStoredAssetId };
 }

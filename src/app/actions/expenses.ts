@@ -51,10 +51,12 @@ async function maybeAttachReceipt(
   if (!(file instanceof File) || file.size === 0) {
     return null;
   }
+  const body = Buffer.from(await file.arrayBuffer());
   const inspection = inspectExpenseReceiptUpload({
     type: file.type,
     name: file.name,
     size: file.size,
+    body,
   });
   if (!inspection.ok) {
     throw new Error(inspection.error);
@@ -64,7 +66,6 @@ async function maybeAttachReceipt(
       "Receipt storage isn't set up yet. Ask an admin to connect private business file storage.",
     );
   }
-  const body = Buffer.from(await file.arrayBuffer());
   await putExpenseReceiptFromBytes({ db: prisma }, access, {
     expenseId,
     originalFilename: inspection.fileName,

@@ -2248,7 +2248,8 @@ model PayrollRunEvent {
 /// creates or updates an Invoice / LineItem.
 /// voidedAt is a soft void -- the row stays for job-cost history.
 /// receiptStoredAssetId is the private managed receipt. receiptUrl is
-/// legacy only and is never written or exposed as a public file URL.
+/// a legacy pointer and is not cleared by private attach/remove. New
+/// receipts never write a public file URL.
 model Expense {
   id                    String    @id @default(cuid())
   businessId            String

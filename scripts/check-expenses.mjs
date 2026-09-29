@@ -514,11 +514,14 @@ try {
   check("Workspace can edit and void an expense", workspaceSource.includes("voidExpenseAction") && workspaceSource.includes("Edit"));
   check("Receipt header opens receipt mode, not a new expense", workspaceSource.includes('onAdd("receipt")'));
   check(
-    "Workspace never links a public receipt URL",
-    !workspaceSource.includes("expense.receiptUrl") &&
-      workspaceSource.includes("expense.receiptHref") &&
+    "Workspace reviews private receipts privately and labels older Blob receipts",
+    workspaceSource.includes("expense.receiptHref") &&
+      workspaceSource.includes("legacyReceiptHref") &&
+      workspaceSource.includes("hasPrivateReceipt") &&
+      workspaceSource.includes("Earlier receipt (stored before private storage)") &&
       workspaceSource.includes("Remove receipt") &&
-      workspaceSource.includes("does not infer tax treatment"),
+      workspaceSource.includes("does not infer tax treatment") &&
+      !workspaceSource.includes("expense.receiptUrl"),
   );
   const pageStorage = pageSource.includes("isBusinessStorageConfigured") && !pageSource.includes("isStorageConfigured");
   check("Expenses page uses private business storage, not Vercel Blob", pageStorage);

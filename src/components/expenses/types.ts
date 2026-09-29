@@ -37,7 +37,9 @@ export type ExpenseListItem = {
   customerId: string | null;
   customerName: string | null;
   hasReceipt: boolean;
+  hasPrivateReceipt: boolean;
   receiptHref: string | null;
+  legacyReceiptHref: string | null;
   reimbursable: boolean;
   customerBillable: boolean;
   reimbursementStatus: string;

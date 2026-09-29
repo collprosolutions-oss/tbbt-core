@@ -335,8 +335,11 @@ export default async function ExpensesPage({
       jobLabel: expense.job ? jobLabel(expense.job) : null,
       customerId: expense.customerId,
       customerName: expense.customer?.name ?? null,
-      hasReceipt: Boolean(expense.receiptStoredAssetId),
+      hasPrivateReceipt: Boolean(expense.receiptStoredAssetId),
+      hasReceipt: Boolean(expense.receiptStoredAssetId || expense.receiptUrl),
       receiptHref: expenseReceiptHref(expense.receiptStoredAssetId),
+      legacyReceiptHref:
+        !expense.receiptStoredAssetId && expense.receiptUrl ? expense.receiptUrl : null,
       reimbursable: expense.reimbursable,
       customerBillable: expense.customerBillable,
       reimbursementStatus: expense.reimbursementStatus,

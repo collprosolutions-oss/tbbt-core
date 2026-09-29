@@ -108,7 +108,7 @@ async function bestEffortDeleteOwnedObject(
   });
 }
 
-async function bestEffortCleanupOwnedObject(
+export async function bestEffortCleanupOwnedObject(
   deps: StorageServiceDeps,
   businessId: string,
   input: { bucket: string; storageKey: string },
@@ -116,8 +116,12 @@ async function bestEffortCleanupOwnedObject(
   try {
     const provider = await resolveStorageProvider(deps);
     await bestEffortDeleteOwnedObject(provider, businessId, input);
-  } catch {
-    // Provider resolution and delete are both best-effort after DB commit.
+  } catch (error) {
+    console.error("Failed to delete stored object", {
+      businessId,
+      storageKey: input.storageKey,
+      error,
+    });
   }
 }
 
