@@ -10,7 +10,7 @@ import {
   requireOperatingProductAccess,
   requireOperatingProductAccessForForm,
 } from "@/lib/saas-billing/enforce";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
 import {
   buildEstimateReadyEmail,
   formatEstimateServiceAddress,
@@ -18,6 +18,7 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  EstimateOptionError,
   addEstimateOption,
   claimDraftEstimate,
   collapseEstimateOptions,
@@ -27,6 +28,7 @@ import {
   resolveDraftLineOptionId,
   startEstimateOptions,
 } from "@/lib/estimate-option-ops";
+import { DRAFT_ONLY_OPTIONS_MESSAGE } from "@/lib/estimate-options";
 import {
   addCatalogItemToDraftEstimate,
   applyDraftEstimateCalculator,
@@ -646,7 +648,16 @@ export async function addCustomLineItem(
       await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
     });
   } catch (error) {
-    return { error: estimateOptionErrorMessage(error, "That priced option is not on this draft.") };
+    if (error instanceof EstimateOptionError || (error instanceof Error && error.name === "EstimateOptionError")) {
+      if (error.message === DRAFT_ONLY_OPTIONS_MESSAGE) {
+        return { error: "Only a draft estimate can be changed." };
+      }
+      return { error: error.message };
+    }
+    if (error instanceof ForbiddenError || (error instanceof Error && error.name === "ForbiddenError")) {
+      return { error: error.message };
+    }
+    throw error;
   }
 
   revalidatePath(`/estimates/${estimate.id}`);

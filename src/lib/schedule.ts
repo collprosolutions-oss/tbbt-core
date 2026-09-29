@@ -257,6 +257,7 @@ export function dayToneClasses(tone: DayTone) {
 /** The minimal shape every schedule view needs to render and reason about a Job. */
 export type ScheduleJob = {
   id: string;
+  businessId: string;
   status: string;
   scheduledAt: Date | null;
   scheduledDurationMinutes: number | null;
@@ -268,8 +269,12 @@ export type ScheduleJob = {
     region: string | null;
     postalCode: string | null;
   } | null;
-  approvedEstimateVersion: { lineItems: { description: string }[] } | null;
-  estimate: { lineItems: { description: string }[] } | null;
+  approvedEstimateOption: {
+    businessId: string;
+    lineItems: { description: string }[];
+  } | null;
+  approvedEstimateVersion: { lineItems: { description: string; optionId?: string | null }[] } | null;
+  estimate: { lineItems: { description: string; optionId?: string | null }[] } | null;
   /// The one field member assigned to this Job (Phase 3 / Step 4 Employee
   /// Field Workflow), or null for Unassigned. See CrewView in
   /// src/components/schedule/crew-view.tsx, the only view that groups by
@@ -280,6 +285,7 @@ export type ScheduleJob = {
 /** The Prisma `select` shape that produces ScheduleJob above -- share this, never hand-roll a second one. */
 export const SCHEDULE_JOB_SELECT = {
   id: true,
+  businessId: true,
   status: true,
   scheduledAt: true,
   scheduledDurationMinutes: true,
@@ -294,9 +300,16 @@ export const SCHEDULE_JOB_SELECT = {
     },
   },
   approvedEstimateOptionId: true,
-  // Bounded chosen-option lines for a compact scope summary. Filter to
-  // approvedEstimateOptionId in jobScopeSummary — take:1 of unfiltered
-  // lines can pick an unchosen alternative.
+  approvedEstimateOption: {
+    select: {
+      businessId: true,
+      lineItems: {
+        take: 1,
+        orderBy: { createdAt: "asc" as const },
+        select: { description: true },
+      },
+    },
+  },
   approvedEstimateVersion: {
     select: {
       lineItems: {
@@ -362,10 +375,22 @@ export function groupJobsByAssignedMember<
 
 /** Mirrors resolveApprovedWorkOrderScope()'s priority (bound version, then legacy estimate) for a one-line summary. */
 export function jobScopeSummary(job: {
+  businessId?: string;
   approvedEstimateOptionId?: string | null;
+  approvedEstimateOption?: {
+    businessId?: string;
+    lineItems?: { description: string }[];
+  } | null;
   approvedEstimateVersion: { lineItems: { description: string; optionId?: string | null }[] } | null;
   estimate: { lineItems: { description: string; optionId?: string | null }[] } | null;
 }): string | null {
+  const option = job.approvedEstimateOption;
+  const optionInScope =
+    option &&
+    (!job.businessId || !option.businessId || option.businessId === job.businessId);
+  const optionLine = optionInScope ? option?.lineItems?.[0] : undefined;
+  if (optionLine) return lineItemTitle(optionLine.description);
+
   const optionId = job.approvedEstimateOptionId ?? null;
   const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
   const estimateLines = job.estimate?.lineItems ?? [];

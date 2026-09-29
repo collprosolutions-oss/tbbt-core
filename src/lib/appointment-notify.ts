@@ -58,6 +58,16 @@ export async function notifyCustomerAppointmentProposed(
         },
       },
       approvedEstimateOptionId: true,
+      approvedEstimateOption: {
+        select: {
+          businessId: true,
+          lineItems: {
+            take: 1,
+            orderBy: { createdAt: "asc" },
+            select: { description: true },
+          },
+        },
+      },
       estimate: {
         select: {
           lineItems: {
@@ -160,6 +170,12 @@ export async function notifyCustomerAppointmentProposed(
     scheduledDurationMinutes: input.scheduledDurationMinutes,
     serviceDescription: appointmentServiceDescription(
       (() => {
+        const option = job.approvedEstimateOption;
+        const optionLine =
+          option && option.businessId === input.businessId
+            ? option.lineItems[0]
+            : undefined;
+        if (optionLine) return [optionLine];
         const optionId = job.approvedEstimateOptionId ?? null;
         const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
         const estimateLines = job.estimate?.lineItems ?? [];

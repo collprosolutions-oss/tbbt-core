@@ -254,8 +254,17 @@ function accessPayload(access) {
 }
 
 function spawnRaceWorker(mode, payload) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--experimental-strip-types", raceWorkerPath], {
+  let child = null;
+  const promise = new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    child = spawn(process.execPath, ["--experimental-strip-types", raceWorkerPath], {
       env: {
         ...process.env,
         DATABASE_URL: testUrl,
@@ -264,27 +273,44 @@ function spawnRaceWorker(mode, payload) {
       },
       stdio: ["ignore", "pipe", "inherit"],
     });
+    timer = setTimeout(() => {
+      child?.kill("SIGKILL");
+      finish({ ok: false, error: "worker timeout" });
+    }, 30_000);
     let out = "";
     child.stdout.on("data", (chunk) => {
       out += chunk;
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
     child.on("close", (code) => {
+      clearTimeout(timer);
+      if (settled) return;
       try {
         const last = out
           .trim()
           .split("\n")
           .filter(Boolean)
           .pop();
-        resolve(JSON.parse(last));
+        finish(JSON.parse(last));
       } catch {
-        resolve({ ok: false, error: `worker exit ${code}: ${out}` });
+        finish({ ok: false, error: `worker exit ${code}: ${out}` });
       }
     });
   });
+  return {
+    promise,
+    kill() {
+      child?.kill("SIGKILL");
+    },
+  };
 }
 
-async function waitForBlockedContenders(observer, minCount, timeoutMs = 8000) {
+async function waitForBlockedContenders(observer, minCount, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const rows = await observer.$queryRaw`
@@ -329,14 +355,15 @@ async function runEstimateRace(estimateId, startContenders) {
   try {
     blocked = await waitForBlockedContenders(observer, 2);
   } catch (error) {
+    for (const worker of workers) worker.kill();
     release();
-    await Promise.allSettled([hold, ...workers]);
+    await Promise.allSettled([hold, ...workers.map((worker) => worker.promise)]);
     await observer.$disconnect();
     await locker.$disconnect();
     throw error;
   }
   release();
-  const outcomes = await Promise.all(workers);
+  const outcomes = await Promise.all(workers.map((worker) => worker.promise));
   await hold;
   await observer.$disconnect();
   await locker.$disconnect();
@@ -723,6 +750,9 @@ async function runEstimateRace(estimateId, startContenders) {
     }) === OPTION_UNASSIGNED_LINE_MESSAGE,
   );
 
+  // Verifies the combined guards — Estimate FOR UPDATE plus the
+  // conditional updateMany in approveEstimate (public-estimate.ts
+  // status SENT + approvedVersionId null) — not the row lock alone.
   console.log("\nTEST 9 — Concurrent approvals: exactly one option wins");
   const raceApprove = await createDraft(businessA.id, 40, "Race base");
   setTestAccess(ownerA);

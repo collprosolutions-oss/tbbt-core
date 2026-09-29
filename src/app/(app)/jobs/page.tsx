@@ -97,6 +97,7 @@ const LINE_ITEM_SELECT = {
 
 const UNSCHEDULED_PANEL_SELECT = {
   id: true,
+  businessId: true,
   estimateId: true,
   customer: { select: { name: true } },
   property: {
@@ -110,7 +111,18 @@ const UNSCHEDULED_PANEL_SELECT = {
   },
   approvedEstimateOptionId: true,
   approvedEstimateOption: {
-    select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
+    select: {
+      id: true,
+      businessId: true,
+      name: true,
+      total: true,
+      laborMinimumAdjustment: true,
+      lineItems: {
+        take: 1,
+        orderBy: { createdAt: "asc" as const },
+        select: { description: true },
+      },
+    },
   },
   approvedEstimateVersion: {
     select: {
@@ -355,7 +367,18 @@ export default async function JobsPage({
         },
         estimate: { select: { total: true, lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } } },
         approvedEstimateOption: {
-          select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
+          select: {
+            id: true,
+            businessId: true,
+            name: true,
+            total: true,
+            laborMinimumAdjustment: true,
+            lineItems: {
+              take: 1,
+              orderBy: { createdAt: "asc" },
+              select: { description: true },
+            },
+          },
         },
         approvedEstimateVersion: {
           select: {
