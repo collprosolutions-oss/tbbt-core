@@ -108,6 +108,7 @@ npm run test:native-field-visit
 npm run test:native-field-checklist
 npm run test:native-field-checklist-offline
 npm run test:native-field-activity
+npm run test:collections-worklist
 npx tsc --noEmit
 npm run build
 ```

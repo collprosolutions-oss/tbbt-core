@@ -1548,6 +1548,25 @@ check(
     localNames.includes("20260929010700_monthly_business_goal"),
 );
 
+const collectionsWorkItemMigration = readFileSync(
+  new URL("../prisma/migrations/20260929011000_invoice_collection_work_item/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Invoice collection work-item migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"Invoice"|UPDATE\s+"Payment"/i.test(
+    collectionsWorkItemMigration,
+  ) &&
+    collectionsWorkItemMigration.includes('CREATE TABLE IF NOT EXISTS "InvoiceCollectionWorkItem"') &&
+    collectionsWorkItemMigration.includes("InvoiceCollectionWorkItem_businessId_invoiceId_key") &&
+    collectionsWorkItemMigration.includes("20260928200000_estimate_line_template_archive") &&
+    !collectionsWorkItemMigration.includes("ALTER TABLE \"Invoice\"") &&
+    localNames.includes("20260929011000_invoice_collection_work_item") &&
+    !localNames.includes("20260928200000_invoice_collection_work_item") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929011000_invoice_collection_work_item"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",
