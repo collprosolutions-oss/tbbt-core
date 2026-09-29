@@ -140,6 +140,7 @@
     "test:cleaning-corrective-clean": "node --experimental-strip-types scripts/check-cleaning-corrective-clean.mjs",
     "test:cleaning-recurring-booking": "node --experimental-strip-types scripts/check-cleaning-recurring-booking.mjs",
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
+    "test:job-location-assignment": "node --experimental-strip-types scripts/check-job-location-assignment.mjs",
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
     "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",

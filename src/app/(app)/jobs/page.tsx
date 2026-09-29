@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { CalendarClock, CalendarDays, CalendarX2, CheckCircle2, Timer } from "lucide-react";
 import { CrewFilterSelect } from "@/components/jobs/crew-filter-select";
 import { DateFilterSelect } from "@/components/jobs/date-filter-select";
+import { LocationFilterSelect } from "@/components/jobs/location-filter-select";
 import {
   JobsWorkspace,
   type JobChangeOrderSummary,
@@ -28,7 +29,14 @@ import { UnscheduledJobsPanel } from "@/components/schedule/unscheduled-jobs-pan
 import { WeekView } from "@/components/schedule/week-view";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
+import {
+  JOB_LOCATION_FILTER_ALL,
+  jobLocationFilterWhere,
+  ownerScheduleLocationQuery,
+  parseOwnerScheduleLocationFilter,
+} from "@/lib/job-location";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
@@ -179,6 +187,7 @@ export default async function JobsPage({
     q?: string;
     status?: string;
     crew?: string;
+    location?: string;
     range?: string;
     page?: string;
     pageSize?: string;
@@ -207,6 +216,8 @@ export default async function JobsPage({
   const q = (params.q ?? "").trim();
   const tab = parseTab(params.status);
   const crew = params.crew;
+  const locationFilter = parseOwnerScheduleLocationFilter(params.location);
+  const locationWhere = jobLocationFilterWhere(locationFilter);
   const rangePreset = params.range && params.range !== "all" ? params.range : undefined;
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize))
     ? Number(params.pageSize)
@@ -278,7 +289,14 @@ export default async function JobsPage({
             : {};
   const rangeWhere = rangePreset ? explicitRangeWhere : defaultRangeWhere;
 
-  const tableWhere = { ...access.scope, ...tabWhere, ...searchWhere, ...crewWhere, ...rangeWhere };
+  const tableWhere = {
+    ...access.scope,
+    ...tabWhere,
+    ...searchWhere,
+    ...crewWhere,
+    ...locationWhere,
+    ...rangeWhere,
+  };
 
   const [
     todayCount,
@@ -297,7 +315,7 @@ export default async function JobsPage({
       where: { ...access.scope, scheduledAt: { gte: todayRange.start, lt: todayRange.end } },
     }),
     prisma.job.findMany({
-      where: { ...access.scope, status: "UNSCHEDULED" },
+      where: { ...access.scope, status: "UNSCHEDULED", ...locationWhere },
       select: UNSCHEDULED_PANEL_SELECT,
       orderBy: { createdAt: "desc" },
       take: UNSCHEDULED_PANEL_TAKE,
@@ -380,6 +398,7 @@ export default async function JobsPage({
           ...eligibleMemberRows,
         ]
       : eligibleMemberRows;
+  const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
   const availability = await loadAvailabilitySnapshot(prisma, access.businessId);
   const scheduleBufferMinutes = availability.settings.schedulingBufferMinutes;
   const canScheduling = await hasProductCapability(
@@ -513,7 +532,7 @@ export default async function JobsPage({
   if (view === "month") {
     const range = monthGridRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
-      where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
+      where: { ...access.scope, ...locationWhere, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
@@ -534,7 +553,7 @@ export default async function JobsPage({
   } else if (view === "week") {
     const range = weekRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
-      where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
+      where: { ...access.scope, ...locationWhere, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
@@ -547,7 +566,7 @@ export default async function JobsPage({
   } else if (view === "day") {
     const range = dayRange(anchorDate, timeZone);
     const calendarJobs = await prisma.job.findMany({
-      where: { ...access.scope, scheduledAt: { gte: range.start, lt: range.end } },
+      where: { ...access.scope, ...locationWhere, scheduledAt: { gte: range.start, lt: range.end } },
       select: SCHEDULE_JOB_SELECT,
       orderBy: { scheduledAt: "asc" },
     });
@@ -566,6 +585,7 @@ export default async function JobsPage({
     const calendarJobs = await prisma.job.findMany({
       where: {
         ...access.scope,
+        ...locationWhere,
         status: { in: ["SCHEDULED", "IN_PROGRESS"] },
         scheduledAt: { gte: range.monthStart, lt: range.monthEnd },
       },
@@ -578,7 +598,7 @@ export default async function JobsPage({
     );
   } else {
     const listJobs: JobsListItem[] = await prisma.job.findMany({
-      where: access.scope,
+      where: { ...access.scope, ...locationWhere },
       include: {
         customer: { select: { name: true } },
         property: { select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true } },
@@ -639,8 +659,12 @@ export default async function JobsPage({
   const otherParams = new URLSearchParams();
   if (q) otherParams.set("q", q);
   if (crew) otherParams.set("crew", crew);
+  for (const [key, value] of Object.entries(ownerScheduleLocationQuery(locationFilter))) {
+    otherParams.set(key, value);
+  }
   if (rangePreset) otherParams.set("range", rangePreset);
   if (pageSize !== DEFAULT_PAGE_SIZE) otherParams.set("pageSize", String(pageSize));
+  const scheduleExtraQuery = new URLSearchParams(ownerScheduleLocationQuery(locationFilter)).toString();
 
   const tabs: { key: TabKey; label: string; count: number }[] = [
     {
@@ -680,7 +704,12 @@ export default async function JobsPage({
       />
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ScheduleViewTabs view={view} date={anchorDate} timeZone={timeZone} />
+        <ScheduleViewTabs
+          view={view}
+          date={anchorDate}
+          timeZone={timeZone}
+          extraQuery={scheduleExtraQuery}
+        />
         {dateNavLabel ? (
           <ScheduleDateNav
             view={view}
@@ -688,6 +717,7 @@ export default async function JobsPage({
             label={dateNavLabel}
             todayIso={todayIso}
             timeZone={timeZone}
+            extraQuery={scheduleExtraQuery}
           />
         ) : null}
       </div>
@@ -701,7 +731,11 @@ export default async function JobsPage({
           <div className="lg:col-span-1">
             <UnscheduledJobsPanel
               jobs={unscheduledPanelJobs}
-              totalCount={unscheduledCount}
+              totalCount={
+                locationFilter === JOB_LOCATION_FILTER_ALL
+                  ? unscheduledCount
+                  : unscheduledPanelJobs.length
+              }
               availability={availability}
             />
           </div>
@@ -745,6 +779,15 @@ export default async function JobsPage({
         </nav>
         <div className="flex flex-wrap items-center gap-2">
           {crewOptions.length > 0 ? <CrewFilterSelect value={crew ?? "all"} options={crewOptions} /> : null}
+          {locationDirectory.available && locationDirectory.locations.length > 0 ? (
+            <LocationFilterSelect
+              value={locationFilter}
+              options={locationDirectory.locations.map((location) => ({
+                id: location.id,
+                name: location.status === "ARCHIVED" ? `${location.name} (archived)` : location.name,
+              }))}
+            />
+          ) : null}
           <DateFilterSelect value={rangePreset ?? "all"} />
         </div>
       </div>
@@ -812,6 +855,7 @@ export default async function JobsPage({
           <form action="/jobs" method="GET" className="flex items-center gap-2">
             <input type="hidden" name="status" value={tab === "all" ? "" : tab} />
             <input type="hidden" name="crew" value={crew ?? ""} />
+            <input type="hidden" name="location" value={locationFilter === JOB_LOCATION_FILTER_ALL ? "" : locationFilter} />
             <input type="hidden" name="range" value={rangePreset ?? ""} />
             <Input type="search" name="q" defaultValue={q} placeholder="Search jobs..." className="h-9 w-56" />
           </form>
@@ -848,6 +892,7 @@ export default async function JobsPage({
       <form action="/jobs" method="GET" className="md:hidden">
         <input type="hidden" name="status" value={tab === "all" ? "" : tab} />
         <input type="hidden" name="crew" value={crew ?? ""} />
+        <input type="hidden" name="location" value={locationFilter === JOB_LOCATION_FILTER_ALL ? "" : locationFilter} />
         <input type="hidden" name="range" value={rangePreset ?? ""} />
         <Input type="search" name="q" defaultValue={q} placeholder="Search jobs..." className="h-9" />
       </form>

@@ -3,8 +3,10 @@
  *
  * This is not a timezone, Stripe account, service area, geo engine, or
  * tenant boundary. Adding a location never rewrites those records.
- * Historical jobs stay unassigned until a later step explicitly sets
- * Job.businessLocationId.
+ * Historical jobs stay unassigned until an OWNER write in
+ * src/lib/job-location-ops.ts explicitly sets Job.businessLocationId. That
+ * write rechecks location ownership and never rewrites timezone, Stripe,
+ * tenant ownership, or the customer property.
  */
 
 export const BUSINESS_LOCATION_STATUSES = ["ACTIVE", "ARCHIVED"] as const;

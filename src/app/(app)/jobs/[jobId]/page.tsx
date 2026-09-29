@@ -11,6 +11,7 @@ import {
 import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { AssignJobLocationForm } from "@/components/jobs/assign-job-location-form";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
 import { CleaningCorrectiveCleanForm } from "@/components/jobs/cleaning-corrective-clean-form";
 import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking-form";
@@ -38,7 +39,9 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { formatISODateInTimeZone, formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { JOB_LOCATION_ADDITIVE_MESSAGE, JOB_LOCATION_UNASSIGNED_LABEL } from "@/lib/job-location";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -189,6 +192,7 @@ export default async function JobPage({
       assignedMembership: {
         select: { id: true, user: { select: { name: true, email: true } } },
       },
+      businessLocation: { select: { id: true, name: true, status: true } },
       problemReports: {
         orderBy: { createdAt: "desc" },
         select: {
@@ -249,6 +253,17 @@ export default async function JobPage({
         ]
       : eligibleMemberRows;
   const viewerIsAssignee = job.assignedMembershipId === actorMembership.id;
+  const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
+  const canAssignLocation = actorRole === "OWNER" && locationDirectory.available;
+  const assignableLocations = locationDirectory.locations
+    .filter(
+      (location) =>
+        location.status === "ACTIVE" || location.id === job.businessLocationId,
+    )
+    .map((location) => ({
+      id: location.id,
+      name: location.status === "ARCHIVED" ? `${location.name} (archived)` : location.name,
+    }));
 
   const isScheduled = Boolean(job.scheduledAt);
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
@@ -478,6 +493,14 @@ export default async function JobPage({
           <p>
             Service address:{" "}
             {job.property ? formatAddress(job.property) : "None selected"}
+          </p>
+          <p>
+            Office location:{" "}
+            {job.businessLocation
+              ? `${job.businessLocation.name}${
+                  job.businessLocation.status === "ARCHIVED" ? " (archived)" : ""
+                }`
+              : JOB_LOCATION_UNASSIGNED_LABEL}
           </p>
           <p>
             Linked Estimate:{" "}
@@ -785,6 +808,47 @@ export default async function JobPage({
           )}
         </CardContent>
       </Card>
+
+      {locationDirectory.available ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Office location</CardTitle>
+            <CardDescription>
+              Optional same-business office or shop for this job. Existing jobs
+              stay valid without one. {JOB_LOCATION_ADDITIVE_MESSAGE}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p>
+              Currently:{" "}
+              {job.businessLocation
+                ? `${job.businessLocation.name}${
+                    job.businessLocation.status === "ARCHIVED" ? " (archived)" : ""
+                  }`
+                : JOB_LOCATION_UNASSIGNED_LABEL}
+            </p>
+            {canAssignLocation ? (
+              assignableLocations.length === 0 && !job.businessLocation ? (
+                <p className="text-muted-foreground">
+                  No active business locations yet. Add one in Settings, then
+                  assign it here.
+                </p>
+              ) : (
+                <AssignJobLocationForm
+                  jobId={job.id}
+                  expectedUpdatedAt={job.updatedAt.toISOString()}
+                  assignedLocationId={job.businessLocation?.id ?? null}
+                  locations={assignableLocations}
+                />
+              )
+            ) : (
+              <p className="text-muted-foreground">
+                Only the owner can assign a business location to a job.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
