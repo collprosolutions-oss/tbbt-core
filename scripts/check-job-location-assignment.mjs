@@ -4,8 +4,9 @@
  * Dedicated localhost test database: tbbt_job_location_assignment_test
  *
  * The localhost host guard runs before any @/lib import or Prisma use.
- * CREATE DATABASE failures abort. The test database is always dropped
- * after backends are terminated.
+ * CREATE DATABASE failures abort. Gate waits and racer settlements have
+ * a 10s deadline. Cleanup races those waits, terminates leftover
+ * backends, disconnects, and always DROP DATABASE IF EXISTS WITH (FORCE).
  *
  * Run with:
  *   npm run test:job-location-assignment
@@ -85,14 +86,18 @@ function runPsql(sql) {
   });
 }
 
-function dropTestDatabase() {
+function terminateTestDatabaseBackends() {
   const terminate = runPsql(
     `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
   );
   if (terminate.status !== 0) {
     console.warn(terminate.stderr || terminate.stdout);
   }
-  const dropped = runPsql(`DROP DATABASE IF EXISTS "${testDbName}"`);
+}
+
+function dropTestDatabase() {
+  terminateTestDatabaseBackends();
+  const dropped = runPsql(`DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`);
   if (dropped.status !== 0) {
     console.error(dropped.stderr || dropped.stdout);
     process.exitCode = 1;
@@ -137,6 +142,17 @@ const racer = new PrismaClient({
   }),
 });
 const pendingRacerSettlements = [];
+const RACER_DEADLINE_MS = 10_000;
+
+function withDeadline(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timer);
+  });
+}
 
 function createDeferred() {
   let resolveFn;
@@ -162,10 +178,14 @@ function createDeferred() {
 }
 
 function startRacerAssign(gate, run) {
-  const settled = gate.promise.then(run).then(
-    (v) => ({ ok: true, v }),
-    (e) => ({ ok: false, e }),
-  );
+  const settled = withDeadline(gate.promise, RACER_DEADLINE_MS, "Racer gate wait timed out.")
+    .then(() =>
+      withDeadline(Promise.resolve().then(run), RACER_DEADLINE_MS, "Racer assignment timed out."),
+    )
+    .then(
+      (v) => ({ ok: true, v }),
+      (e) => ({ ok: false, e }),
+    );
   pendingRacerSettlements.push(settled);
   return settled;
 }
@@ -369,12 +389,19 @@ check(
   thisScript.indexOf("assertLocalDatabaseUrl(process.env.DATABASE_URL)") <
     thisScript.indexOf('await import("@/lib/authorization")'),
 );
+const finallySlice = thisScript.slice(thisScript.lastIndexOf("} finally {"));
 check(
   "Failed checks set exitCode and always drop the test database",
   thisScript.includes("process.exitCode = 1") &&
     thisScript.includes("pg_terminate_backend") &&
     thisScript.includes("dropTestDatabase()") &&
-    thisScript.includes("pendingRacerSettlements"),
+    thisScript.includes("pendingRacerSettlements") &&
+    thisScript.includes("WITH (FORCE)") &&
+    thisScript.includes("function withDeadline(") &&
+    thisScript.includes("RACER_DEADLINE_MS") &&
+    finallySlice.includes("Promise.race") &&
+    finallySlice.includes("terminateTestDatabaseBackends()") &&
+    finallySlice.includes("dropTestDatabase()"),
 );
 const createDbSlice = thisScript.slice(
   thisScript.indexOf("const createDb = runPsql"),
@@ -1077,7 +1104,11 @@ try {
   console.error(error);
   process.exitCode = 1;
 } finally {
-  await Promise.allSettled(pendingRacerSettlements);
+  await Promise.race([
+    Promise.allSettled(pendingRacerSettlements),
+    new Promise((resolve) => setTimeout(resolve, RACER_DEADLINE_MS)),
+  ]);
+  terminateTestDatabaseBackends();
   await Promise.allSettled([prisma.$disconnect(), holder.$disconnect(), racer.$disconnect()]);
   dropTestDatabase();
 }
