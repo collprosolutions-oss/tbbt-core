@@ -51,11 +51,14 @@ const {
   customerFkFieldsFromDmmf,
   customerListRelationsFromDmmf,
   customerMergeTestHooks,
+  CUSTOMER_REASSIGN_SPECS,
+  handledCustomerReassignKeys,
   loadDuplicateReview,
   loadOwnedMergePair,
   loadPossibleDuplicatesForCustomer,
   mergeConfirmedCustomers,
   REASSIGNED_CUSTOMER_RELATION_FIELDS,
+  requiredCustomerReassignTargets,
 } = await import("@/lib/customer-merge-ops");
 const { authorizeManagedUpload } = await import("@/lib/business-storage/service");
 const { StorageAccessError } = await import("@/lib/business-storage/types");
@@ -246,7 +249,7 @@ async function terminateAndDrop(admin, name) {
       /* ignore */
     }
   }
-  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${name}"`);
+  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
 }
 
 let dbCreated = false;
@@ -293,11 +296,11 @@ try {
   );
   check(
     "Merge remaps jobs, estimates, invoices, properties, and communications",
-    opsSrc.includes("tx.job.updateMany") &&
-      opsSrc.includes("tx.estimate.updateMany") &&
-      opsSrc.includes("tx.invoice.updateMany") &&
-      opsSrc.includes("tx.property.updateMany") &&
-      opsSrc.includes("tx.customerCommunication.updateMany"),
+    CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "job") &&
+      CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "estimate") &&
+      CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "invoice") &&
+      CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "property") &&
+      CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "customerCommunication"),
   );
   check(
     "Feature does not send email or SMS",
@@ -349,7 +352,8 @@ try {
       opsSrc.includes("possibleDuplicateCustomerId") &&
       opsSrc.includes('recordType: "CUSTOMER"') &&
       opsSrc.includes("pendingBusinessEventWhere") &&
-      opsSrc.includes('path: ["customerId"]'),
+      opsSrc.includes('path: ["customerId"]') &&
+      opsSrc.includes("CUSTOMER_REASSIGN_SPECS"),
   );
   check(
     "Duplicate listing groups in SQL with take and a per-group cap",
@@ -392,13 +396,17 @@ try {
     "This harness refuses non-localhost hosts before connect or push",
     testSrc.includes("assertLocalDatabaseUrl") &&
       testSrc.indexOf("assertLocalDatabaseUrl(baseUrl") < testSrc.indexOf("CREATE DATABASE") &&
-      testSrc.indexOf("assertLocalDatabaseUrl(baseUrl") < testSrc.indexOf('db", "push"'),
+      testSrc.indexOf("assertLocalDatabaseUrl(baseUrl") < testSrc.indexOf('db", "push"') &&
+      testSrc.includes('DROP DATABASE IF EXISTS "${name}" WITH (FORCE)'),
   );
 
   const dmmfRelations = customerListRelationsFromDmmf(Prisma.dmmf);
   const missingRelations = dmmfRelations.filter(
     (name) => !REASSIGNED_CUSTOMER_RELATION_FIELDS.includes(name),
   );
+  const requiredRefs = requiredCustomerReassignTargets(Prisma.dmmf);
+  const handledRefs = handledCustomerReassignKeys();
+  const missingRefs = requiredRefs.filter((ref) => !handledRefs.has(`${ref.model}.${ref.field}`));
   check(
     "DMMF Customer relations are all handled in reassignCustomerId",
     missingRelations.length === 0 &&
@@ -407,34 +415,18 @@ try {
   if (missingRelations.length > 0) {
     console.error(`  missing DMMF relations: ${missingRelations.join(", ")}`);
   }
-  const reassignSrc = opsSrc.slice(
-    opsSrc.indexOf("async function reassignCustomerId"),
-    opsSrc.indexOf("async function assertNoLeftoverCustomerReferences"),
-  );
-  const relationTokens = {
-    properties: "tx.property.updateMany",
-    serviceRequests: "tx.serviceRequest.updateMany",
-    estimates: "tx.estimate.updateMany",
-    jobs: "tx.job.updateMany",
-    invoices: "tx.invoice.updateMany",
-    payments: "tx.payment.updateMany",
-    expenses: "tx.expense.updateMany",
-    reviewRequests: "tx.reviewRequest.updateMany",
-    reviews: "tx.review.updateMany",
-    communications: "tx.customerCommunication.updateMany",
-    communicationThreads: "mergeCommunicationThreads",
-    phoneInteractions: "tx.phoneInteraction.updateMany",
-    receptionistEvents: "tx.receptionistEvent.updateMany",
-    referralRequests: "tx.referralRequest.updateMany",
-    customerFollowUps: "tx.customerFollowUp.updateMany",
-    referralsGiven: "sourceCustomerId",
-    referralsReceived: "referredCustomerId",
-    growthActionRequests: "tx.growthActionRequest.updateMany",
-  };
   check(
-    "reassignCustomerId source mentions every Customer relation",
-    dmmfRelations.every((name) => relationTokens[name] && reassignSrc.includes(relationTokens[name])),
+    "Re-point table covers every Customer FK, list relation, and soft customer-id column",
+    missingRefs.length === 0 &&
+      requiredRefs.some((ref) => ref.model === "StoredAsset" && ref.field === "customerId") &&
+      requiredRefs.some((ref) => ref.model === "ExternalLeadImportRow" && ref.field === "possibleDuplicateCustomerId") &&
+      requiredRefs.some((ref) => ref.model === "Job" && ref.field === "customerId"),
   );
+  if (missingRefs.length > 0) {
+    console.error(
+      `  unhandled Customer refs: ${missingRefs.map((ref) => `${ref.model}.${ref.field} (${ref.via})`).join(", ")}`,
+    );
+  }
   check(
     "DMMF leftover scan finds Customer foreign keys",
     customerFkFieldsFromDmmf(Prisma.dmmf).some((ref) => ref.model === "Job" && ref.field === "customerId"),

@@ -96,30 +96,143 @@ export type DuplicateReview = {
 };
 
 /**
- * Customer list relations that reassignCustomerId / mergeCommunicationThreads
- * must remap. firstCampaign is a belongs-to on Customer itself (copied onto
- * the survivor). StoredAsset.customerId is not a Prisma Customer relation.
+ * One entry per Customer pointer that merge remaps before delete.
+ * Adding a new Customer link is one row here. The coverage check fails
+ * if DMMF or a documented soft customer-id column is missing.
+ *
+ * Soft (no-FK) columns are scalars named `customerId` or `*CustomerId`,
+ * except `stripeCustomerId` (Stripe's identifier) and
+ * CustomerMerge.survivorCustomerId / absorbedCustomerId (this merge's
+ * audit row, written after remaps).
+ *
+ * Explicit extras that do not match that name:
+ * - LeadAttributionCorrection.recordId when recordType is CUSTOMER
+ * - pending BusinessEvent payload.customerId / CUSTOMER subjectId
+ *
+ * After #213/#214/#215 land, add:
+ * - JobCallback.customerId
+ * - InvoiceCollectionWorkItem.customerId
+ * - CustomerCsvImportRow.createdCustomerId
+ * - CustomerCsvImportRow.possibleDuplicateCustomerId
  */
-export const REASSIGNED_CUSTOMER_RELATION_FIELDS = [
-  "properties",
-  "serviceRequests",
-  "estimates",
-  "jobs",
-  "invoices",
-  "payments",
-  "expenses",
-  "reviewRequests",
-  "reviews",
-  "communications",
-  "communicationThreads",
-  "phoneInteractions",
-  "receptionistEvents",
-  "referralRequests",
-  "customerFollowUps",
-  "referralsGiven",
-  "referralsReceived",
-  "growthActionRequests",
-] as const;
+export type CustomerReassignSpec =
+  | {
+      kind: "updateMany";
+      model: string;
+      delegate: string;
+      field: string;
+      extraWhere?: Record<string, unknown>;
+      relation?: string;
+    }
+  | {
+      kind: "communicationThreads";
+      model: "CommunicationThread";
+      field: "customerId";
+      relation: "communicationThreads";
+    }
+  | {
+      kind: "pendingBusinessEvents";
+      model: "BusinessEvent";
+      field: "payload.customerId";
+    };
+
+export const CUSTOMER_REASSIGN_SPECS: readonly CustomerReassignSpec[] = [
+  { kind: "communicationThreads", model: "CommunicationThread", field: "customerId", relation: "communicationThreads" },
+  { kind: "updateMany", model: "Property", delegate: "property", field: "customerId", relation: "properties" },
+  { kind: "updateMany", model: "ServiceRequest", delegate: "serviceRequest", field: "customerId", relation: "serviceRequests" },
+  { kind: "updateMany", model: "Estimate", delegate: "estimate", field: "customerId", relation: "estimates" },
+  { kind: "updateMany", model: "Job", delegate: "job", field: "customerId", relation: "jobs" },
+  { kind: "updateMany", model: "Invoice", delegate: "invoice", field: "customerId", relation: "invoices" },
+  { kind: "updateMany", model: "Payment", delegate: "payment", field: "customerId", relation: "payments" },
+  { kind: "updateMany", model: "Expense", delegate: "expense", field: "customerId", relation: "expenses" },
+  { kind: "updateMany", model: "ReviewRequest", delegate: "reviewRequest", field: "customerId", relation: "reviewRequests" },
+  { kind: "updateMany", model: "Review", delegate: "review", field: "customerId", relation: "reviews" },
+  { kind: "updateMany", model: "CustomerCommunication", delegate: "customerCommunication", field: "customerId", relation: "communications" },
+  { kind: "updateMany", model: "PhoneInteraction", delegate: "phoneInteraction", field: "customerId", relation: "phoneInteractions" },
+  { kind: "updateMany", model: "ReceptionistEvent", delegate: "receptionistEvent", field: "customerId", relation: "receptionistEvents" },
+  { kind: "updateMany", model: "ReferralRequest", delegate: "referralRequest", field: "customerId", relation: "referralRequests" },
+  { kind: "updateMany", model: "CustomerFollowUp", delegate: "customerFollowUp", field: "customerId", relation: "customerFollowUps" },
+  { kind: "updateMany", model: "Referral", delegate: "referral", field: "sourceCustomerId", relation: "referralsGiven" },
+  { kind: "updateMany", model: "Referral", delegate: "referral", field: "referredCustomerId", relation: "referralsReceived" },
+  { kind: "updateMany", model: "GrowthActionRequest", delegate: "growthActionRequest", field: "customerId", relation: "growthActionRequests" },
+  { kind: "updateMany", model: "StoredAsset", delegate: "storedAsset", field: "customerId" },
+  { kind: "updateMany", model: "ExternalLeadImportRow", delegate: "externalLeadImportRow", field: "possibleDuplicateCustomerId" },
+  {
+    kind: "updateMany",
+    model: "LeadAttributionCorrection",
+    delegate: "leadAttributionCorrection",
+    field: "recordId",
+    extraWhere: { recordType: "CUSTOMER" },
+  },
+  { kind: "pendingBusinessEvents", model: "BusinessEvent", field: "payload.customerId" },
+];
+
+export const REASSIGNED_CUSTOMER_RELATION_FIELDS = CUSTOMER_REASSIGN_SPECS.map((spec) =>
+  "relation" in spec ? spec.relation : undefined,
+).filter((name): name is string => Boolean(name));
+
+const IGNORED_SOFT_CUSTOMER_ID_FIELDS = new Set([
+  "CustomerMerge.survivorCustomerId",
+  "CustomerMerge.absorbedCustomerId",
+]);
+
+function isSoftCustomerIdFieldName(name: string) {
+  if (name === "stripeCustomerId") return false;
+  return name === "customerId" || name.endsWith("CustomerId");
+}
+
+export function requiredCustomerReassignTargets(dmmf: typeof Prisma.dmmf = Prisma.dmmf) {
+  const targets = new Map<string, { model: string; field: string; via: string }>();
+  function add(model: string, field: string, via: string) {
+    const key = `${model}.${field}`;
+    if (IGNORED_SOFT_CUSTOMER_ID_FIELDS.has(key)) return;
+    if (!targets.has(key)) targets.set(key, { model, field, via });
+  }
+
+  const customer = dmmf.datamodel.models.find((model) => model.name === "Customer");
+  if (customer) {
+    for (const rel of customer.fields) {
+      if (rel.kind !== "object" || rel.name === "business" || rel.name === "firstCampaign") continue;
+      const related = dmmf.datamodel.models.find((model) => model.name === rel.type);
+      if (!related) continue;
+      for (const field of related.fields) {
+        if (field.kind !== "object" || field.type !== "Customer") continue;
+        if (rel.relationName && field.relationName && rel.relationName !== field.relationName) {
+          continue;
+        }
+        for (const fk of field.relationFromFields ?? []) {
+          add(related.name, fk, `Customer.${rel.name}`);
+        }
+      }
+    }
+  }
+
+  for (const model of dmmf.datamodel.models) {
+    if (model.name === "Customer") continue;
+    const fkNames = new Set<string>();
+    for (const field of model.fields) {
+      if (field.kind === "object" && field.type === "Customer") {
+        for (const fk of field.relationFromFields ?? []) {
+          fkNames.add(fk);
+          add(model.name, fk, "fk");
+        }
+      }
+    }
+    for (const field of model.fields) {
+      if (field.kind !== "scalar" || !isSoftCustomerIdFieldName(field.name)) continue;
+      if (fkNames.has(field.name)) continue;
+      add(model.name, field.name, "soft-id");
+    }
+  }
+
+  add("LeadAttributionCorrection", "recordId", "explicit");
+  add("BusinessEvent", "payload.customerId", "explicit");
+  return [...targets.values()];
+}
+
+export function handledCustomerReassignKeys(specs: readonly CustomerReassignSpec[] = CUSTOMER_REASSIGN_SPECS) {
+  return new Set(specs.map((spec) => `${spec.model}.${spec.field}`));
+}
 
 function requireOwner(access: CustomerMergeAccess) {
   requireBusinessRole(access, "OWNER");
@@ -466,93 +579,22 @@ export function customerListRelationsFromDmmf(dmmf: typeof Prisma.dmmf = Prisma.
     .map((field) => field.name);
 }
 
-async function reassignCustomerId(
-  tx: Tx,
-  businessId: string,
-  absorbId: string,
-  keepId: string,
-) {
-  await mergeCommunicationThreads(tx, businessId, absorbId, keepId);
-  await tx.property.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.serviceRequest.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.estimate.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.job.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.invoice.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.payment.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.expense.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.reviewRequest.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.review.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.customerCommunication.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.phoneInteraction.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.receptionistEvent.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.referralRequest.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.customerFollowUp.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.referral.updateMany({
-    where: { businessId, sourceCustomerId: absorbId },
-    data: { sourceCustomerId: keepId },
-  });
-  await tx.referral.updateMany({
-    where: { businessId, referredCustomerId: absorbId },
-    data: { referredCustomerId: keepId },
-  });
-  await tx.growthActionRequest.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.storedAsset.updateMany({
-    where: { businessId, customerId: absorbId },
-    data: { customerId: keepId },
-  });
-  await tx.externalLeadImportRow.updateMany({
-    where: { businessId, possibleDuplicateCustomerId: absorbId },
-    data: { possibleDuplicateCustomerId: keepId },
-  });
-  await tx.leadAttributionCorrection.updateMany({
-    where: { businessId, recordType: "CUSTOMER", recordId: absorbId },
-    data: { recordId: keepId },
-  });
+type UpdateManyDelegate = {
+  updateMany: (args: {
+    where: Record<string, unknown>;
+    data: Record<string, unknown>;
+  }) => Promise<{ count: number }>;
+};
+
+function updateManyDelegate(tx: Tx, name: string): UpdateManyDelegate {
+  const delegate = (tx as unknown as Record<string, UpdateManyDelegate | undefined>)[name];
+  if (!delegate?.updateMany) {
+    throw new Error(`Customer merge is missing a Prisma delegate for ${name}.`);
+  }
+  return delegate;
+}
+
+async function remapPendingBusinessEvents(tx: Tx, businessId: string, absorbId: string, keepId: string) {
   const pendingEvents = await tx.businessEvent.findMany({
     where: pendingBusinessEventWhere(businessId, absorbId),
     select: { id: true, payload: true, subjectType: true, subjectId: true },
@@ -577,11 +619,39 @@ async function reassignCustomerId(
   }
 }
 
-const SOFT_CUSTOMER_REFS: SoftLeftover[] = [
-  { delegate: "storedAsset", field: "customerId" },
-  { delegate: "externalLeadImportRow", field: "possibleDuplicateCustomerId" },
-  { delegate: "leadAttributionCorrection", field: "recordId", extraWhere: { recordType: "CUSTOMER" } },
-];
+async function reassignCustomerId(
+  tx: Tx,
+  businessId: string,
+  absorbId: string,
+  keepId: string,
+) {
+  for (const spec of CUSTOMER_REASSIGN_SPECS) {
+    if (spec.kind === "communicationThreads") {
+      await mergeCommunicationThreads(tx, businessId, absorbId, keepId);
+      continue;
+    }
+    if (spec.kind === "pendingBusinessEvents") {
+      await remapPendingBusinessEvents(tx, businessId, absorbId, keepId);
+      continue;
+    }
+    await updateManyDelegate(tx, spec.delegate).updateMany({
+      where: { businessId, [spec.field]: absorbId, ...(spec.extraWhere ?? {}) },
+      data: { [spec.field]: keepId },
+    });
+  }
+}
+
+function softLeftoverRefs(): SoftLeftover[] {
+  const fks = new Set(customerFkFieldsFromDmmf().map((ref) => `${ref.model}.${ref.field}`));
+  return CUSTOMER_REASSIGN_SPECS.filter(
+    (spec): spec is Extract<CustomerReassignSpec, { kind: "updateMany" }> =>
+      spec.kind === "updateMany" && !fks.has(`${spec.model}.${spec.field}`),
+  ).map((spec) => ({
+    delegate: spec.delegate as keyof Tx,
+    field: spec.field,
+    extraWhere: spec.extraWhere,
+  }));
+}
 
 async function leftoverRows(reader: Tx | Db, absorbId: string, businessId: string) {
   const rows: Array<{ delegate: string; field: string; id: string }> = [];
@@ -595,7 +665,7 @@ async function leftoverRows(reader: Tx | Db, absorbId: string, businessId: strin
     });
     for (const row of found) rows.push({ delegate: ref.delegate, field: ref.field, id: row.id });
   }
-  for (const ref of SOFT_CUSTOMER_REFS) {
+  for (const ref of softLeftoverRefs()) {
     const delegate = delegates[String(ref.delegate)];
     if (!delegate?.findMany) continue;
     const found = await delegate.findMany({
