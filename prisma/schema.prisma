@@ -417,6 +417,11 @@ model Business {
   externalLeadImportRows   ExternalLeadImportRow[]
   customerCsvImports       CustomerCsvImport[]
   customerCsvImportRows    CustomerCsvImportRow[]
+  /// OWNER-reviewed CSV preview/confirm for this business's catalog.
+  /// Confirm writes ServiceCatalogItem only — never LineItem snapshots
+  /// or published hourly rates.
+  serviceCatalogImports    ServiceCatalogImport[]
+  serviceCatalogImportRows ServiceCatalogImportRow[]
   regulatoryIntelligenceNotes RegulatoryIntelligenceNote[]
   /// OWNER-authored extra intake questions + allowlisted visibility rules.
   /// Drafts stay off public hire forms until published as TenantIntakeSnapshot.
@@ -652,6 +657,8 @@ model Membership {
   confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
   createdCustomerCsvImports       CustomerCsvImport[] @relation("CustomerCsvImportCreator")
   confirmedCustomerCsvImports     CustomerCsvImport[] @relation("CustomerCsvImportConfirmer")
+  createdServiceCatalogImports    ServiceCatalogImport[] @relation("ServiceCatalogImportCreator")
+  confirmedServiceCatalogImports  ServiceCatalogImport[] @relation("ServiceCatalogImportConfirmer")
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
@@ -4779,6 +4786,89 @@ model CustomerCsvImportRow {
 
   business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
   import   CustomerCsvImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowFingerprint])
+}
+
+/// OWNER-reviewed service catalog CSV. Preview is stored first; catalog
+/// rows are added or updated only after explicit OWNER confirmation.
+/// Duplicate-name matches are same-business + same-trade name matches,
+/// not scores. Confirm never rewrites LineItem / EstimateVersionLineItem
+/// snapshots and never publishes hourly rates.
+model ServiceCatalogImport {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// CSV_UPLOAD. Server-side source-URL fetch is not implemented.
+  sourceKind              String
+  /// Sanitized filename. Display only.
+  sourceLabel             String
+  /// SHA-256 of the exact CSV bytes used for this preview.
+  contentSha256           String
+  capturedAt              DateTime
+  /// PREVIEW | CONFIRMING | CONFIRMED
+  status                  String   @default("PREVIEW")
+  rowCount                Int
+  validCount              Int
+  invalidCount            Int
+  nameMatchCount          Int
+  createdByMembershipId   String
+  confirmedAt             DateTime?
+  confirmedByMembershipId String?
+  /// Set when status is CONFIRMING. Re-upload and a second confirm may
+  /// recover only after CATALOG_IMPORT_CONFIRMING_LEASE_MS.
+  confirmingAt            DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership @relation("ServiceCatalogImportCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  confirmedBy Membership? @relation("ServiceCatalogImportConfirmer", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  rows        ServiceCatalogImportRow[]
+
+  @@unique([businessId, contentSha256])
+  @@index([businessId])
+  @@index([createdByMembershipId])
+  @@index([confirmedByMembershipId])
+}
+
+/// One sanitized catalog CSV row captured at preview time. Invalid rows
+/// block confirm. NAME_MATCH rows stay skipped until the owner picks
+/// update or add-as-new. Blank optional cells keep existing catalog
+/// values on update. Confirm writes ServiceCatalogItem only.
+model ServiceCatalogImportRow {
+  id                   String   @id @default(cuid())
+  businessId           String
+  importId             String
+  rowNumber            Int
+  /// VALID | INVALID | NAME_MATCH
+  previewStatus        String
+  invalidReason        String?
+  rowFingerprint       String
+  name                 String
+  description          String?
+  pricingMode          String
+  price                Decimal?
+  /// Null means the CSV cell was blank — keep the existing category on update.
+  category             String?
+  tradeCode            String
+  unitLabel            String   @default("")
+  /// Null means the CSV cell was blank — keep the existing value on update.
+  recurrenceEligible   Boolean?
+  /// Null means the CSV cell was blank — never reactivate an archived service.
+  active               Boolean?
+  matchedCatalogItemId String?
+  writtenCatalogItemId String?
+  /// ADD | UPDATE after confirm; null while still a preview or skipped.
+  writeAction          String?
+  /// SKIP | UPDATE | ADD_NEW. Only NAME_MATCH rows use this. Default SKIP.
+  matchDecision        String   @default("SKIP")
+  createdAt            DateTime @default(now())
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import   ServiceCatalogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
 
   @@unique([importId, rowNumber])
   @@index([businessId])

@@ -150,6 +150,7 @@
     "test:business-locations": "node --experimental-strip-types scripts/check-business-locations.mjs",
     "test:partner-vendor-directory": "node --experimental-strip-types scripts/check-partner-vendor-directory.mjs",
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
+    "test:service-catalog-import": "node --experimental-strip-types scripts/check-service-catalog-import.mjs",
     "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",
     "test:native-field-photos": "node --experimental-strip-types scripts/check-native-field-photos.mjs",
     "test:native-field-visit": "node --experimental-strip-types scripts/check-native-field-visit.mjs",
