@@ -132,20 +132,26 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
-async function waitForBackendLock(db, dbName, ms, label) {
+async function waitForBackendLock(db, _dbName, ms, label) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     const rows = await db.$queryRaw`
-      SELECT pid
+      SELECT pid, wait_event_type, wait_event, state
       FROM pg_stat_activity
-      WHERE datname = ${dbName}
+      WHERE datname = current_database()
         AND pid <> pg_backend_pid()
         AND wait_event_type = 'Lock'
     `;
     if (Array.isArray(rows) && rows.length > 0) return rows;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`${label} timed out after ${ms}ms`);
+  const snapshot = await db.$queryRaw`
+    SELECT pid, wait_event_type, wait_event, state, left(query, 120) AS query
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND pid <> pg_backend_pid()
+  `;
+  throw new Error(`${label} timed out after ${ms}ms; backends=${JSON.stringify(snapshot)}`);
 }
 
 const opsSrc = readRepo("src/lib/workforce-availability-request-ops.ts");
@@ -240,7 +246,9 @@ check(
   checkSrc.includes("waitForBackendLock") &&
     checkSrc.includes("pg_stat_activity") &&
     checkSrc.includes("wait_event_type = 'Lock'") &&
-    checkSrc.includes("accept locked the membership row"),
+    checkSrc.includes("accept locked the membership row") &&
+    checkSrc.includes("Promise.resolve(") &&
+    checkSrc.includes("deactivateClient.membership.update"),
 );
 check(
   "Inactive membership blocks ACCEPT only, so OWNER can still decline",
@@ -1119,10 +1127,12 @@ try {
       now: NOW,
     });
     await withTimeout(lockHeldBarrier.arrived, 4000, "accept locked the membership row");
-    updateHeld = deactivateClient.membership.update({
-      where: { id: helperMem.id },
-      data: { active: false },
-    });
+    updateHeld = Promise.resolve(
+      deactivateClient.membership.update({
+        where: { id: helperMem.id },
+        data: { active: false },
+      }),
+    );
     await waitForBackendLock(
       lockWatchClient,
       testDbName,
