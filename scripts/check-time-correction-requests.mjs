@@ -353,7 +353,7 @@ try {
       /export async function decideTimeCorrectionRequest[\s\S]*lockWorkerTimesheetWeeks[\s\S]*originalEndedAt[\s\S]*proposedEndedAt/.test(
         opsSrc,
       ) &&
-      /export async function approveTimesheetWeek[\s\S]*weekRange\(input\.weekStartedAt, input\.timeZone\)/.test(
+      /export async function approveTimesheetWeek[\s\S]*accessTimeZone\(access, input\.timeZone\)[\s\S]*weekRange\(input\.weekStartedAt, timeZone\)/.test(
         opsSrc,
       ),
   );

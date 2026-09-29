@@ -168,30 +168,42 @@ export function entryOverlapsWeek(
 }
 
 /**
- * P1-08 founder policy. Must not be guessed.
+ * P1-08 founder policy B: reject.
  *
- * A crossing entry is loaded into every overlapping business-local week
- * (`entryOverlapsWeek`) and currently credited with its full duration in
- * each (`hoursBetween` / `paidHours` / `approvalSnapshot`).
- *
- * Acceptable policies from the audit:
- *   A. "split"  — automatically split the interval at the week boundary
- *   B. "reject" — refuse approval until the interval is corrected
- *
- * Leave null until the founder chooses A or B. Do not wire a default.
+ * A crossing interval is loaded into every overlapping business-local week
+ * (`entryOverlapsWeek`). Approval must refuse until the entry is corrected
+ * into intervals that each occupy one Sunday-start business week.
+ * Do not auto-split and do not silently truncate hours. Already-APPROVED
+ * historical rows are left unchanged.
  */
-export const WEEK_BOUNDARY_CROSSING_POLICY: null | "split" | "reject" = null;
+export const WEEK_BOUNDARY_CROSSING_POLICY = "reject" as const;
 
-export const WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR =
-  "P1-08 is blocked: founder must choose WEEK_BOUNDARY_CROSSING_POLICY \"split\" (A) or \"reject\" (B) before changing week attribution.";
+export const WEEK_BOUNDARY_CROSSING_ERROR =
+  "This time crosses the business week. Correct it into separate entries that each stay in one week before approving.";
 
+function lastOccupiedBusinessWeekStart(startedAt: Date, endedAt: Date, timeZone: string): Date {
+  const endWeek = weekRange(endedAt, timeZone).start;
+  if (endedAt.getTime() > startedAt.getTime() && endedAt.getTime() === endWeek.getTime()) {
+    return addDays(endWeek, -7, timeZone);
+  }
+  return endWeek;
+}
+
+/**
+ * True when the interval has positive duration in more than one
+ * business-local Sunday week. Ending exactly at the next Sunday 00:00
+ * is a touch, not a crossing — weeks are half-open [start, end).
+ */
 export function entryCrossesBusinessWeekBoundary(
   entry: { startedAt: Date; endedAt: Date | null },
   timeZone: string,
   now: Date = new Date(),
 ): boolean {
   const end = entry.endedAt ?? now;
-  return weekRange(entry.startedAt, timeZone).start.getTime() !== weekRange(end, timeZone).start.getTime();
+  if (end.getTime() <= entry.startedAt.getTime()) return false;
+  const first = weekRange(entry.startedAt, timeZone).start;
+  const last = lastOccupiedBusinessWeekStart(entry.startedAt, end, timeZone);
+  return first.getTime() !== last.getTime();
 }
 
 export function businessWeekStartsTouchedByEntry(
@@ -201,7 +213,8 @@ export function businessWeekStartsTouchedByEntry(
 ): Date[] {
   const end = entry.endedAt ?? now;
   const first = weekRange(entry.startedAt, timeZone).start;
-  const last = weekRange(end, timeZone).start;
+  if (end.getTime() <= entry.startedAt.getTime()) return [first];
+  const last = lastOccupiedBusinessWeekStart(entry.startedAt, end, timeZone);
   const starts: Date[] = [];
   for (let cursor = first; cursor.getTime() <= last.getTime(); cursor = addDays(cursor, 7, timeZone)) {
     starts.push(cursor);
@@ -209,15 +222,8 @@ export function businessWeekStartsTouchedByEntry(
   return starts;
 }
 
-/**
- * Implementation seam for P1-08. Throws until the founder chooses A or B.
- * Callers must not catch this to invent a default attribution.
- */
-export function resolveWeekBoundaryCrossingPolicy(): "split" | "reject" {
-  if (WEEK_BOUNDARY_CROSSING_POLICY === "split" || WEEK_BOUNDARY_CROSSING_POLICY === "reject") {
-    return WEEK_BOUNDARY_CROSSING_POLICY;
-  }
-  throw new Error(WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR);
+export function resolveWeekBoundaryCrossingPolicy(): "reject" {
+  return WEEK_BOUNDARY_CROSSING_POLICY;
 }
 
 export type Interval = { startedAt: Date; endedAt: Date | null };
@@ -355,7 +361,10 @@ export function canEditTimeEntry(status: string): boolean {
   return status !== "APPROVED";
 }
 
-export function canApproveWeek(entries: readonly { status: string; endedAt: Date | null }[]): {
+export function canApproveWeek(
+  entries: readonly { status: string; startedAt?: Date; endedAt: Date | null }[],
+  timeZone?: string,
+): {
   ok: boolean;
   error?: string;
 } {
@@ -364,6 +373,20 @@ export function canApproveWeek(entries: readonly { status: string; endedAt: Date
   }
   if (entries.some((entry) => entry.status === "RUNNING" || entry.endedAt == null)) {
     return { ok: false, error: "Stop every running clock before approving this week." };
+  }
+  if (timeZone && resolveWeekBoundaryCrossingPolicy() === "reject") {
+    const crosses = entries.some((entry) => {
+      if (entry.status === "APPROVED" || entry.startedAt == null || entry.endedAt == null) {
+        return false;
+      }
+      return entryCrossesBusinessWeekBoundary(
+        { startedAt: entry.startedAt, endedAt: entry.endedAt },
+        timeZone,
+      );
+    });
+    if (crosses) {
+      return { ok: false, error: WEEK_BOUNDARY_CROSSING_ERROR };
+    }
   }
   return { ok: true };
 }

@@ -1205,7 +1205,8 @@ export async function approveTimesheetWeek(
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   const actorMembershipId = access.workspace.membership.id;
-  const { start, end } = weekRange(input.weekStartedAt, input.timeZone);
+  const timeZone = accessTimeZone(access, input.timeZone);
+  const { start, end } = weekRange(input.weekStartedAt, timeZone);
 
   return db.$transaction(async (tx) => {
     const membership = await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
@@ -1219,7 +1220,7 @@ export async function approveTimesheetWeek(
       start,
       end,
     );
-    const gate = canApproveWeek(entries);
+    const gate = canApproveWeek(entries, timeZone);
     if (!gate.ok) {
       throw new TimeCardError(gate.error ?? "This week is not ready to approve.");
     }
@@ -1374,7 +1375,8 @@ export async function reopenTimesheetWeek(
     throw new TimeCardError("A reason is required to reopen an approved week.");
   }
   const actorMembershipId = access.workspace.membership.id;
-  const { start, end } = weekRange(input.weekStartedAt, input.timeZone);
+  const timeZone = accessTimeZone(access, input.timeZone);
+  const { start, end } = weekRange(input.weekStartedAt, timeZone);
 
   return db.$transaction(async (tx) => {
     const week = await tx.timesheetWeek.findUnique({

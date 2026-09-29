@@ -31,8 +31,8 @@ const {
   canRequestTimeCorrection,
   coerceHourlyWage,
   estimateLaborCost,
+  WEEK_BOUNDARY_CROSSING_ERROR,
   WEEK_BOUNDARY_CROSSING_POLICY,
-  WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR,
   businessWeekStartsTouchedByEntry,
   entryCrossesBusinessWeekBoundary,
   entryOverlapsWeek,
@@ -243,21 +243,40 @@ try {
       entryOverlapsWeek(crossing, weekA.start, weekA.end) &&
       entryOverlapsWeek(crossing, weekB.start, weekB.end),
   );
+  const boundaryTouch = {
+    startedAt: civil("2026-09-19", "22:00"),
+    endedAt: civil("2026-09-20", "00:00"),
+  };
   check(
-    "P1-08 current defect: full 4h is credited to both overlapping weeks",
-    paidHours([crossing]) === 4 &&
-      paidHours([crossing]) === hoursBetween(crossing.startedAt, crossing.endedAt),
+    "Ending exactly at Sunday 00:00 America/New_York is a touch, not a crossing",
+    boundaryTouch.endedAt?.toISOString() === "2026-09-20T04:00:00.000Z" &&
+      entryCrossesBusinessWeekBoundary(boundaryTouch, NY) === false &&
+      businessWeekStartsTouchedByEntry(boundaryTouch, NY).length === 1,
   );
-  check("P1-08 policy is unset until the founder chooses A or B", WEEK_BOUNDARY_CROSSING_POLICY === null);
-  try {
-    resolveWeekBoundaryCrossingPolicy();
-    check("P1-08 seam refuses to choose a policy", false);
-  } catch (error) {
-    check(
-      "P1-08 seam refuses to choose a policy",
-      error instanceof Error && error.message === WEEK_BOUNDARY_POLICY_UNDECIDED_ERROR,
-    );
-  }
+  const sameWeekNight = {
+    startedAt: civil("2026-09-19", "20:00"),
+    endedAt: civil("2026-09-19", "23:00"),
+  };
+  check(
+    "Same-week Saturday night does not cross the Sunday boundary",
+    entryCrossesBusinessWeekBoundary(sameWeekNight, NY) === false,
+  );
+  check(
+    "P1-08 policy B rejects approval of a crossing entry",
+    WEEK_BOUNDARY_CROSSING_POLICY === "reject" &&
+      resolveWeekBoundaryCrossingPolicy() === "reject" &&
+      canApproveWeek(
+        [{ status: "READY", startedAt: crossing.startedAt, endedAt: crossing.endedAt }],
+        NY,
+      ).error === WEEK_BOUNDARY_CROSSING_ERROR,
+  );
+  check(
+    "Already-APPROVED historical crossing entries are not blocked by the gate",
+    canApproveWeek(
+      [{ status: "APPROVED", startedAt: crossing.startedAt, endedAt: crossing.endedAt }],
+      NY,
+    ).ok === true,
+  );
   check("8 hours × $30 = $240", estimateLaborCost(8, 30) === 240);
   check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
@@ -428,10 +447,14 @@ try {
       fieldPageSrc.includes("formatTimeInput(entry.startedAt, timeZone)"),
   );
   check(
-    "P1-08 approve path is not wired to a guessed week-boundary policy",
-    WEEK_BOUNDARY_CROSSING_POLICY === null &&
-      !timeCardOpsSrc.includes("resolveWeekBoundaryCrossingPolicy") &&
-      !timeCardOpsSrc.includes("WEEK_BOUNDARY_CROSSING_POLICY"),
+    "P1-08 approve path rejects boundary-crossing entries using Business timezone",
+    WEEK_BOUNDARY_CROSSING_POLICY === "reject" &&
+      timeCardOpsSrc.includes("canApproveWeek(entries, timeZone)") &&
+      timeCardOpsSrc.includes("accessTimeZone(access, input.timeZone)") &&
+      !timeCardOpsSrc.includes("split") &&
+      !/hoursBetween\([\s\S]*weekStart/.test(
+        timeCardOpsSrc.slice(timeCardOpsSrc.indexOf("export async function approveTimesheetWeek")),
+      ),
   );
 
   const businessA = await prisma.business.create({
@@ -773,12 +796,24 @@ try {
     !dstReject.ok && dstReject.error === NONEXISTENT_CIVIL_TIME_ERROR && civil("2026-03-08", "02:30") === null,
   );
 
-  console.log("\nTEST — P1-08 overlapping-week double credit (policy blocked)");
+  console.log("\nTEST — P1-08 reject boundary-crossing approval (policy B)");
   const crossUser = await prisma.user.create({
     data: { name: "Casey Cross", email: "cross-time@example.com", passwordHash: "x" },
   });
+  const sameWeekUser = await prisma.user.create({
+    data: { name: "Sam Sameweek", email: "sameweek-time@example.com", passwordHash: "x" },
+  });
+  const histUser = await prisma.user.create({
+    data: { name: "Holly History", email: "hist-time@example.com", passwordHash: "x" },
+  });
   const crossMem = await prisma.membership.create({
     data: { userId: crossUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(25) },
+  });
+  const sameWeekMem = await prisma.membership.create({
+    data: { userId: sameWeekUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(20) },
+  });
+  const histMem = await prisma.membership.create({
+    data: { userId: histUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(25) },
   });
   const crossJob = await prisma.job.create({
     data: {
@@ -787,6 +822,24 @@ try {
       status: "SCHEDULED",
       projectToken: randomUUID(),
       assignedMembershipId: crossMem.id,
+    },
+  });
+  const sameWeekJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: sameWeekMem.id,
+    },
+  });
+  const histJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "SCHEDULED",
+      projectToken: randomUUID(),
+      assignedMembershipId: histMem.id,
     },
   });
   const crossEntry = await createManualTimeEntry(prisma, ownerA, {
@@ -798,6 +851,33 @@ try {
     note: "Overnight across the Sunday week boundary",
     timeZone: NY,
   });
+  const sameWeekEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: sameWeekMem.id,
+    activityType: "JOB",
+    jobId: sameWeekJob.id,
+    startedAt: civil("2026-09-19", "09:00"),
+    endedAt: civil("2026-09-19", "17:00"),
+    note: "Same-week Saturday shift",
+    timeZone: NY,
+  });
+  const histEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: histMem.id,
+    activityType: "JOB",
+    jobId: histJob.id,
+    startedAt: civil("2026-09-19", "22:00"),
+    endedAt: civil("2026-09-20", "02:00"),
+    note: "Historical approved crossing",
+    timeZone: NY,
+  });
+  await prisma.timeEntry.update({
+    where: { id: histEntry.id },
+    data: {
+      status: "APPROVED",
+      approvedHours: new Prisma.Decimal(4),
+      approvedHourlyWage: new Prisma.Decimal(25),
+      approvedLaborCost: new Prisma.Decimal(100),
+    },
+  });
   const crossStored = await prisma.timeEntry.findUnique({ where: { id: crossEntry.id } });
   const priorWeek = weekRange(civil("2026-09-19", "12:00"), NY);
   const nextWeek = weekRange(civil("2026-09-20", "12:00"), NY);
@@ -807,6 +887,82 @@ try {
       crossStored.endedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
       hoursBetween(crossStored.startedAt, crossStored.endedAt) === 4 &&
       entryCrossesBusinessWeekBoundary(crossStored, NY),
+  );
+  await expectError(
+    "Approval of the Saturday week is refused while the crossing entry remains",
+    () => approveTimesheetWeek(prisma, ownerA, {
+      membershipId: crossMem.id,
+      weekStartedAt: priorWeek.start,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && error.message === WEEK_BOUNDARY_CROSSING_ERROR,
+  );
+  await expectError(
+    "Approval of the Sunday week is refused while the crossing entry remains",
+    () => approveTimesheetWeek(prisma, ownerA, {
+      membershipId: crossMem.id,
+      weekStartedAt: nextWeek.start,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && error.message === WEEK_BOUNDARY_CROSSING_ERROR,
+  );
+  const stillCrossing = await prisma.timeEntry.findUnique({ where: { id: crossEntry.id } });
+  check(
+    "Refused approval does not split, truncate, or approve the crossing entry",
+    stillCrossing.status === "READY" &&
+      stillCrossing.startedAt.toISOString() === "2026-09-20T02:00:00.000Z" &&
+      stillCrossing.endedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      stillCrossing.approvedHours == null &&
+      hoursBetween(stillCrossing.startedAt, stillCrossing.endedAt) === 4,
+  );
+  const sameWeekApproved = await approveTimesheetWeek(prisma, ownerA, {
+    membershipId: sameWeekMem.id,
+    weekStartedAt: priorWeek.start,
+    timeZone: NY,
+  });
+  check(
+    "Normal same-week Saturday 09:00–17:00 still approves as 8 hours",
+    sameWeekApproved.status === "APPROVED" && Number(sameWeekApproved.approvedHours) === 8,
+  );
+  const histApproved = await approveTimesheetWeek(prisma, ownerA, {
+    membershipId: histMem.id,
+    weekStartedAt: priorWeek.start,
+    timeZone: NY,
+  });
+  const histAfter = await prisma.timeEntry.findUnique({ where: { id: histEntry.id } });
+  check(
+    "Already-approved historical crossing record is not rewritten",
+    histApproved.status === "APPROVED" &&
+      histAfter.status === "APPROVED" &&
+      Number(histAfter.approvedHours) === 4 &&
+      histAfter.startedAt.toISOString() === "2026-09-20T02:00:00.000Z" &&
+      histAfter.endedAt.toISOString() === "2026-09-20T06:00:00.000Z",
+  );
+  const saturdayOnly = await correctTimeEntry(prisma, ownerA, {
+    timeEntryId: crossEntry.id,
+    startedAt: civil("2026-09-19", "22:00"),
+    endedAt: civil("2026-09-20", "00:00"),
+    reason: "Keep Saturday hours in the first business week",
+    timeZone: NY,
+  });
+  const sundayOnly = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: crossMem.id,
+    activityType: "JOB",
+    jobId: crossJob.id,
+    startedAt: civil("2026-09-20", "00:00"),
+    endedAt: civil("2026-09-20", "02:00"),
+    note: "Sunday hours after the week boundary",
+    timeZone: NY,
+  });
+  check(
+    "Correction yields two valid one-week entries that touch at Sunday 00:00",
+    saturdayOnly.endedAt.toISOString() === "2026-09-20T04:00:00.000Z" &&
+      sundayOnly.startedAt.toISOString() === "2026-09-20T04:00:00.000Z" &&
+      hoursBetween(saturdayOnly.startedAt, saturdayOnly.endedAt) === 2 &&
+      hoursBetween(sundayOnly.startedAt, sundayOnly.endedAt) === 2 &&
+      entryCrossesBusinessWeekBoundary(saturdayOnly, NY) === false &&
+      entryCrossesBusinessWeekBoundary(sundayOnly, NY) === false &&
+      !intervalsOverlap(saturdayOnly, sundayOnly),
   );
   const weekAApproved = await approveTimesheetWeek(prisma, ownerA, {
     membershipId: crossMem.id,
@@ -818,17 +974,22 @@ try {
     weekStartedAt: nextWeek.start,
     timeZone: NY,
   });
+  const saturdayApproved = await prisma.timeEntry.findUnique({ where: { id: saturdayOnly.id } });
+  const sundayApproved = await prisma.timeEntry.findUnique({ where: { id: sundayOnly.id } });
   check(
-    "P1-08 reproduction: both business-local weeks snapshot the full 4 hours",
-    Number(weekAApproved.approvedHours) === 4 &&
-      Number(weekBApproved.approvedHours) === 4 &&
-      Number(weekAApproved.approvedHours) + Number(weekBApproved.approvedHours) === 8,
+    "After correction, each business-local week approves its own 2 hours",
+    Number(weekAApproved.approvedHours) === 2 &&
+      Number(weekBApproved.approvedHours) === 2 &&
+      saturdayApproved.status === "APPROVED" &&
+      sundayApproved.status === "APPROVED" &&
+      Number(saturdayApproved.approvedHours) === 2 &&
+      Number(sundayApproved.approvedHours) === 2,
   );
   check(
-    "P1-08 remains blocked: seam is present and policy is still undecided",
-    WEEK_BOUNDARY_CROSSING_POLICY === null &&
-      businessWeekStartsTouchedByEntry(crossStored, NY).map((start) => start.toISOString()).join(",") ===
-        `${priorWeek.start.toISOString()},${nextWeek.start.toISOString()}`,
+    "Combined credited hours equal the original 4 worked hours exactly once",
+    Number(weekAApproved.approvedHours) + Number(weekBApproved.approvedHours) === 4 &&
+      Number(saturdayApproved.approvedHours) + Number(sundayApproved.approvedHours) ===
+        hoursBetween(civil("2026-09-19", "22:00"), civil("2026-09-20", "02:00")),
   );
 
   console.log("\nTEST — OWNER/ADMIN manual entry, wage, and MEMBER denial");
@@ -926,7 +1087,7 @@ try {
     where: { membershipId: helperMem.id },
     orderBy: { startedAt: "asc" },
   });
-  const weekStart = weekRange(helperSample?.startedAt ?? new Date()).start;
+  const weekStart = weekRange(helperSample?.startedAt ?? new Date(), NY).start;
   const approved = await approveTimesheetWeek(prisma, ownerA, {
     membershipId: helperMem.id,
     weekStartedAt: weekStart,
@@ -990,7 +1151,7 @@ try {
     where: { membershipId: memberMem.id, status: "RUNNING" },
   });
   check("Current-clock status is RUNNING travel", current?.activityType === "TRAVEL");
-  const runningWeekStart = weekRange(current?.startedAt ?? new Date()).start;
+  const runningWeekStart = weekRange(current?.startedAt ?? new Date(), NY).start;
   await expectError(
     "Cannot approve a week while a clock is running",
     () => approveTimesheetWeek(prisma, ownerA, { membershipId: memberMem.id, weekStartedAt: runningWeekStart }),
@@ -1059,7 +1220,7 @@ try {
     endedAt: hourEnd,
     note: "Acceptance test hour",
   });
-  const handyWeek = weekRange(hourStart).start;
+  const handyWeek = weekRange(hourStart, NY).start;
   await approveTimesheetWeek(prisma, joeAccess, {
     membershipId: joeMem.id,
     weekStartedAt: handyWeek,
@@ -1264,7 +1425,7 @@ try {
     endedAt: persistEnd,
     note: "Persist hour",
   });
-  const persistWeek = weekRange(persistStart).start;
+  const persistWeek = weekRange(persistStart, NY).start;
   await approveTimesheetWeek(prisma, persistAccess, {
     membershipId: persistMem.id,
     weekStartedAt: persistWeek,
