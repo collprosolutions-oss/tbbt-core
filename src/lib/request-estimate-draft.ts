@@ -33,6 +33,7 @@ import { resolveCustomerPolicies } from "@/lib/estimate-policies";
 import { coerceRequestQuantity } from "@/lib/service-request-work";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 import type { BusinessEstimatingDefaultPayload } from "@/lib/estimating-defaults";
+import { draftEstimateOptionsSendError } from "@/lib/estimate-options";
 
 export const STARTING_AT_DRAFT_MARKER = "(starting at)";
 export const CUSTOM_QUOTE_DRAFT_MARKER = "(custom quote — enter price)";
@@ -158,7 +159,9 @@ export function draftEstimateSendError(estimate: {
   lineItems: Array<{
     description: string;
     unitPrice: { lte: (value: number) => boolean } | number | string;
+    optionId?: string | null;
   }>;
+  options?: Array<{ id: string; name: string; sortOrder: number }>;
 }): string | null {
   if (estimate.status !== "DRAFT") {
     return "Only a draft estimate can be sent.";
@@ -172,7 +175,7 @@ export function draftEstimateSendError(estimate: {
   if (estimate.lineItems.some(isUnpricedDraftLine)) {
     return "Enter a price for each line before sending.";
   }
-  return null;
+  return draftEstimateOptionsSendError(estimate);
 }
 
 /**
@@ -189,7 +192,9 @@ export function draftEstimateSendState(estimate: {
   lineItems: Array<{
     description: string;
     unitPrice: { lte: (value: number) => boolean } | number | string;
+    optionId?: string | null;
   }>;
+  options?: Array<{ id: string; name: string; sortOrder: number }>;
 }): DraftEstimateSendState {
   const error = draftEstimateSendError(estimate);
   return { canSend: error === null, error };

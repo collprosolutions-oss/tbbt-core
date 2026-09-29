@@ -28,6 +28,7 @@ const {
   approvalSnapshot,
   canApproveWeek,
   canEditTimeEntry,
+  canRequestTimeCorrection,
   coerceHourlyWage,
   estimateLaborCost,
   formatDateInput,
@@ -606,19 +607,41 @@ try {
   check("Correction produced a CORRECT adjustment with reason", audit.some((row) => row.action === "CORRECT" && row.reason === "Adjusted end time after review"));
   check("Adjustment stores previous and next snapshots", audit.some((row) => row.previousJson && row.nextJson));
 
-  await requestTimeCorrection(prisma, helperA, {
+  const helperOriginalStart = adminManual.startedAt;
+  const helperOriginalEnd = adminManual.endedAt;
+  const helperRequest = await requestTimeCorrection(prisma, helperA, {
     timeEntryId: adminManual.id,
     reason: "I took a longer drive",
+    proposedStartedAt: hoursAgo(6.25),
+    proposedEndedAt: hoursAgo(5.25),
+    timeZone: "America/New_York",
   });
   const flagged = await prisma.timeEntry.findUnique({ where: { id: adminManual.id } });
-  check("MEMBER can request correction on own entry", flagged.status === "NEEDS_REVIEW");
+  check(
+    "MEMBER can request correction on own entry without rewriting it",
+    helperRequest.request.status === "PENDING" &&
+      flagged.status === adminManual.status &&
+      flagged.startedAt.getTime() === helperOriginalStart.getTime() &&
+      flagged.endedAt.getTime() === helperOriginalEnd.getTime() &&
+      flagged.note === adminManual.note,
+  );
   const memberOwned = await prisma.timeEntry.findFirst({
     where: { membershipId: memberMem.id, status: { not: "RUNNING" } },
   });
   await expectError(
     "MEMBER cannot request correction on another worker's entry",
-    () => requestTimeCorrection(prisma, helperA, { timeEntryId: memberOwned.id, reason: "nope" }),
+    () => requestTimeCorrection(prisma, helperA, {
+      timeEntryId: memberOwned.id,
+      reason: "nope",
+      proposedStartedAt: hoursAgo(4),
+      proposedEndedAt: hoursAgo(3),
+      timeZone: "America/New_York",
+    }),
     (error) => error instanceof ForbiddenError,
+  );
+  check(
+    "Approved week cannot be requested as a worker correction",
+    canRequestTimeCorrection({ entryStatus: "APPROVED", endedAt: new Date(), weekStatus: "APPROVED" }).ok === false,
   );
 
   const helperSample = await prisma.timeEntry.findFirst({
@@ -1305,7 +1328,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: closerMem.id,
-      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      weekStartedAt: weekRange(approvedRunning.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
@@ -1539,7 +1562,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: stopWorkerMem.id,
-      weekStartedAt: weekRange(approvedStopClock.startedAt).start,
+      weekStartedAt: weekRange(approvedStopClock.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
@@ -1579,9 +1602,9 @@ try {
   });
   const priorWeekA = makeAccess(businessA.id, "MEMBER", priorWeekMem.id);
   const transitionNow = new Date();
-  const currentWeekStart = weekRange(transitionNow).start;
+  const currentWeekStart = weekRange(transitionNow, "America/New_York").start;
   const priorStartedAt = new Date(currentWeekStart.getTime() - 24 * 60 * 60 * 1000);
-  const priorWeekStart = weekRange(priorStartedAt).start;
+  const priorWeekStart = weekRange(priorStartedAt, "America/New_York").start;
   const priorWeekJob = await prisma.job.create({
     data: {
       businessId: businessA.id,

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { TimeCardsWorkspace } from "@/components/time-cards/time-cards-workspace";
 import type {
   TimeCardAdjustment,
+  TimeCardCorrectionRequest,
   TimeCardEntry,
   TimeCardJobOption,
   TimeCardKpi,
@@ -16,6 +17,7 @@ import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -24,6 +26,7 @@ import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate, parseScheduleDate, startOfDay } from "@/lib/schedule";
 import {
   TIME_ACTIVITY_LABELS,
+  TIME_CORRECTION_STATUS_LABELS,
   TIME_STATUS_LABELS,
   canEditTimeEntry,
   estimateLaborCost,
@@ -32,6 +35,7 @@ import {
   formatTimeInput,
   hoursBetween,
   isTimeActivityType,
+  isTimeCorrectionRequestStatus,
   isTimeEntryStatus,
   paidHours,
   weekRange,
@@ -90,7 +94,8 @@ export default async function TimeCardsPage({
     : null;
   const founderTokens = sanitizeFounderPageTokens("time-cards", founderOverride?.tokens ?? {});
 
-  const [memberships, jobs, entries, weeks, adjustments] = await Promise.all([
+  const [memberships, jobs, entries, weeks, adjustments, pendingCorrectionRequests, decidedCorrectionRequests] =
+    await Promise.all([
     prisma.membership.findMany({
       where: access.scope,
       include: { user: { select: { name: true } } },
@@ -144,7 +149,69 @@ export default async function TimeCardsPage({
       orderBy: { createdAt: "desc" },
       take: 80,
     }),
+    prisma.timeCorrectionRequest.findMany({
+      where: {
+        ...access.scope,
+        status: "PENDING",
+      },
+      include: {
+        requestedBy: { include: { user: { select: { name: true } } } },
+        decisions: {
+          include: { actor: { include: { user: { select: { name: true } } } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 80,
+    }),
+    prisma.timeCorrectionRequest.findMany({
+      where: {
+        ...access.scope,
+        status: { not: "PENDING" },
+        originalStartedAt: { lt: weekEnd },
+        originalEndedAt: { gt: weekStart },
+      },
+      include: {
+        requestedBy: { include: { user: { select: { name: true } } } },
+        decisions: {
+          include: { actor: { include: { user: { select: { name: true } } } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 80,
+    }),
   ]);
+
+  const pendingWeekKeys = new Map<
+    string,
+    { membershipId: string; weekStartedAt: Date }
+  >();
+  for (const request of pendingCorrectionRequests) {
+    for (const at of [request.originalStartedAt, request.proposedStartedAt]) {
+      const start = weekRange(at, timeZone).start;
+      pendingWeekKeys.set(`${request.requestedByMembershipId}:${start.toISOString()}`, {
+        membershipId: request.requestedByMembershipId,
+        weekStartedAt: start,
+      });
+    }
+  }
+  const pendingWeeks =
+    pendingWeekKeys.size === 0
+      ? []
+      : await prisma.timesheetWeek.findMany({
+          where: {
+            businessId: access.businessId,
+            OR: [...pendingWeekKeys.values()],
+          },
+        });
+  const approvedWeekKeys = new Set(
+    [...weeks, ...pendingWeeks]
+      .filter((week) => week.status === "APPROVED")
+      .map((week) => `${week.membershipId}:${week.weekStartedAt.toISOString()}`),
+  );
 
   const weekByMembership = new Map(weeks.map((week) => [week.membershipId, week]));
   const jobOptions: TimeCardJobOption[] = jobs.map((job) => ({
@@ -217,6 +284,38 @@ export default async function TimeCardsPage({
     createdAtLabel: formatTime(item.createdAt, timeZone),
     actorName: item.actor.user.name,
   }));
+
+  const correctionRequestDtos: TimeCardCorrectionRequest[] = [
+    ...pendingCorrectionRequests,
+    ...decidedCorrectionRequests,
+  ].map((request) => {
+    const status = isTimeCorrectionRequestStatus(request.status) ? request.status : "PENDING";
+    const decision = request.decisions[0];
+    const originalWeekKey = `${request.requestedByMembershipId}:${weekRange(request.originalStartedAt, timeZone).start.toISOString()}`;
+    const proposedWeekKey = `${request.requestedByMembershipId}:${weekRange(request.proposedStartedAt, timeZone).start.toISOString()}`;
+    return {
+      id: request.id,
+      timeEntryId: request.timeEntryId,
+      membershipId: request.requestedByMembershipId,
+      workerName: request.requestedBy.user.name,
+      status,
+      statusLabel: TIME_CORRECTION_STATUS_LABELS[status],
+      reason: request.reason,
+      originalClockLabel: `${formatTime(request.originalStartedAt, timeZone)} – ${formatTime(request.originalEndedAt, timeZone)}`,
+      proposedClockLabel: `${formatTime(request.proposedStartedAt, timeZone)} – ${formatTime(request.proposedEndedAt, timeZone)}`,
+      originalHoursLabel: formatDurationClock(
+        hoursBetween(request.originalStartedAt, request.originalEndedAt),
+      ),
+      proposedHoursLabel: formatDurationClock(
+        hoursBetween(request.proposedStartedAt, request.proposedEndedAt),
+      ),
+      createdAtLabel: formatTime(request.createdAt, timeZone),
+      decisionLabel: decision
+        ? `${decision.decision} by ${decision.actor.user.name}`
+        : null,
+      weekApproved: approvedWeekKeys.has(originalWeekKey) || approvedWeekKeys.has(proposedWeekKey),
+    };
+  });
 
   const clockedNow = workers.filter((worker) => worker.clockedIn && worker.active);
   const todayEntries = entries.filter((entry) => entry.startedAt < dayEnd && (entry.endedAt == null || entry.endedAt > dayStart));
@@ -334,6 +433,8 @@ export default async function TimeCardsPage({
           jobs={jobOptions}
           entries={entryDtos}
           adjustments={adjustmentDtos}
+          correctionRequests={correctionRequestDtos}
+          canDecideCorrections={roleHasCapability(access.workspace.role, CAPABILITIES.DECIDE_TIME_CORRECTIONS)}
           selectedMembershipId={params.worker ?? workers[0]?.membershipId ?? null}
           payrollReadyCount={payrollReadyCount}
           weekWorkerCount={activeWorkers.length}

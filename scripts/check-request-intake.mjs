@@ -122,9 +122,13 @@ check(
     !jobPhotoSrc.includes("BLOB_READ_WRITE_TOKEN"),
 );
 check(
-  "Expense receipt uploads still use the current storage helper and 4MB size cap",
+  "Expense receipts use private managed storage with a 4MB cap, not Vercel Blob",
   storageSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024") &&
-    expenseSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES"),
+    expenseSrc.includes("putExpenseReceiptFromBytes") &&
+    expenseSrc.includes("inspectExpenseReceiptUpload") &&
+    !expenseSrc.includes("uploadExpenseReceipt") &&
+    !expenseSrc.includes("MAX_JOB_PHOTO_UPLOAD_BYTES") &&
+    !expenseSrc.includes("BLOB_READ_WRITE_TOKEN"),
 );
 
 const nextConfigSrc = readRepo("next.config.ts");

@@ -12,7 +12,13 @@ import { Label } from "@/components/ui/label";
 
 const initialState: EstimateActionState = {};
 
-export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
+export function AddCustomLineForm({
+  estimateId,
+  options,
+}: {
+  estimateId: string;
+  options?: Array<{ id: string; name: string }>;
+}) {
   const [state, action, pending] = useActionState(addCustomLineItem, initialState);
   const [lineType, setLineType] = useState("LABOR");
 
@@ -24,6 +30,23 @@ export function AddCustomLineForm({ estimateId }: { estimateId: string }) {
         </Alert>
       ) : null}
       <input type="hidden" name="estimateId" value={estimateId} />
+      {options && options.length > 0 ? (
+        <div className="space-y-2">
+          <Label htmlFor="custom-optionId">Priced option</Label>
+          <select
+            id="custom-optionId"
+            name="optionId"
+            required
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor="custom-type">Type</Label>
         <select

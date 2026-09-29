@@ -10,6 +10,8 @@ import {
   View,
 } from "react-native";
 import { isApiError, signInNative } from "../api";
+import { secureChecklistDraftStorage } from "../checklist-draft-storage";
+import { applyChecklistDraftAccount } from "../checklist-drafts";
 import { writeSessionToken } from "../session";
 import type { NativeViewer, NativeWorkspace } from "../types";
 
@@ -40,6 +42,10 @@ export function SignInScreen({
         setError(result.error);
         return;
       }
+      await applyChecklistDraftAccount(secureChecklistDraftStorage, {
+        businessId: result.workspace.businessId,
+        membershipId: result.workspace.membershipId,
+      });
       await writeSessionToken(result.session.token);
       onSignedIn({
         token: result.session.token,

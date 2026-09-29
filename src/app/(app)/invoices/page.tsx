@@ -62,7 +62,7 @@ function rangeFilterStart(preset: string | undefined, now: Date) {
   return null;
 }
 
-const LINE_ITEM_SELECT = { description: true } as const;
+const LINE_ITEM_SELECT = { description: true, optionId: true } as const;
 
 export default async function InvoicesPage({
   searchParams,
@@ -175,11 +175,23 @@ export default async function InvoicesPage({
             property: {
               select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true },
             },
+            businessId: true,
+            approvedEstimateOptionId: true,
+            approvedEstimateOption: {
+              select: {
+                businessId: true,
+                lineItems: {
+                  take: 1,
+                  orderBy: { createdAt: "asc" },
+                  select: { description: true },
+                },
+              },
+            },
             approvedEstimateVersion: {
-              select: { lineItems: { take: 1, orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } },
+              select: { lineItems: { take: 8, orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } },
             },
             estimate: {
-              select: { lineItems: { take: 1, orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } },
+              select: { lineItems: { take: 8, orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } },
             },
           },
         },

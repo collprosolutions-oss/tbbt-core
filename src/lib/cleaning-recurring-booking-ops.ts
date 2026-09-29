@@ -101,6 +101,7 @@ const SOURCE_JOB_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   scheduledDurationMinutes: true,
   pickupDurationMinutes: true,
   leadSource: true,
@@ -172,6 +173,7 @@ export type RecurringBookingOccurrence = {
   propertyId: string | null;
   estimateId: string | null;
   approvedEstimateVersionId: string | null;
+  approvedEstimateOptionId: string | null;
   recurrenceSourceJobId: string | null;
   nextBookingSourceJobId: string | null;
   correctiveCleanSourceJobId: string | null;
@@ -201,6 +203,7 @@ const OCCURRENCE_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   recurrenceSourceJobId: true,
   nextBookingSourceJobId: true,
   correctiveCleanSourceJobId: true,
@@ -283,6 +286,7 @@ function selectedScopeBinding(job: SourceJob, businessId: string) {
   return {
     estimateId: estimate?.id ?? null,
     approvedEstimateVersionId: approvedVersion?.id ?? null,
+    approvedEstimateOptionId: approvedVersion ? job.approvedEstimateOptionId ?? null : null,
   };
 }
 
@@ -530,6 +534,7 @@ async function materializeUpcoming(
         propertyId: bindings.property.id,
         estimateId: bindings.scope.estimateId,
         approvedEstimateVersionId: bindings.scope.approvedEstimateVersionId,
+        approvedEstimateOptionId: bindings.scope.approvedEstimateOptionId,
         projectToken: randomUUID(),
         status: "SCHEDULED",
         scheduledAt,
