@@ -309,6 +309,8 @@ model Business {
   jobProblemReports           JobProblemReport[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
+  timeCorrectionRequests   TimeCorrectionRequest[]
+  timeCorrectionDecisions  TimeCorrectionDecision[]
   timesheetWeeks           TimesheetWeek[]
   payrollRuns              PayrollRun[]
   payrollRunItems          PayrollRunItem[]
@@ -569,6 +571,8 @@ model Membership {
   /// Adjustments this membership authored (owner/admin corrections, or a
   /// MEMBER's own correction request). Not the entries they worked.
   authoredAdjustments TimeEntryAdjustment[] @relation("TimeEntryAdjustmentActor")
+  requestedTimeCorrections TimeCorrectionRequest[] @relation("TimeCorrectionRequester")
+  timeCorrectionDecisions  TimeCorrectionDecision[] @relation("TimeCorrectionDecisionActor")
   approvedTimesheets  TimesheetWeek[]       @relation("TimesheetWeekApprover")
   payrollRunItems     PayrollRunItem[]
   payrollRunEvents    PayrollRunEvent[]     @relation("PayrollRunEventActor")
@@ -2068,6 +2072,7 @@ model TimeEntry {
   membership Membership             @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   job        Job?                   @relation(fields: [jobId], references: [id], onDelete: SetNull)
   adjustments TimeEntryAdjustment[]
+  correctionRequests TimeCorrectionRequest[]
 
   @@index([businessId])
   @@index([membershipId])
@@ -2077,14 +2082,15 @@ model TimeEntry {
 }
 
 /// Auditable change history for a TimeEntry. Created on every create,
-/// edit, correction-request, approve, and reopen. Application code must
-/// never update or delete an existing row -- append only.
+/// edit, correction-request, owner decision, approve, and reopen.
+/// Application code must never update or delete an existing row --
+/// append only.
 model TimeEntryAdjustment {
   id                String   @id @default(cuid())
   businessId        String
   timeEntryId       String
   actorMembershipId String
-  /// CREATE | UPDATE | CORRECT | CORRECTION_REQUEST | APPROVE | REOPEN
+  /// CREATE | UPDATE | CORRECT | CORRECTION_REQUEST | CORRECTION_DECLINED | APPROVE | REOPEN
   action            String
   reason            String?
   previousJson      Json?
@@ -2097,6 +2103,57 @@ model TimeEntryAdjustment {
 
   @@index([businessId])
   @@index([timeEntryId])
+}
+
+/// Worker request to correct their own recorded TimeEntry. Proposed
+/// times and the original clock live here so an OWNER decision never
+/// silently rewrites the entry, an approved week, or a payroll result.
+/// status: PENDING | ACCEPTED | DECLINED
+model TimeCorrectionRequest {
+  id                      String   @id @default(cuid())
+  businessId              String
+  timeEntryId             String
+  requestedByMembershipId String
+  status                  String   @default("PENDING")
+  reason                  String
+  originalStartedAt       DateTime
+  originalEndedAt         DateTime
+  proposedStartedAt       DateTime
+  proposedEndedAt         DateTime
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  timeEntry   TimeEntry                @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  requestedBy Membership               @relation("TimeCorrectionRequester", fields: [requestedByMembershipId], references: [id], onDelete: Cascade)
+  decisions   TimeCorrectionDecision[]
+
+  @@index([businessId])
+  @@index([timeEntryId])
+  @@index([businessId, status])
+  @@index([requestedByMembershipId])
+}
+
+/// Append-only OWNER decision for one TimeCorrectionRequest. One row
+/// per request (unique requestId). Application code must never update
+/// or delete an existing row.
+model TimeCorrectionDecision {
+  id                String   @id @default(cuid())
+  businessId        String
+  requestId         String
+  actorMembershipId String
+  /// ACCEPTED | DECLINED
+  decision          String
+  reason            String?
+  createdAt         DateTime @default(now())
+
+  business Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  request  TimeCorrectionRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor    Membership            @relation("TimeCorrectionDecisionActor", fields: [actorMembershipId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId])
+  @@index([businessId])
+  @@index([actorMembershipId])
 }
 
 /// Weekly approval unit for one worker in one business. Payroll Ready

@@ -1337,6 +1337,27 @@ check(
       localNames.indexOf("20260928200000_estimate_line_template_archive"),
 );
 
+const timeCorrectionRequestsMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010000_time_correction_requests/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Time correction request migration is additive and after estimate template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"TimeEntry"|UPDATE\s+"TimesheetWeek"|UPDATE\s+"PayrollRun"/i.test(
+    timeCorrectionRequestsMigration,
+  ) &&
+    timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionRequest"') &&
+    timeCorrectionRequestsMigration.includes('CREATE TABLE IF NOT EXISTS "TimeCorrectionDecision"') &&
+    timeCorrectionRequestsMigration.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.includes("20260929010000_time_correction_requests") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_time_correction_requests"),
+);
+
 check(
   "OWNER studio reminder SMS destination migration is additive and after #204",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&

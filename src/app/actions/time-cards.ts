@@ -6,7 +6,10 @@
  * businessId. OWNER/ADMIN management mutations require
  * CAPABILITIES.MANAGE_TIME_CARDS. MEMBER may only clock themselves
  * (and only onto an assigned Job for JOB time) -- that gate lives in
- * src/lib/time-card-ops.ts.
+ * src/lib/time-card-ops.ts. Worker time-correction requests stay on
+ * the caller's own recorded entry. OWNER accept/decline uses
+ * CAPABILITIES.DECIDE_TIME_CORRECTIONS and never silently rewrites an
+ * approved week or payroll snapshot.
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
@@ -20,6 +23,7 @@ import {
   clockOutTime,
   correctTimeEntry,
   createManualTimeEntry,
+  decideTimeCorrectionRequest,
   reopenTimesheetWeek,
   requestTimeCorrection,
   timeCardErrorMessage,
@@ -161,12 +165,55 @@ export async function requestTimeCorrectionAction(
     const access = await requireOperatingBusinessAccess();
     const timeEntryId = readString(formData, "timeEntryId");
     const reason = readString(formData, "reason");
+    const proposedStartedAt = parseDateTimeInput(
+      readString(formData, "proposedStartDate"),
+      readString(formData, "proposedStartTime"),
+    );
+    const proposedEndedAt = parseDateTimeInput(
+      readString(formData, "proposedEndDate"),
+      readString(formData, "proposedEndTime"),
+    );
     if (!timeEntryId) return { error: "That time entry could not be found." };
-    await requestTimeCorrection(prisma, access, { timeEntryId, reason });
-    revalidateTimeCards();
-    return { message: "Correction requested." };
+    if (!proposedStartedAt || !proposedEndedAt) {
+      return { error: "Enter the proposed start and end times." };
+    }
+    const result = await requestTimeCorrection(prisma, access, {
+      timeEntryId,
+      reason,
+      proposedStartedAt,
+      proposedEndedAt,
+    });
+    revalidateTimeCards(result.entry.jobId);
+    return { message: "Correction requested. The original time stays until an owner decides." };
   } catch (error) {
     return { error: timeCardErrorMessage(error, "Could not request that correction.") };
+  }
+}
+
+export async function decideTimeCorrectionRequestAction(
+  _prev: TimeCardActionState,
+  formData: FormData,
+): Promise<TimeCardActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const requestId = readString(formData, "requestId");
+    const decision = readString(formData, "decision");
+    const reason = readString(formData, "reason") || null;
+    if (!requestId) return { error: "That correction request could not be found." };
+    const result = await decideTimeCorrectionRequest(prisma, access, {
+      requestId,
+      decision,
+      reason,
+    });
+    revalidateTimeCards(result.entry.jobId);
+    return {
+      message:
+        result.decision.decision === "ACCEPTED"
+          ? "Correction accepted. The original request and decision are kept."
+          : "Correction declined. The original time was not changed.",
+    };
+  } catch (error) {
+    return { error: timeCardErrorMessage(error, "Could not decide that correction request.") };
   }
 }
 

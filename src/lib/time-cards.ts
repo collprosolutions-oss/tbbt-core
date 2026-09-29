@@ -42,10 +42,49 @@ export const TIME_ADJUSTMENT_ACTIONS = [
   "UPDATE",
   "CORRECT",
   "CORRECTION_REQUEST",
+  "CORRECTION_DECLINED",
   "APPROVE",
   "REOPEN",
 ] as const;
 export type TimeAdjustmentAction = (typeof TIME_ADJUSTMENT_ACTIONS)[number];
+
+export const TIME_CORRECTION_REQUEST_STATUSES = ["PENDING", "ACCEPTED", "DECLINED"] as const;
+export type TimeCorrectionRequestStatus = (typeof TIME_CORRECTION_REQUEST_STATUSES)[number];
+
+export const TIME_CORRECTION_DECISIONS = ["ACCEPTED", "DECLINED"] as const;
+export type TimeCorrectionDecisionValue = (typeof TIME_CORRECTION_DECISIONS)[number];
+
+export const TIME_CORRECTION_STATUS_LABELS: Record<TimeCorrectionRequestStatus, string> = {
+  PENDING: "Pending owner",
+  ACCEPTED: "Accepted",
+  DECLINED: "Declined",
+};
+
+export function isTimeCorrectionRequestStatus(value: string): value is TimeCorrectionRequestStatus {
+  return (TIME_CORRECTION_REQUEST_STATUSES as readonly string[]).includes(value);
+}
+
+export function isTimeCorrectionDecision(value: string): value is TimeCorrectionDecisionValue {
+  return (TIME_CORRECTION_DECISIONS as readonly string[]).includes(value);
+}
+
+/**
+ * A worker may request a correction only on their own stopped, unapproved
+ * recorded time. Approved weeks stay frozen until an owner reopens them.
+ */
+export function canRequestTimeCorrection(input: {
+  entryStatus: string;
+  endedAt: Date | null;
+  weekStatus?: string | null;
+}): { ok: boolean; error?: string } {
+  if (input.entryStatus === "APPROVED" || input.weekStatus === "APPROVED") {
+    return { ok: false, error: "That week is approved. Ask an owner to reopen it before requesting a correction." };
+  }
+  if (input.entryStatus === "RUNNING" || input.endedAt == null) {
+    return { ok: false, error: "Stop the clock before requesting a correction." };
+  }
+  return { ok: true };
+}
 
 export const TIMESHEET_WEEK_STATUSES = ["OPEN", "APPROVED"] as const;
 export type TimesheetWeekStatus = (typeof TIMESHEET_WEEK_STATUSES)[number];

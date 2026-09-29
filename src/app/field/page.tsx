@@ -1,16 +1,25 @@
 import type { Metadata } from "next";
 import { FieldJobCard } from "@/components/field/field-job-card";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
+import { FieldTimeCorrectionRequests } from "@/components/field/field-time-correction-requests";
 import { FIELD_JOB_SELECT, groupFieldJobs } from "@/lib/field-jobs";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
-import { formatISODate, startOfDay } from "@/lib/schedule";
+import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
 import { prisma } from "@/lib/prisma";
 import { calculateDailyCapacity } from "@/lib/workforce-capacity";
 import { capacityJobsFromRows, loadSchedulingPolicy, loadWorkforceMembers } from "@/lib/workforce-data";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
-import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
+import {
+  TIME_ACTIVITY_LABELS,
+  canRequestTimeCorrection,
+  formatDateInput,
+  formatTimeInput,
+  isTimeActivityType,
+  isTimeCorrectionRequestStatus,
+  weekRange,
+} from "@/lib/time-cards";
 
 export const metadata: Metadata = {
   title: "My Jobs",
@@ -58,6 +67,35 @@ export default async function FieldHomePage() {
       })),
     ),
     member: self,
+  });
+  const { start: recentStart } = weekRange(addDays(new Date(), -7, timeZone), timeZone);
+  const ownEntries = await prisma.timeEntry.findMany({
+    where: {
+      businessId: field.businessId,
+      membershipId: field.membershipId,
+      endedAt: { not: null },
+      startedAt: { gte: recentStart },
+    },
+    include: {
+      job: {
+        select: {
+          customer: { select: { name: true } },
+          property: { select: { addressLine1: true } },
+        },
+      },
+      correctionRequests: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+    },
+    orderBy: { startedAt: "desc" },
+    take: 12,
+  });
+  const ownWeeks = await prisma.timesheetWeek.findMany({
+    where: {
+      businessId: field.businessId,
+      membershipId: field.membershipId,
+    },
   });
   const running = await prisma.timeEntry.findFirst({
     where: {
@@ -110,6 +148,51 @@ export default async function FieldHomePage() {
           id: job.id,
           label: job.customer?.name ?? job.property?.addressLine1 ?? "Assigned job",
         }))}
+      />
+
+      <FieldTimeCorrectionRequests
+        entries={ownEntries.flatMap((entry) => {
+          if (!entry.endedAt) return [];
+          const week = ownWeeks.find(
+            (row) =>
+              row.weekStartedAt.getTime() === weekRange(entry.startedAt, timeZone).start.getTime(),
+          );
+          const latest = entry.correctionRequests[0];
+          const requestStatus =
+            latest && isTimeCorrectionRequestStatus(latest.status) ? latest.status : null;
+          const gate = canRequestTimeCorrection({
+            entryStatus: entry.status,
+            endedAt: entry.endedAt,
+            weekStatus: week?.status,
+          });
+          const canRequest = gate.ok && requestStatus !== "PENDING";
+          return [
+            {
+              id: entry.id,
+              activityLabel:
+                TIME_ACTIVITY_LABELS[
+                  isTimeActivityType(entry.activityType) ? entry.activityType : "OTHER"
+                ],
+              jobLabel: entry.job?.customer?.name ?? entry.job?.property?.addressLine1 ?? null,
+              clockLabel: `${formatTime(entry.startedAt, timeZone)} – ${formatTime(entry.endedAt, timeZone)}`,
+              startDate: formatDateInput(entry.startedAt),
+              startTime: formatTimeInput(entry.startedAt),
+              endDate: formatDateInput(entry.endedAt),
+              endTime: formatTimeInput(entry.endedAt),
+              canRequest,
+              blockedReason: canRequest
+                ? null
+                : requestStatus === "PENDING"
+                  ? "Waiting for the owner to accept or decline."
+                  : (gate.error ?? null),
+              requestStatus,
+              requestReason: latest?.reason ?? null,
+              proposedClockLabel: latest
+                ? `${formatTime(latest.proposedStartedAt, timeZone)} – ${formatTime(latest.proposedEndedAt, timeZone)}`
+                : null,
+            },
+          ];
+        })}
       />
 
       <JobGroup title="Today" jobs={groups.today} emptyLabel="Nothing assigned for today." timeZone={timeZone} />

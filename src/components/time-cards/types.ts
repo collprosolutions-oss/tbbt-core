@@ -57,6 +57,22 @@ export type TimeCardAdjustment = {
   actorName: string;
 };
 
+export type TimeCardCorrectionRequest = {
+  id: string;
+  timeEntryId: string;
+  membershipId: string;
+  workerName: string;
+  status: "PENDING" | "ACCEPTED" | "DECLINED";
+  statusLabel: string;
+  reason: string;
+  originalClockLabel: string;
+  proposedClockLabel: string;
+  originalHoursLabel: string;
+  proposedHoursLabel: string;
+  createdAtLabel: string;
+  decisionLabel: string | null;
+};
+
 export type TimeCardKpi = {
   label: string;
   value: string;

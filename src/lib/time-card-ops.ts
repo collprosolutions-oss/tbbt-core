@@ -16,6 +16,7 @@ import {
   approvalSnapshot,
   canApproveWeek,
   canEditTimeEntry,
+  canRequestTimeCorrection,
   coerceHourlyWage,
   missingApprovalSnapshotPatch,
   hasOverlappingEntry,
@@ -29,6 +30,7 @@ import {
   type AssignedFieldActivityType,
   type TimeActivityType,
   type TimeAdjustmentAction,
+  type TimeCorrectionDecisionValue,
   type TimeEntrySource,
 } from "@/lib/time-cards";
 
@@ -84,6 +86,28 @@ const COMPLETION_CLOCK_ORDER_ERROR =
 const STOP_CLOCK_ORDER_ERROR =
   "Job time cannot be stopped because the stop time is not after the clock-in start.";
 const AUTOMATIC_CLOCK_TRANSITION_REASON = "Closed automatically when a new activity started.";
+const APPROVED_WEEK_CORRECTION_REQUEST_ERROR =
+  "That week is approved. Ask an owner to reopen it before requesting a correction.";
+const APPROVED_WEEK_CORRECTION_DECIDE_ERROR =
+  "That week is approved. Reopen it before accepting a time correction.";
+const DUPLICATE_PENDING_CORRECTION_ERROR =
+  "A correction request is already waiting for the owner.";
+const DUPLICATE_CORRECTION_DECISION_ERROR =
+  "That correction request already has an owner decision.";
+const MISSING_CORRECTION_REQUEST_ERROR = "That correction request could not be found.";
+
+type TenantTimeCorrectionRequestRow = {
+  id: string;
+  businessId: string;
+  timeEntryId: string;
+  requestedByMembershipId: string;
+  status: string;
+  reason: string;
+  originalStartedAt: Date;
+  originalEndedAt: Date;
+  proposedStartedAt: Date;
+  proposedEndedAt: Date;
+};
 
 type TenantJobRow = {
   id: string;
@@ -638,19 +662,32 @@ export async function correctTimeEntry(
   });
 }
 
-/** MEMBER (own entry) or owner/admin: flag an unapproved entry for review. */
+export type RequestTimeCorrectionInput = {
+  timeEntryId: string;
+  reason: string;
+  proposedStartedAt: Date;
+  proposedEndedAt: Date;
+};
+
+/**
+ * Worker request to correct their own recorded time. Proposed times and
+ * the original clock are stored on TimeCorrectionRequest. The TimeEntry
+ * itself is not rewritten here -- an OWNER must accept or decline.
+ */
 export async function requestTimeCorrection(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { timeEntryId: string; reason: string },
+  input: RequestTimeCorrectionInput,
 ) {
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   const reason = input.reason.trim();
   if (!reason) {
     throw new TimeCardError("Describe the correction you need.");
   }
+  if (input.proposedEndedAt <= input.proposedStartedAt) {
+    throw new TimeCardError("Proposed end time must be after the proposed start time.");
+  }
   const actorMembershipId = access.workspace.membership.id;
-  const actorRole = access.workspace.role;
 
   return db.$transaction(async (tx) => {
     const entry = await tx.timeEntry.findFirst({
@@ -660,34 +697,234 @@ export async function requestTimeCorrection(
       throw new TimeCardError("That time entry could not be found.");
     }
     access.assertOwned(entry);
-    if (actorRole === "MEMBER" && entry.membershipId !== actorMembershipId) {
+    if (entry.membershipId !== actorMembershipId) {
       throw new ForbiddenError();
     }
-    if (actorRole !== "MEMBER") {
-      requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
+    const gate = canRequestTimeCorrection({
+      entryStatus: entry.status,
+      endedAt: entry.endedAt,
+    });
+    if (!gate.ok) {
+      throw new TimeCardError(gate.error ?? APPROVED_WEEK_CORRECTION_REQUEST_ERROR);
     }
-    if (!canEditTimeEntry(entry.status)) {
-      throw new TimeCardError("Approved time cannot be changed. Ask an owner to reopen the week.");
+    if (!entry.endedAt) {
+      throw new TimeCardError("Stop the clock before requesting a correction.");
+    }
+    try {
+      await assertWeekEditable(tx, access.businessId, entry.membershipId, entry.startedAt);
+      await assertWeekEditable(tx, access.businessId, entry.membershipId, input.proposedStartedAt);
+    } catch (error) {
+      if (isTimeCardError(error)) {
+        throw new TimeCardError(APPROVED_WEEK_CORRECTION_REQUEST_ERROR);
+      }
+      throw error;
+    }
+
+    const pending = await tx.timeCorrectionRequest.findFirst({
+      where: {
+        businessId: access.businessId,
+        timeEntryId: entry.id,
+        status: "PENDING",
+      },
+    });
+    if (pending) {
+      throw new TimeCardError(DUPLICATE_PENDING_CORRECTION_ERROR);
+    }
+
+    const overlaps = await overlappingEntries(
+      tx,
+      access.businessId,
+      entry.membershipId,
+      input.proposedStartedAt,
+      input.proposedEndedAt,
+      entry.id,
+    );
+    if (overlaps.length > 0) {
+      throw new TimeCardError("That correction would overlap another entry.");
     }
 
     const previous = toAuditSnapshot(entry);
-    const updated = await tx.timeEntry.update({
-      where: { id: entry.id },
+    const request = await tx.timeCorrectionRequest.create({
       data: {
-        status: "NEEDS_REVIEW",
-        note: entry.note ? `${entry.note}\nCorrection requested: ${reason}` : reason,
+        businessId: access.businessId,
+        timeEntryId: entry.id,
+        requestedByMembershipId: actorMembershipId,
+        status: "PENDING",
+        reason,
+        originalStartedAt: entry.startedAt,
+        originalEndedAt: entry.endedAt,
+        proposedStartedAt: input.proposedStartedAt,
+        proposedEndedAt: input.proposedEndedAt,
       },
     });
     await writeAdjustment(tx, {
       businessId: access.businessId,
-      timeEntryId: updated.id,
+      timeEntryId: entry.id,
       actorMembershipId,
       action: "CORRECTION_REQUEST",
       reason,
       previous,
-      next: toAuditSnapshot(updated),
+      next: {
+        ...previous,
+        startedAt: input.proposedStartedAt.toISOString(),
+        endedAt: input.proposedEndedAt.toISOString(),
+      },
     });
-    return updated;
+    const unchanged = await tx.timeEntry.findFirst({
+      where: { id: entry.id, businessId: access.businessId },
+    });
+    if (!unchanged) {
+      throw new TimeCardError("That time entry could not be found.");
+    }
+    return { request, entry: unchanged };
+  });
+}
+
+async function lockTenantOwnedTimeCorrectionRequest(
+  db: Db,
+  businessId: string,
+  requestId: string,
+): Promise<TenantTimeCorrectionRequestRow | null> {
+  const rows = await db.$queryRaw<TenantTimeCorrectionRequestRow[]>`
+    SELECT id, "businessId", "timeEntryId", "requestedByMembershipId", status, reason,
+           "originalStartedAt", "originalEndedAt", "proposedStartedAt", "proposedEndedAt"
+    FROM "TimeCorrectionRequest"
+    WHERE id = ${requestId}
+      AND "businessId" = ${businessId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+export type DecideTimeCorrectionRequestInput = {
+  requestId: string;
+  decision: string;
+  reason?: string | null;
+};
+
+/**
+ * OWNER accept or decline. Accept applies the stored proposed times only
+ * when the week is still open. Decline leaves the original TimeEntry
+ * untouched. A second decision is refused. Approved weeks and locked
+ * payroll snapshots are never rewritten from this path.
+ */
+export async function decideTimeCorrectionRequest(
+  db: PrismaClient,
+  access: BusinessAccess,
+  input: DecideTimeCorrectionRequestInput,
+) {
+  await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
+  requireBusinessCapability(access, CAPABILITIES.DECIDE_TIME_CORRECTIONS);
+  if (input.decision !== "ACCEPTED" && input.decision !== "DECLINED") {
+    throw new TimeCardError("Choose accept or decline.");
+  }
+  const decision = input.decision as TimeCorrectionDecisionValue;
+  const decisionReason = input.reason?.trim() || null;
+  const actorMembershipId = access.workspace.membership.id;
+
+  return db.$transaction(async (tx) => {
+    const request = await lockTenantOwnedTimeCorrectionRequest(tx, access.businessId, input.requestId);
+    if (!request) {
+      throw new TimeCardError(MISSING_CORRECTION_REQUEST_ERROR);
+    }
+    access.assertOwned(request);
+    if (request.status !== "PENDING") {
+      throw new TimeCardError(DUPLICATE_CORRECTION_DECISION_ERROR);
+    }
+
+    const existingDecision = await tx.timeCorrectionDecision.findUnique({
+      where: { requestId: request.id },
+    });
+    if (existingDecision) {
+      throw new TimeCardError(DUPLICATE_CORRECTION_DECISION_ERROR);
+    }
+
+    const entry = await tx.timeEntry.findFirst({
+      where: { id: request.timeEntryId, businessId: access.businessId },
+    });
+    if (!entry) {
+      throw new TimeCardError("That time entry could not be found.");
+    }
+    access.assertOwned(entry);
+
+    if (decision === "ACCEPTED") {
+      if (!canEditTimeEntry(entry.status)) {
+        throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
+      }
+      try {
+        await assertWeekEditable(tx, access.businessId, entry.membershipId, entry.startedAt);
+        await assertWeekEditable(tx, access.businessId, entry.membershipId, request.proposedStartedAt);
+      } catch (error) {
+        if (isTimeCardError(error)) {
+          throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
+        }
+        throw error;
+      }
+      if (request.proposedEndedAt <= request.proposedStartedAt) {
+        throw new TimeCardError("Proposed end time must be after the proposed start time.");
+      }
+      const overlaps = await overlappingEntries(
+        tx,
+        access.businessId,
+        entry.membershipId,
+        request.proposedStartedAt,
+        request.proposedEndedAt,
+        entry.id,
+      );
+      if (overlaps.length > 0) {
+        throw new TimeCardError("That correction would overlap another entry.");
+      }
+
+      const previous = toAuditSnapshot(entry);
+      const updated = await tx.timeEntry.update({
+        where: { id: entry.id },
+        data: {
+          startedAt: request.proposedStartedAt,
+          endedAt: request.proposedEndedAt,
+        },
+      });
+      await writeAdjustment(tx, {
+        businessId: access.businessId,
+        timeEntryId: updated.id,
+        actorMembershipId,
+        action: "CORRECT",
+        reason: decisionReason ?? request.reason,
+        previous,
+        next: toAuditSnapshot(updated),
+      });
+    } else {
+      const snapshot = toAuditSnapshot(entry);
+      await writeAdjustment(tx, {
+        businessId: access.businessId,
+        timeEntryId: entry.id,
+        actorMembershipId,
+        action: "CORRECTION_DECLINED",
+        reason: decisionReason ?? "Owner declined the requested time correction.",
+        previous: snapshot,
+        next: snapshot,
+      });
+    }
+
+    const decided = await tx.timeCorrectionRequest.update({
+      where: { id: request.id },
+      data: { status: decision },
+    });
+    const decisionRow = await tx.timeCorrectionDecision.create({
+      data: {
+        businessId: access.businessId,
+        requestId: request.id,
+        actorMembershipId,
+        decision,
+        reason: decisionReason,
+      },
+    });
+    const nextEntry = await tx.timeEntry.findFirst({
+      where: { id: entry.id, businessId: access.businessId },
+    });
+    if (!nextEntry) {
+      throw new TimeCardError("That time entry could not be found.");
+    }
+    return { request: decided, decision: decisionRow, entry: nextEntry };
   });
 }
 
