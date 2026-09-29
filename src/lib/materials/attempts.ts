@@ -9,6 +9,7 @@ export const MATERIAL_ATTEMPT_KINDS = [
   "CONVERT_TAKEOFF",
   "CREATE_DRAFT_PO",
   "RECORD_PURCHASE",
+  "RECORD_PO_RECEIPT",
 ] as const;
 export type MaterialAttemptKind = (typeof MATERIAL_ATTEMPT_KINDS)[number];
 

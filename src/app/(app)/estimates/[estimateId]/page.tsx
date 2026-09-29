@@ -1108,6 +1108,7 @@ export default async function EstimateBuilderPage({
         variance={purchaseWorkspace.variance}
         suppliers={purchaseWorkspace.suppliers}
         canConvertTakeoff
+        canRecordReceipt={access.workspace.role === "OWNER"}
       />
 
       {estimate.lineItems.length > 0 && composedTerms.length > 0 ? (

@@ -25,6 +25,7 @@ export {
   separateMaterialMoneyLayers,
 } from "@/lib/materials/markup";
 export { listAssignedJobPickupView, listJobMaterialPickupRequirements } from "@/lib/materials/pickup";
+export { recordPurchaseOrderReceipt } from "@/lib/materials/receipt";
 export { appendMaterialPriceHistory, listMaterialPriceHistory } from "@/lib/materials/price-history";
 export {
   addPurchaseListItem,
@@ -49,11 +50,15 @@ export {
   PURCHASE_ORDER_STATUS_LABELS,
   SUPPLIER_ADAPTER_STATES,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  canRecordPurchaseOrderReceipt,
   canTransitionPurchaseOrder,
   isMaterialPriceSource,
   isPurchaseItemStatus,
   isPurchaseOrderStatus,
   normalizeMaterialName,
+  purchaseOrderReceiptQuantities,
+  purchaseOrderStatusFromReceipts,
+  PURCHASE_ORDER_RECEIPT_STATUSES,
   PURCHASE_ORDER_TRANSITIONS,
 } from "@/lib/materials/types";
 export type {
@@ -63,6 +68,7 @@ export type {
   MaterialPriceSource,
   MaterialVarianceRow,
   PurchaseItemStatus,
+  PurchaseOrderReceiptQuantities,
   PurchaseOrderStatus,
   SupplierAdapterState,
 } from "@/lib/materials/types";

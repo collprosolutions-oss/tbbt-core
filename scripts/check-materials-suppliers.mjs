@@ -139,6 +139,7 @@ try {
   const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
   const takeoffSrc = readRepo("src/lib/materials/takeoff.ts");
   const expenseSrc = readRepo("src/lib/materials/expense-link.ts");
+  const receiptSrc = readRepo("src/lib/materials/receipt.ts");
   const actionsSrc = readRepo("src/app/actions/materials.ts");
   const fieldCard = readRepo("src/components/field/assigned-job-pickup-card.tsx");
   check(
@@ -187,6 +188,7 @@ try {
     purchaseSrc,
     takeoffSrc,
     expenseSrc,
+    receiptSrc,
     actionsSrc,
   ];
   check(

@@ -129,6 +129,7 @@
     "test:workforce-capacity": "node --experimental-strip-types scripts/check-workforce-capacity.mjs",
     "test:workforce-staffing": "node --experimental-strip-types scripts/check-workforce-staffing.mjs",
     "test:materials-suppliers": "node --experimental-strip-types scripts/check-materials-suppliers.mjs",
+    "test:purchase-order-receipts": "node --experimental-strip-types scripts/check-purchase-order-receipts.mjs",
     "test:communications-department": "node --experimental-strip-types scripts/check-communications-department.mjs",
     "test:receptionist-recovery-center": "node --experimental-strip-types scripts/check-receptionist-recovery-center.mjs",
     "test:growth-department": "node --experimental-strip-types scripts/check-growth-department.mjs",

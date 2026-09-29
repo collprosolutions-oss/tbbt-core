@@ -3956,7 +3956,13 @@ model MaterialPurchaseOrderItem {
   businessId         String
   purchaseOrderId    String
   purchaseListItemId String
+  /// Ordered quantity copied from the purchase list when the PO was drafted.
   quantity           Decimal
+  /// Cumulative OWNER-recorded received quantity. Distinct from
+  /// MaterialPurchaseListItem.quantityPurchased and from worker
+  /// quantityPickedUp on the native pickup PR. Default 0 — never inferred.
+  quantityReceived   Decimal  @default(0)
+  lastReceivedAt     DateTime?
   unitCost           Decimal?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -3971,13 +3977,14 @@ model MaterialPurchaseOrderItem {
   @@index([purchaseListItemId])
 }
 
-/// Browser/form retry identity for convert-takeoff, draft PO, and
-/// record-purchase. Never authorizes; businessId comes from the session.
+/// Browser/form retry identity for convert-takeoff, draft PO,
+/// record-purchase, and record-PO-receipt. Never authorizes; businessId
+/// comes from the session.
 model MaterialOperationAttempt {
   id                 String   @id @default(cuid())
   businessId         String
   attemptKey         String
-  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE
+  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE | RECORD_PO_RECEIPT
   kind               String
   purchaseListId     String?
   purchaseOrderId    String?

@@ -208,7 +208,12 @@ export async function loadPurchaseListBoard(
       purchaseOrders: {
         include: {
           supplier: { select: { id: true, name: true } },
-          items: true,
+          items: {
+            include: {
+              purchaseListItem: { select: { id: true, name: true, unit: true } },
+            },
+            orderBy: { createdAt: "asc" },
+          },
         },
         orderBy: { createdAt: "asc" },
       },

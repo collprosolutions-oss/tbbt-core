@@ -8,6 +8,7 @@ import { listMaterialPriceHistory } from "@/lib/materials/price-history";
 import { ensurePurchaseList, loadPurchaseListBoard } from "@/lib/materials/purchase";
 import { materialEstimateVsActual } from "@/lib/materials/variance";
 import type { MaterialsCatalogRow, MaterialsSupplierRow } from "@/components/materials/materials-workspace";
+import { purchaseOrderReceiptQuantities } from "@/lib/materials/types";
 import type {
   MaterialVarianceView,
   PurchaseListItemView,
@@ -105,6 +106,21 @@ export async function loadPurchaseWorkspace(
     id: order.id,
     status: order.status,
     supplierName: order.supplier?.name ?? null,
+    items: order.items.map((item) => {
+      const receipt = purchaseOrderReceiptQuantities({
+        quantityOrdered: item.quantity.toString(),
+        quantityReceived: item.quantityReceived.toString(),
+      });
+      return {
+        id: item.id,
+        name: item.purchaseListItem.name,
+        unit: item.purchaseListItem.unit,
+        quantityOrdered: item.quantity.toString(),
+        quantityReceived: item.quantityReceived.toString(),
+        quantityRemaining: String(receipt.quantityRemaining),
+        fullyReceived: receipt.fullyReceived,
+      };
+    }),
   }));
   const varianceRows: MaterialVarianceView[] = variance.map((row) => ({
     name: row.name,

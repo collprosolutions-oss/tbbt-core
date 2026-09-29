@@ -78,6 +78,58 @@ export function canTransitionPurchaseOrder(
   return PURCHASE_ORDER_TRANSITIONS[from].includes(to);
 }
 
+/** Statuses that accept an OWNER-recorded delivery against an existing PO. */
+export const PURCHASE_ORDER_RECEIPT_STATUSES = [
+  "ORDERED_EXTERNALLY",
+  "PARTIALLY_RECEIVED",
+] as const;
+export type PurchaseOrderReceiptStatus = (typeof PURCHASE_ORDER_RECEIPT_STATUSES)[number];
+
+export function canRecordPurchaseOrderReceipt(status: string) {
+  return (PURCHASE_ORDER_RECEIPT_STATUSES as readonly string[]).includes(status);
+}
+
+export type PurchaseOrderReceiptQuantities = {
+  quantityOrdered: number;
+  quantityReceived: number;
+  quantityRemaining: number;
+  fullyReceived: boolean;
+};
+
+/**
+ * Ordered-versus-received math for one PO line. `quantityReceived` is the
+ * OWNER-recorded PO receipt total — not purchase-list quantityPurchased
+ * and not worker quantityPickedUp from the native pickup PR.
+ */
+export function purchaseOrderReceiptQuantities(input: {
+  quantityOrdered: string | number;
+  quantityReceived?: string | number | null;
+}): PurchaseOrderReceiptQuantities {
+  const quantityOrdered = Number(input.quantityOrdered);
+  const quantityReceived = Number(input.quantityReceived ?? 0);
+  const ordered = Number.isFinite(quantityOrdered) ? quantityOrdered : 0;
+  const received = Number.isFinite(quantityReceived) ? quantityReceived : 0;
+  const quantityRemaining = Math.max(0, ordered - received);
+  return {
+    quantityOrdered: ordered,
+    quantityReceived: received,
+    quantityRemaining,
+    fullyReceived: ordered > 0 && received >= ordered,
+  };
+}
+
+export function purchaseOrderStatusFromReceipts(
+  lines: ReadonlyArray<PurchaseOrderReceiptQuantities>,
+): PurchaseOrderStatus {
+  if (lines.length > 0 && lines.every((line) => line.fullyReceived)) {
+    return "RECEIVED";
+  }
+  if (lines.some((line) => line.quantityReceived > 0)) {
+    return "PARTIALLY_RECEIVED";
+  }
+  return "ORDERED_EXTERNALLY";
+}
+
 export function isMaterialPriceSource(value: unknown): value is MaterialPriceSource {
   return (
     typeof value === "string" &&
