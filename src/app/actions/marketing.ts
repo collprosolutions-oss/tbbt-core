@@ -26,11 +26,13 @@ import {
   marketingErrorMessage,
   returnMarketingStudioPackage,
   revokeJobPhotoMarketingPermission,
-  setMarketingContentPlannedFor,
+  planStudioPublicationDay,
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
 import {
+  OWNER_STUDIO_CALENDAR_MESSAGE,
   STUDIO_APPROVED_INTERNAL_MESSAGE,
+  STUDIO_PLANNED_DAY_SAVED_MESSAGE,
   STUDIO_RETURNED_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE,
@@ -296,21 +298,32 @@ export async function setStudioWeeklyReminderOwnerSmsAction(
   }
 }
 
-export async function setMarketingPlannedDateAction(
+export async function planStudioPublicationDayAction(
   _prev: MarketingActionState,
   formData: FormData,
 ): Promise<MarketingActionState> {
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
-    await setMarketingContentPlannedFor(prisma, access, {
+    if (access.workspace.role !== "OWNER") {
+      return { error: OWNER_STUDIO_CALENDAR_MESSAGE };
+    }
+    await planStudioPublicationDay(prisma, access, {
       contentId: readString(formData, "contentId"),
       plannedFor: readString(formData, "plannedFor"),
+      expectedUpdatedAt: readString(formData, "expectedUpdatedAt") || undefined,
     });
     revalidateMarketing();
-    return { message: "Internal planning date saved. This does not publish the post." };
+    return { message: STUDIO_PLANNED_DAY_SAVED_MESSAGE };
   } catch (error) {
-    return { error: marketingErrorMessage(error, "That planning date could not be saved.") };
+    return { error: marketingErrorMessage(error, "That planned publication day could not be saved.") };
   }
+}
+
+export async function setMarketingPlannedDateAction(
+  _prev: MarketingActionState,
+  formData: FormData,
+): Promise<MarketingActionState> {
+  return planStudioPublicationDayAction(_prev, formData);
 }
 
 export async function generateMarketingAiAction(

@@ -6,6 +6,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
 import { listActiveTradeCodes } from "@/lib/business-trades";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 import { rollupAttribution } from "@/lib/lead-attribution";
 import {
@@ -17,7 +18,9 @@ import {
   SOCIAL_MANUAL_COPY_MESSAGE,
   STUDIO_APPROVAL_QUEUE_LIMIT,
   STUDIO_APPROVAL_QUEUE_STATUS,
+  STUDIO_CONTENT_CALENDAR_LIMIT,
   WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
+  presentStudioContentCalendar,
   studioApprovalQueueMeta,
 } from "@/lib/marketing";
 import {
@@ -30,7 +33,7 @@ import {
   draftMarketingVariations,
   weeklyMarketingPlanFromActivity,
 } from "@/lib/ai/marketing";
-import { addDays, startOfDay, startOfWeek } from "@/lib/schedule";
+import { addDays, startOfWeek } from "@/lib/schedule";
 import { asNumber } from "@/lib/reports";
 
 function catalogIdForEstimate(
@@ -65,7 +68,7 @@ export async function loadMarketingSource(
 
   const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, contentCalendarRows, contentCalendarTotal, weeklyReminder] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -73,6 +76,7 @@ export async function loadMarketingSource(
         name: true,
         slug: true,
         tradeCode: true,
+        timezone: true,
         publicServiceAreaLabel: true,
         publicPhone: true,
         publicEmail: true,
@@ -203,8 +207,26 @@ export async function loadMarketingSource(
       },
     }),
     prisma.marketingContent.count({ where: approvalQueueWhere }),
+    prisma.marketingContent.findMany({
+      where: scope,
+      take: STUDIO_CONTENT_CALENDAR_LIMIT,
+      orderBy: [{ plannedFor: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        contentType: true,
+        title: true,
+        channelIntent: true,
+        status: true,
+        plannedFor: true,
+        exportedAt: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.marketingContent.count({ where: scope }),
     loadStudioWeeklyReminderState(prisma, businessId, now),
   ]);
+
+  const timeZone = resolveBusinessTimeZone(business);
 
   const catalogName = (id: string | null) =>
     id ? catalogItems.find((item) => item.id === id)?.name ?? null : null;
@@ -295,10 +317,15 @@ export async function loadMarketingSource(
       })),
     })),
     weeklyReminder: presentStudioWeeklyReminderForViewer(weeklyReminder, viewerRole),
+    contentCalendar: presentStudioContentCalendar({
+      rows: contentCalendarRows,
+      total: contentCalendarTotal,
+      timeZone,
+    }),
     approvalQueue: {
       ...studioApprovalQueueMeta(approvalQueueTotal),
       message: WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
-      items: approvalQueueRows.map((content) => ({
+      items: approvalQueueRows.map((content) => ({)
         id: content.id,
         contentType: content.contentType,
         title: content.title,
@@ -357,8 +384,8 @@ export async function loadMarketingSource(
     campaigns,
     weeklyPlan: weeklyContentPlan(
       contents,
-      startOfWeek(startOfDay(new Date())),
-      addDays(startOfWeek(startOfDay(new Date())), 7),
+      startOfWeek(now, timeZone),
+      addDays(startOfWeek(now, timeZone), 7, timeZone),
     ),
     draftAssist: draftMarketingContent({
       contentType: "GENERAL_POST",
