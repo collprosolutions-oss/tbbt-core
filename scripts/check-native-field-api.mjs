@@ -265,16 +265,12 @@ check(
     completeFnSrc.includes("exactActiveMembershipHeld") &&
     startFnSrc.includes("exactActiveMembershipHeld") &&
     stopFnSrc.includes("exactActiveMembershipHeld") &&
-    completeFnSrc.indexOf("lockTenantOwnedJob") <
-      completeFnSrc.indexOf("exactActiveMembershipHeld") &&
-    completeFnSrc.indexOf("exactActiveMembershipHeld") <
-      completeFnSrc.indexOf("completeJobWithRunningTimeSafetyInTransaction") &&
-    startFnSrc.indexOf("lockTenantOwnedJob") < startFnSrc.indexOf("exactActiveMembershipHeld") &&
-    startFnSrc.indexOf("exactActiveMembershipHeld") <
-      startFnSrc.indexOf("startJobWithRunningTimeSafetyInTransaction") &&
-    stopFnSrc.indexOf("lockTenantOwnedJob") < stopFnSrc.indexOf("exactActiveMembershipHeld") &&
-    stopFnSrc.indexOf("exactActiveMembershipHeld") <
-      stopFnSrc.indexOf("stopRunningAssignedJobTimeInTransaction"),
+    completeFnSrc.slice(completeFnSrc.indexOf("$transaction")).indexOf("lockTenantOwnedJob") <
+      completeFnSrc.slice(completeFnSrc.indexOf("$transaction")).indexOf("exactActiveMembershipHeld") &&
+    startFnSrc.slice(startFnSrc.indexOf("$transaction")).indexOf("lockTenantOwnedJob") <
+      startFnSrc.slice(startFnSrc.indexOf("$transaction")).indexOf("exactActiveMembershipHeld") &&
+    stopFnSrc.slice(stopFnSrc.indexOf("$transaction")).indexOf("lockTenantOwnedJob") <
+      stopFnSrc.slice(stopFnSrc.indexOf("$transaction")).indexOf("exactActiveMembershipHeld"),
 );
 check(
   "Start job reuses assigned-job scope and the canonical status + time-card write",

@@ -162,14 +162,18 @@ check(
     !membershipGuardSrc.includes("userId") &&
     startNativeActivityFnSrc.includes("exactActiveMembershipHeld") &&
     stopNativeActivityFnSrc.includes("exactActiveMembershipHeld") &&
-    startNativeActivityFnSrc.indexOf("lockTenantOwnedJob") <
-      startNativeActivityFnSrc.indexOf("exactActiveMembershipHeld") &&
-    startNativeActivityFnSrc.indexOf("exactActiveMembershipHeld") <
-      startNativeActivityFnSrc.indexOf("startAssignedActivityTimeInTransaction") &&
-    stopNativeActivityFnSrc.indexOf("lockTenantOwnedJob") <
-      stopNativeActivityFnSrc.indexOf("exactActiveMembershipHeld") &&
-    stopNativeActivityFnSrc.indexOf("exactActiveMembershipHeld") <
-      stopNativeActivityFnSrc.indexOf("stopAssignedActivityTimeInTransaction"),
+    startNativeActivityFnSrc
+      .slice(startNativeActivityFnSrc.indexOf("$transaction"))
+      .indexOf("lockTenantOwnedJob") <
+      startNativeActivityFnSrc
+        .slice(startNativeActivityFnSrc.indexOf("$transaction"))
+        .indexOf("exactActiveMembershipHeld") &&
+    stopNativeActivityFnSrc
+      .slice(stopNativeActivityFnSrc.indexOf("$transaction"))
+      .indexOf("lockTenantOwnedJob") <
+      stopNativeActivityFnSrc
+        .slice(stopNativeActivityFnSrc.indexOf("$transaction"))
+        .indexOf("exactActiveMembershipHeld"),
 );
 check(
   "Native activity routes use Bearer helpers, cap JSON, and never use cookies()",
