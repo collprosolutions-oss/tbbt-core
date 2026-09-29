@@ -130,6 +130,7 @@ export async function loadRecordedWarrantyTerms(
           where: { id: job.approvedEstimateVersionId, ...access.scope },
           select: {
             id: true,
+            businessId: true,
             lineItems: {
               orderBy: { createdAt: "asc" },
               select: { id: true, description: true },
@@ -142,6 +143,7 @@ export async function loadRecordedWarrantyTerms(
           where: { id: job.estimateId, ...access.scope },
           select: {
             id: true,
+            businessId: true,
             lineItems: {
               orderBy: { createdAt: "asc" },
               select: { id: true, description: true },
