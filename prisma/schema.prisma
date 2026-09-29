@@ -2110,6 +2110,26 @@ model InvoiceCollectionWorkItem {
   @@index([customerId])
 }
 
+/// Detection ledger for revenue-integrity backfills that joined on
+/// jobId/estimateId without businessId equality. Rows are recorded
+/// only. Application code must never use this table to reassign
+/// Invoice, Payment, or ChangeOrder ownership.
+model RevenueIntegrityBusinessIsolationFinding {
+  id                String   @id
+  category          String
+  recordTable       String
+  recordId          String
+  recordBusinessId  String
+  attachedInvoiceId String?
+  invoiceBusinessId String?
+  jobId             String?
+  jobBusinessId     String?
+  detectedAt        DateTime @default(now())
+
+  @@unique([recordTable, recordId, category])
+  @@index([category])
+}
+
 model LineItem {
   id                   String       @id @default(cuid())
   businessId           String

@@ -126,11 +126,14 @@ const contactLoaderFn = contactLoaderSrc.slice(
   contactLoaderSrc.indexOf("export async function loadActiveWorkspaceMemberships"),
 );
 check(
-  "Dashboard/workspace Business SELECT runs only after contact schema ensure",
+  "Dashboard/workspace Business SELECT runs only after a fail-closed contact schema probe",
   workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
+    !workspaceSrc.includes("$executeRaw") &&
     contactLoaderFn.includes("await ensureBusinessPublicContactSchema(db)") &&
     contactLoaderFn.indexOf("await ensureBusinessPublicContactSchema(db)") <
-      contactLoaderFn.indexOf("include: { business: true }"),
+      contactLoaderFn.indexOf("include: { business: true }") &&
+    !contactLoaderSrc.includes("ADD COLUMN IF NOT EXISTS") &&
+    !contactLoaderSrc.includes("$executeRawUnsafe"),
 );
 check(
   "Contact page metadata no longer hardcodes the CollPro phone",
@@ -361,7 +364,13 @@ try {
     },
   });
 
-  console.log("\nDB — Preview-skip-migrate recovery when contact columns are missing");
+  const invoiceBeforeMissing = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+  check(
+    "Invoice total is 200 before the missing-column probe",
+    invoiceBeforeMissing.total.toString() === "200",
+  );
+
+  console.log("\nDB — Missing contact columns fail closed (no request-path ADD COLUMN)");
   await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicPhone"`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicEmail"`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicWebsite"`);
@@ -381,41 +390,46 @@ try {
   );
 
   resetBusinessPublicContactSchemaEnsure();
-  const recoveredMemberships = await loadActiveWorkspaceMemberships(
-    prisma,
-    ownerUser.id,
-  );
+  let membershipsFailClosed = false;
+  let membershipsFailMessage = "";
+  try {
+    await loadActiveWorkspaceMemberships(prisma, ownerUser.id);
+  } catch (error) {
+    membershipsFailClosed = /fail closed/i.test(error.message);
+    membershipsFailMessage = error.message;
+  }
   check(
-    "loadActiveWorkspaceMemberships recreates the columns and returns the tenant business",
-    recoveredMemberships.length === 1 &&
-      recoveredMemberships[0].business.id === collpro.id &&
-      recoveredMemberships[0].business.publicPhone == null &&
-      recoveredMemberships[0].business.publicEmail == null &&
-      recoveredMemberships[0].business.publicWebsite == null,
+    "loadActiveWorkspaceMemberships fail-closes instead of recreating columns",
+    membershipsFailClosed && /publicPhone/i.test(membershipsFailMessage),
   );
 
-  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicPhone"`);
-  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicEmail"`);
-  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicWebsite"`);
   resetBusinessPublicContactSchemaEnsure();
-
-  await ensureBusinessPublicContactSchema(prisma);
-  const recoveredSettingsBusiness = await prisma.business.findFirst({
-    where: { id: collpro.id },
-    select: {
-      id: true,
-      publicPhone: true,
-      publicEmail: true,
-      publicWebsite: true,
-    },
-  });
+  let ensureFailClosed = false;
+  try {
+    await ensureBusinessPublicContactSchema(prisma);
+  } catch (error) {
+    ensureFailClosed = /fail closed/i.test(error.message);
+  }
   check(
-    "Settings-style Business SELECT recovers missing contact columns and leaves them empty",
-    recoveredSettingsBusiness?.id === collpro.id &&
-      recoveredSettingsBusiness.publicPhone == null &&
-      recoveredSettingsBusiness.publicEmail == null &&
-      recoveredSettingsBusiness.publicWebsite == null,
+    "ensureBusinessPublicContactSchema fail-closes when contact columns are missing",
+    ensureFailClosed,
   );
+
+  const columnsAfterFail = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'Business'
+      AND column_name IN ('publicPhone', 'publicEmail', 'publicWebsite')
+  `;
+  check(
+    "Fail-closed contact probe does not ADD the dropped columns",
+    columnsAfterFail.length === 0,
+  );
+
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" ADD COLUMN "publicPhone" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" ADD COLUMN "publicEmail" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Business" ADD COLUMN "publicWebsite" TEXT`);
 
   const invoiceAfter = await prisma.invoice.findUnique({ where: { id: invoice.id } });
   const otherAfter = await prisma.business.findUnique({
@@ -423,11 +437,11 @@ try {
     select: { publicPhone: true, publicEmail: true, publicWebsite: true },
   });
   check(
-    "Recovering contact columns does not rewrite invoice totals",
+    "Re-adding contact columns through the migration stand-in does not rewrite invoice totals",
     invoiceAfter.total.toString() === "200",
   );
   check(
-    "Recovering contact columns does not leak CollPro contact onto the other tenant",
+    "Re-adding contact columns does not leak CollPro contact onto the other tenant",
     otherAfter.publicPhone == null &&
       otherAfter.publicEmail == null &&
       otherAfter.publicWebsite == null,

@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
+  classifyRequestPathSql,
+  failClosedRequiredSchema,
+  isPreviewSharedProductionRuntime,
   listLocalMigrationChecksums,
   listLocalMigrationNames,
   planProductionMigrateDeploy,
+  planRequestPathSchemaEnsure,
   prismaMigrationChecksum,
+  requestPathSchemaWritesBlocked,
   shouldRunProductionMigrate,
 } from "./production-migrate-policy.mjs";
 
@@ -155,10 +160,11 @@ const businessContact = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers public contact columns skipped by migrate",
-  businessContact.includes("Preview shares Production and skips migrate") &&
-    businessContact.includes('ADD COLUMN IF NOT EXISTS "publicPhone"') &&
-    businessContact.includes("ensureBusinessPublicContactSchema"),
+  "Public contact request path fail-closes instead of ADD COLUMN",
+  businessContact.includes("fail closed") &&
+    businessContact.includes("ensureBusinessPublicContactSchema") &&
+    !businessContact.includes("ADD COLUMN IF NOT EXISTS") &&
+    !businessContact.includes("$executeRawUnsafe"),
 );
 
 const workspaceLoader = readFileSync(
@@ -166,12 +172,23 @@ const workspaceLoader = readFileSync(
   "utf8",
 );
 check(
-  "Authenticated workspace load ensures public contact columns before Business SELECT",
+  "Authenticated workspace load probes public contact columns before Business SELECT",
   workspaceLoader.includes("loadActiveWorkspaceMemberships") &&
     businessContact.includes("export async function loadActiveWorkspaceMemberships") &&
     businessContact.includes("include: { business: true }") &&
     businessContact.indexOf("await ensureBusinessPublicContactSchema(db)") <
       businessContact.lastIndexOf("include: { business: true }"),
+);
+check(
+  "Authenticated workspace load is not a second migration engine",
+  !workspaceLoader.includes("ensureAppointmentConfirmationSchema") &&
+    !workspaceLoader.includes("ensureFirstRunSetupSchema") &&
+    !workspaceLoader.includes("ensureStarterServicesSetupSchema") &&
+    !workspaceLoader.includes("ensureWebsiteSetupSchema") &&
+    !workspaceLoader.includes("ensureSaasBillingSchema") &&
+    !workspaceLoader.includes("ensureBusinessTimezoneSchema") &&
+    !workspaceLoader.includes("ensureCustomerMessagingSchema") &&
+    !workspaceLoader.includes("$executeRaw"),
 );
 
 const availabilityData = readFileSync(
@@ -216,8 +233,8 @@ check(
 );
 
 check(
-  "Authenticated workspace load ensures appointment columns before Job SELECT",
-  workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
+  "Authenticated workspace load does not run appointment confirmation DDL",
+  !workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
 );
 
 const firstRunMigration = readFileSync(
@@ -246,8 +263,8 @@ check(
 );
 
 check(
-  "Authenticated workspace load ensures first-run setup column before Business SELECT",
-  workspaceLoader.includes("ensureFirstRunSetupSchema"),
+  "Authenticated workspace load does not run first-run setup DDL",
+  !workspaceLoader.includes("ensureFirstRunSetupSchema"),
 );
 
 const starterServicesMigration = readFileSync(
@@ -276,8 +293,8 @@ check(
 );
 
 check(
-  "Authenticated workspace load ensures starter-services setup columns before Business SELECT",
-  workspaceLoader.includes("ensureStarterServicesSetupSchema"),
+  "Authenticated workspace load does not run starter-services setup DDL",
+  !workspaceLoader.includes("ensureStarterServicesSetupSchema"),
 );
 
 const websiteSetupMigration = readFileSync(
@@ -307,8 +324,8 @@ check(
 );
 
 check(
-  "Authenticated workspace load ensures website setup columns before Business SELECT",
-  workspaceLoader.includes("ensureWebsiteSetupSchema"),
+  "Authenticated workspace load does not run website setup DDL",
+  !workspaceLoader.includes("ensureWebsiteSetupSchema"),
 );
 
 const saasBillingMigration = readFileSync(
@@ -330,16 +347,17 @@ const saasBillingSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers SaaS billing tables skipped by migrate",
-  saasBillingSchema.includes("Preview shares Production and skips migrate") &&
+  "SaaS billing request path fail-closes instead of CREATE/ALTER/backfill",
+  saasBillingSchema.includes("fail closed") &&
     saasBillingSchema.includes("ensureSaasBillingSchema") &&
-    saasBillingSchema.includes("SAAS_BILLING_ENSURE_SQL") &&
-    saasBillingSchema.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"'),
+    saasBillingSchema.includes("assertSaasBillingSchemaPresent") &&
+    !saasBillingSchema.includes("$executeRawUnsafe") &&
+    saasBillingSchema.includes("Never execute from a request path"),
 );
 
 check(
-  "Authenticated workspace load ensures SaaS billing tables before Business SELECT",
-  workspaceLoader.includes("ensureSaasBillingSchema"),
+  "Authenticated workspace load does not run SaaS billing DDL or backfill",
+  !workspaceLoader.includes("ensureSaasBillingSchema"),
 );
 
 const founderTrialMigration = readFileSync(
@@ -406,8 +424,8 @@ check(
     businessTimezone.includes('ADD COLUMN IF NOT EXISTS "timezone"'),
 );
 check(
-  "Authenticated workspace load ensures business timezone column before Business SELECT",
-  workspaceLoader.includes("ensureBusinessTimezoneSchema"),
+  "Authenticated workspace load does not run business timezone DDL",
+  !workspaceLoader.includes("ensureBusinessTimezoneSchema"),
 );
 
 const customerMessagingMigration = readFileSync(
@@ -451,8 +469,8 @@ check(
     !/UPDATE "Customer"/i.test(twilioSmsMigration),
 );
 check(
-  "Authenticated workspace load ensures customer messaging schema before Business SELECT",
-  workspaceLoader.includes("ensureCustomerMessagingSchema"),
+  "Authenticated workspace load does not run customer messaging DDL",
+  !workspaceLoader.includes("ensureCustomerMessagingSchema"),
 );
 
 const ownerIntelligenceMigration = readFileSync(
@@ -1901,6 +1919,73 @@ check(
     !localNames.includes("20260928210000_owner_equipment_register") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
       localNames.indexOf("20260929010800_owner_equipment_register"),
+);
+
+const revenueIsolationMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929233000_revenue_integrity_business_isolation/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Revenue-integrity business-isolation migration is forward-only after the original backfill",
+  localNames.includes("20260929233000_revenue_integrity_business_isolation") &&
+    localNames.indexOf("20260926100000_revenue_integrity_supplemental_invoices") <
+      localNames.indexOf("20260929233000_revenue_integrity_business_isolation") &&
+    revenueIsolationMigration.includes("Do not edit that already-applied migration") &&
+    revenueIsolationMigration.includes("RevenueIntegrityBusinessIsolationFinding") &&
+    revenueIsolationMigration.includes("change_order_attached_foreign_invoice") &&
+    revenueIsolationMigration.includes("payment_attached_foreign_invoice") &&
+    !/DELETE FROM "(Invoice|Payment|ChangeOrder)"/i.test(revenueIsolationMigration),
+);
+check(
+  "Original revenue-integrity backfill is unchanged and still lacks business-equality predicates",
+  revenueIntegrityMigration.includes('WHERE co."jobId" = first_invoice."jobId"') &&
+    !revenueIntegrityMigration.includes('co."businessId" = first_invoice."businessId"') &&
+    !revenueIntegrityMigration.includes('p."businessId" = original."businessId"') &&
+    !revenueIntegrityMigration.includes('p."businessId" = j."businessId"'),
+);
+check(
+  "Corrective revenue-integrity backfill requires business-equality on every attach UPDATE",
+  revenueIsolationMigration.includes('AND co."businessId" = first_invoice."businessId"') &&
+    revenueIsolationMigration.includes('AND p."businessId" = original."businessId"') &&
+    revenueIsolationMigration.includes('AND p."businessId" = j."businessId"') &&
+    revenueIsolationMigration.includes('AND original."businessId" = j."businessId"') &&
+    revenueIsolationMigration.includes('p."invoiceId" IS NULL') &&
+    revenueIsolationMigration.includes('co."invoiceId" IS NULL'),
+);
+
+check(
+  "Preview is the shared-production runtime that skips migrate",
+  isPreviewSharedProductionRuntime({ vercelEnv: "preview" }) === true &&
+    isPreviewSharedProductionRuntime({ vercelEnv: "production" }) === false,
+);
+check("Request-path schema writes are always blocked", requestPathSchemaWritesBlocked() === true);
+check(
+  "Request-path CREATE/INSERT statements fail closed",
+  planRequestPathSchemaEnsure({
+    statements: [
+      'CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription" (id text)',
+      'INSERT INTO "BusinessSaasSubscription" ("id") VALUES (\'x\')',
+    ],
+  }).allowed === false &&
+    classifyRequestPathSql("ALTER TABLE \"Business\" ADD COLUMN IF NOT EXISTS \"publicPhone\" TEXT")
+      .schemaDdl === true,
+);
+check(
+  "Request-path information_schema reads stay allowed",
+  planRequestPathSchemaEnsure({
+    statements: [
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'Business'",
+    ],
+  }).allowed === true,
+);
+check(
+  "Missing required schema fail-closes",
+  failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).failClosed === true &&
+    failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).ok === false &&
+    failClosedRequiredSchema({ present: true, name: "Business.publicPhone" }).ok === true,
 );
 
 console.log(

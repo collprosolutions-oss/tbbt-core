@@ -1,15 +1,8 @@
 import { redirect } from "next/navigation";
-import type { Business, Membership, MembershipRole } from "@prisma/client";
+import type { Business, Membership, MembershipRole, Prisma, PrismaClient } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
-import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
 import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
-import { ensureBusinessTimezoneSchema } from "@/lib/business-timezone";
-import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging";
-import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
-import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
-import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
-import { ensureSaasBillingSchema } from "@/lib/saas-billing";
 
 export type WorkspaceContext = {
   user: { id: string; email: string; name: string };
@@ -18,10 +11,33 @@ export type WorkspaceContext = {
   role: MembershipRole;
 };
 
-export async function requireWorkspace(): Promise<WorkspaceContext> {
-  const user = await getSessionUser();
+export type WorkspaceRequestDeps = {
+  db?: PrismaClient | Prisma.TransactionClient;
+  getSessionUser?: typeof getSessionUser;
+  getWorkspaceCookie?: typeof getWorkspaceCookie;
+  setWorkspaceCookie?: typeof setWorkspaceCookie;
+  redirect?: (path: string) => never;
+};
+
+/**
+ * Authenticated workspace load. Schema/data migration belongs exclusively
+ * to the migration system. Missing required Business contact columns
+ * fail closed via loadActiveWorkspaceMemberships — this is not a second
+ * migrate deploy, including on Preview (shared production DATABASE_URL).
+ */
+export async function requireWorkspace(
+  deps: WorkspaceRequestDeps = {},
+): Promise<WorkspaceContext> {
+  const db = deps.db ?? prisma;
+  const readUser = deps.getSessionUser ?? getSessionUser;
+  const readCookie = deps.getWorkspaceCookie ?? getWorkspaceCookie;
+  const writeCookie = deps.setWorkspaceCookie ?? setWorkspaceCookie;
+  const bounce = deps.redirect ?? redirect;
+
+  const user = await readUser();
   if (!user) {
-    redirect("/sign-in");
+    bounce("/sign-in");
+    throw new Error("requireWorkspace redirected");
   }
 
   // Only an ACTIVE membership resolves to a real workspace -- an
@@ -29,26 +45,20 @@ export async function requireWorkspace(): Promise<WorkspaceContext> {
   // src/app/actions/team.ts) must lose access here, at the single place
   // every authenticated page/action derives its workspace from, not just
   // in the Team UI.
-  await ensureAppointmentConfirmationSchema(prisma);
-  await ensureFirstRunSetupSchema(prisma);
-  await ensureStarterServicesSetupSchema(prisma);
-  await ensureWebsiteSetupSchema(prisma);
-  await ensureSaasBillingSchema(prisma);
-  await ensureBusinessTimezoneSchema(prisma);
-  await ensureCustomerMessagingSchema(prisma);
-  const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
+  const memberships = await loadActiveWorkspaceMemberships(db, user.id);
 
   if (memberships.length === 0) {
-    redirect("/sign-in");
+    bounce("/sign-in");
+    throw new Error("requireWorkspace redirected");
   }
 
-  const requestedId = await getWorkspaceCookie();
+  const requestedId = await readCookie();
   const current =
     memberships.find((membership) => membership.businessId === requestedId) ??
     memberships[0];
 
   if (current.businessId !== requestedId) {
-    await setWorkspaceCookie(current.businessId);
+    await writeCookie(current.businessId);
   }
 
   return {
