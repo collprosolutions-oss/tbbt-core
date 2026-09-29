@@ -59,7 +59,8 @@ export async function clockInAction(
     const activityType = readString(formData, "activityType");
     const jobId = readString(formData, "jobId") || null;
     const note = readString(formData, "note") || null;
-    await clockInTime(prisma, access, { membershipId, activityType, jobId, note });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    await clockInTime(prisma, access, { membershipId, activityType, jobId, note, timeZone });
     revalidateTimeCards(jobId);
     return { message: "Clocked in." };
   } catch (error) {
@@ -75,7 +76,8 @@ export async function clockOutAction(
     const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId") || access.workspace.membership.id;
     const note = readString(formData, "note") || null;
-    const result = await clockOutTime(prisma, access, { membershipId, note });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const result = await clockOutTime(prisma, access, { membershipId, note, timeZone });
     revalidateTimeCards(result.jobId);
     return { message: "Clocked out." };
   } catch (error) {
@@ -97,6 +99,7 @@ export async function createManualTimeEntryAction(
     const endedAt = parseDateTimeInput(readString(formData, "endDate"), readString(formData, "endTime"));
     if (!membershipId) return { error: "Choose a worker." };
     if (!startedAt || !endedAt) return { error: "Enter a valid start and end time." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     await createManualTimeEntry(prisma, access, {
       membershipId,
       activityType,
@@ -105,6 +108,7 @@ export async function createManualTimeEntryAction(
       endedAt,
       note,
       needsReview: readString(formData, "needsReview") === "1",
+      timeZone,
     });
     revalidateTimeCards(jobId);
     return { message: "Time entry saved." };
@@ -141,6 +145,7 @@ export async function correctTimeEntryAction(
       if (!parsedEnd) return { error: "Enter a valid end time." };
       endedAt = parsedEnd;
     }
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     await correctTimeEntry(prisma, access, {
       timeEntryId,
       reason,
@@ -149,6 +154,7 @@ export async function correctTimeEntryAction(
       activityType,
       jobId: jobRaw === "" ? undefined : jobRaw,
       note: note === "" ? undefined : note,
+      timeZone,
     });
     revalidateTimeCards();
     return { message: "Correction saved." };

@@ -1328,7 +1328,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: closerMem.id,
-      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      weekStartedAt: weekRange(approvedRunning.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
@@ -1562,7 +1562,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: stopWorkerMem.id,
-      weekStartedAt: weekRange(approvedStopClock.startedAt).start,
+      weekStartedAt: weekRange(approvedStopClock.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
@@ -1602,9 +1602,9 @@ try {
   });
   const priorWeekA = makeAccess(businessA.id, "MEMBER", priorWeekMem.id);
   const transitionNow = new Date();
-  const currentWeekStart = weekRange(transitionNow).start;
+  const currentWeekStart = weekRange(transitionNow, "America/New_York").start;
   const priorStartedAt = new Date(currentWeekStart.getTime() - 24 * 60 * 60 * 1000);
-  const priorWeekStart = weekRange(priorStartedAt).start;
+  const priorWeekStart = weekRange(priorStartedAt, "America/New_York").start;
   const priorWeekJob = await prisma.job.create({
     data: {
       businessId: businessA.id,

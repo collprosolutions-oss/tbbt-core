@@ -312,12 +312,24 @@ async function assertJobClockAccess(input: {
   }
 }
 
+function accessTimeZone(access: BusinessAccess, timeZone?: string) {
+  return timeZone || resolveBusinessTimeZone(access.workspace.business);
+}
+
+async function loadBusinessTimeZone(db: Db, businessId: string) {
+  const business = await db.business.findFirst({
+    where: { id: businessId },
+    select: { timezone: true },
+  });
+  return resolveBusinessTimeZone(business);
+}
+
 async function loadOpenWeek(
   db: Db,
   businessId: string,
   membershipId: string,
   at: Date,
-  timeZone?: string,
+  timeZone: string,
 ) {
   const { start } = weekRange(at, timeZone);
   return db.timesheetWeek.findUnique({
@@ -336,7 +348,7 @@ async function assertWeekEditable(
   businessId: string,
   membershipId: string,
   at: Date,
-  timeZone?: string,
+  timeZone: string,
 ) {
   const week = await loadOpenWeek(db, businessId, membershipId, at, timeZone);
   if (week?.status === "APPROVED") {
@@ -378,12 +390,13 @@ async function assertRunningEntriesEditable(
   membershipId: string,
   running: readonly { startedAt: Date }[],
   at: Date,
+  timeZone: string,
   approvedWeekError?: string,
 ) {
   for (const current of running) {
     try {
-      await assertWeekEditable(db, businessId, membershipId, current.startedAt);
-      await assertWeekEditable(db, businessId, membershipId, at);
+      await assertWeekEditable(db, businessId, membershipId, current.startedAt, timeZone);
+      await assertWeekEditable(db, businessId, membershipId, at, timeZone);
     } catch (error) {
       if (isTimeCardError(error)) {
         throw new TimeCardError(approvedWeekError ?? error.message);
@@ -445,6 +458,7 @@ export type ClockInInput = {
   jobId?: string | null;
   note?: string | null;
   startedAt?: Date;
+  timeZone?: string;
 };
 
 /**
@@ -463,6 +477,7 @@ export async function clockInTime(
   const actorMembershipId = access.workspace.membership.id;
   const workerMembershipId = input.membershipId;
   const startedAt = input.startedAt ?? new Date();
+  const timeZone = accessTimeZone(access, input.timeZone);
 
   if (!isTimeActivityType(input.activityType)) {
     throw new TimeCardError("Choose a valid activity.");
@@ -478,7 +493,7 @@ export async function clockInTime(
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, workerMembershipId);
-    await assertWeekEditable(tx, access.businessId, workerMembershipId, startedAt);
+    await assertWeekEditable(tx, access.businessId, workerMembershipId, startedAt, timeZone);
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -513,6 +528,7 @@ export async function clockInTime(
       workerMembershipId,
       running,
       startedAt,
+      timeZone,
     );
 
     for (const current of running) {
@@ -572,12 +588,13 @@ export async function clockInTime(
 export async function clockOutTime(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { membershipId: string; endedAt?: Date; note?: string | null },
+  input: { membershipId: string; endedAt?: Date; note?: string | null; timeZone?: string },
 ) {
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   const actorRole = access.workspace.role;
   const actorMembershipId = access.workspace.membership.id;
   const endedAt = input.endedAt ?? new Date();
+  const timeZone = accessTimeZone(access, input.timeZone);
 
   if (actorRole === "MEMBER" && input.membershipId !== actorMembershipId) {
     throw new ForbiddenError();
@@ -588,7 +605,7 @@ export async function clockOutTime(
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
-    await assertWeekEditable(tx, access.businessId, input.membershipId, endedAt);
+    await assertWeekEditable(tx, access.businessId, input.membershipId, endedAt, timeZone);
 
     const running = await tx.timeEntry.findFirst({
       where: {
@@ -636,6 +653,7 @@ export type ManualEntryInput = {
   endedAt: Date;
   note?: string | null;
   needsReview?: boolean;
+  timeZone?: string;
 };
 
 export async function createManualTimeEntry(
@@ -654,10 +672,12 @@ export async function createManualTimeEntry(
   }
 
   const actorMembershipId = access.workspace.membership.id;
+  const timeZone = accessTimeZone(access, input.timeZone);
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
-    await assertWeekEditable(tx, access.businessId, input.membershipId, input.startedAt);
+    await assertWeekEditable(tx, access.businessId, input.membershipId, input.startedAt, timeZone);
+    await assertWeekEditable(tx, access.businessId, input.membershipId, input.endedAt, timeZone);
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -713,6 +733,7 @@ export type CorrectEntryInput = {
   jobId?: string | null;
   note?: string | null;
   reason: string;
+  timeZone?: string;
 };
 
 export async function correctTimeEntry(
@@ -731,6 +752,7 @@ export async function correctTimeEntry(
   }
 
   const actorMembershipId = access.workspace.membership.id;
+  const timeZone = accessTimeZone(access, input.timeZone);
 
   return db.$transaction(async (tx) => {
     const entry = await tx.timeEntry.findFirst({
@@ -752,7 +774,10 @@ export async function correctTimeEntry(
     if (endedAt && endedAt <= startedAt) {
       throw new TimeCardError("End time must be after start time.");
     }
-    await assertWeekEditable(tx, access.businessId, entry.membershipId, startedAt);
+    await assertWeekEditable(tx, access.businessId, entry.membershipId, startedAt, timeZone);
+    if (endedAt) {
+      await assertWeekEditable(tx, access.businessId, entry.membershipId, endedAt, timeZone);
+    }
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -1416,6 +1441,7 @@ export type CloseRunningJobTimeForCompletionInput = {
   /** Trusted server-derived membership that is writing the audit row. */
   actorMembershipId?: string | null;
   endedAt?: Date;
+  timeZone?: string;
 };
 
 export type ClosedJobTimeEntry = {
@@ -1465,6 +1491,7 @@ async function closeLockedJobRunningTime(
     throw new TimeCardError(missingActorError);
   }
   await loadMembershipInBusiness(db, job.businessId, input.actorMembershipId);
+  const timeZone = input.timeZone || (await loadBusinessTimeZone(db, job.businessId));
 
   const closed: ClosedJobTimeEntry[] = [];
   for (const entry of running) {
@@ -1472,8 +1499,8 @@ async function closeLockedJobRunningTime(
       throw new TimeCardError(approvedWeekError);
     }
     try {
-      await assertWeekEditable(db, job.businessId, entry.membershipId, entry.startedAt);
-      await assertWeekEditable(db, job.businessId, entry.membershipId, endedAt);
+      await assertWeekEditable(db, job.businessId, entry.membershipId, entry.startedAt, timeZone);
+      await assertWeekEditable(db, job.businessId, entry.membershipId, endedAt, timeZone);
     } catch (error) {
       if (isTimeCardError(error)) {
         throw new TimeCardError(approvedWeekError);
@@ -1679,11 +1706,13 @@ async function ensureRunningAssignedActivityTimeInTransaction(
     activityType: TimeActivityType;
     createReason: string;
     approvedWeekError?: string;
+    timeZone?: string;
   },
 ): Promise<{ created: boolean; entry: StartedJobTimeEntry }> {
   await loadMembershipInBusiness(db, input.businessId, input.membershipId);
+  const timeZone = input.timeZone || (await loadBusinessTimeZone(db, input.businessId));
   try {
-    await assertWeekEditable(db, input.businessId, input.membershipId, input.startedAt);
+    await assertWeekEditable(db, input.businessId, input.membershipId, input.startedAt, timeZone);
   } catch (error) {
     if (isTimeCardError(error) && input.approvedWeekError) {
       throw new TimeCardError(input.approvedWeekError);
@@ -1728,6 +1757,7 @@ async function ensureRunningAssignedActivityTimeInTransaction(
     input.membershipId,
     running,
     input.startedAt,
+    timeZone,
     input.approvedWeekError,
   );
 
