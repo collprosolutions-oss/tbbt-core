@@ -185,9 +185,22 @@ function withTimeout(promise, ms, label) {
 
 function dedicatedClientUrl(applicationName) {
   const url = new URL(testUrl);
-  url.searchParams.set("connection_limit", "1");
   url.searchParams.set("application_name", applicationName);
   return url.toString();
+}
+
+async function countRowLockWaiters(observer, holderPid) {
+  const waited = await observer.$queryRaw`
+    SELECT COUNT(DISTINCT a.pid)::int AS n
+    FROM pg_stat_activity a
+    JOIN pg_locks w ON w.pid = a.pid AND NOT w.granted
+    WHERE a.datname = current_database()
+      AND a.wait_event_type = 'Lock'
+      AND a.pid IS DISTINCT FROM ${holderPid}
+      AND a.query ILIKE '%CustomerCsvImportRow%'
+      AND a.query ILIKE '%FOR UPDATE%'
+  `;
+  return waited[0]?.n ?? 0;
 }
 
 try {
@@ -1067,28 +1080,7 @@ try {
     const waitDeadline = Date.now() + 10_000;
     let waitingCount = 0;
     while (Date.now() < waitDeadline) {
-      const waited = await prisma.$queryRaw`
-        SELECT COUNT(DISTINCT a.pid)::int AS n
-        FROM pg_stat_activity a
-        JOIN pg_locks w ON w.pid = a.pid AND NOT w.granted
-        JOIN pg_locks h
-          ON h.granted
-         AND h.pid = ${holderState.pid}
-         AND h.locktype = w.locktype
-         AND h.database IS NOT DISTINCT FROM w.database
-         AND h.relation IS NOT DISTINCT FROM w.relation
-         AND h.page IS NOT DISTINCT FROM w.page
-         AND h.tuple IS NOT DISTINCT FROM w.tuple
-         AND h.virtualxid IS NOT DISTINCT FROM w.virtualxid
-         AND h.transactionid IS NOT DISTINCT FROM w.transactionid
-         AND h.classid IS NOT DISTINCT FROM w.classid
-         AND h.objid IS NOT DISTINCT FROM w.objid
-         AND h.objsubid IS NOT DISTINCT FROM w.objsubid
-        WHERE a.datname = current_database()
-          AND a.wait_event_type = 'Lock'
-          AND a.application_name IN (${RACE_RACER_A_APP}, ${RACE_RACER_B_APP})
-      `;
-      waitingCount = waited[0]?.n ?? 0;
+      waitingCount = await countRowLockWaiters(prisma, holderState.pid);
       if (waitingCount >= 2) break;
       await delay(25);
     }
@@ -1097,8 +1089,14 @@ try {
       waitingCount >= 2,
     );
     if (waitingCount < 2) {
+      const activity = await prisma.$queryRaw`
+        SELECT pid, application_name, wait_event_type, wait_event, state, query
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+        ORDER BY pid
+      `;
       throw new Error(
-        `Expected both racers to wait on the held row lock (wait_event_type=Lock); saw ${waitingCount}`,
+        `Expected both racers to wait on the held row lock (wait_event_type=Lock); saw ${waitingCount}. activity=${JSON.stringify(activity)}`,
       );
     }
 
