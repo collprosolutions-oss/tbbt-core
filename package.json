@@ -39,6 +39,7 @@
     "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",
     "test:payroll": "node --experimental-strip-types scripts/check-payroll.mjs",
     "test:reports": "node --experimental-strip-types scripts/check-reports.mjs",
+    "test:monthly-goals": "node --experimental-strip-types scripts/check-monthly-goals.mjs",
     "test:bsos": "node --experimental-strip-types scripts/check-bsos.mjs",
     "test:bsos-network": "node --experimental-strip-types scripts/check-bsos-network.mjs",
     "test:service-areas": "node --experimental-strip-types scripts/check-service-areas.mjs",
