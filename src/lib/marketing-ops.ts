@@ -27,12 +27,13 @@ import {
   STUDIO_APPROVE_NOT_READY_MESSAGE,
   STUDIO_APPROVAL_QUEUE_STATUS,
   STUDIO_CALENDAR_PACKAGE_NOT_FOUND_MESSAGE,
+  STUDIO_PACKAGE_STALE_MESSAGE,
   STUDIO_PLANNED_DAY_INVALID_MESSAGE,
+  STUDIO_PLANNED_DAY_SNAPSHOT_REQUIRED_MESSAGE,
   STUDIO_PLANNED_DAY_STALE_MESSAGE,
   STUDIO_RETURN_FOR_CHANGES_MESSAGE,
   STUDIO_RETURN_NOT_READY_MESSAGE,
   parseHashtags,
-  parseMarketingDate,
   parseRequiredShotList,
   parseRequiredStoryboard,
   parseShotList,
@@ -81,7 +82,6 @@ export type CreateMarketingContentInput = {
   channelIntent?: string;
   jobId?: string;
   photoIds?: string[];
-  plannedFor?: string;
   campaignId?: string;
   catalogItemId?: string;
   storyboardJson?: string;
@@ -98,7 +98,6 @@ export type UpdateMarketingStudioInput = {
   shotListJson?: string;
   hashtags?: string;
   photoIds?: string[];
-  plannedFor?: string;
   channelIntent?: string;
 };
 
@@ -232,7 +231,6 @@ export async function createMarketingContent(
     throw new MarketingError("Select a job photo that already has marketing permission.");
   }
 
-  const plannedFor = input.plannedFor ? parseMarketingDate(input.plannedFor) : null;
   let campaignId: string | null = null;
   if (input.campaignId) {
     const campaign = access.assertOwned(
@@ -265,7 +263,7 @@ export async function createMarketingContent(
       body,
       channelIntent,
       status: "DRAFT",
-      plannedFor,
+      plannedFor: null,
       storyboardJson: serializeStoryboard(parseStoryboard(input.storyboardJson ?? "[]")),
       shotListJson: serializeShotList(parseShotList(input.shotListJson ?? "[]")),
       hashtags: formatHashtags(parseHashtags(input.hashtags ?? "")),
@@ -315,15 +313,6 @@ export async function updateMarketingStudioPackage(
   if (!isMarketingChannel(channelIntent)) {
     throw new MarketingError("Choose a channel intent.");
   }
-  const plannedFor =
-    input.plannedFor !== undefined
-      ? input.plannedFor
-        ? parseMarketingDate(input.plannedFor)
-        : null
-      : content.plannedFor;
-  if (input.plannedFor && !plannedFor) {
-    throw new MarketingError("Enter a valid internal planning date.");
-  }
 
   let storyboardJson = content.storyboardJson;
   if (input.storyboardJson !== undefined) {
@@ -350,6 +339,24 @@ export async function updateMarketingStudioPackage(
   }
 
   return runInTransaction(db, async (tx) => {
+    const claimed = await tx.marketingContent.updateMany({
+      where: {
+        id: content.id,
+        businessId: access.businessId,
+        updatedAt: content.updatedAt,
+      },
+      data: {
+        title,
+        body,
+        channelIntent,
+        storyboardJson,
+        shotListJson,
+        hashtags,
+      },
+    });
+    if (claimed.count !== 1) {
+      throw new MarketingError(STUDIO_PACKAGE_STALE_MESSAGE);
+    }
     if (photos) {
       await tx.marketingContentPhoto.deleteMany({
         where: { contentId: content.id, ...access.scope },
@@ -362,19 +369,12 @@ export async function updateMarketingStudioPackage(
         })),
       });
     }
-    return tx.marketingContent.update({
-      where: { id: content.id },
-      data: {
-        title,
-        body,
-        channelIntent,
-        plannedFor,
-        storyboardJson,
-        shotListJson,
-        hashtags,
-      },
-      include: { photos: true },
-    });
+    return access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: content.id, ...access.scope },
+        include: { photos: true },
+      }),
+    );
   });
 }
 
@@ -613,27 +613,6 @@ export async function downloadMarketingReviewPacket(
   };
 }
 
-export async function setMarketingContentPlannedFor(
-  db: Db,
-  access: BusinessAccess,
-  input: { contentId: string; plannedFor: string },
-) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
-  const content = access.assertOwned(
-    await db.marketingContent.findFirst({
-      where: { id: input.contentId, ...access.scope },
-    }),
-  );
-  const plannedFor = parseMarketingDate(input.plannedFor);
-  if (!plannedFor) {
-    throw new MarketingError("Enter a valid internal planning date.");
-  }
-  return db.marketingContent.update({
-    where: { id: content.id },
-    data: { plannedFor },
-  });
-}
-
 function requireOwnerStudioCalendar(access: BusinessAccess) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
   if (access.workspace.role !== "OWNER") {
@@ -666,7 +645,7 @@ function studioCalendarWriteWhere(
 export type PlanStudioPublicationDayInput = {
   contentId: string;
   plannedFor: string;
-  expectedUpdatedAt?: string | Date;
+  expectedUpdatedAt: string | Date;
 };
 
 export type PlanStudioPublicationDayResult = {
@@ -710,13 +689,34 @@ export async function planStudioPublicationDay(
     }
 
     const expectedUpdatedAt = parseExpectedUpdatedAt(input.expectedUpdatedAt);
-    if (expectedUpdatedAt && expectedUpdatedAt.getTime() !== content.updatedAt.getTime()) {
+    if (!expectedUpdatedAt) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_SNAPSHOT_REQUIRED_MESSAGE);
+    }
+    if (expectedUpdatedAt.getTime() !== content.updatedAt.getTime()) {
       throw new MarketingError(STUDIO_PLANNED_DAY_STALE_MESSAGE);
     }
 
-    const claimUpdatedAt = expectedUpdatedAt ?? content.updatedAt;
+    const currentDay = content.plannedFor
+      ? studioPublicationDayKey(content.plannedFor, timeZone)
+      : null;
+    if (currentDay === input.plannedFor.trim() && content.plannedFor) {
+      return {
+        id: content.id,
+        status: content.status,
+        plannedFor: content.plannedFor,
+        plannedDay: currentDay,
+        exportedAt: content.exportedAt,
+        reviewedByMembershipId: content.reviewedByMembershipId,
+        updatedAt: content.updatedAt,
+        published: false,
+        posted: false,
+        customerMessageSent: false,
+        providerConnectionClaimed: false,
+      };
+    }
+
     const claimed = await tx.marketingContent.updateMany({
-      where: studioCalendarWriteWhere(access, content.id, claimUpdatedAt),
+      where: studioCalendarWriteWhere(access, content.id, content.updatedAt),
       data: { plannedFor },
     });
     if (claimed.count !== 1) {

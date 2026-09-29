@@ -126,7 +126,6 @@ export async function createMarketingContentAction(
       channelIntent: readString(formData, "channelIntent"),
       jobId: readString(formData, "jobId") || undefined,
       photoIds: formData.getAll("photoIds").filter((value): value is string => typeof value === "string"),
-      plannedFor: readString(formData, "plannedFor") || undefined,
       storyboardJson: readString(formData, "storyboardJson") || "[]",
       shotListJson: readString(formData, "shotListJson") || "[]",
       hashtags: readString(formData, "hashtags"),
@@ -152,7 +151,6 @@ export async function updateMarketingStudioAction(
       title: readString(formData, "title"),
       body: readString(formData, "body"),
       channelIntent: readString(formData, "channelIntent") || undefined,
-      plannedFor: readString(formData, "plannedFor") || undefined,
       storyboardJson: readString(formData, "storyboardJson") || "[]",
       shotListJson: readString(formData, "shotListJson") || "[]",
       hashtags: readString(formData, "hashtags"),
@@ -310,7 +308,7 @@ export async function planStudioPublicationDayAction(
     await planStudioPublicationDay(prisma, access, {
       contentId: readString(formData, "contentId"),
       plannedFor: readString(formData, "plannedFor"),
-      expectedUpdatedAt: readString(formData, "expectedUpdatedAt") || undefined,
+      expectedUpdatedAt: readString(formData, "expectedUpdatedAt"),
     });
     revalidateMarketing();
     return { message: STUDIO_PLANNED_DAY_SAVED_MESSAGE };

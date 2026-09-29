@@ -152,7 +152,7 @@ export const STUDIO_CONTENT_CALENDAR_MESSAGE =
   "This content calendar lists recorded creator packages and their planned publication day in this business timezone. TBBT will not approve, publish, post, send a message, or claim a provider connection.";
 
 export const STUDIO_CONTENT_CALENDAR_LIMITS_MESSAGE =
-  "The calendar shows at most 50 recorded creator packages. Remaining packages stay on file and appear as earlier items leave the calendar.";
+  "Unplanned packages and packages planned from today in this business timezone always appear, up to 50 each. Past planned days are listed separately, also up to 50.";
 
 export const STUDIO_PLANNED_DAY_SAVED_MESSAGE =
   "Planned publication day saved in this business timezone. The package was not approved, published, posted, or sent.";
@@ -163,12 +163,19 @@ export const STUDIO_PLANNED_DAY_INVALID_MESSAGE =
 export const STUDIO_PLANNED_DAY_STALE_MESSAGE =
   "This package changed while you were planning. Refresh and try again.";
 
+export const STUDIO_PLANNED_DAY_SNAPSHOT_REQUIRED_MESSAGE =
+  "Planning requires the current package snapshot. Refresh and try again.";
+
+export const STUDIO_PACKAGE_STALE_MESSAGE =
+  "This package changed while you were editing. Refresh and try again.";
+
 export const STUDIO_CALENDAR_PACKAGE_NOT_FOUND_MESSAGE =
   "That creator package is not in this business.";
 
 export const STUDIO_CALENDAR_EXPORT_EXPORTED_LABEL = "Handoff exported";
 export const STUDIO_CALENDAR_EXPORT_NOT_EXPORTED_LABEL = "Not exported";
 export const STUDIO_CALENDAR_UNSCHEDULED_LABEL = "No planned day";
+export const STUDIO_CALENDAR_PAST_LABEL = "Past planned days";
 
 export const LEAD_SOURCE_UNTRACKED_MESSAGE =
   "No recorded lead source is on file yet. TBBT will not invent attribution.";
@@ -651,8 +658,33 @@ export function parseStudioPublicationDay(
   return parseCivilDateInTimeZone(year, month, day, timeZone);
 }
 
+export function isLegacyUtcMidnightPlannedFor(value: Date): boolean {
+  return (
+    value.getUTCHours() === 0 &&
+    value.getUTCMinutes() === 0 &&
+    value.getUTCSeconds() === 0 &&
+    value.getUTCMilliseconds() === 0
+  );
+}
+
 export function studioPublicationDayKey(date: Date, timeZone: string): string {
+  if (isLegacyUtcMidnightPlannedFor(date)) {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
   return formatISODateInTimeZone(date, timeZone);
+}
+
+/** Inclusive lower bound for "from today" so legacy UTC-midnight rows keep today's civil date. */
+export function studioCalendarActiveCutoff(now: Date, timeZone: string): Date {
+  const todayKey = formatISODateInTimeZone(now, timeZone);
+  const [year, month, day] = todayKey.split("-").map(Number);
+  const utcMidnight = new Date(Date.UTC(year, month - 1, day));
+  const zonedStart = parseCivilDateInTimeZone(year, month, day, timeZone);
+  if (!zonedStart) return utcMidnight;
+  return utcMidnight.getTime() <= zonedStart.getTime() ? utcMidnight : zonedStart;
 }
 
 export function studioCalendarApprovalLabel(status: string): string {
@@ -764,59 +796,85 @@ export function groupStudioContentCalendarDays(
   items: readonly StudioContentCalendarItem[],
 ): StudioContentCalendarDay[] {
   const byDay = new Map<string, StudioContentCalendarItem[]>();
-  const unscheduled: StudioContentCalendarItem[] = [];
   for (const item of items) {
-    if (!item.plannedDay) {
-      unscheduled.push(item);
-      continue;
-    }
+    if (!item.plannedDay) continue;
     const list = byDay.get(item.plannedDay) ?? [];
     list.push(item);
     byDay.set(item.plannedDay, list);
   }
-  const days: StudioContentCalendarDay[] = [...byDay.entries()]
+  return [...byDay.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([day, dayItems]) => ({
       day,
       label: day,
       items: dayItems,
     }));
-  if (unscheduled.length > 0) {
-    days.push({
-      day: null,
-      label: STUDIO_CALENDAR_UNSCHEDULED_LABEL,
-      items: unscheduled,
-    });
-  }
-  return days;
 }
 
 export function presentStudioContentCalendar(input: {
-  rows: readonly StudioContentCalendarRecord[];
-  total: number;
+  fromToday: readonly StudioContentCalendarRecord[];
+  unplanned: readonly StudioContentCalendarRecord[];
+  past: readonly StudioContentCalendarRecord[];
+  fromTodayTotal: number;
+  unplannedTotal: number;
+  pastTotal: number;
   timeZone: string;
 }): {
   timeZone: string;
   limit: number;
   total: number;
   truncated: boolean;
+  fromTodayTruncated: boolean;
+  unplannedTruncated: boolean;
+  pastTruncated: boolean;
   message: string;
   limitsMessage: string;
   limits: StudioContentCalendarLimits;
   items: StudioContentCalendarItem[];
+  pastItems: StudioContentCalendarItem[];
   days: StudioContentCalendarDay[];
+  unscheduled: StudioContentCalendarDay | null;
+  pastDays: StudioContentCalendarDay[];
 } {
-  const bounded = boundStudioContentCalendar(input.rows);
-  const items = bounded.items.map((row) => presentStudioContentCalendarItem(row, input.timeZone));
+  const fromTodayBounded = boundStudioContentCalendar(input.fromToday);
+  const unplannedBounded = boundStudioContentCalendar(input.unplanned);
+  const pastBounded = boundStudioContentCalendar(input.past);
+  const fromTodayItems = fromTodayBounded.items.map((row) =>
+    presentStudioContentCalendarItem(row, input.timeZone),
+  );
+  const unplannedItems = unplannedBounded.items.map((row) =>
+    presentStudioContentCalendarItem(row, input.timeZone),
+  );
+  const pastItems = pastBounded.items.map((row) =>
+    presentStudioContentCalendarItem(row, input.timeZone),
+  );
+  const fromTodayTruncated = fromTodayBounded.truncated || input.fromTodayTotal > STUDIO_CONTENT_CALENDAR_LIMIT;
+  const unplannedTruncated = unplannedBounded.truncated || input.unplannedTotal > STUDIO_CONTENT_CALENDAR_LIMIT;
+  const pastTruncated = pastBounded.truncated || input.pastTotal > STUDIO_CONTENT_CALENDAR_LIMIT;
+  const total = input.fromTodayTotal + input.unplannedTotal + input.pastTotal;
   return {
     timeZone: input.timeZone,
-    ...studioContentCalendarMeta(input.total),
-    truncated: bounded.truncated || input.total > STUDIO_CONTENT_CALENDAR_LIMIT,
+    limit: STUDIO_CONTENT_CALENDAR_LIMIT,
+    total,
+    truncated: fromTodayTruncated || unplannedTruncated || pastTruncated,
+    fromTodayTruncated,
+    unplannedTruncated,
+    pastTruncated,
     message: STUDIO_CONTENT_CALENDAR_MESSAGE,
     limitsMessage: STUDIO_CONTENT_CALENDAR_LIMITS_MESSAGE,
     limits: studioContentCalendarLimits(),
-    items,
-    days: groupStudioContentCalendarDays(items),
+    items: [...fromTodayItems, ...unplannedItems],
+    pastItems,
+    days: groupStudioContentCalendarDays(fromTodayItems),
+    unscheduled:
+      unplannedItems.length > 0
+        ? {
+            day: null,
+            label: STUDIO_CALENDAR_UNSCHEDULED_LABEL,
+            items: unplannedItems,
+          }
+        : null,
+    pastDays: groupStudioContentCalendarDays(pastItems),
   };
 }
 

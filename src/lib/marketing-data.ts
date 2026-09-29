@@ -20,8 +20,11 @@ import {
   STUDIO_APPROVAL_QUEUE_STATUS,
   STUDIO_CONTENT_CALENDAR_LIMIT,
   WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
+  parseStudioPublicationDay,
   presentStudioContentCalendar,
   studioApprovalQueueMeta,
+  studioCalendarActiveCutoff,
+  studioPublicationDayKey,
 } from "@/lib/marketing";
 import {
   loadStudioWeeklyReminderState,
@@ -68,7 +71,7 @@ export async function loadMarketingSource(
 
   const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, contentCalendarRows, contentCalendarTotal, weeklyReminder] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -207,26 +210,44 @@ export async function loadMarketingSource(
       },
     }),
     prisma.marketingContent.count({ where: approvalQueueWhere }),
-    prisma.marketingContent.findMany({
-      where: scope,
-      take: STUDIO_CONTENT_CALENDAR_LIMIT,
-      orderBy: [{ plannedFor: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        contentType: true,
-        title: true,
-        channelIntent: true,
-        status: true,
-        plannedFor: true,
-        exportedAt: true,
-        updatedAt: true,
-      },
-    }),
-    prisma.marketingContent.count({ where: scope }),
     loadStudioWeeklyReminderState(prisma, businessId, now),
   ]);
 
   const timeZone = resolveBusinessTimeZone(business);
+  const calendarCutoff = studioCalendarActiveCutoff(now, timeZone);
+  const calendarSelect = {
+    id: true,
+    contentType: true,
+    title: true,
+    channelIntent: true,
+    status: true,
+    plannedFor: true,
+    exportedAt: true,
+    updatedAt: true,
+  } as const;
+  const [fromTodayRows, unplannedRows, pastRows, fromTodayTotal, unplannedTotal, pastTotal] = await Promise.all([
+    prisma.marketingContent.findMany({
+      where: { ...scope, plannedFor: { gte: calendarCutoff } },
+      take: STUDIO_CONTENT_CALENDAR_LIMIT,
+      orderBy: [{ plannedFor: "asc" }, { updatedAt: "desc" }, { id: "desc" }],
+      select: calendarSelect,
+    }),
+    prisma.marketingContent.findMany({
+      where: { ...scope, plannedFor: null },
+      take: STUDIO_CONTENT_CALENDAR_LIMIT,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      select: calendarSelect,
+    }),
+    prisma.marketingContent.findMany({
+      where: { ...scope, plannedFor: { lt: calendarCutoff } },
+      take: STUDIO_CONTENT_CALENDAR_LIMIT,
+      orderBy: [{ plannedFor: "desc" }, { updatedAt: "desc" }, { id: "desc" }],
+      select: calendarSelect,
+    }),
+    prisma.marketingContent.count({ where: { ...scope, plannedFor: { gte: calendarCutoff } } }),
+    prisma.marketingContent.count({ where: { ...scope, plannedFor: null } }),
+    prisma.marketingContent.count({ where: { ...scope, plannedFor: { lt: calendarCutoff } } }),
+  ]);
 
   const catalogName = (id: string | null) =>
     id ? catalogItems.find((item) => item.id === id)?.name ?? null : null;
@@ -318,8 +339,12 @@ export async function loadMarketingSource(
     })),
     weeklyReminder: presentStudioWeeklyReminderForViewer(weeklyReminder, viewerRole),
     contentCalendar: presentStudioContentCalendar({
-      rows: contentCalendarRows,
-      total: contentCalendarTotal,
+      fromToday: fromTodayRows,
+      unplanned: unplannedRows,
+      past: pastRows,
+      fromTodayTotal,
+      unplannedTotal,
+      pastTotal,
       timeZone,
     }),
     approvalQueue: {
@@ -383,7 +408,12 @@ export async function loadMarketingSource(
     },
     campaigns,
     weeklyPlan: weeklyContentPlan(
-      contents,
+      contents.map((row) => ({
+        ...row,
+        plannedFor: row.plannedFor
+          ? parseStudioPublicationDay(studioPublicationDayKey(row.plannedFor, timeZone), timeZone)
+          : null,
+      })),
       startOfWeek(now, timeZone),
       addDays(startOfWeek(now, timeZone), 7, timeZone),
     ),
