@@ -15,16 +15,37 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const ALLOWED_TEST_HOSTS = new Set(["localhost", "127.0.0.1"]);
+function assertLocalDatabaseUrl(urlString, label) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    console.error(`${label} is not a valid URL.`);
+    process.exit(1);
+  }
+  const host = (parsedUrl.hostname || "").toLowerCase();
+  if (!ALLOWED_TEST_HOSTS.has(host)) {
+    console.error(
+      `Refusing customer-messaging test DB: ${label} host must be localhost or 127.0.0.1, got ${host || "(empty)"}.`,
+    );
+    process.exit(1);
+  }
+  return parsedUrl;
+}
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "DATABASE_URL");
 
 const testDbName = "tbbt_customer_messaging_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+assertLocalDatabaseUrl(testUrl, "customer-messaging test DATABASE_URL");
 process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://customer-messaging.test";
 delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
@@ -66,6 +87,7 @@ const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const {
   applyCustomerMessageDeliveryUpdate,
   applyInboundConsentEvent,
+  inboundConsentTestHooks,
   attemptAppointmentReminderSms,
   attemptCustomerSms,
   attemptPaymentReminderSms,
@@ -178,6 +200,10 @@ const webhookHandlerSrc = readFileSync(
   new URL("../src/lib/customer-messaging/webhook.ts", import.meta.url),
   "utf8",
 );
+const inboundSrc = readFileSync(
+  new URL("../src/lib/customer-messaging/inbound.ts", import.meta.url),
+  "utf8",
+);
 const requestFlowSrc = readFileSync(
   new URL("../src/components/public/request-flow.tsx", import.meta.url),
   "utf8",
@@ -261,6 +287,12 @@ try {
       webhookRouteSrc.includes("handleCustomerMessagingWebhookRequest") &&
       webhookRouteSrc.includes("NextResponse.json") &&
       !webhookHandlerSrc.includes("businessId"),
+  );
+  check(
+    "Inbound STOP claim is not treated as consent completion",
+    inboundSrc.includes("Claim is identity-only") &&
+      inboundSrc.includes("inboundConsentTestHooks") &&
+      !inboundSrc.includes('if (duplicate === "duplicate")'),
   );
   check(
     "Public request opt-in checkbox starts unchecked",
@@ -1010,6 +1042,103 @@ try {
       (await prisma.customer.findFirst({ where: { id: revoked.id } })).smsConsentStatus === "REVOKED",
   );
 
+  console.log("\nTEST — Leftover inbound STOP claim stays retryable");
+  const leftoverPhone = uniqueSmsDigits("239");
+  const leftoverCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Leftover Signed Stop",
+      phone: leftoverPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const leftoverParams = {
+    MessageSid: `SM_http_leftover_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${leftoverPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const leftoverBody = new URLSearchParams(leftoverParams).toString();
+  const leftoverSig = twilioRequestSignature("twilio_test_token", webhookUrl, leftoverParams);
+  const leftoverWriteError = new Error("forced leftover consent write failure");
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw leftoverWriteError;
+  };
+  inboundConsentTestHooks.beforeCleanup = async () => {
+    throw new Error("forced leftover cleanup failure");
+  };
+  const leftoverFirst = await Promise.allSettled([
+    handleCustomerMessagingWebhookRequest(prisma, {
+      url: webhookUrl,
+      twilioSignature: leftoverSig,
+      tbbtSignature: null,
+      rawBody: leftoverBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+  ]);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
+  check(
+    "Signed leftover STOP rejects after consent and cleanup failure",
+    leftoverFirst[0].status === "rejected" && leftoverFirst[0].reason === leftoverWriteError,
+  );
+  check(
+    "Unsigned leftover retry is still rejected",
+    (await handleCustomerMessagingWebhookRequest(prisma, {
+      url: webhookUrl,
+      twilioSignature: "nope",
+      tbbtSignature: null,
+      rawBody: leftoverBody,
+      contentType: "application/x-www-form-urlencoded",
+    })).status === 400,
+  );
+  check(
+    "Leftover signed STOP left consent GRANTED",
+    (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "GRANTED",
+  );
+  check(
+    "Leftover webhook claim remains after cleanup failure",
+    (await prisma.customerMessagingWebhookEvent.count({
+      where: { provider: "twilio", providerEventId: leftoverParams.MessageSid },
+    })) === 1,
+  );
+  const leftoverRetry = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: leftoverSig,
+    tbbtSignature: null,
+    rawBody: leftoverBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Same signed leftover STOP retries and applies REVOKED",
+    leftoverRetry.status === 200 &&
+      leftoverRetry.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "REVOKED",
+  );
+  const leftoverThird = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: leftoverSig,
+    tbbtSignature: null,
+    rawBody: leftoverBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Third same signed leftover STOP stays REVOKED exactly once",
+    leftoverThird.status === 200 &&
+      leftoverThird.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "REVOKED" &&
+      (await prisma.customerMessagingWebhookEvent.count({
+        where: { provider: "twilio", providerEventId: leftoverParams.MessageSid },
+      })) === 1,
+  );
+  check(
+    "Leftover STOP did not revoke the other-tenant same-phone customer",
+    (await prisma.customer.findFirst({ where: { id: samePhoneBeta.id } })).smsConsentStatus === "GRANTED",
+  );
+
   console.log("\nTEST — Public opt-in capture and existing customer behavior");
   check("Unchecked opt-in is not affirmative", isAffirmativeSmsOptIn(false) === false && isAffirmativeSmsOptIn(undefined) === false);
   check("Explicit opt-in is affirmative", isAffirmativeSmsOptIn("true") === true && isAffirmativeSmsOptIn("on") === true);
@@ -1105,6 +1234,9 @@ try {
     }),
   );
 } finally {
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
   resetCustomerMessagingProvider();
   await prisma.$disconnect();
 }

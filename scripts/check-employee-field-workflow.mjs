@@ -64,6 +64,25 @@ function check(label, condition) {
   }
 }
 
+const ALLOWED_TEST_HOSTS = new Set(["localhost", "127.0.0.1"]);
+function assertLocalDatabaseUrl(urlString, label) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    console.error(`${label} is not a valid URL.`);
+    process.exit(1);
+  }
+  const host = (parsedUrl.hostname || "").toLowerCase();
+  if (!ALLOWED_TEST_HOSTS.has(host)) {
+    console.error(
+      `Refusing employee-field-workflow test DB: ${label} host must be localhost or 127.0.0.1, got ${host || "(empty)"}.`,
+    );
+    process.exit(1);
+  }
+  return parsedUrl;
+}
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error(
@@ -71,6 +90,7 @@ if (!baseUrl) {
   );
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "DATABASE_URL");
 
 const repoRoot = new URL("..", import.meta.url).pathname;
 
@@ -309,6 +329,7 @@ const testDbName = "tbbt_employee_field_workflow_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+assertLocalDatabaseUrl(testUrl, "employee-field-workflow test DATABASE_URL");
 
 const push = spawnSync(
   "npx",
@@ -953,11 +974,15 @@ try {
   // must never leak to the Customer Project Portal (TEST 29).
   const httpProblemDescription = "Canary field problem: damaged material Q9x";
   const httpAdditionalWorkDescription = "Canary field additional-work request Q9x";
+  const httpCustomerAdditionalWorkDescription = "Canary customer additional-work request Q9x";
   await prisma.jobProblemReport.create({
     data: { businessId: businessA.id, jobId: scopeJob.id, membershipId: member1Membership.id, description: httpProblemDescription },
   });
   await prisma.additionalWorkRequest.create({
     data: { businessId: businessA.id, jobId: scopeJob.id, description: httpAdditionalWorkDescription, source: "EMPLOYEE" },
+  });
+  await prisma.additionalWorkRequest.create({
+    data: { businessId: businessA.id, jobId: scopeJob.id, description: httpCustomerAdditionalWorkDescription, source: "CUSTOMER" },
   });
 
   // --- 3. HTTP checks against the built app -----------------------------
@@ -1195,6 +1220,7 @@ try {
   check("TEST 28 - Work Order shows the field problem report's description", workOrderPage.body.includes(httpProblemDescription));
   check("TEST 28 - Work Order shows the reporting member's name", workOrderPage.body.includes(member1User.name));
   check("TEST 28 - Work Order shows the employee-sourced additional-work request", workOrderPage.body.includes(httpAdditionalWorkDescription) && workOrderPage.body.includes("Reported by field employee"));
+  check("TEST 28 - Work Order still shows the customer-sourced additional-work request", workOrderPage.body.includes(httpCustomerAdditionalWorkDescription) && workOrderPage.body.includes("Requested by customer"));
   check("TEST 28 - Work Order shows the current assignment (assigned member's name/email)", workOrderPage.body.includes(member1User.name) && workOrderPage.body.includes(member1User.email));
 
   console.log("\nTEST 29 — Customer Project Portal never exposes field problem reports or employee-only data");
@@ -1202,6 +1228,7 @@ try {
   check("TEST 29 - Customer portal returns 200", portalPage.status === 200);
   check("TEST 29 - Customer portal never shows the field problem report", !portalPage.body.includes(httpProblemDescription));
   check("TEST 29 - Customer portal never shows the employee-sourced additional-work request text", !portalPage.body.includes(httpAdditionalWorkDescription));
+  check("TEST 29 - Customer portal still shows the customer-sourced additional-work request text", portalPage.body.includes(httpCustomerAdditionalWorkDescription));
   check("TEST 29 - Customer portal never shows the assigned member's name (no employee assignment surfaced to the customer)", !portalPage.body.includes(member1User.name));
   check("TEST 29 - Customer portal never shows the DRAFT/SENT/DECLINED/CANCELLED change order titles", !portalPage.body.includes(CO_DRAFT) && !portalPage.body.includes(CO_CANCELLED));
 

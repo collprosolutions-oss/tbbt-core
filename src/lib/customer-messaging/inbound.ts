@@ -9,6 +9,17 @@ import {
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+/**
+ * Test-only pause/fault points. Production never assigns these.
+ * Used to prove leftover webhook claims stay retryable when both the
+ * consent write and compensation delete fail.
+ */
+export const inboundConsentTestHooks: {
+  afterClaim?: () => Promise<void> | void;
+  beforeConsentWrite?: () => Promise<void> | void;
+  beforeCleanup?: () => Promise<void> | void;
+} = {};
+
 export type InboundConsentResult = {
   applied: boolean;
   reason: string;
@@ -113,14 +124,16 @@ export async function applyInboundConsentEvent(
     return { applied: false, reason: "unknown_tenant" };
   }
 
-  const duplicate = await rememberWebhookEvent(db, {
+  // Claim is identity-only. A leftover row from a failed apply is not
+  // completion and must not return false idempotent success.
+  await rememberWebhookEvent(db, {
     provider: inbound.provider,
     providerEventId: inbound.providerEventId,
     eventKind: "inbound",
     businessId: business.id,
   });
-  if (duplicate === "duplicate") {
-    return { applied: true, reason: "idempotent", businessId: business.id };
+  if (inboundConsentTestHooks.afterClaim) {
+    await inboundConsentTestHooks.afterClaim();
   }
 
   try {
@@ -170,15 +183,33 @@ async function applyRecordedInboundConsent(
   const matches = candidates.filter(
     (row) => normalizePhone(row.phone) === fromDigits,
   );
-  if (matches.length !== 1) {
+  if (matches.length > 1) {
     return {
       applied: false,
-      reason: matches.length === 0 ? "unknown_customer" : "ambiguous_customer",
+      reason: "ambiguous_customer",
       businessId,
     };
   }
 
-  const customer = matches[0];
+  let customer = matches[0] ?? null;
+  if (!customer && inbound.optOutType === "STOP") {
+    const absorbed = await findUnambiguousSurvivorForAbsorbedPhone(
+      db,
+      businessId,
+      fromDigits,
+    );
+    if (absorbed.status === "ambiguous") {
+      return { applied: false, reason: "ambiguous_customer", businessId };
+    }
+    customer = absorbed.customer;
+  }
+  if (!customer) {
+    return {
+      applied: false,
+      reason: "unknown_customer",
+      businessId,
+    };
+  }
   if (inbound.optOutType === "HELP") {
     return {
       applied: false,
@@ -246,12 +277,69 @@ async function abandonRecordedInboundWebhook(
     error: input.error,
   });
   try {
+    if (inboundConsentTestHooks.beforeCleanup) {
+      await inboundConsentTestHooks.beforeCleanup();
+    }
     await db.customerMessagingWebhookEvent.deleteMany({
       where: { provider: input.provider, providerEventId: input.providerEventId },
     });
   } catch (cleanupError) {
     console.error("Failed to delete inbound webhook after consent write error", cleanupError);
   }
+}
+
+function absorbedSnapshotPhone(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return null;
+  }
+  const phone = (snapshot as { phone?: unknown }).phone;
+  return typeof phone === "string" ? phone : null;
+}
+
+async function absorbedPhoneSurvivorIds(
+  db: Db,
+  businessId: string,
+  fromDigits: string,
+): Promise<string[]> {
+  const merges = await db.customerMerge.findMany({
+    where: { businessId },
+    select: { survivorCustomerId: true, absorbedSnapshot: true },
+  });
+  const survivorIds = new Set<string>();
+  for (const merge of merges) {
+    const phone = absorbedSnapshotPhone(merge.absorbedSnapshot);
+    if (phone && normalizePhone(phone) === fromDigits) {
+      survivorIds.add(merge.survivorCustomerId);
+    }
+  }
+  return [...survivorIds];
+}
+
+/**
+ * Same-business STOP only. Maps an absorbed former phone onto exactly one
+ * surviving customer. Does not match email, name, or other tenants.
+ * If that survivor was later absorbed, applyConsentStatus hops the id.
+ */
+async function findUnambiguousSurvivorForAbsorbedPhone(
+  db: Db,
+  businessId: string,
+  fromDigits: string,
+): Promise<
+  | { status: "none"; customer: null }
+  | { status: "ambiguous"; customer: null }
+  | { status: "matched"; customer: { id: string; smsConsentStatus: string } }
+> {
+  const survivorIds = await absorbedPhoneSurvivorIds(db, businessId, fromDigits);
+  if (survivorIds.length === 0) return { status: "none", customer: null };
+  if (survivorIds.length !== 1) return { status: "ambiguous", customer: null };
+  const survivor = await db.customer.findFirst({
+    where: { id: survivorIds[0], businessId },
+    select: { id: true, smsConsentStatus: true },
+  });
+  return {
+    status: "matched",
+    customer: survivor ?? { id: survivorIds[0], smsConsentStatus: "UNKNOWN" },
+  };
 }
 
 const CONSENT_MERGE_HOPS = 4;
@@ -266,6 +354,9 @@ async function applyConsentStatus(
     reason: "revoked" | "granted";
   },
 ): Promise<InboundConsentResult> {
+  if (inboundConsentTestHooks.beforeConsentWrite) {
+    await inboundConsentTestHooks.beforeConsentWrite();
+  }
   const firstWhere =
     input.status === "GRANTED"
       ? { id: input.customerId, businessId: input.businessId, smsConsentStatus: "REVOKED" }

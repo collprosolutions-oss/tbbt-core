@@ -400,7 +400,13 @@ export async function loadPortalAdditionalWorkRequests(
   if (!job) return [];
 
   const rows = await db.additionalWorkRequest.findMany({
-    where: { jobId: job.id, businessId: job.businessId },
+    where: {
+      jobId: job.id,
+      businessId: job.businessId,
+      // Customer-token portal history is the customer's own submissions.
+      // Employee-originated field requests stay on owner/internal views.
+      source: "CUSTOMER",
+    },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,

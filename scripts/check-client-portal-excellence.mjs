@@ -100,6 +100,11 @@ check(
     homeHelper.includes("customerId: job.customerId"),
 );
 check(
+  "Portal additional-work history is customer-source only",
+  homeHelper.includes('source: "CUSTOMER"') &&
+    homeHelper.includes("Employee-originated field requests stay on owner/internal views"),
+);
+check(
   "Internal cost/vault/notes stay off the portal page",
   !page.includes("laborCost") &&
     !page.includes("supplierCost") &&
@@ -387,17 +392,38 @@ check(
   payAction.kind === "pay_invoice" && payAction.href === "#invoice",
 );
 
+const ALLOWED_TEST_HOSTS = new Set(["localhost", "127.0.0.1"]);
+function assertLocalDatabaseUrl(urlString, label) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    console.error(`${label} is not a valid URL.`);
+    process.exit(1);
+  }
+  const host = (parsedUrl.hostname || "").toLowerCase();
+  if (!ALLOWED_TEST_HOSTS.has(host)) {
+    console.error(
+      `Refusing client-portal-excellence test DB: ${label} host must be localhost or 127.0.0.1, got ${host || "(empty)"}.`,
+    );
+    process.exit(1);
+  }
+  return parsedUrl;
+}
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.log("\nDB skipped — DATABASE_URL is not set");
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
 }
+assertLocalDatabaseUrl(baseUrl, "DATABASE_URL");
 
 const testDbName = "tbbt_client_portal_excellence_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+assertLocalDatabaseUrl(testUrl, "client-portal-excellence test DATABASE_URL");
 const push = spawnSync(
   "npx",
   ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
@@ -660,6 +686,14 @@ try {
   await prisma.additionalWorkRequest.create({
     data: {
       businessId: alpha.id,
+      jobId: jobA.job.id,
+      description: "Alpha employee-only extra leak work",
+      source: "EMPLOYEE",
+    },
+  });
+  await prisma.additionalWorkRequest.create({
+    data: {
+      businessId: alpha.id,
       jobId: jobSibling.job.id,
       description: "Sibling extra leak work",
       source: "CUSTOMER",
@@ -809,10 +843,14 @@ try {
   );
   const missingWork = await loadPortalAdditionalWorkRequests(prisma, randomUUID());
   check(
-    "Owned token sees only this job's additional-work requests",
+    "Owned token sees only this job's customer-originated additional-work requests",
     alphaWork.length === 1 &&
       alphaWork[0].description === "Alpha extra outlet" &&
       alphaWork[0].statusLabel === "Submitted",
+  );
+  check(
+    "Employee-originated additional work on the same job is omitted from the portal loader",
+    alphaWork.every((row) => !row.description.includes("employee-only")),
   );
   check(
     "Sibling additional work does not appear on Alpha's token",
@@ -869,6 +907,14 @@ try {
       const ownedBody = await owned.text();
       check("owned token returns 200", owned.status === 200);
       check("owned page shows this business", ownedBody.includes("Alpha Portal Co"));
+      check(
+        "owned portal HTML shows the customer-originated additional-work request",
+        ownedBody.includes("Alpha extra outlet"),
+      );
+      check(
+        "owned portal HTML omits same-job employee-originated additional-work text",
+        !ownedBody.includes("Alpha employee-only extra leak work"),
+      );
       check("owned page shows this customer", ownedBody.includes("Alpha Owner Customer"));
       check("owned page is Project Home", ownedBody.includes("Project Home"));
       check(
