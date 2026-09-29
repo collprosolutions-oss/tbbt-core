@@ -31,8 +31,10 @@ const {
   canRequestTimeCorrection,
   coerceHourlyWage,
   estimateLaborCost,
+  ALREADY_CREDITED_CROSSING_ERROR = "An approved time entry already credited in another week crosses this week. Reopen and correct it into one-week entries before approving.",
   WEEK_BOUNDARY_CROSSING_ERROR,
   WEEK_BOUNDARY_CROSSING_POLICY,
+  MISSING_APPROVAL_TIMEZONE_ERROR = "canApproveWeek requires the business timezone.",
   businessWeekStartsTouchedByEntry,
   entryCrossesBusinessWeekBoundary,
   entryOverlapsWeek,
@@ -60,10 +62,13 @@ const {
   completeJobWithRunningTimeSafety,
   correctTimeEntry,
   createManualTimeEntry,
+  decideTimeCorrectionRequest,
   JOB_COMPLETION_TIME_CLOSED_REASON,
   JOB_STOP_TIME_CLOSED_REASON,
   reopenTimesheetWeek,
   startAssignedActivityTime,
+  startJobWithRunningTimeSafety,
+  stopAssignedActivityTime,
   stopRunningAssignedJobTime,
   requestTimeCorrection,
   TimeCardError,
@@ -277,6 +282,40 @@ try {
       NY,
     ).ok === true,
   );
+  check(
+    "Approving another week is refused when an APPROVED crossing was already credited elsewhere",
+    canApproveWeek(
+      [{ status: "APPROVED", startedAt: crossing.startedAt, endedAt: crossing.endedAt }],
+      NY,
+      { weekStartedAt: weekB.start, alreadyApprovedWeekStarts: [weekA.start] },
+    ).error === ALREADY_CREDITED_CROSSING_ERROR,
+  );
+  try {
+    canApproveWeek(
+      [{ status: "READY", startedAt: crossing.startedAt, endedAt: crossing.endedAt }],
+    );
+    check("canApproveWeek without a timezone throws", false);
+  } catch (error) {
+    check(
+      "canApproveWeek without a timezone throws",
+      error instanceof Error && error.message === MISSING_APPROVAL_TIMEZONE_ERROR,
+    );
+  }
+  const fallbackSecond = new Date("2026-11-01T06:30:00.000Z");
+  const fallbackFirst = parseDateTimeInput("2026-11-01", "01:30", NY);
+  const fallbackKept = parseBusinessDateTimeInput("2026-11-01", "01:30", NY, fallbackSecond);
+  check(
+    "DST fall-back 01:30 America/New_York is ambiguous; first occurrence is 05:30Z",
+    fallbackFirst?.toISOString() === "2026-11-01T05:30:00.000Z" &&
+      formatDateInput(fallbackSecond, NY) === "2026-11-01" &&
+      formatTimeInput(fallbackSecond, NY) === "01:30",
+  );
+  check(
+    "Resubmitting the formatted civil time of an existing fall-back instant keeps that instant",
+    fallbackKept.ok === true &&
+      fallbackKept.value.toISOString() === "2026-11-01T06:30:00.000Z" &&
+      fallbackKept.value.getTime() === fallbackSecond.getTime(),
+  );
   check("8 hours × $30 = $240", estimateLaborCost(8, 30) === 240);
   check("Labor cost is hours × wage", estimateLaborCost(4, 25) === 100);
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
@@ -372,7 +411,10 @@ try {
   check("Labor cost is null without wage", estimateLaborCost(4, null) === null);
   check("Approved entries cannot be edited", canEditTimeEntry("APPROVED") === false);
   check("Ready entries can be edited", canEditTimeEntry("READY") === true);
-  check("Running week cannot be approved", canApproveWeek([{ status: "RUNNING", endedAt: null }]).ok === false);
+  check(
+    "Running week cannot be approved",
+    canApproveWeek([{ status: "RUNNING", startedAt: civil("2026-08-24", "09:00"), endedAt: null }], NY).ok === false,
+  );
   check("Duration clock formats 2.5h as 2:30", formatDurationClock(2.5) === "2:30");
   check("OWNER/ADMIN have MANAGE_TIME_CARDS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_TIME_CARDS) && roleHasCapability("ADMIN", CAPABILITIES.MANAGE_TIME_CARDS));
   check("MEMBER does not have MANAGE_TIME_CARDS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_TIME_CARDS));
@@ -449,11 +491,37 @@ try {
   check(
     "P1-08 approve path rejects boundary-crossing entries using Business timezone",
     WEEK_BOUNDARY_CROSSING_POLICY === "reject" &&
-      timeCardOpsSrc.includes("canApproveWeek(entries, timeZone)") &&
+      timeCardOpsSrc.includes("canApproveWeek(entries, timeZone") &&
+      timeCardOpsSrc.includes("alreadyApprovedWeekStarts") &&
       timeCardOpsSrc.includes("accessTimeZone(access, input.timeZone)") &&
       !timeCardOpsSrc.includes("split") &&
       !/hoursBetween\([\s\S]*weekStart/.test(
         timeCardOpsSrc.slice(timeCardOpsSrc.indexOf("export async function approveTimesheetWeek")),
+      ),
+  );
+  check(
+    "Write paths assert every business-local week touched by an interval",
+    timeCardOpsSrc.includes("businessWeekStartsTouchedByEntry") &&
+      timeCardOpsSrc.includes("collectTouchedWeekStarts") &&
+      timeCardOpsSrc.includes("assertIntervalWeeksEditable") &&
+      /async function assertCorrectionWeeksEditable[\s\S]*collectTouchedWeekStarts/.test(timeCardOpsSrc) &&
+      /export async function createManualTimeEntry[\s\S]*assertIntervalWeeksEditable/.test(timeCardOpsSrc) &&
+      /export async function correctTimeEntry[\s\S]*assertCorrectionWeeksEditable/.test(timeCardOpsSrc) &&
+      /export async function clockOutTime[\s\S]*assertIntervalWeeksEditable/.test(timeCardOpsSrc) &&
+      /export async function requestTimeCorrection[\s\S]*assertCorrectionWeeksEditable/.test(timeCardOpsSrc) &&
+      /export async function decideTimeCorrectionRequest[\s\S]*assertCorrectionWeeksEditable/.test(timeCardOpsSrc) &&
+      /async function closeLockedJobRunningTime[\s\S]*assertIntervalWeeksEditable/.test(timeCardOpsSrc) &&
+      /async function ensureRunningAssignedActivityTimeInTransaction[\s\S]*assertIntervalWeeksEditable/.test(
+        timeCardOpsSrc,
+      ),
+  );
+  check(
+    "Correction and request actions keep an existing instant when civil fields are unchanged",
+    /export async function correctTimeEntryAction[\s\S]*parseBusinessDateTimeInput\([\s\S]*existing\?\.startedAt/.test(
+      timeCardActionSrc,
+    ) &&
+      /export async function requestTimeCorrectionAction[\s\S]*parseBusinessDateTimeInput\([\s\S]*existing\?\.startedAt/.test(
+        timeCardActionSrc,
       ),
   );
 
@@ -935,8 +1003,74 @@ try {
     histApproved.status === "APPROVED" &&
       histAfter.status === "APPROVED" &&
       Number(histAfter.approvedHours) === 4 &&
+      Number(histAfter.approvedLaborCost) === 100 &&
       histAfter.startedAt.toISOString() === "2026-09-20T02:00:00.000Z" &&
       histAfter.endedAt.toISOString() === "2026-09-20T06:00:00.000Z",
+  );
+  const histSunday = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: histMem.id,
+    activityType: "JOB",
+    jobId: histJob.id,
+    startedAt: civil("2026-09-20", "09:00"),
+    endedAt: civil("2026-09-20", "17:00"),
+    note: "Sunday-only after historical crossing",
+    timeZone: NY,
+  });
+  const histWeekABeforeB = await prisma.timesheetWeek.findUnique({
+    where: {
+      businessId_membershipId_weekStartedAt: {
+        businessId: businessA.id,
+        membershipId: histMem.id,
+        weekStartedAt: priorWeek.start,
+      },
+    },
+  });
+  const histEntryCountBeforeB = await prisma.timeEntry.count({ where: { membershipId: histMem.id } });
+  await expectError(
+    "Historical APPROVED crossing credited in week A cannot be credited again in week B",
+    () => approveTimesheetWeek(prisma, ownerA, {
+      membershipId: histMem.id,
+      weekStartedAt: nextWeek.start,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && error.message === ALREADY_CREDITED_CROSSING_ERROR,
+  );
+  const histWeekAAfterB = await prisma.timesheetWeek.findUnique({
+    where: {
+      businessId_membershipId_weekStartedAt: {
+        businessId: businessA.id,
+        membershipId: histMem.id,
+        weekStartedAt: priorWeek.start,
+      },
+    },
+  });
+  const histWeekBAfter = await prisma.timesheetWeek.findUnique({
+    where: {
+      businessId_membershipId_weekStartedAt: {
+        businessId: businessA.id,
+        membershipId: histMem.id,
+        weekStartedAt: nextWeek.start,
+      },
+    },
+  });
+  const histAfterWeekB = await prisma.timeEntry.findUnique({ where: { id: histEntry.id } });
+  const histSundayAfter = await prisma.timeEntry.findUnique({ where: { id: histSunday.id } });
+  check(
+    "Refused week B approval leaves week A hours/cost and the historical crossing unchanged",
+    Number(histWeekABeforeB.approvedHours) === 4 &&
+      Number(histWeekABeforeB.approvedLaborCost) === 100 &&
+      Number(histWeekAAfterB.approvedHours) === Number(histWeekABeforeB.approvedHours) &&
+      Number(histWeekAAfterB.approvedLaborCost) === Number(histWeekABeforeB.approvedLaborCost) &&
+      histWeekAAfterB.status === "APPROVED" &&
+      (histWeekBAfter == null || histWeekBAfter.status !== "APPROVED") &&
+      histAfterWeekB.status === "APPROVED" &&
+      Number(histAfterWeekB.approvedHours) === 4 &&
+      Number(histAfterWeekB.approvedLaborCost) === 100 &&
+      histAfterWeekB.startedAt.toISOString() === "2026-09-20T02:00:00.000Z" &&
+      histAfterWeekB.endedAt.toISOString() === "2026-09-20T06:00:00.000Z" &&
+      histSundayAfter.status === "READY" &&
+      histSundayAfter.approvedHours == null &&
+      (await prisma.timeEntry.count({ where: { membershipId: histMem.id } })) === histEntryCountBeforeB,
   );
   const saturdayOnly = await correctTimeEntry(prisma, ownerA, {
     timeEntryId: crossEntry.id,
@@ -990,6 +1124,393 @@ try {
     Number(weekAApproved.approvedHours) + Number(weekBApproved.approvedHours) === 4 &&
       Number(saturdayApproved.approvedHours) + Number(sundayApproved.approvedHours) ===
         hoursBetween(civil("2026-09-19", "22:00"), civil("2026-09-20", "02:00")),
+  );
+
+  console.log("\nTEST — P1-08 intermediate approved week blocks A→C writes");
+  const spanStart = civil("2026-09-12", "10:00");
+  const spanEnd = civil("2026-09-21", "10:00");
+  const weekAStart = weekRange(spanStart, NY).start;
+  const weekBStart = weekRange(civil("2026-09-19", "12:00"), NY).start;
+  const weekCStart = weekRange(spanEnd, NY).start;
+  check(
+    "A→C fixture touches three Sunday weeks with B in the middle",
+    businessWeekStartsTouchedByEntry({ startedAt: spanStart, endedAt: spanEnd }, NY)
+      .map((start) => start.toISOString())
+      .join(",") === [weekAStart, weekBStart, weekCStart].map((start) => start.toISOString()).join(",") &&
+      weekAStart.toISOString() === "2026-09-06T04:00:00.000Z" &&
+      weekBStart.toISOString() === "2026-09-13T04:00:00.000Z" &&
+      weekCStart.toISOString() === "2026-09-20T04:00:00.000Z",
+  );
+  const spanUser = await prisma.user.create({
+    data: { name: "Ava Arc", email: "span-time@example.com", passwordHash: "x" },
+  });
+  const spanMem = await prisma.membership.create({
+    data: { userId: spanUser.id, businessId: businessA.id, role: "MEMBER", hourlyWage: new Prisma.Decimal(22) },
+  });
+  const spanAccess = makeAccess(businessA.id, "MEMBER", spanMem.id);
+  async function spanJob() {
+    return prisma.job.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        status: "IN_PROGRESS",
+        projectToken: randomUUID(),
+        assignedMembershipId: spanMem.id,
+      },
+    });
+  }
+  const spanManualJob = await spanJob();
+  const spanCorrectJob = await spanJob();
+  const spanRequestJob = await spanJob();
+  const spanDecideJob = await spanJob();
+  const spanClockJob = await spanJob();
+  const spanCompleteJob = await spanJob();
+  const spanStartJob = await spanJob();
+  const spanTravelJob = await spanJob();
+  const spanStopJob = await spanJob();
+  const spanStopTravelJob = await spanJob();
+  const weekAOnlyCorrect = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: spanMem.id,
+    activityType: "JOB",
+    jobId: spanCorrectJob.id,
+    startedAt: civil("2026-09-11", "09:00"),
+    endedAt: civil("2026-09-11", "11:00"),
+    note: "Week A only before spanning correction",
+    timeZone: NY,
+  });
+  const weekAOnlyRequest = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: spanMem.id,
+    activityType: "JOB",
+    jobId: spanRequestJob.id,
+    startedAt: civil("2026-09-11", "12:00"),
+    endedAt: civil("2026-09-11", "14:00"),
+    note: "Week A only before spanning request",
+    timeZone: NY,
+  });
+  const weekAOnlyDecide = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: spanMem.id,
+    activityType: "JOB",
+    jobId: spanDecideJob.id,
+    startedAt: civil("2026-09-11", "15:00"),
+    endedAt: civil("2026-09-11", "17:00"),
+    note: "Week A only before spanning accept",
+    timeZone: NY,
+  });
+  const pendingSpanRequest = await requestTimeCorrection(prisma, spanAccess, {
+    timeEntryId: weekAOnlyDecide.id,
+    reason: "Move the end into week C",
+    proposedStartedAt: spanStart,
+    proposedEndedAt: spanEnd,
+    timeZone: NY,
+  });
+  await prisma.timesheetWeek.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: spanMem.id,
+      weekStartedAt: weekBStart,
+      status: "APPROVED",
+      approvedAt: new Date(),
+      approvedByMembershipId: ownerMem.id,
+      approvedHours: new Prisma.Decimal(0),
+      approvedHourlyWage: new Prisma.Decimal(22),
+      approvedLaborCost: new Prisma.Decimal(0),
+    },
+  });
+  const approvedMiddleWeek = await prisma.timesheetWeek.findUnique({
+    where: {
+      businessId_membershipId_weekStartedAt: {
+        businessId: businessA.id,
+        membershipId: spanMem.id,
+        weekStartedAt: weekBStart,
+      },
+    },
+  });
+  const spanEntryCountBefore = await prisma.timeEntry.count({ where: { membershipId: spanMem.id } });
+  const spanRequestCountBefore = await prisma.timeCorrectionRequest.count({
+    where: { requestedByMembershipId: spanMem.id },
+  });
+  const spanAdjustmentCountBefore = await prisma.timeEntryAdjustment.count({
+    where: { timeEntry: { membershipId: spanMem.id } },
+  });
+  function unchangedSpanLedger() {
+    return Promise.all([
+      prisma.timeEntry.count({ where: { membershipId: spanMem.id } }),
+      prisma.timeCorrectionRequest.count({ where: { requestedByMembershipId: spanMem.id } }),
+      prisma.timeEntryAdjustment.count({ where: { timeEntry: { membershipId: spanMem.id } } }),
+      prisma.timesheetWeek.findUnique({
+        where: {
+          businessId_membershipId_weekStartedAt: {
+            businessId: businessA.id,
+            membershipId: spanMem.id,
+            weekStartedAt: weekBStart,
+          },
+        },
+      }),
+    ]);
+  }
+  async function expectUnchanged(label, before) {
+    const [entries, requests, adjustments, week] = await unchangedSpanLedger();
+    check(
+      label,
+      entries === before.entries &&
+        requests === before.requests &&
+        adjustments === before.adjustments &&
+        week.status === "APPROVED" &&
+        Number(week.approvedHours) === Number(before.week.approvedHours) &&
+        Number(week.approvedLaborCost) === Number(before.week.approvedLaborCost),
+    );
+  }
+  const spanLedgerBefore = {
+    entries: spanEntryCountBefore,
+    requests: spanRequestCountBefore,
+    adjustments: spanAdjustmentCountBefore,
+    week: approvedMiddleWeek,
+  };
+  await expectError(
+    "Manual A→C entry is rejected when week B is approved",
+    () => createManualTimeEntry(prisma, ownerA, {
+      membershipId: spanMem.id,
+      activityType: "JOB",
+      jobId: spanManualJob.id,
+      startedAt: spanStart,
+      endedAt: spanEnd,
+      note: "Would cross approved week B",
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  await expectUnchanged("Manual A→C refusal mutates nothing", spanLedgerBefore);
+  const correctBefore = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyCorrect.id } });
+  await expectError(
+    "Owner correction that spans A→C is rejected when week B is approved",
+    () => correctTimeEntry(prisma, ownerA, {
+      timeEntryId: weekAOnlyCorrect.id,
+      startedAt: spanStart,
+      endedAt: spanEnd,
+      reason: "Would cross approved week B",
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const correctAfter = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyCorrect.id } });
+  check(
+    "Rejected spanning correction leaves the week A entry unchanged",
+    correctAfter.startedAt.getTime() === correctBefore.startedAt.getTime() &&
+      correctAfter.endedAt.getTime() === correctBefore.endedAt.getTime() &&
+      correctAfter.status === correctBefore.status &&
+      correctAfter.note === correctBefore.note,
+  );
+  await expectUnchanged("Correction A→C refusal mutates nothing", spanLedgerBefore);
+  const requestBefore = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyRequest.id } });
+  await expectError(
+    "Worker correction request that spans A→C is rejected when week B is approved",
+    () => requestTimeCorrection(prisma, spanAccess, {
+      timeEntryId: weekAOnlyRequest.id,
+      reason: "Would cross approved week B",
+      proposedStartedAt: spanStart,
+      proposedEndedAt: spanEnd,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const requestAfter = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyRequest.id } });
+  check(
+    "Rejected spanning request leaves the original entry and request count unchanged",
+    requestAfter.startedAt.getTime() === requestBefore.startedAt.getTime() &&
+      requestAfter.endedAt.getTime() === requestBefore.endedAt.getTime() &&
+      requestAfter.status === requestBefore.status,
+  );
+  await expectUnchanged("Correction-request A→C refusal mutates nothing", spanLedgerBefore);
+  const decideEntryBefore = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyDecide.id } });
+  const decideRequestBefore = await prisma.timeCorrectionRequest.findUnique({
+    where: { id: pendingSpanRequest.request.id },
+  });
+  await expectError(
+    "Accepting an A→C correction is rejected when week B is approved",
+    () => decideTimeCorrectionRequest(prisma, ownerA, {
+      requestId: pendingSpanRequest.request.id,
+      decision: "ACCEPTED",
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const decideEntryAfter = await prisma.timeEntry.findUnique({ where: { id: weekAOnlyDecide.id } });
+  const decideRequestAfter = await prisma.timeCorrectionRequest.findUnique({
+    where: { id: pendingSpanRequest.request.id },
+  });
+  const decideDecisionAfter = await prisma.timeCorrectionDecision.findUnique({
+    where: { requestId: pendingSpanRequest.request.id },
+  });
+  check(
+    "Rejected spanning accept leaves the entry, pending request, and decision table unchanged",
+    decideEntryAfter.startedAt.getTime() === decideEntryBefore.startedAt.getTime() &&
+      decideEntryAfter.endedAt.getTime() === decideEntryBefore.endedAt.getTime() &&
+      decideRequestAfter.status === "PENDING" &&
+      decideRequestBefore.status === "PENDING" &&
+      decideDecisionAfter == null,
+  );
+  await expectUnchanged("Decide/accept A→C refusal mutates nothing", spanLedgerBefore);
+
+  async function insertRunning(jobId, activityType, startedAt) {
+    return prisma.timeEntry.create({
+      data: {
+        businessId: businessA.id,
+        membershipId: spanMem.id,
+        jobId,
+        activityType,
+        status: "RUNNING",
+        startedAt,
+        endedAt: null,
+        source: "CLOCK",
+      },
+    });
+  }
+  const clockRunning = await insertRunning(spanClockJob.id, "JOB", spanStart);
+  await expectError(
+    "Clock-out spanning A→C is rejected when week B is approved",
+    () => clockOutTime(prisma, ownerA, {
+      membershipId: spanMem.id,
+      endedAt: spanEnd,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const clockRunningAfter = await prisma.timeEntry.findUnique({ where: { id: clockRunning.id } });
+  check(
+    "Rejected A→C clock-out leaves the running entry open",
+    clockRunningAfter.status === "RUNNING" && clockRunningAfter.endedAt == null,
+  );
+  await expectError(
+    "Clock-in that would close an A→C interval is rejected when week B is approved",
+    () => clockInTime(prisma, ownerA, {
+      membershipId: spanMem.id,
+      activityType: "TRAVEL",
+      startedAt: spanEnd,
+      timeZone: NY,
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const clockAfterIn = await prisma.timeEntry.findUnique({ where: { id: clockRunning.id } });
+  check(
+    "Rejected A→C clock-in leaves the long-running entry open and writes no new clock",
+    clockAfterIn.status === "RUNNING" &&
+      clockAfterIn.endedAt == null &&
+      (await prisma.timeEntry.count({
+        where: { membershipId: spanMem.id, startedAt: spanEnd },
+      })) === 0,
+  );
+  const completeRunning = await insertRunning(spanCompleteJob.id, "JOB", spanStart);
+  const completeResult = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: spanCompleteJob.id,
+    actorMembershipId: ownerMem.id,
+    endedAt: spanEnd,
+    timeZone: NY,
+  });
+  const completeRunningAfter = await prisma.timeEntry.findUnique({ where: { id: completeRunning.id } });
+  const completeJobAfter = await prisma.job.findUnique({ where: { id: spanCompleteJob.id } });
+  check(
+    "Job complete that would close A→C is rejected when week B is approved",
+    completeResult.ok === false &&
+      /approved/i.test(completeResult.error ?? "") &&
+      completeRunningAfter.status === "RUNNING" &&
+      completeRunningAfter.endedAt == null &&
+      completeJobAfter.status === "IN_PROGRESS",
+  );
+  const startRunning = await insertRunning(spanStartJob.id, "JOB", spanStart);
+  const startResult = await startJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: spanStartJob.id,
+    actorMembershipId: spanMem.id,
+    startedAt: spanEnd,
+  });
+  const startRunningAfter = await prisma.timeEntry.findUnique({ where: { id: startRunning.id } });
+  check(
+    "Job start that would close A→C is rejected when week B is approved",
+    startResult.ok === false &&
+      /approved/i.test(startResult.error ?? "") &&
+      startRunningAfter.status === "RUNNING" &&
+      startRunningAfter.endedAt == null,
+  );
+  const travelRunning = await insertRunning(spanTravelJob.id, "JOB", spanStart);
+  const travelStart = await startAssignedActivityTime(prisma, {
+    businessId: businessA.id,
+    jobId: spanTravelJob.id,
+    activityType: "TRAVEL",
+    actorMembershipId: spanMem.id,
+    startedAt: spanEnd,
+  });
+  const travelRunningAfter = await prisma.timeEntry.findUnique({ where: { id: travelRunning.id } });
+  check(
+    "Native travel start that would close A→C is rejected when week B is approved",
+    travelStart.ok === false &&
+      /approved/i.test(travelStart.error ?? "") &&
+      travelRunningAfter.status === "RUNNING" &&
+      travelRunningAfter.endedAt == null,
+  );
+  const stopRunning = await insertRunning(spanStopJob.id, "JOB", spanStart);
+  const stopResult = await stopRunningAssignedJobTime(prisma, {
+    businessId: businessA.id,
+    jobId: spanStopJob.id,
+    actorMembershipId: spanMem.id,
+    endedAt: spanEnd,
+  });
+  const stopRunningAfter = await prisma.timeEntry.findUnique({ where: { id: stopRunning.id } });
+  check(
+    "Native job-stop that would close A→C is rejected when week B is approved",
+    stopResult.ok === false &&
+      /approved/i.test(stopResult.error ?? "") &&
+      stopRunningAfter.status === "RUNNING" &&
+      stopRunningAfter.endedAt == null,
+  );
+  const stopTravelRunning = await insertRunning(spanStopTravelJob.id, "TRAVEL", spanStart);
+  const stopTravel = await stopAssignedActivityTime(prisma, {
+    businessId: businessA.id,
+    jobId: spanStopTravelJob.id,
+    activityType: "TRAVEL",
+    actorMembershipId: spanMem.id,
+    endedAt: spanEnd,
+  });
+  const stopTravelAfter = await prisma.timeEntry.findUnique({ where: { id: stopTravelRunning.id } });
+  check(
+    "Native travel-stop that would close A→C is rejected when week B is approved",
+    stopTravel.ok === false &&
+      /approved/i.test(stopTravel.error ?? "") &&
+      stopTravelAfter.status === "RUNNING" &&
+      stopTravelAfter.endedAt == null,
+  );
+
+  const fallbackExisting = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: helperMem.id,
+    activityType: "OTHER",
+    startedAt: new Date("2026-11-01T06:30:00.000Z"),
+    endedAt: new Date("2026-11-01T08:30:00.000Z"),
+    note: "Second 01:30 fall-back occurrence",
+    timeZone: NY,
+  });
+  const fallbackParsedStart = parseBusinessDateTimeInput(
+    formatDateInput(fallbackExisting.startedAt, NY),
+    formatTimeInput(fallbackExisting.startedAt, NY),
+    NY,
+    fallbackExisting.startedAt,
+  );
+  const fallbackParsedEnd = parseBusinessDateTimeInput(
+    formatDateInput(fallbackExisting.endedAt, NY),
+    formatTimeInput(fallbackExisting.endedAt, NY),
+    NY,
+    fallbackExisting.endedAt,
+  );
+  const fallbackCorrected = await correctTimeEntry(prisma, ownerA, {
+    timeEntryId: fallbackExisting.id,
+    startedAt: fallbackParsedStart.ok ? fallbackParsedStart.value : null,
+    endedAt: fallbackParsedEnd.ok ? fallbackParsedEnd.value : null,
+    reason: "Resubmit displayed fall-back civil times",
+    timeZone: NY,
+  });
+  check(
+    "Correcting with the displayed fall-back civil strings does not move the stored instant",
+    fallbackCorrected.startedAt.toISOString() === "2026-11-01T06:30:00.000Z" &&
+      fallbackCorrected.endedAt.toISOString() === "2026-11-01T08:30:00.000Z",
   );
 
   console.log("\nTEST — OWNER/ADMIN manual entry, wage, and MEMBER denial");

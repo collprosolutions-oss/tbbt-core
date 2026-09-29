@@ -143,15 +143,29 @@ export async function correctTimeEntryAction(
     const note = readString(formData, "note");
     if (!timeEntryId) return { error: "That time entry could not be found." };
     const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const existing = await prisma.timeEntry.findFirst({
+      where: { id: timeEntryId, businessId: access.businessId },
+      select: { startedAt: true, endedAt: true },
+    });
     let startedAt: Date | undefined;
     if (startDate || startTime) {
-      const parsedStart = parseBusinessDateTimeInput(startDate, startTime, timeZone);
+      const parsedStart = parseBusinessDateTimeInput(
+        startDate,
+        startTime,
+        timeZone,
+        existing?.startedAt,
+      );
       if (!parsedStart.ok) return { error: parsedStart.error };
       startedAt = parsedStart.value;
     }
     let endedAt: Date | undefined;
     if (endDate || endTime) {
-      const parsedEnd = parseBusinessDateTimeInput(endDate, endTime, timeZone);
+      const parsedEnd = parseBusinessDateTimeInput(
+        endDate,
+        endTime,
+        timeZone,
+        existing?.endedAt,
+      );
       if (!parsedEnd.ok) return { error: parsedEnd.error };
       endedAt = parsedEnd.value;
     }
@@ -182,15 +196,21 @@ export async function requestTimeCorrectionAction(
     const reason = readString(formData, "reason");
     if (!timeEntryId) return { error: "That time entry could not be found." };
     const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const existing = await prisma.timeEntry.findFirst({
+      where: { id: timeEntryId, businessId: access.businessId },
+      select: { startedAt: true, endedAt: true },
+    });
     const proposedStartedAt = parseBusinessDateTimeInput(
       readString(formData, "proposedStartDate"),
       readString(formData, "proposedStartTime"),
       timeZone,
+      existing?.startedAt,
     );
     const proposedEndedAt = parseBusinessDateTimeInput(
       readString(formData, "proposedEndDate"),
       readString(formData, "proposedEndTime"),
       timeZone,
+      existing?.endedAt,
     );
     if (!proposedStartedAt.ok) return { error: proposedStartedAt.error };
     if (!proposedEndedAt.ok) return { error: proposedEndedAt.error };

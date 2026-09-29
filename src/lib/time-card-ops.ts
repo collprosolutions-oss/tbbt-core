@@ -15,10 +15,12 @@ import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   approvalSnapshot,
+  businessWeekStartsTouchedByEntry,
   canApproveWeek,
   canEditTimeEntry,
   canRequestTimeCorrection,
   coerceHourlyWage,
+  entryCrossesBusinessWeekBoundary,
   missingApprovalSnapshotPatch,
   hasOverlappingEntry,
   isAssignedFieldActivityType,
@@ -199,22 +201,27 @@ export async function lockWorkerTimesheetWeek(
   await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
 }
 
+function collectTouchedWeekStarts(
+  intervals: ReadonlyArray<{ startedAt: Date; endedAt: Date | null }>,
+  timeZone: string,
+): Date[] {
+  const starts = new Map<string, Date>();
+  for (const interval of intervals) {
+    for (const start of businessWeekStartsTouchedByEntry(interval, timeZone)) {
+      starts.set(start.toISOString(), start);
+    }
+  }
+  return [...starts.values()].sort((left, right) => left.getTime() - right.getTime());
+}
+
 async function lockWorkerTimesheetWeeks(
   db: Db,
   businessId: string,
   membershipId: string,
-  at: readonly Date[],
+  intervals: ReadonlyArray<{ startedAt: Date; endedAt: Date | null }>,
   timeZone: string,
 ) {
-  const starts = [
-    ...new Map(
-      at.map((value) => {
-        const start = weekRange(value, timeZone).start;
-        return [start.toISOString(), start] as const;
-      }),
-    ).values(),
-  ].sort((left, right) => left.getTime() - right.getTime());
-  for (const start of starts) {
+  for (const start of collectTouchedWeekStarts(intervals, timeZone)) {
     await lockWorkerTimesheetWeek(db, businessId, membershipId, start);
   }
 }
@@ -356,33 +363,48 @@ async function assertWeekEditable(
   }
 }
 
-function correctionWeekInstants(at: ReadonlyArray<Date | null | undefined>) {
-  return at.filter((value): value is Date => value instanceof Date);
+function correctionWeekIntervals(
+  intervals: ReadonlyArray<{ startedAt: Date; endedAt: Date | null } | null | undefined>,
+) {
+  return intervals.filter(
+    (value): value is { startedAt: Date; endedAt: Date | null } =>
+      value != null && value.startedAt instanceof Date,
+  );
 }
 
 async function assertCorrectionWeeksEditable(
   db: Db,
   businessId: string,
   membershipId: string,
-  at: ReadonlyArray<Date | null | undefined>,
+  intervals: ReadonlyArray<{ startedAt: Date; endedAt: Date | null } | null | undefined>,
   timeZone: string,
 ) {
-  const starts = [
-    ...new Map(
-      correctionWeekInstants(at).map((value) => {
-        const start = weekRange(value, timeZone).start;
-        return [start.toISOString(), start] as const;
-      }),
-    ).values(),
-  ];
-  for (const start of starts) {
+  for (const start of collectTouchedWeekStarts(correctionWeekIntervals(intervals), timeZone)) {
     await assertWeekEditable(db, businessId, membershipId, start, timeZone);
   }
 }
 
+async function assertIntervalWeeksEditable(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  startedAt: Date,
+  endedAt: Date | null,
+  timeZone: string,
+) {
+  await assertCorrectionWeeksEditable(
+    db,
+    businessId,
+    membershipId,
+    [{ startedAt, endedAt }],
+    timeZone,
+  );
+}
+
 /**
  * Clock-in transition must not close a RUNNING entry whose own week is
- * approved, even when the new start falls in an open week.
+ * approved, even when the new start falls in an open week. Every
+ * business-local week the closed interval occupies must still be open.
  */
 async function assertRunningEntriesEditable(
   db: Db,
@@ -395,8 +417,14 @@ async function assertRunningEntriesEditable(
 ) {
   for (const current of running) {
     try {
-      await assertWeekEditable(db, businessId, membershipId, current.startedAt, timeZone);
-      await assertWeekEditable(db, businessId, membershipId, at, timeZone);
+      await assertIntervalWeeksEditable(
+        db,
+        businessId,
+        membershipId,
+        current.startedAt,
+        at,
+        timeZone,
+      );
     } catch (error) {
       if (isTimeCardError(error)) {
         throw new TimeCardError(approvedWeekError ?? error.message);
@@ -493,7 +521,14 @@ export async function clockInTime(
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, workerMembershipId);
-    await assertWeekEditable(tx, access.businessId, workerMembershipId, startedAt, timeZone);
+    await assertIntervalWeeksEditable(
+      tx,
+      access.businessId,
+      workerMembershipId,
+      startedAt,
+      null,
+      timeZone,
+    );
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -605,7 +640,6 @@ export async function clockOutTime(
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
-    await assertWeekEditable(tx, access.businessId, input.membershipId, endedAt, timeZone);
 
     const running = await tx.timeEntry.findFirst({
       where: {
@@ -622,6 +656,14 @@ export async function clockOutTime(
     if (endedAt <= running.startedAt) {
       throw new TimeCardError("Clock-out must be after the start time.");
     }
+    await assertIntervalWeeksEditable(
+      tx,
+      access.businessId,
+      input.membershipId,
+      running.startedAt,
+      endedAt,
+      timeZone,
+    );
 
     const previous = toAuditSnapshot(running);
     const updated = await tx.timeEntry.update({
@@ -676,8 +718,14 @@ export async function createManualTimeEntry(
 
   return db.$transaction(async (tx) => {
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
-    await assertWeekEditable(tx, access.businessId, input.membershipId, input.startedAt, timeZone);
-    await assertWeekEditable(tx, access.businessId, input.membershipId, input.endedAt, timeZone);
+    await assertIntervalWeeksEditable(
+      tx,
+      access.businessId,
+      input.membershipId,
+      input.startedAt,
+      input.endedAt,
+      timeZone,
+    );
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -774,10 +822,16 @@ export async function correctTimeEntry(
     if (endedAt && endedAt <= startedAt) {
       throw new TimeCardError("End time must be after start time.");
     }
-    await assertWeekEditable(tx, access.businessId, entry.membershipId, startedAt, timeZone);
-    if (endedAt) {
-      await assertWeekEditable(tx, access.businessId, entry.membershipId, endedAt, timeZone);
-    }
+    await assertCorrectionWeeksEditable(
+      tx,
+      access.businessId,
+      entry.membershipId,
+      [
+        { startedAt: entry.startedAt, endedAt: entry.endedAt },
+        { startedAt, endedAt },
+      ],
+      timeZone,
+    );
     await assertJobClockAccess({
       db: tx,
       businessId: access.businessId,
@@ -884,7 +938,10 @@ export async function requestTimeCorrection(
         tx,
         access.businessId,
         entry.membershipId,
-        [entry.startedAt, entry.endedAt, input.proposedStartedAt, input.proposedEndedAt],
+        [
+          { startedAt: entry.startedAt, endedAt: entry.endedAt },
+          { startedAt: input.proposedStartedAt, endedAt: input.proposedEndedAt },
+        ],
         timeZone,
       );
     } catch (error) {
@@ -1037,13 +1094,10 @@ export async function decideTimeCorrectionRequest(
         access.businessId,
         entry.membershipId,
         [
-          request.originalStartedAt,
-          request.originalEndedAt,
-          request.proposedStartedAt,
-          request.proposedEndedAt,
-          entry.startedAt,
-          entry.endedAt,
-        ].filter((value): value is Date => value instanceof Date),
+          { startedAt: request.originalStartedAt, endedAt: request.originalEndedAt },
+          { startedAt: request.proposedStartedAt, endedAt: request.proposedEndedAt },
+          { startedAt: entry.startedAt, endedAt: entry.endedAt },
+        ],
         timeZone,
       );
       const lockedEntry = await lockTenantOwnedTimeEntry(tx, access.businessId, entry.id);
@@ -1072,12 +1126,9 @@ export async function decideTimeCorrectionRequest(
           access.businessId,
           current.membershipId,
           [
-            current.startedAt,
-            current.endedAt,
-            request.originalStartedAt,
-            request.originalEndedAt,
-            request.proposedStartedAt,
-            request.proposedEndedAt,
+            { startedAt: current.startedAt, endedAt: current.endedAt },
+            { startedAt: request.originalStartedAt, endedAt: request.originalEndedAt },
+            { startedAt: request.proposedStartedAt, endedAt: request.proposedEndedAt },
           ],
           timeZone,
         );
@@ -1220,7 +1271,38 @@ export async function approveTimesheetWeek(
       start,
       end,
     );
-    const gate = canApproveWeek(entries, timeZone);
+    const crossingIntervals = entries
+      .filter(
+        (entry) =>
+          entry.endedAt != null &&
+          entryCrossesBusinessWeekBoundary(
+            { startedAt: entry.startedAt, endedAt: entry.endedAt },
+            timeZone,
+          ),
+      )
+      .map((entry) => ({ startedAt: entry.startedAt, endedAt: entry.endedAt }));
+    if (crossingIntervals.length > 0) {
+      await lockWorkerTimesheetWeeks(
+        tx,
+        access.businessId,
+        input.membershipId,
+        crossingIntervals,
+        timeZone,
+      );
+    }
+    const otherApprovedWeeks = await tx.timesheetWeek.findMany({
+      where: {
+        businessId: access.businessId,
+        membershipId: input.membershipId,
+        status: "APPROVED",
+        weekStartedAt: { not: start },
+      },
+      select: { weekStartedAt: true },
+    });
+    const gate = canApproveWeek(entries, timeZone, {
+      weekStartedAt: start,
+      alreadyApprovedWeekStarts: otherApprovedWeeks.map((week) => week.weekStartedAt),
+    });
     if (!gate.ok) {
       throw new TimeCardError(gate.error ?? "This week is not ready to approve.");
     }
@@ -1501,8 +1583,14 @@ async function closeLockedJobRunningTime(
       throw new TimeCardError(approvedWeekError);
     }
     try {
-      await assertWeekEditable(db, job.businessId, entry.membershipId, entry.startedAt, timeZone);
-      await assertWeekEditable(db, job.businessId, entry.membershipId, endedAt, timeZone);
+      await assertIntervalWeeksEditable(
+        db,
+        job.businessId,
+        entry.membershipId,
+        entry.startedAt,
+        endedAt,
+        timeZone,
+      );
     } catch (error) {
       if (isTimeCardError(error)) {
         throw new TimeCardError(approvedWeekError);
@@ -1739,7 +1827,14 @@ async function ensureRunningAssignedActivityTimeInTransaction(
   await loadMembershipInBusiness(db, input.businessId, input.membershipId);
   const timeZone = input.timeZone || (await loadBusinessTimeZone(db, input.businessId));
   try {
-    await assertWeekEditable(db, input.businessId, input.membershipId, input.startedAt, timeZone);
+    await assertIntervalWeeksEditable(
+      db,
+      input.businessId,
+      input.membershipId,
+      input.startedAt,
+      null,
+      timeZone,
+    );
   } catch (error) {
     if (isTimeCardError(error) && input.approvedWeekError) {
       throw new TimeCardError(input.approvedWeekError);

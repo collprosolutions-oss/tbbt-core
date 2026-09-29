@@ -181,6 +181,12 @@ export const WEEK_BOUNDARY_CROSSING_POLICY = "reject" as const;
 export const WEEK_BOUNDARY_CROSSING_ERROR =
   "This time crosses the business week. Correct it into separate entries that each stay in one week before approving.";
 
+export const ALREADY_CREDITED_CROSSING_ERROR =
+  "An approved time entry already credited in another week crosses this week. Reopen and correct it into one-week entries before approving.";
+
+export const MISSING_APPROVAL_TIMEZONE_ERROR =
+  "canApproveWeek requires the business timezone.";
+
 function lastOccupiedBusinessWeekStart(startedAt: Date, endedAt: Date, timeZone: string): Date {
   const endWeek = weekRange(endedAt, timeZone).start;
   if (endedAt.getTime() > startedAt.getTime() && endedAt.getTime() === endWeek.getTime()) {
@@ -362,29 +368,45 @@ export function canEditTimeEntry(status: string): boolean {
 }
 
 export function canApproveWeek(
-  entries: readonly { status: string; startedAt?: Date; endedAt: Date | null }[],
-  timeZone?: string,
+  entries: readonly { status: string; startedAt: Date; endedAt: Date | null }[],
+  timeZone: string,
+  options?: {
+    weekStartedAt?: Date;
+    alreadyApprovedWeekStarts?: readonly Date[];
+  },
 ): {
   ok: boolean;
   error?: string;
 } {
+  if (!timeZone) {
+    throw new Error(MISSING_APPROVAL_TIMEZONE_ERROR);
+  }
   if (entries.length === 0) {
     return { ok: false, error: "There is no time to approve for this week." };
   }
   if (entries.some((entry) => entry.status === "RUNNING" || entry.endedAt == null)) {
     return { ok: false, error: "Stop every running clock before approving this week." };
   }
-  if (timeZone && resolveWeekBoundaryCrossingPolicy() === "reject") {
-    const crosses = entries.some((entry) => {
-      if (entry.status === "APPROVED" || entry.startedAt == null || entry.endedAt == null) {
-        return false;
+  if (resolveWeekBoundaryCrossingPolicy() === "reject") {
+    for (const entry of entries) {
+      if (entry.endedAt == null) continue;
+      const interval = { startedAt: entry.startedAt, endedAt: entry.endedAt };
+      if (!entryCrossesBusinessWeekBoundary(interval, timeZone)) {
+        continue;
       }
-      return entryCrossesBusinessWeekBoundary(
-        { startedAt: entry.startedAt, endedAt: entry.endedAt },
-        timeZone,
-      );
-    });
-    if (crosses) {
+      if (entry.status === "APPROVED") {
+        const creditedElsewhere = options?.alreadyApprovedWeekStarts?.some((otherStart) => {
+          if (options.weekStartedAt && otherStart.getTime() === options.weekStartedAt.getTime()) {
+            return false;
+          }
+          const other = weekRange(otherStart, timeZone);
+          return entryOverlapsWeek(interval, other.start, other.end);
+        });
+        if (creditedElsewhere) {
+          return { ok: false, error: ALREADY_CREDITED_CROSSING_ERROR };
+        }
+        continue;
+      }
       return { ok: false, error: WEEK_BOUNDARY_CROSSING_ERROR };
     }
   }
@@ -588,11 +610,41 @@ export function parseDateTimeInput(date: string, time: string, timeZone: string)
   return value;
 }
 
+function normalizeCivilTimeInput(time: string): string | null {
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(time.trim());
+  if (!timeMatch) return null;
+  return `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}`;
+}
+
+/**
+ * Fall-back days have a repeated civil hour. `zonedCivilToUtc` always
+ * resolves that hour to the first occurrence. If the submitted civil
+ * strings are exactly the formatted value of an existing instant, keep
+ * that instant so an edit/resubmit cannot silently move it.
+ */
+export function civilInputMatchesExistingInstant(
+  date: string,
+  time: string,
+  existing: Date,
+  timeZone: string,
+): boolean {
+  const submittedTime = normalizeCivilTimeInput(time);
+  return (
+    submittedTime != null &&
+    date.trim() === formatDateInput(existing, timeZone) &&
+    submittedTime === formatTimeInput(existing, timeZone)
+  );
+}
+
 export function parseBusinessDateTimeInput(
   date: string,
   time: string,
   timeZone: string,
+  existing?: Date | null,
 ): { ok: true; value: Date } | { ok: false; error: string } {
+  if (existing && civilInputMatchesExistingInstant(date, time, existing, timeZone)) {
+    return { ok: true, value: existing };
+  }
   const value = parseDateTimeInput(date, time, timeZone);
   if (value) return { ok: true, value };
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());

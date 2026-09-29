@@ -347,7 +347,8 @@ try {
       opsSrc.includes("pg_advisory_xact_lock") &&
       opsSrc.includes("ENTRY_CHANGED_SINCE_REQUEST_ERROR") &&
       opsSrc.includes("entryTimesMatchRequest") &&
-      /async function lockWorkerTimesheetWeeks[\s\S]*weekRange\(value, timeZone\)/.test(opsSrc) &&
+      /async function lockWorkerTimesheetWeeks[\s\S]*collectTouchedWeekStarts/.test(opsSrc) &&
+      /async function assertCorrectionWeeksEditable[\s\S]*collectTouchedWeekStarts/.test(opsSrc) &&
       /async function loadOpenWeek[\s\S]*timeZone: string[\s\S]*weekRange\(at, timeZone\)/.test(opsSrc) &&
       /async function assertWeekEditable[\s\S]*timeZone: string/.test(opsSrc) &&
       /export async function decideTimeCorrectionRequest[\s\S]*lockWorkerTimesheetWeeks[\s\S]*originalEndedAt[\s\S]*proposedEndedAt/.test(
