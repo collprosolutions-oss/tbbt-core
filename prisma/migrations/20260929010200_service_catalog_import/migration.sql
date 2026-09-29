@@ -3,8 +3,8 @@
 -- statement is IF NOT EXISTS. No backfill. Existing businesses keep zero rows.
 -- Confirm writes ServiceCatalogItem only — never LineItem,
 -- EstimateVersionLineItem, invoices, jobs, or published hourly rates.
--- Timestamp is 20260929010000 so it does not collide with
--- 20260928200000_estimate_line_template_archive.
+-- Timestamp is 20260929010200 so it does not collide with
+-- 20260928200000_estimate_line_template_archive or other 20260929010000 PRs.
 
 CREATE TABLE IF NOT EXISTS "ServiceCatalogImport" (
     "id" TEXT NOT NULL,
@@ -38,14 +38,15 @@ CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow" (
     "description" TEXT,
     "pricingMode" TEXT NOT NULL,
     "price" DECIMAL(65,30),
-    "category" TEXT NOT NULL,
+    "category" TEXT,
     "tradeCode" TEXT NOT NULL,
     "unitLabel" TEXT NOT NULL DEFAULT '',
-    "recurrenceEligible" BOOLEAN NOT NULL DEFAULT false,
-    "active" BOOLEAN NOT NULL DEFAULT true,
+    "recurrenceEligible" BOOLEAN,
+    "active" BOOLEAN,
     "matchedCatalogItemId" TEXT,
     "writtenCatalogItemId" TEXT,
     "writeAction" TEXT,
+    "matchDecision" TEXT NOT NULL DEFAULT 'SKIP',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "ServiceCatalogImportRow_pkey" PRIMARY KEY ("id")
 );

@@ -35,24 +35,34 @@ const {
   CATALOG_IMPORT_CSV_REQUIRED_MESSAGE,
   CATALOG_IMPORT_EMPTY_MESSAGE,
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
+  CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
   CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE,
   CATALOG_IMPORT_NAME_MATCH_MESSAGE,
   CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE,
   CATALOG_IMPORT_NO_HOURLY_MESSAGE,
   CATALOG_IMPORT_NOT_AVAILABLE_MESSAGE,
   CATALOG_IMPORT_NOT_CSV_MESSAGE,
+  CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE,
+  CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE,
   CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE,
+  CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
   CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE,
+  catalogImportOverLengthMessage,
   catalogImportRowFingerprint,
   catalogNameKey,
   decodeCatalogCsvBytes,
   evaluateCatalogImportRow,
   hashCatalogCsvBytes,
   MAX_SERVICE_CATALOG_IMPORT_BYTES,
+  MAX_SERVICE_CATALOG_IMPORT_CATEGORY,
+  MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
+  MAX_SERVICE_CATALOG_IMPORT_NAME,
   MAX_SERVICE_CATALOG_IMPORT_ROWS,
+  MAX_SERVICE_CATALOG_IMPORT_UNIT,
   OWNER_ONLY_CATALOG_IMPORT_MESSAGE,
   parseCatalogCsv,
   parseCatalogPricingMode,
+  pickDeterministicCatalogMatch,
   parseServiceCatalogCsv,
   sanitizeCatalogImportText,
   sanitizeCatalogSourceFilename,
@@ -92,13 +102,40 @@ const uiSource = [
   .map(readSrc)
   .join("\n");
 const opsSource = readSrc("src/lib/service-catalog-import-ops.ts");
+const parseSource = readSrc("src/lib/service-catalog-import.ts");
+const previewUiSource = readSrc("src/components/catalog/import-catalog-preview.tsx");
+const formSource = readSrc("src/components/catalog/import-catalog-form.tsx");
 const migrationSource = readSrc(
-  "prisma/migrations/20260929010000_service_catalog_import/migration.sql",
+  "prisma/migrations/20260929010200_service_catalog_import/migration.sql",
 );
+const scriptSource = readSrc("scripts/check-service-catalog-import.mjs");
+
+function isLocalDatabaseHost(urlString) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    return false;
+  }
+  const protocol = parsedUrl.protocol.replace(/:$/, "").toLowerCase();
+  if (protocol !== "postgres" && protocol !== "postgresql") return false;
+  const host = (parsedUrl.hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (!host) return true;
+  if (host.startsWith("/")) return true;
+  const socketHost = parsedUrl.searchParams.get("host") || "";
+  return socketHost.startsWith("/");
+}
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
+  process.exit(1);
+}
+if (!isLocalDatabaseHost(baseUrl)) {
+  console.error(
+    "Refusing pg_terminate_backend / DROP DATABASE / prisma db push --accept-data-loss: DATABASE_URL host is not localhost, 127.0.0.1, ::1, or a local socket. Preview shares Production's DATABASE_URL.",
+  );
   process.exit(1);
 }
 
@@ -262,6 +299,72 @@ try {
       !("fetchOwnerSuppliedCsv" in importModule) &&
       !("previewOwnerSourceUrl" in opsModule),
   );
+  check(
+    "Name-match copy says update-only and blank cells keep existing values",
+    CATALOG_IMPORT_NAME_MATCH_MESSAGE.includes("only when you pick update") &&
+      CATALOG_IMPORT_NAME_MATCH_MESSAGE.includes("Blank cells keep") &&
+      previewUiSource.includes('value="SKIP"') &&
+      previewUiSource.includes('value="UPDATE"') &&
+      previewUiSource.includes('value="ADD_NEW"') &&
+      previewUiSource.includes("Current") &&
+      previewUiSource.includes("Incoming") &&
+      previewUiSource.includes("Keep existing"),
+  );
+  check(
+    "Upload form requires pricingMode and price except Custom Quote",
+    formSource.includes("pricingMode is required") &&
+      formSource.includes("price is required except for Custom Quote") &&
+      CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE.includes("pricingMode is required") &&
+      CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE.includes("except for Custom Quote"),
+  );
+  check(
+    "Confirm claims PREVIEW to CONFIRMING and writes nothing when count is 0",
+    opsSource.includes('status: "PREVIEW"') &&
+      opsSource.includes('data: { status: "CONFIRMING" }') &&
+      opsSource.includes("claimed.count !== 1") &&
+      opsSource.includes("CATALOG_IMPORT_IN_PROGRESS_MESSAGE") &&
+      opsSource.includes("writeEligibleRow") &&
+      opsSource.includes("writtenCatalogItemId: null"),
+  );
+  check(
+    "Confirm rematches live catalog and recovers CONFIRMING on re-upload",
+    opsSource.includes("catalogRowBecameStale") &&
+      opsSource.includes("CATALOG_IMPORT_STALE_MATCHES_MESSAGE") &&
+      opsSource.includes('status: "CONFIRMING"') &&
+      opsSource.includes("refreshPreviewMatches") &&
+      opsSource.includes("$transaction"),
+  );
+  check(
+    "P2002 websiteSlug maps to a readable conflict",
+    opsSource.includes("P2002") &&
+      opsSource.includes("CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE"),
+  );
+  check(
+    "Matching is deterministic by createdAt then id",
+    parseSource.includes("pickDeterministicCatalogMatch") &&
+      parseSource.includes("createdAt") &&
+      typeof pickDeterministicCatalogMatch === "function",
+  );
+  const terminateAt = scriptSource.indexOf("pg_terminate_backend");
+  const dropAt = scriptSource.indexOf("DROP DATABASE");
+  const pushAt = scriptSource.indexOf("accept-data-loss");
+  const guardAt = scriptSource.indexOf("isLocalDatabaseHost(baseUrl)");
+  check(
+    "Destructive test DB steps refuse unless DATABASE_URL is local",
+    guardAt > 0 &&
+      terminateAt > guardAt &&
+      dropAt > guardAt &&
+      pushAt > guardAt &&
+      scriptSource.includes('host === "localhost"') &&
+      scriptSource.includes("127.0.0.1") &&
+      scriptSource.includes("::1"),
+  );
+  check(
+    "Migration timestamp is 20260929010200 and names matchDecision skip default",
+    migrationSource.includes("20260929010200") &&
+      migrationSource.includes('"matchDecision" TEXT NOT NULL DEFAULT \'SKIP\'') &&
+      scriptSource.includes("20260929010200_service_catalog_import/migration.sql"),
+  );
 
   console.log("\nSTATIC — parse, sanitize, upload bounds");
   const quoted = parseCatalogCsv('name,description\n"Fan, 52""","Replace, now"');
@@ -270,8 +373,80 @@ try {
     quoted[1][0] === 'Fan, 52"' && quoted[1][1] === "Replace, now",
   );
   check(
-    "Sanitize strips tags and control characters",
-    sanitizeCatalogImportText("Fan\u0000<script>x</script> Swap", 80) === "Fan Swap",
+    "Sanitize strips tags and control characters without truncating",
+    sanitizeCatalogImportText("Fan\u0000<script>x</script> Swap") === "Fan Swap" &&
+      parseSource.includes("catalogImportFieldOverLength") &&
+      !/export function sanitizeCatalogImportText\([^)]*max/.test(parseSource),
+  );
+  const longName = "N".repeat(MAX_SERVICE_CATALOG_IMPORT_NAME + 1);
+  const overLength = evaluateCatalogImportRow(2, {
+    name: longName,
+    pricingMode: "FIXED",
+    price: "10",
+  });
+  check(
+    "Over-length name is invalid and not truncated",
+    overLength.previewStatus === "INVALID" &&
+      overLength.name === longName &&
+      overLength.invalidReason ===
+        catalogImportOverLengthMessage("Name", MAX_SERVICE_CATALOG_IMPORT_NAME),
+  );
+  const overDescription = evaluateCatalogImportRow(2, {
+    name: "Fan",
+    description: "D".repeat(MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION + 1),
+    pricingMode: "FIXED",
+    price: "10",
+  });
+  check(
+    "Over-length description is invalid",
+    overDescription.previewStatus === "INVALID" &&
+      overDescription.invalidReason ===
+        catalogImportOverLengthMessage(
+          "Description",
+          MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
+        ),
+  );
+  const overCategory = evaluateCatalogImportRow(2, {
+    name: "Fan",
+    pricingMode: "FIXED",
+    price: "10",
+    category: "C".repeat(MAX_SERVICE_CATALOG_IMPORT_CATEGORY + 1),
+  });
+  check(
+    "Over-length category is invalid",
+    overCategory.previewStatus === "INVALID" &&
+      overCategory.invalidReason ===
+        catalogImportOverLengthMessage("Category", MAX_SERVICE_CATALOG_IMPORT_CATEGORY),
+  );
+  const overUnit = evaluateCatalogImportRow(2, {
+    name: "Fan",
+    pricingMode: "VARIABLE",
+    price: "10",
+    unitLabel: "U".repeat(MAX_SERVICE_CATALOG_IMPORT_UNIT + 1),
+  });
+  check(
+    "Over-length unit label is invalid",
+    overUnit.previewStatus === "INVALID" &&
+      overUnit.invalidReason ===
+        catalogImportOverLengthMessage("Unit label", MAX_SERVICE_CATALOG_IMPORT_UNIT),
+  );
+  const missingMode = evaluateCatalogImportRow(2, {
+    name: "Fan",
+    price: "10",
+  });
+  check(
+    "Missing pricingMode is invalid",
+    missingMode.previewStatus === "INVALID" &&
+      missingMode.invalidReason === CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE,
+  );
+  const missingPrice = evaluateCatalogImportRow(2, {
+    name: "Fan",
+    pricingMode: "FIXED",
+  });
+  check(
+    "Missing price is invalid except Custom Quote",
+    missingPrice.previewStatus === "INVALID" &&
+      missingPrice.invalidReason === CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE,
   );
   check(
     "Filename is sanitized",
@@ -444,6 +619,53 @@ try {
   check(
     "Name key is case-insensitive per trade",
     catalogNameKey("Door Knob", "handyman") === catalogNameKey("door knob", "HANDYMAN"),
+  );
+  const duplicateCatalogMatches = applyCatalogImportContext(
+    parseServiceCatalogCsv(
+      csv(["Door Knob,Swap,FIXED,75,Doors & Locks,HANDYMAN,,,yes"]),
+    ),
+    {
+      businessId: "biz-a",
+      primaryTrade: "HANDYMAN",
+      activeTradeCodes: ["HANDYMAN"],
+      existingItems: [
+        {
+          id: "cat-newer",
+          businessId: "biz-a",
+          name: "Door Knob",
+          tradeCode: "HANDYMAN",
+          createdAt: new Date("2026-09-02T00:00:00.000Z"),
+        },
+        {
+          id: "cat-older",
+          businessId: "biz-a",
+          name: "Door Knob",
+          tradeCode: "HANDYMAN",
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+        },
+      ],
+    },
+  );
+  check(
+    "Duplicate catalog names match the oldest createdAt then id",
+    duplicateCatalogMatches[0].previewStatus === "NAME_MATCH" &&
+      duplicateCatalogMatches[0].matchedCatalogItemId === "cat-older" &&
+      pickDeterministicCatalogMatch([
+        {
+          id: "z-id",
+          businessId: "biz-a",
+          name: "Door Knob",
+          tradeCode: "HANDYMAN",
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+        },
+        {
+          id: "a-id",
+          businessId: "biz-a",
+          name: "Door Knob",
+          tradeCode: "HANDYMAN",
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+        },
+      ])?.id === "a-id",
   );
 
   const businessA = await prisma.business.create({
@@ -648,7 +870,7 @@ try {
       retryPreview.contentSha256 === hashCatalogCsvBytes(previewBytes),
   );
 
-  console.log("\nCONFIRM — add, update, history, retry");
+  console.log("\nCONFIRM — skip default, explicit update, history, retry");
   const cleanBytes = Buffer.from(
     csv([
       "New Fan,Install a fan,FIXED,125,Fans & Fixtures,HANDYMAN,,,yes",
@@ -660,30 +882,60 @@ try {
     bytes: cleanBytes,
   });
   check(
-    "Clean preview has zero validation errors and one name match",
+    "Clean preview has zero validation errors and one name match defaulting to skip",
     cleanPreview.invalidCount === 0 &&
       cleanPreview.validCount === 1 &&
-      cleanPreview.nameMatchCount === 1,
+      cleanPreview.nameMatchCount === 1 &&
+      cleanPreview.rows.some(
+        (row) =>
+          row.previewStatus === "NAME_MATCH" && row.matchDecision === "SKIP",
+      ),
   );
 
-  const confirmed = await confirmServiceCatalogImport(prisma, ownerA, {
+  const skipped = await confirmServiceCatalogImport(prisma, ownerA, {
     importId: cleanPreview.id,
   });
-  check("Confirm marks the batch CONFIRMED", confirmed.preview.status === "CONFIRMED");
+  check("Confirm marks the batch CONFIRMED", skipped.preview.status === "CONFIRMED");
   check(
-    "Confirm added one and updated one",
-    confirmed.addedCount === 1 && confirmed.updatedCount === 1,
+    "Confirm adds VALID rows and skips NAME_MATCH unless marked update",
+    skipped.addedCount === 1 && skipped.updatedCount === 0,
   );
   const added = await prisma.serviceCatalogItem.findFirst({
     where: { businessId: businessA.id, name: "New Fan" },
   });
-  const updated = await prisma.serviceCatalogItem.findFirst({
+  const skippedExisting = await prisma.serviceCatalogItem.findFirst({
     where: { id: existingA.id },
   });
   check("New service was added on this business", Boolean(added) && added.price.toString() === "125");
   check(
-    "Matching name updated this business's catalog item",
-    updated?.price.toString() === "90" &&
+    "Skip default left the matching catalog item unchanged",
+    skippedExisting?.price.toString() === "70" &&
+      skippedExisting.description === "Original catalog scope" &&
+      skippedExisting.pricingMode === "STARTING_AT",
+  );
+
+  const updateBytes = Buffer.from(
+    csv(["Existing Door Knob,Updated scope,FIXED,90,Doors & Locks,HANDYMAN,,,yes"]),
+  );
+  const updatePreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "update-catalog.csv",
+    bytes: updateBytes,
+  });
+  const updateRow = updatePreview.rows.find(
+    (row) => row.previewStatus === "NAME_MATCH" && row.matchedCatalogItemId === existingA.id,
+  );
+  const updatedConfirm = await confirmServiceCatalogImport(prisma, ownerA, {
+    importId: updatePreview.id,
+    matchDecisions: updateRow ? { [updateRow.id]: "UPDATE" } : {},
+  });
+  const updated = await prisma.serviceCatalogItem.findFirst({
+    where: { id: existingA.id },
+  });
+  check(
+    "Confirm updates only the NAME_MATCH row marked update",
+    updatedConfirm.addedCount === 0 &&
+      updatedConfirm.updatedCount === 1 &&
+      updated?.price.toString() === "90" &&
       updated.description.includes("Updated scope") &&
       updated.pricingMode === "FIXED",
   );
@@ -722,9 +974,9 @@ try {
   });
   check("Confirm retry is reused and does not double-write", confirmRetry.reused === true);
   const catalogAfterRetry = await prisma.serviceCatalogItem.count({
-    where: { businessId: businessA.id },
+    where: { businessId: businessA.id, name: "New Fan" },
   });
-  check("Retry did not create a second New Fan", catalogAfterRetry === 2);
+  check("Retry did not create a second New Fan", catalogAfterRetry === 1);
 
   await expectError(
     "ADMIN cannot confirm an OWNER preview",
@@ -737,6 +989,156 @@ try {
     "Already-confirmed copy exists for UI",
     alreadyConfirmedCopy.includes("already confirmed"),
   );
+
+  console.log("\nCONFIRM — blank keep, archived active, rematch, concurrency");
+  const archived = await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: businessA.id,
+      name: "Archived Fan",
+      description: "Keep archived description",
+      pricingMode: "STARTING_AT",
+      price: new Prisma.Decimal(30),
+      category: "Fans & Fixtures",
+      tradeCode: "HANDYMAN",
+      unitLabel: "each",
+      recurrenceEligible: false,
+      active: false,
+    },
+  });
+  const blankKeepBytes = Buffer.from(
+    csv(["Archived Fan,,FIXED,99,,HANDYMAN,,,"]),
+  );
+  const blankKeepPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "blank-keep.csv",
+    bytes: blankKeepBytes,
+  });
+  const blankKeepRow = blankKeepPreview.rows.find(
+    (row) => row.matchedCatalogItemId === archived.id,
+  );
+  check(
+    "Blank optional cells stay null on the NAME_MATCH preview row",
+    blankKeepRow?.previewStatus === "NAME_MATCH" &&
+      blankKeepRow.description == null &&
+      blankKeepRow.category == null &&
+      blankKeepRow.active == null,
+  );
+  await confirmServiceCatalogImport(prisma, ownerA, {
+    importId: blankKeepPreview.id,
+    matchDecisions: blankKeepRow ? { [blankKeepRow.id]: "UPDATE" } : {},
+  });
+  const archivedAfter = await prisma.serviceCatalogItem.findFirst({
+    where: { id: archived.id, businessId: businessA.id },
+  });
+  check(
+    "Update with blank cells keeps description, category, and archived active",
+    archivedAfter?.price.toString() === "99" &&
+      archivedAfter.pricingMode === "FIXED" &&
+      archivedAfter.description === "Keep archived description" &&
+      archivedAfter.category === "Fans & Fixtures" &&
+      archivedAfter.unitLabel === "each" &&
+      archivedAfter.active === false,
+  );
+
+  const firstXBytes = Buffer.from(csv(["X,First scope,FIXED,10,Other Services,HANDYMAN,,,yes"]));
+  const secondXBytes = Buffer.from(csv(["X,Second scope,FIXED,11,Other Services,HANDYMAN,,,yes"]));
+  const firstXPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "x-first.csv",
+    bytes: firstXBytes,
+  });
+  const secondXPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "x-second.csv",
+    bytes: secondXBytes,
+  });
+  check(
+    "Two previews both contain a VALID X before either confirm",
+    firstXPreview.rows.some((row) => row.name === "X" && row.previewStatus === "VALID") &&
+      secondXPreview.rows.some((row) => row.name === "X" && row.previewStatus === "VALID"),
+  );
+  await confirmServiceCatalogImport(prisma, ownerA, { importId: firstXPreview.id });
+  await expectError(
+    "Second preview of X rematches the live catalog instead of writing another X",
+    () => confirmServiceCatalogImport(prisma, ownerA, { importId: secondXPreview.id }),
+    (error) =>
+      error instanceof ServiceCatalogImportError &&
+      error.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+  );
+  const xCount = await prisma.serviceCatalogItem.count({
+    where: { businessId: businessA.id, name: "X" },
+  });
+  const secondXAfter = await loadOwnedCatalogImport(prisma, ownerA, secondXPreview.id);
+  check("Sequential confirms of X leave exactly one X", xCount === 1);
+  check(
+    "Stale second preview returns to reviewable PREVIEW with a name match",
+    secondXAfter.status === "PREVIEW" &&
+      secondXAfter.rows.some(
+        (row) => row.name === "X" && row.previewStatus === "NAME_MATCH",
+      ),
+  );
+
+  const recoverBytes = Buffer.from(
+    csv(["Recover Fan,Install,FIXED,40,Fans & Fixtures,HANDYMAN,,,yes"]),
+  );
+  const recoverPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "recover.csv",
+    bytes: recoverBytes,
+  });
+  await prisma.serviceCatalogImport.update({
+    where: { id: recoverPreview.id },
+    data: { status: "CONFIRMING" },
+  });
+  const recovered = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "recover-again.csv",
+    bytes: recoverBytes,
+  });
+  check(
+    "Re-upload of a CONFIRMING import resets to PREVIEW and refreshes matches",
+    recovered.id === recoverPreview.id && recovered.status === "PREVIEW",
+  );
+
+  const concurrentBytes = Buffer.from(
+    csv([
+      "Concurrent One,Install,FIXED,15,Fans & Fixtures,HANDYMAN,,,yes",
+      "Concurrent Two,Install,FIXED,16,Fans & Fixtures,HANDYMAN,,,yes",
+    ]),
+  );
+  const concurrentPreview = await previewServiceCatalogCsvUpload(prisma, ownerA, {
+    filename: "concurrent.csv",
+    bytes: concurrentBytes,
+  });
+  const prismaRace = new PrismaClient({ datasourceUrl: testUrl });
+  try {
+    const [firstRace, secondRace] = await Promise.allSettled([
+      confirmServiceCatalogImport(prisma, ownerA, { importId: concurrentPreview.id }),
+      confirmServiceCatalogImport(prismaRace, ownerA, {
+        importId: concurrentPreview.id,
+      }),
+    ]);
+    const fulfilled = [firstRace, secondRace].filter((result) => result.status === "fulfilled");
+    const rejected = [firstRace, secondRace].filter((result) => result.status === "rejected");
+    check(
+      "Two simultaneous confirms leave one writer and one in-progress or reused result",
+      fulfilled.length >= 1 &&
+        (rejected.length === 0 ||
+          rejected.every(
+            (result) =>
+              result.reason instanceof ServiceCatalogImportError &&
+              (result.reason.message === CATALOG_IMPORT_IN_PROGRESS_MESSAGE ||
+                result.reason.message === CATALOG_IMPORT_STALE_MATCHES_MESSAGE),
+          )),
+    );
+    const concurrentOne = await prisma.serviceCatalogItem.count({
+      where: { businessId: businessA.id, name: "Concurrent One" },
+    });
+    const concurrentTwo = await prisma.serviceCatalogItem.count({
+      where: { businessId: businessA.id, name: "Concurrent Two" },
+    });
+    check(
+      "Two simultaneous confirms leave exactly one new item per VALID row",
+      concurrentOne === 1 && concurrentTwo === 1,
+    );
+  } finally {
+    await prismaRace.$disconnect();
+  }
 
   console.log(
     failures === 0

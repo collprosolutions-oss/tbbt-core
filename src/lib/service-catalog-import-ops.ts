@@ -1,13 +1,13 @@
 /**
  * OWNER-reviewed service catalog CSV write path.
  *
- * Preview stores sanitized rows. Confirm adds or updates ServiceCatalogItem
- * rows only after an explicit OWNER action. Retries reuse the same batch
- * (businessId + content hash, then writtenCatalogItemId).
+ * Preview stores sanitized rows. Confirm adds new VALID rows and writes
+ * NAME_MATCH rows only after an explicit per-row update / add-as-new
+ * choice (skip is the default). Retries reuse businessId + content hash.
  *
  * Browser-supplied businessId is never authorization. Confirm never writes
  * LineItem or EstimateVersionLineItem snapshots and never publishes hourly
- * rates.
+ * rates. Confirm is single-flight: only one PREVIEW→CONFIRMING claim writes.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -17,38 +17,43 @@ import {
   listActiveTradeCodes,
   resolvePrimaryTradeCode,
 } from "@/lib/business-trades";
-import {
-  catalogRecurrenceEligibleForTrade,
-  catalogUnitLabelFromForm,
-} from "@/lib/catalog-item-fields";
+import { catalogRecurrenceEligibleForTrade } from "@/lib/catalog-item-fields";
 import { catalogDefinitionFromSnapshot } from "@/lib/estimate-calculators";
 import {
   catalogCalculatorDefinition,
   joinCatalogDescription,
 } from "@/lib/estimate-line-scope";
+import { DEFAULT_SERVICE_CATEGORY, normalizeServiceCategory } from "@/lib/service-catalog-category";
 import {
   applyCatalogImportContext,
   CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE,
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
+  CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
   CATALOG_IMPORT_NOT_AVAILABLE_MESSAGE,
   CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE,
+  CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE,
+  CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
+  catalogRowBecameStale,
   countCatalogPreviewStatuses,
   decodeCatalogCsvBytes,
   hashCatalogCsvBytes,
   MAX_SERVICE_CATALOG_IMPORT_BYTES,
   OWNER_ONLY_CATALOG_IMPORT_MESSAGE,
+  parseCatalogImportMatchDecision,
   parseServiceCatalogCsv,
   sanitizeCatalogSourceFilename,
   SERVICE_CATALOG_IMPORT_ROUTE,
   ServiceCatalogImportError,
   storedCatalogRowToParsed,
   type ParsedCatalogImportRow,
+  type ServiceCatalogImportMatchDecision,
 } from "@/lib/service-catalog-import";
 import { allocateUnusedWebsiteSlug } from "@/lib/website-engine/slugs";
 
 export { OWNER_ONLY_CATALOG_IMPORT_MESSAGE, SERVICE_CATALOG_IMPORT_ROUTE };
 
 type Db = PrismaClient;
+type Tx = Prisma.TransactionClient;
 export type ServiceCatalogImportAccess = BusinessAccess;
 
 export type StoredCatalogImportRow = {
@@ -63,14 +68,15 @@ export type StoredCatalogImportRow = {
   description: string | null;
   pricingMode: string;
   price: Prisma.Decimal | null;
-  category: string;
+  category: string | null;
   tradeCode: string;
   unitLabel: string;
-  recurrenceEligible: boolean;
-  active: boolean;
+  recurrenceEligible: boolean | null;
+  active: boolean | null;
   matchedCatalogItemId: string | null;
   writtenCatalogItemId: string | null;
   writeAction: string | null;
+  matchDecision: string;
 };
 
 export type StoredCatalogImport = {
@@ -145,13 +151,20 @@ function toPreview(
   };
 }
 
-async function loadCatalogImportContext(db: Db, businessId: string) {
+async function loadCatalogImportContext(db: Db | Tx, businessId: string) {
   const [activeTradeCodes, primaryTrade, existingItems] = await Promise.all([
     listActiveTradeCodes(db, businessId),
     resolvePrimaryTradeCode(db, businessId),
     db.serviceCatalogItem.findMany({
       where: { businessId },
-      select: { id: true, businessId: true, name: true, tradeCode: true },
+      select: {
+        id: true,
+        businessId: true,
+        name: true,
+        tradeCode: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
   ]);
   return { activeTradeCodes, primaryTrade, existingItems };
@@ -165,16 +178,29 @@ function rowWriteData(businessId: string, row: ParsedCatalogImportRow) {
     invalidReason: row.invalidReason,
     rowFingerprint: row.rowFingerprint,
     name: row.name,
-    description: row.description || null,
+    description: row.description,
     pricingMode: row.pricingMode,
     price: row.price,
     category: row.category,
     tradeCode: row.tradeCode,
-    unitLabel: row.unitLabel,
+    unitLabel: row.unitLabel ?? "",
     recurrenceEligible: row.recurrenceEligible,
     active: row.active,
     matchedCatalogItemId: row.matchedCatalogItemId,
+    matchDecision: row.previewStatus === "NAME_MATCH" ? row.matchDecision : "SKIP",
   };
+}
+
+function plannedWriteAction(
+  row: StoredCatalogImportRow,
+): "ADD" | "UPDATE" | null {
+  if (row.writtenCatalogItemId) return null;
+  if (row.previewStatus === "VALID") return "ADD";
+  if (row.previewStatus === "NAME_MATCH") {
+    if (row.matchDecision === "UPDATE") return "UPDATE";
+    if (row.matchDecision === "ADD_NEW") return "ADD";
+  }
+  return null;
 }
 
 async function persistPreview(
@@ -199,8 +225,15 @@ async function persistPreview(
   if (existing) {
     access.assertOwned(existing);
     const rows = existing.rows ?? [];
-    if (existing.status === "CONFIRMED" || existing.status === "CONFIRMING") {
+    if (existing.status === "CONFIRMED") {
       return toPreview(existing, rows);
+    }
+    if (existing.status === "CONFIRMING") {
+      await db.serviceCatalogImport.updateMany({
+        where: { id: existing.id, businessId, status: "CONFIRMING" },
+        data: { status: "PREVIEW" },
+      });
+      return refreshPreviewMatches(db, access, { ...existing, status: "PREVIEW" }, rows);
     }
     return refreshPreviewMatches(db, access, existing, rows);
   }
@@ -255,23 +288,53 @@ async function refreshPreviewMatches(
   rows: StoredCatalogImportRow[],
 ): Promise<ServiceCatalogImportPreview> {
   const context = await loadCatalogImportContext(db, access.businessId);
-  const parsed = rows.map((row) => storedCatalogRowToParsed(row));
+  const written = rows.filter((row) => row.writtenCatalogItemId);
+  const unwritten = rows.filter((row) => !row.writtenCatalogItemId);
+  const parsed = unwritten.map((row) => storedCatalogRowToParsed(row));
   const flagged = applyCatalogImportContext(parsed, {
     businessId: access.businessId,
     ...context,
   });
-  await db.serviceCatalogImportRow.deleteMany({
-    where: { businessId: access.businessId, importId: existing.id },
-  });
-  await db.serviceCatalogImportRow.createMany({
-    data: flagged.map((row) => ({
-      ...rowWriteData(access.businessId, row),
-      importId: existing.id,
-    })),
-  });
-  await db.serviceCatalogImport.update({
-    where: { id: existing.id },
-    data: previewCountWrite(flagged),
+  const decisions = new Map(
+    unwritten.map((row) => [
+      row.rowNumber,
+      parseCatalogImportMatchDecision(row.matchDecision) ?? "SKIP",
+    ]),
+  );
+
+  await db.$transaction(async (tx) => {
+    await tx.serviceCatalogImportRow.deleteMany({
+      where: {
+        businessId: access.businessId,
+        importId: existing.id,
+        writtenCatalogItemId: null,
+      },
+    });
+    if (flagged.length > 0) {
+      await tx.serviceCatalogImportRow.createMany({
+        data: flagged.map((row) => ({
+          ...rowWriteData(access.businessId, {
+            ...row,
+            matchDecision:
+              row.previewStatus === "NAME_MATCH"
+                ? (decisions.get(row.rowNumber) ?? "SKIP")
+                : "SKIP",
+          }),
+          importId: existing.id,
+        })),
+      });
+    }
+    const nextRows = [
+      ...written.map((row) => ({ previewStatus: row.previewStatus })),
+      ...flagged,
+    ];
+    await tx.serviceCatalogImport.update({
+      where: { id: existing.id },
+      data: {
+        status: "PREVIEW",
+        ...previewCountWrite(nextRows),
+      },
+    });
   });
   return loadOwnedCatalogImport(db, access, existing.id);
 }
@@ -308,80 +371,203 @@ export async function loadOwnedCatalogImport(
   return toPreview(record, record.rows ?? []);
 }
 
-async function writeCatalogRow(
+export async function setCatalogImportMatchDecision(
   db: Db,
   access: ServiceCatalogImportAccess,
+  input: {
+    importId: string;
+    rowId: string;
+    decision: string;
+  },
+): Promise<ServiceCatalogImportPreview> {
+  requireOwner(access);
+  const decision = parseCatalogImportMatchDecision(input.decision);
+  if (!decision) {
+    throw new ServiceCatalogImportError(CATALOG_IMPORT_NOT_AVAILABLE_MESSAGE);
+  }
+  const preview = await loadOwnedCatalogImport(db, access, input.importId);
+  if (preview.status !== "PREVIEW") {
+    throw new ServiceCatalogImportError(
+      preview.status === "CONFIRMED"
+        ? "This catalog preview was already confirmed."
+        : CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
+    );
+  }
+  const row = preview.rows.find((candidate) => candidate.id === input.rowId.trim());
+  if (!row || row.businessId !== access.businessId || row.previewStatus !== "NAME_MATCH") {
+    throw new ServiceCatalogImportError(CATALOG_IMPORT_NOT_AVAILABLE_MESSAGE);
+  }
+  access.assertOwned(row);
+  await db.serviceCatalogImportRow.updateMany({
+    where: {
+      id: row.id,
+      businessId: access.businessId,
+      importId: preview.id,
+      previewStatus: "NAME_MATCH",
+      writtenCatalogItemId: null,
+    },
+    data: { matchDecision: decision },
+  });
+  return loadOwnedCatalogImport(db, access, preview.id);
+}
+
+async function persistMatchDecisions(
+  db: Db,
+  access: ServiceCatalogImportAccess,
+  preview: ServiceCatalogImportPreview,
+  decisions: Record<string, string> | undefined,
+) {
+  if (!decisions) return preview;
+  for (const [rowId, raw] of Object.entries(decisions)) {
+    const decision = parseCatalogImportMatchDecision(raw);
+    if (!decision) continue;
+    const row = preview.rows.find((candidate) => candidate.id === rowId);
+    if (!row || row.previewStatus !== "NAME_MATCH") continue;
+    await db.serviceCatalogImportRow.updateMany({
+      where: {
+        id: row.id,
+        businessId: access.businessId,
+        importId: preview.id,
+        previewStatus: "NAME_MATCH",
+        writtenCatalogItemId: null,
+      },
+      data: { matchDecision: decision },
+    });
+  }
+  return loadOwnedCatalogImport(db, access, preview.id);
+}
+
+function keepExistingText(incoming: string | null | undefined, existing: string | null) {
+  const value = incoming?.trim() ?? "";
+  return value ? value : existing;
+}
+
+async function applyCatalogUpdate(
+  tx: Tx,
+  access: ServiceCatalogImportAccess,
   row: StoredCatalogImportRow,
-): Promise<{ catalogItemId: string; writeAction: "ADD" | "UPDATE" }> {
+): Promise<string> {
   const tradeCode = await authorizeCatalogTradeCode(
-    db,
+    tx,
     access.businessId,
     row.tradeCode || null,
   );
-  if (row.matchedCatalogItemId) {
-    const existing = access.assertOwned(
-      await db.serviceCatalogItem.findFirst({
-        where: {
-          id: row.matchedCatalogItemId,
-          businessId: access.businessId,
-          tradeCode,
-        },
-      }),
-    );
-    await db.serviceCatalogItem.update({
-      where: { id: existing.id },
+  const existing = access.assertOwned(
+    await tx.serviceCatalogItem.findFirst({
+      where: {
+        id: row.matchedCatalogItemId ?? "",
+        businessId: access.businessId,
+        tradeCode,
+      },
+    }),
+  );
+  const nextDescription = row.description?.trim()
+    ? joinCatalogDescription(
+        row.description,
+        catalogCalculatorDefinition(existing.description) ??
+          catalogDefinitionFromSnapshot(null, row.name),
+      )
+    : existing.description;
+  await tx.serviceCatalogItem.update({
+    where: { id: existing.id },
+    data: {
+      name: row.name,
+      pricingMode: row.pricingMode,
+      price: row.price,
+      description: nextDescription,
+      category: row.category?.trim()
+        ? normalizeServiceCategory(row.category)
+        : existing.category,
+      recurrenceEligible: catalogRecurrenceEligibleForTrade(
+        existing.tradeCode,
+        row.recurrenceEligible != null,
+        row.recurrenceEligible === true,
+        existing.recurrenceEligible,
+      ),
+      unitLabel: keepExistingText(row.unitLabel, existing.unitLabel) ?? existing.unitLabel,
+      active: row.active == null ? existing.active : row.active,
+    },
+  });
+  return existing.id;
+}
+
+async function applyCatalogAdd(
+  tx: Tx,
+  access: ServiceCatalogImportAccess,
+  row: StoredCatalogImportRow,
+): Promise<string> {
+  const tradeCode = await authorizeCatalogTradeCode(
+    tx,
+    access.businessId,
+    row.tradeCode || null,
+  );
+  const websiteSlug = await allocateUnusedWebsiteSlug(tx, access.businessId, row.name);
+  try {
+    const created = await tx.serviceCatalogItem.create({
       data: {
+        businessId: access.businessId,
+        tradeCode,
         name: row.name,
+        websiteSlug,
         pricingMode: row.pricingMode,
         price: row.price,
         description: joinCatalogDescription(
           row.description || null,
-          catalogCalculatorDefinition(existing.description) ??
-            catalogDefinitionFromSnapshot(null, row.name),
+          catalogDefinitionFromSnapshot(null, row.name),
         ),
-        category: row.category,
+        category: normalizeServiceCategory(row.category) || DEFAULT_SERVICE_CATEGORY,
         recurrenceEligible: catalogRecurrenceEligibleForTrade(
-          existing.tradeCode,
+          tradeCode,
           true,
-          row.recurrenceEligible,
-          existing.recurrenceEligible,
+          row.recurrenceEligible === true,
+          false,
         ),
-        unitLabel: catalogUnitLabelFromForm(
-          row.pricingMode,
-          row.unitLabel,
-          existing.unitLabel,
-        ),
-        active: row.active,
+        unitLabel: row.unitLabel ?? "",
+        active: row.active == null ? true : row.active,
       },
     });
-    return { catalogItemId: existing.id, writeAction: "UPDATE" };
+    return created.id;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new ServiceCatalogImportError(CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE);
+    }
+    throw error;
   }
+}
 
-  const websiteSlug = await allocateUnusedWebsiteSlug(db, access.businessId, row.name);
-  const created = await db.serviceCatalogItem.create({
-    data: {
-      businessId: access.businessId,
-      tradeCode,
-      name: row.name,
-      websiteSlug,
-      pricingMode: row.pricingMode,
-      price: row.price,
-      description: joinCatalogDescription(
-        row.description || null,
-        catalogDefinitionFromSnapshot(null, row.name),
-      ),
-      category: row.category,
-      recurrenceEligible: catalogRecurrenceEligibleForTrade(
-        tradeCode,
-        true,
-        row.recurrenceEligible,
-        false,
-      ),
-      unitLabel: row.unitLabel,
-      active: row.active,
-    },
+async function writeEligibleRow(
+  db: Db,
+  access: ServiceCatalogImportAccess,
+  row: StoredCatalogImportRow,
+  writeAction: "ADD" | "UPDATE",
+): Promise<{ catalogItemId: string; writeAction: "ADD" | "UPDATE" } | null> {
+  return db.$transaction(async (tx) => {
+    const claimed = await tx.serviceCatalogImportRow.updateMany({
+      where: {
+        id: row.id,
+        businessId: access.businessId,
+        importId: row.importId,
+        writtenCatalogItemId: null,
+        writeAction: null,
+      },
+      data: { writeAction },
+    });
+    if (claimed.count !== 1) {
+      return null;
+    }
+    const catalogItemId =
+      writeAction === "UPDATE"
+        ? await applyCatalogUpdate(tx, access, row)
+        : await applyCatalogAdd(tx, access, row);
+    await tx.serviceCatalogImportRow.update({
+      where: { id: row.id },
+      data: { writtenCatalogItemId: catalogItemId },
+    });
+    return { catalogItemId, writeAction };
   });
-  return { catalogItemId: created.id, writeAction: "ADD" };
 }
 
 export type ConfirmCatalogImportResult = {
@@ -395,10 +581,13 @@ export type ConfirmCatalogImportResult = {
 export async function confirmServiceCatalogImport(
   db: Db,
   access: ServiceCatalogImportAccess,
-  input: { importId: string },
+  input: {
+    importId: string;
+    matchDecisions?: Record<string, string>;
+  },
 ): Promise<ConfirmCatalogImportResult> {
   requireOwner(access);
-  const preview = await loadOwnedCatalogImport(db, access, input.importId);
+  let preview = await loadOwnedCatalogImport(db, access, input.importId);
   if (preview.status === "CONFIRMED") {
     return {
       preview,
@@ -410,49 +599,84 @@ export async function confirmServiceCatalogImport(
       reused: true,
     };
   }
-  if (preview.status !== "PREVIEW" && preview.status !== "CONFIRMING") {
-    throw new ServiceCatalogImportError(CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE);
+  if (preview.status !== "PREVIEW") {
+    throw new ServiceCatalogImportError(
+      preview.status === "CONFIRMING"
+        ? CATALOG_IMPORT_IN_PROGRESS_MESSAGE
+        : CATALOG_IMPORT_CONFIRM_REQUIRED_MESSAGE,
+    );
   }
   if (preview.rows.some((row) => row.previewStatus === "INVALID")) {
     throw new ServiceCatalogImportError(CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE);
   }
 
-  await db.serviceCatalogImport.updateMany({
+  preview = await persistMatchDecisions(db, access, preview, input.matchDecisions);
+
+  const claimed = await db.serviceCatalogImport.updateMany({
     where: { id: preview.id, businessId: access.businessId, status: "PREVIEW" },
     data: { status: "CONFIRMING" },
   });
+  if (claimed.count !== 1) {
+    const current = await loadOwnedCatalogImport(db, access, preview.id);
+    if (current.status === "CONFIRMED") {
+      return {
+        preview: current,
+        writtenCatalogItemIds: current.rows
+          .map((row) => row.writtenCatalogItemId)
+          .filter((id): id is string => Boolean(id)),
+        addedCount: current.rows.filter((row) => row.writeAction === "ADD").length,
+        updatedCount: current.rows.filter((row) => row.writeAction === "UPDATE").length,
+        reused: true,
+      };
+    }
+    throw new ServiceCatalogImportError(CATALOG_IMPORT_IN_PROGRESS_MESSAGE);
+  }
+
+  const context = await loadCatalogImportContext(db, access.businessId);
+  const live = applyCatalogImportContext(
+    preview.rows.map((row) => storedCatalogRowToParsed(row)),
+    { businessId: access.businessId, ...context },
+  );
+  const liveByNumber = new Map(live.map((row) => [row.rowNumber, row]));
+  const stale = preview.rows.some((row) => {
+    if (row.writtenCatalogItemId) return false;
+    const current = liveByNumber.get(row.rowNumber);
+    return current ? catalogRowBecameStale(row, current) : false;
+  });
+  if (stale) {
+    await refreshPreviewMatches(db, access, preview, preview.rows);
+    throw new ServiceCatalogImportError(CATALOG_IMPORT_STALE_MATCHES_MESSAGE);
+  }
 
   const writtenCatalogItemIds: string[] = [];
   let addedCount = 0;
   let updatedCount = 0;
 
-  for (const row of preview.rows) {
-    if (row.writtenCatalogItemId) {
-      writtenCatalogItemIds.push(row.writtenCatalogItemId);
-      if (row.writeAction === "UPDATE") updatedCount += 1;
+  try {
+    for (const row of preview.rows) {
+      if (row.writtenCatalogItemId) {
+        writtenCatalogItemIds.push(row.writtenCatalogItemId);
+        if (row.writeAction === "UPDATE") updatedCount += 1;
+        else addedCount += 1;
+        continue;
+      }
+      const action = plannedWriteAction(row);
+      if (!action) continue;
+      const result = await writeEligibleRow(db, access, row, action);
+      if (!result) continue;
+      writtenCatalogItemIds.push(result.catalogItemId);
+      if (result.writeAction === "UPDATE") updatedCount += 1;
       else addedCount += 1;
-      continue;
     }
-    if (row.previewStatus !== "VALID" && row.previewStatus !== "NAME_MATCH") {
-      continue;
-    }
-
-    const result = await writeCatalogRow(db, access, row);
-    await db.serviceCatalogImportRow.updateMany({
-      where: {
-        id: row.id,
-        businessId: access.businessId,
-        importId: preview.id,
-        writtenCatalogItemId: null,
-      },
-      data: {
-        writtenCatalogItemId: result.catalogItemId,
-        writeAction: result.writeAction,
-      },
+  } catch (error) {
+    await db.serviceCatalogImport.updateMany({
+      where: { id: preview.id, businessId: access.businessId, status: "CONFIRMING" },
+      data: { status: "PREVIEW" },
     });
-    writtenCatalogItemIds.push(result.catalogItemId);
-    if (result.writeAction === "UPDATE") updatedCount += 1;
-    else addedCount += 1;
+    if (error instanceof ServiceCatalogImportError) {
+      throw error;
+    }
+    throw new ServiceCatalogImportError(CATALOG_IMPORT_STALE_MATCHES_MESSAGE);
   }
 
   await db.serviceCatalogImport.update({
@@ -473,3 +697,5 @@ export async function confirmServiceCatalogImport(
     reused: false,
   };
 }
+
+export type { ServiceCatalogImportMatchDecision };

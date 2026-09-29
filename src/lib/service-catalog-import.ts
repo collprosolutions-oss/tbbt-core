@@ -9,7 +9,6 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { isHourlyUnitLabel } from "@/lib/estimate-calculators/unit-registry";
 import { parsePricingMode, type PricingMode } from "@/lib/pricing-mode";
-import { normalizeServiceCategory } from "@/lib/service-catalog-category";
 import {
   CATALOG_IMPORT_EMPTY_MESSAGE,
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
@@ -17,13 +16,18 @@ import {
   CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE,
   CATALOG_IMPORT_NO_HOURLY_MESSAGE,
   CATALOG_IMPORT_NOT_CSV_MESSAGE,
+  CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE,
+  CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE,
   CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE,
+  SERVICE_CATALOG_IMPORT_MATCH_DECISIONS,
+  catalogImportOverLengthMessage,
   MAX_SERVICE_CATALOG_IMPORT_BYTES,
   MAX_SERVICE_CATALOG_IMPORT_CATEGORY,
   MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
   MAX_SERVICE_CATALOG_IMPORT_NAME,
   MAX_SERVICE_CATALOG_IMPORT_ROWS,
   MAX_SERVICE_CATALOG_IMPORT_UNIT,
+  type ServiceCatalogImportMatchDecision,
   type ServiceCatalogImportRowStatus,
 } from "@/lib/service-catalog-import-copy";
 import { getTradeConfig, pricingModeAllowedForTrade } from "@/lib/trade-config";
@@ -37,13 +41,21 @@ export {
   CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE,
   CATALOG_IMPORT_INVALID_MESSAGE,
   CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE,
+  CATALOG_IMPORT_IN_PROGRESS_MESSAGE,
   CATALOG_IMPORT_NAME_MATCH_MESSAGE,
   CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE,
   CATALOG_IMPORT_NO_HOURLY_MESSAGE,
   CATALOG_IMPORT_NOT_AVAILABLE_MESSAGE,
   CATALOG_IMPORT_NOT_CSV_MESSAGE,
+  CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE,
+  CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE,
   CATALOG_IMPORT_RESOLVE_INVALID_MESSAGE,
+  CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE,
+  CATALOG_IMPORT_STALE_MATCHES_MESSAGE,
   CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE,
+  SERVICE_CATALOG_IMPORT_MATCH_DECISIONS,
+  catalogImportMatchDecisionLabel,
+  catalogImportOverLengthMessage,
   MAX_SERVICE_CATALOG_IMPORT_BYTES,
   MAX_SERVICE_CATALOG_IMPORT_CATEGORY,
   MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
@@ -58,6 +70,7 @@ export {
   SERVICE_CATALOG_IMPORT_WRITE_ACTIONS,
   catalogImportPreviewStatusLabel,
   catalogImportSourceKindLabel,
+  type ServiceCatalogImportMatchDecision,
   type ServiceCatalogImportRowStatus,
   type ServiceCatalogImportSourceKind,
   type ServiceCatalogImportStatus,
@@ -122,18 +135,19 @@ export class ServiceCatalogImportError extends Error {
 export type ParsedCatalogImportRow = {
   rowNumber: number;
   name: string;
-  description: string;
+  description: string | null;
   pricingMode: string;
   price: Prisma.Decimal | null;
-  category: string;
+  category: string | null;
   tradeCode: string;
-  unitLabel: string;
-  recurrenceEligible: boolean;
-  active: boolean;
+  unitLabel: string | null;
+  recurrenceEligible: boolean | null;
+  active: boolean | null;
   previewStatus: ServiceCatalogImportRowStatus;
   invalidReason: string | null;
   rowFingerprint: string;
   matchedCatalogItemId: string | null;
+  matchDecision: ServiceCatalogImportMatchDecision;
 };
 
 export type SameBusinessCatalogItem = {
@@ -141,6 +155,7 @@ export type SameBusinessCatalogItem = {
   businessId: string;
   name: string;
   tradeCode: string;
+  createdAt?: Date;
 };
 
 export function catalogNameKey(name: string, tradeCode: string) {
@@ -156,8 +171,8 @@ export function catalogImportRowFingerprint(input: {
   tradeCode: string;
   pricingMode: string;
   price: Prisma.Decimal | null;
-  category: string;
-  description: string;
+  category: string | null;
+  description: string | null;
 }): string {
   return createHash("sha256")
     .update(
@@ -166,8 +181,8 @@ export function catalogImportRowFingerprint(input: {
         input.tradeCode.trim().toUpperCase(),
         input.pricingMode,
         input.price?.toString() ?? "",
-        input.category.trim().toLowerCase(),
-        input.description.trim().toLowerCase(),
+        (input.category ?? "").trim().toLowerCase(),
+        (input.description ?? "").trim().toLowerCase(),
       ].join("|"),
     )
     .digest("hex");
@@ -180,19 +195,21 @@ function stripMarkup(value: string): string {
     .replace(/[<>]/g, "");
 }
 
-export function sanitizeCatalogImportText(value: string, max: number): string {
+export function sanitizeCatalogImportText(value: string): string {
   return stripMarkup(value)
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+    .trim();
 }
 
-export function sanitizeCatalogImportMultiline(value: string, max: number): string {
+export function sanitizeCatalogImportMultiline(value: string): string {
   return stripMarkup(value)
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
-    .trim()
-    .slice(0, max);
+    .trim();
+}
+
+export function catalogImportFieldOverLength(value: string, max: number) {
+  return value.length > max;
 }
 
 export function sanitizeCatalogSourceFilename(name: string): string {
@@ -202,7 +219,8 @@ export function sanitizeCatalogSourceFilename(name: string): string {
 }
 
 export function normalizeCatalogImportHeader(value: string): string {
-  return sanitizeCatalogImportText(value, 80)
+  return sanitizeCatalogImportText(value)
+    .slice(0, 80)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
@@ -328,10 +346,9 @@ export function parseCatalogPricingMode(raw: string): {
 
 export function parseCatalogImportBoolean(
   raw: string,
-  fallback: boolean,
-): { ok: true; value: boolean } | { ok: false } {
+): { ok: true; value: boolean | null } | { ok: false } {
   const trimmed = raw.trim();
-  if (!trimmed) return { ok: true, value: fallback };
+  if (!trimmed) return { ok: true, value: null };
   const key = trimmed.toLowerCase();
   if (key === "yes" || key === "true" || key === "1" || key === "on") {
     return { ok: true, value: true };
@@ -340,6 +357,17 @@ export function parseCatalogImportBoolean(
     return { ok: true, value: false };
   }
   return { ok: false };
+}
+
+export function parseCatalogImportMatchDecision(
+  value: string,
+): ServiceCatalogImportMatchDecision | null {
+  const decision = value.trim().toUpperCase();
+  return SERVICE_CATALOG_IMPORT_MATCH_DECISIONS.includes(
+    decision as ServiceCatalogImportMatchDecision,
+  )
+    ? (decision as ServiceCatalogImportMatchDecision)
+    : null;
 }
 
 export function parseCatalogImportPrice(
@@ -351,7 +379,7 @@ export function parseCatalogImportPrice(
     return { ok: true, price: null };
   }
   if (!trimmed) {
-    return { ok: false, error: "Enter a valid price for this pricing mode." };
+    return { ok: false, error: CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE };
   }
   try {
     const price = new Prisma.Decimal(trimmed);
@@ -374,35 +402,52 @@ export function evaluateCatalogImportRow(
   rowNumber: number,
   raw: Partial<Record<CanonicalCatalogImportColumn, string>>,
 ): ParsedCatalogImportRow {
-  const name = sanitizeCatalogImportText(raw.name ?? "", MAX_SERVICE_CATALOG_IMPORT_NAME);
-  const description = sanitizeCatalogImportMultiline(
-    raw.description ?? "",
-    MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
-  );
-  const category = normalizeServiceCategory(
-    sanitizeCatalogImportText(raw.category ?? "", MAX_SERVICE_CATALOG_IMPORT_CATEGORY),
-  );
-  const unitLabel = sanitizeCatalogImportText(
-    raw.unitLabel ?? "",
-    MAX_SERVICE_CATALOG_IMPORT_UNIT,
-  );
+  const name = sanitizeCatalogImportText(raw.name ?? "");
+  const description = sanitizeCatalogImportMultiline(raw.description ?? "") || null;
+  const category = sanitizeCatalogImportText(raw.category ?? "") || null;
+  const unitLabel = sanitizeCatalogImportText(raw.unitLabel ?? "") || null;
   const requestedTrade = normalizeRequestedTrade(
-    sanitizeCatalogImportText(raw.tradeCode ?? "", 40),
+    sanitizeCatalogImportText(raw.tradeCode ?? ""),
   );
   const parsedMode = parseCatalogPricingMode(raw.pricingMode ?? "");
-  const recurrence = parseCatalogImportBoolean(raw.recurrenceEligible ?? "", false);
-  const active = parseCatalogImportBoolean(raw.active ?? "", true);
+  const recurrence = parseCatalogImportBoolean(raw.recurrenceEligible ?? "");
+  const active = parseCatalogImportBoolean(raw.active ?? "");
   const priced = parseCatalogImportPrice(parsedMode.mode ?? "", raw.price ?? "");
 
   let invalidReason: string | null = null;
-  if (!name) {
+  if (catalogImportFieldOverLength(name, MAX_SERVICE_CATALOG_IMPORT_NAME)) {
+    invalidReason = catalogImportOverLengthMessage("Name", MAX_SERVICE_CATALOG_IMPORT_NAME);
+  } else if (
+    description &&
+    catalogImportFieldOverLength(description, MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION)
+  ) {
+    invalidReason = catalogImportOverLengthMessage(
+      "Description",
+      MAX_SERVICE_CATALOG_IMPORT_DESCRIPTION,
+    );
+  } else if (
+    category &&
+    catalogImportFieldOverLength(category, MAX_SERVICE_CATALOG_IMPORT_CATEGORY)
+  ) {
+    invalidReason = catalogImportOverLengthMessage(
+      "Category",
+      MAX_SERVICE_CATALOG_IMPORT_CATEGORY,
+    );
+  } else if (
+    unitLabel &&
+    catalogImportFieldOverLength(unitLabel, MAX_SERVICE_CATALOG_IMPORT_UNIT)
+  ) {
+    invalidReason = catalogImportOverLengthMessage(
+      "Unit label",
+      MAX_SERVICE_CATALOG_IMPORT_UNIT,
+    );
+  } else if (!name) {
     invalidReason = "Service name is required.";
   } else if (parsedMode.hourly) {
     invalidReason = CATALOG_IMPORT_NO_HOURLY_MESSAGE;
   } else if (!parsedMode.mode) {
-    invalidReason =
-      "Pricing mode must be Fixed, Starting at, Unit / production, or Custom Quote.";
-  } else if (isHourlyUnitLabel(unitLabel)) {
+    invalidReason = CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE;
+  } else if (unitLabel && isHourlyUnitLabel(unitLabel)) {
     invalidReason = CATALOG_IMPORT_NO_HOURLY_MESSAGE;
   } else if (!priced.ok) {
     invalidReason = priced.error;
@@ -427,8 +472,8 @@ export function evaluateCatalogImportRow(
     category,
     tradeCode,
     unitLabel,
-    recurrenceEligible: recurrence.ok ? recurrence.value : false,
-    active: active.ok ? active.value : true,
+    recurrenceEligible: recurrence.ok ? recurrence.value : null,
+    active: active.ok ? active.value : null,
     previewStatus: invalidReason ? "INVALID" : "VALID",
     invalidReason,
     rowFingerprint: catalogImportRowFingerprint({
@@ -440,6 +485,7 @@ export function evaluateCatalogImportRow(
       description,
     }),
     matchedCatalogItemId: null,
+    matchDecision: "SKIP",
   };
 }
 
@@ -464,6 +510,19 @@ export function parseServiceCatalogCsv(text: string): ParsedCatalogImportRow[] {
   );
 }
 
+export function pickDeterministicCatalogMatch(
+  items: SameBusinessCatalogItem[],
+): SameBusinessCatalogItem | null {
+  if (items.length === 0) return null;
+  const sorted = [...items].sort((left, right) => {
+    const leftTime = left.createdAt?.getTime() ?? 0;
+    const rightTime = right.createdAt?.getTime() ?? 0;
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return left.id.localeCompare(right.id);
+  });
+  return sorted[0] ?? null;
+}
+
 export function applyCatalogImportContext(
   rows: ParsedCatalogImportRow[],
   input: {
@@ -473,11 +532,13 @@ export function applyCatalogImportContext(
     existingItems: SameBusinessCatalogItem[];
   },
 ): ParsedCatalogImportRow[] {
-  const existingByKey = new Map<string, SameBusinessCatalogItem>();
+  const existingByKey = new Map<string, SameBusinessCatalogItem[]>();
   for (const item of input.existingItems) {
     if (item.businessId !== input.businessId) continue;
     const key = catalogNameKey(item.name, item.tradeCode || "HANDYMAN");
-    if (!existingByKey.has(key)) existingByKey.set(key, item);
+    const current = existingByKey.get(key) ?? [];
+    current.push(item);
+    existingByKey.set(key, current);
   }
 
   const seenInFile = new Map<string, number>();
@@ -504,7 +565,9 @@ export function applyCatalogImportContext(
       invalidReason = `This CSV has another row with the same service name and trade (row ${firstRow}).`;
     }
 
-    const match = existingByKey.get(key) ?? null;
+    const match = invalidReason
+      ? null
+      : pickDeterministicCatalogMatch(existingByKey.get(key) ?? []);
     const previewStatus: ServiceCatalogImportRowStatus = invalidReason
       ? "INVALID"
       : match
@@ -516,7 +579,8 @@ export function applyCatalogImportContext(
       tradeCode,
       previewStatus,
       invalidReason,
-      matchedCatalogItemId: invalidReason ? null : match?.id ?? null,
+      matchedCatalogItemId: match?.id ?? null,
+      matchDecision: previewStatus === "NAME_MATCH" ? row.matchDecision || "SKIP" : "SKIP",
       rowFingerprint: catalogImportRowFingerprint({
         name: row.name,
         tradeCode,
@@ -527,6 +591,27 @@ export function applyCatalogImportContext(
       }),
     };
   });
+}
+
+export function catalogRowBecameStale(
+  stored: {
+    previewStatus: string;
+    matchedCatalogItemId: string | null;
+  },
+  live: {
+    previewStatus: string;
+    matchedCatalogItemId: string | null;
+  },
+) {
+  if (stored.previewStatus === "INVALID") return false;
+  if (stored.previewStatus === "VALID" && live.previewStatus === "NAME_MATCH") {
+    return true;
+  }
+  if (stored.previewStatus === "NAME_MATCH") {
+    if (live.previewStatus === "INVALID") return true;
+    if (live.matchedCatalogItemId !== stored.matchedCatalogItemId) return true;
+  }
+  return false;
 }
 
 export function countCatalogPreviewStatuses(
@@ -554,25 +639,26 @@ export function storedCatalogRowToParsed(row: {
   description: string | null;
   pricingMode: string;
   price: Prisma.Decimal | null;
-  category: string;
+  category: string | null;
   tradeCode: string;
   unitLabel: string;
-  recurrenceEligible: boolean;
-  active: boolean;
+  recurrenceEligible: boolean | null;
+  active: boolean | null;
   previewStatus: string;
   invalidReason: string | null;
   rowFingerprint: string;
   matchedCatalogItemId: string | null;
+  matchDecision?: string | null;
 }): ParsedCatalogImportRow {
   return {
     rowNumber: row.rowNumber,
     name: row.name,
-    description: row.description ?? "",
+    description: row.description,
     pricingMode: row.pricingMode,
     price: row.price,
     category: row.category,
     tradeCode: row.tradeCode,
-    unitLabel: row.unitLabel,
+    unitLabel: row.unitLabel || null,
     recurrenceEligible: row.recurrenceEligible,
     active: row.active,
     previewStatus:
@@ -582,5 +668,6 @@ export function storedCatalogRowToParsed(row: {
     invalidReason: row.invalidReason,
     rowFingerprint: row.rowFingerprint,
     matchedCatalogItemId: row.matchedCatalogItemId,
+    matchDecision: parseCatalogImportMatchDecision(row.matchDecision ?? "") ?? "SKIP",
   };
 }

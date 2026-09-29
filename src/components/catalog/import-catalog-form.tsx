@@ -50,9 +50,10 @@ export function ImportCatalogForm() {
         />
         <p className="text-xs text-muted-foreground">
           Max {MAX_SERVICE_CATALOG_IMPORT_BYTES / 1024} KB and{" "}
-          {MAX_SERVICE_CATALOG_IMPORT_ROWS} data rows. Required column: name.
-          Optional: description, pricingMode, price, category, tradeCode,
-          unitLabel, recurrenceEligible, active.
+          {MAX_SERVICE_CATALOG_IMPORT_ROWS} data rows. Required columns: name and
+          pricingMode. price is required except for Custom Quote. Optional:
+          description, category, tradeCode, unitLabel, recurrenceEligible,
+          active. Blank optional cells keep existing values on update.
         </p>
       </div>
 

@@ -1339,7 +1339,7 @@ check(
 
 const serviceCatalogImportMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260929010000_service_catalog_import/migration.sql",
+    "../prisma/migrations/20260929010200_service_catalog_import/migration.sql",
     import.meta.url,
   ),
   "utf8",
@@ -1352,13 +1352,16 @@ check(
     serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImport"') &&
     serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow"') &&
     serviceCatalogImportMigration.includes("ServiceCatalogImport_businessId_contentSha256_key") &&
+    serviceCatalogImportMigration.includes('"matchDecision" TEXT NOT NULL DEFAULT \'SKIP\'') &&
     serviceCatalogImportMigration.includes("never LineItem") &&
     serviceCatalogImportMigration.includes("hourly") &&
-    localNames.includes("20260929010000_service_catalog_import") &&
+    serviceCatalogImportMigration.includes("20260929010200") &&
+    localNames.includes("20260929010200_service_catalog_import") &&
+    !localNames.includes("20260929010000_service_catalog_import") &&
     !localNames.includes("20260928200000_service_catalog_import") &&
     localNames.includes("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_service_catalog_import"),
+      localNames.indexOf("20260929010200_service_catalog_import"),
 );
 
 check(

@@ -36,6 +36,14 @@ export const SERVICE_CATALOG_IMPORT_WRITE_ACTIONS = ["ADD", "UPDATE"] as const;
 export type ServiceCatalogImportWriteAction =
   (typeof SERVICE_CATALOG_IMPORT_WRITE_ACTIONS)[number];
 
+export const SERVICE_CATALOG_IMPORT_MATCH_DECISIONS = [
+  "SKIP",
+  "UPDATE",
+  "ADD_NEW",
+] as const;
+export type ServiceCatalogImportMatchDecision =
+  (typeof SERVICE_CATALOG_IMPORT_MATCH_DECISIONS)[number];
+
 export const OWNER_ONLY_CATALOG_IMPORT_MESSAGE =
   "Only the business owner can import a service catalog CSV.";
 
@@ -63,7 +71,22 @@ export const CATALOG_IMPORT_NO_HISTORY_REWRITE_MESSAGE =
   "Confirm updates this business's catalog only. Historical estimate lines keep their recorded titles, scope, and prices.";
 
 export const CATALOG_IMPORT_NAME_MATCH_MESSAGE =
-  "Same-business name matches are shown before writing. Confirm updates the matching catalog service for that trade.";
+  "Same-business name matches are shown before writing. Matched services change only when you pick update. Blank cells keep the existing description, category, recurrence, unit label, and active status.";
+
+export const CATALOG_IMPORT_IN_PROGRESS_MESSAGE =
+  "This catalog import is already being confirmed.";
+
+export const CATALOG_IMPORT_STALE_MATCHES_MESSAGE =
+  "The catalog changed after this preview. Review the updated name matches before confirming.";
+
+export const CATALOG_IMPORT_SLUG_CONFLICT_MESSAGE =
+  "That service website slug is already used on this business. Review the preview and confirm again.";
+
+export const CATALOG_IMPORT_PRICING_MODE_REQUIRED_MESSAGE =
+  "pricingMode is required. Use Fixed, Starting at, Unit / production, or Custom Quote.";
+
+export const CATALOG_IMPORT_PRICE_REQUIRED_MESSAGE =
+  "price is required except for Custom Quote.";
 
 export const CATALOG_IMPORT_FILE_TOO_LARGE_MESSAGE = `CSV must be ${MAX_SERVICE_CATALOG_IMPORT_BYTES / 1024} KB or smaller.`;
 export const CATALOG_IMPORT_TOO_MANY_ROWS_MESSAGE = `CSV may include at most ${MAX_SERVICE_CATALOG_IMPORT_ROWS} data rows.`;
@@ -72,12 +95,22 @@ export const CATALOG_IMPORT_MISSING_NAME_HEADER_MESSAGE =
 export const CATALOG_IMPORT_EMPTY_MESSAGE = "CSV has no data rows.";
 export const CATALOG_IMPORT_INVALID_MESSAGE = "That CSV could not be read.";
 
+export function catalogImportOverLengthMessage(field: string, max: number) {
+  return `${field} must be ${max} characters or fewer.`;
+}
+
 export function catalogImportSourceKindLabel(_kind: string): string {
   return "Manual CSV";
 }
 
 export function catalogImportPreviewStatusLabel(status: string): string {
   if (status === "INVALID") return "Invalid";
-  if (status === "NAME_MATCH") return "Matching name — will update";
+  if (status === "NAME_MATCH") return "Matching name — skipped unless you pick update";
   return "Ready to add";
+}
+
+export function catalogImportMatchDecisionLabel(decision: string): string {
+  if (decision === "UPDATE") return "Update matching service";
+  if (decision === "ADD_NEW") return "Add as new service";
+  return "Skip";
 }

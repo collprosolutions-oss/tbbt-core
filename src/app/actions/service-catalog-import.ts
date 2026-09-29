@@ -15,6 +15,7 @@ import {
 import {
   confirmServiceCatalogImport,
   previewServiceCatalogCsvUpload,
+  setCatalogImportMatchDecision,
 } from "@/lib/service-catalog-import-ops";
 import { prisma } from "@/lib/prisma";
 
@@ -78,7 +79,7 @@ export async function previewServiceCatalogImport(
   }
 }
 
-export async function confirmServiceCatalogImportAction(
+export async function setServiceCatalogImportMatchDecisionAction(
   _prev: ServiceCatalogImportActionState,
   formData: FormData,
 ): Promise<ServiceCatalogImportActionState> {
@@ -86,8 +87,42 @@ export async function confirmServiceCatalogImportAction(
   if (!operating.ok) return { error: operating.error };
 
   try {
+    const preview = await setCatalogImportMatchDecision(prisma, operating.access, {
+      importId: readString(formData, "importId"),
+      rowId: readString(formData, "rowId"),
+      decision: readString(formData, "matchDecision"),
+    });
+    revalidatePath(`${SERVICE_CATALOG_IMPORT_ROUTE}/${preview.id}`);
+    return {};
+  } catch (error) {
+    if (error instanceof ServiceCatalogImportError) {
+      return { error: error.message };
+    }
+    if (error instanceof ForbiddenError) {
+      return { error: OWNER_ONLY_CATALOG_IMPORT_MESSAGE };
+    }
+    throw error;
+  }
+}
+
+export async function confirmServiceCatalogImportAction(
+  _prev: ServiceCatalogImportActionState,
+  formData: FormData,
+): Promise<ServiceCatalogImportActionState> {
+  const operating = await requireOwnerCatalogImportAccess();
+  if (!operating.ok) return { error: operating.error };
+
+  const matchDecisions: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("matchDecision:") || typeof value !== "string") continue;
+    const rowId = key.slice("matchDecision:".length).trim();
+    if (rowId) matchDecisions[rowId] = value.trim();
+  }
+
+  try {
     const result = await confirmServiceCatalogImport(prisma, operating.access, {
       importId: readString(formData, "importId"),
+      matchDecisions,
     });
     revalidatePath("/services");
     revalidatePath(`${SERVICE_CATALOG_IMPORT_ROUTE}/${result.preview.id}`);

@@ -4523,9 +4523,9 @@ model ServiceCatalogImport {
 }
 
 /// One sanitized catalog CSV row captured at preview time. Invalid rows
-/// block confirm. NAME_MATCH rows are shown before writing and become
-/// updates of the matched same-business catalog item. Confirm writes
-/// ServiceCatalogItem only.
+/// block confirm. NAME_MATCH rows stay skipped until the owner picks
+/// update or add-as-new. Blank optional cells keep existing catalog
+/// values on update. Confirm writes ServiceCatalogItem only.
 model ServiceCatalogImportRow {
   id                   String   @id @default(cuid())
   businessId           String
@@ -4539,15 +4539,20 @@ model ServiceCatalogImportRow {
   description          String?
   pricingMode          String
   price                Decimal?
-  category             String
+  /// Null means the CSV cell was blank — keep the existing category on update.
+  category             String?
   tradeCode            String
   unitLabel            String   @default("")
-  recurrenceEligible   Boolean  @default(false)
-  active               Boolean  @default(true)
+  /// Null means the CSV cell was blank — keep the existing value on update.
+  recurrenceEligible   Boolean?
+  /// Null means the CSV cell was blank — never reactivate an archived service.
+  active               Boolean?
   matchedCatalogItemId String?
   writtenCatalogItemId String?
-  /// ADD | UPDATE after confirm; null while still a preview.
+  /// ADD | UPDATE after confirm; null while still a preview or skipped.
   writeAction          String?
+  /// SKIP | UPDATE | ADD_NEW. Only NAME_MATCH rows use this. Default SKIP.
+  matchDecision        String   @default("SKIP")
   createdAt            DateTime @default(now())
 
   business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
