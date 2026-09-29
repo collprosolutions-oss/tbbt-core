@@ -39,39 +39,86 @@ const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
   "@/lib/saas-billing/messages"
 );
 
+const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function parseDatabaseUrl(raw) {
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+function createArrivalBarrier(expectedCount, timeoutMs) {
+  let arrived = 0;
+  let release;
+  let fail;
+  const gate = new Promise((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  gate.catch(() => {});
+  const timer = setTimeout(() => {
+    fail(
+      new Error(
+        `Arrival barrier timed out after ${timeoutMs}ms (${arrived}/${expectedCount} arrived)`,
+      ),
+    );
+  }, timeoutMs);
+  return {
+    async hold() {
+      arrived += 1;
+      if (arrived >= expectedCount) {
+        clearTimeout(timer);
+        release();
+      }
+      await gate;
+    },
+  };
+}
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
+  process.exitCode = 1;
 }
 
+const parsed = baseUrl ? parseDatabaseUrl(baseUrl) : null;
+if (baseUrl && !parsed) {
+  console.error("DATABASE_URL must be a valid URL.");
+  process.exitCode = 1;
+}
+if (parsed && !LOCAL_DB_HOSTS.has(parsed.hostname)) {
+  console.error(
+    `Refusing to run: DATABASE_URL host must be localhost, 127.0.0.1, or ::1 (got ${parsed.hostname}).`,
+  );
+  process.exitCode = 1;
+}
+
+const shouldRun = Boolean(parsed && LOCAL_DB_HOSTS.has(parsed.hostname));
 const testDbName = "tbbt_native_field_pickup_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-
-const adminUrl = new URL(baseUrl);
-adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for native-field pickup test database.");
-  process.exit(push.status ?? 1);
-}
+const testUrl = shouldRun
+  ? (() => {
+      parsed.pathname = `/${testDbName}`;
+      return parsed.toString();
+    })()
+  : "";
+const adminUrl = shouldRun
+  ? (() => {
+      const url = new URL(baseUrl);
+      url.search = "";
+      return url;
+    })()
+  : null;
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const clients = [];
+function trackedPrisma() {
+  const client = new PrismaClient({ datasourceUrl: testUrl });
+  clients.push(client);
+  return client;
+}
 
 let failures = 0;
 function check(label, condition) {
@@ -101,6 +148,7 @@ function makeOwnerAccess(businessId, membershipId) {
   };
 }
 
+if (shouldRun) {
 const pickupOpsSrc = readRepo("src/lib/materials/pickup.ts");
 const nativePickupSrc = readRepo("src/lib/native-field-pickup.ts");
 const nativeFieldSrc = readRepo("src/lib/native-field.ts");
@@ -223,6 +271,26 @@ check(
 );
 
 try {
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+    throw new Error(
+      createDb.stderr || createDb.stdout || "Failed to create native-field pickup test database.",
+    );
+  }
+
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    throw new Error("Failed to push schema for native-field pickup test database.");
+  }
+
+  const prisma = trackedPrisma();
+
   const onboardingDone = new Date();
   const completedOnboarding = {
     firstRunSetupCompletedAt: onboardingDone,
@@ -742,29 +810,46 @@ try {
         ?.quantityPickedUp === "8",
   );
 
-  const [dupA, dupB] = await Promise.all([
+  const racerA = trackedPrisma();
+  const racerB = trackedPrisma();
+  const duplicateBarrier = createArrivalBarrier(2, 5000);
+  const duplicateSettled = await Promise.allSettled([
     recordNativeAssignedPickupItem(
-      prisma,
+      racerA,
       memberAccess.access,
       duplicateFixture.job.id,
       { itemId: duplicateFixture.pickupItem.id, quantityPickedUp: "5" },
+      { afterInitialRead: () => duplicateBarrier.hold() },
     ),
     recordNativeAssignedPickupItem(
-      prisma,
+      racerB,
       memberAccess.access,
       duplicateFixture.job.id,
       { itemId: duplicateFixture.pickupItem.id, quantityPickedUp: "5" },
+      { afterInitialRead: () => duplicateBarrier.hold() },
     ),
   ]);
+  const duplicateRecorded = duplicateSettled.filter(
+    (result) => result.status === "fulfilled" && result.value.ok === true,
+  );
+  const duplicateWriters = duplicateRecorded.filter(
+    (result) => result.value.alreadyRecorded === false,
+  );
+  const duplicateNoops = duplicateRecorded.filter(
+    (result) => result.value.alreadyRecorded === true,
+  );
   const duplicateRows = await prisma.materialPurchaseListItem.findMany({
     where: { id: duplicateFixture.pickupItem.id, businessId: businessA.id },
   });
   check(
     "Concurrent duplicate taps both succeed and leave one recorded quantity",
-    dupA.ok === true &&
-      dupB.ok === true &&
+    duplicateSettled.length === 2 &&
+      duplicateRecorded.length === 2 &&
+      duplicateWriters.length === 1 &&
+      duplicateNoops.length === 1 &&
       duplicateRows.length === 1 &&
-      duplicateRows[0].quantityPickedUp.toString() === "5",
+      duplicateRows[0].quantityPickedUp.toString() === "5" &&
+      duplicateRows[0].pickupRecordedAt != null,
   );
 
   const race = await recordNativeAssignedPickupItem(
@@ -840,7 +925,21 @@ try {
   failures += 1;
   console.error("FAIL - live native pickup items", error);
 } finally {
-  await prisma.$disconnect();
+  for (const client of clients) {
+    try {
+      await client.$disconnect();
+    } catch {
+      // Keep disconnecting the rest so DROP can proceed.
+    }
+  }
+  const drop = spawnSync(
+    "psql",
+    [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`],
+    { encoding: "utf8" },
+  );
+  if (drop.status !== 0) {
+    console.warn(drop.stderr || drop.stdout);
+  }
 }
 
 console.log(
@@ -848,4 +947,5 @@ console.log(
     ? "\nNative field pickup check passed: isolation, OWNER visibility, duplicates, races, and no purchase side effects held."
     : `\n${failures} native field pickup check(s) failed.`,
 );
-process.exit(failures === 0 ? 0 : 1);
+process.exitCode = failures === 0 ? 0 : 1;
+}

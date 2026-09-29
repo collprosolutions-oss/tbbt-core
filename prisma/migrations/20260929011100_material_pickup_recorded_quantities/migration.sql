@@ -2,7 +2,7 @@
 -- MaterialPurchaseListItem rows. Additive only. Prisma migrate is the
 -- authoritative schema source. Recording pickup never purchases,
 -- prices, expenses, or starts MATERIAL_PICKUP time.
--- Timestamp is 20260929010000 so it stays after
+-- Timestamp is 20260929011100 so it stays after
 -- 20260928200000_estimate_line_template_archive (#210).
 
 ALTER TABLE "MaterialPurchaseListItem"

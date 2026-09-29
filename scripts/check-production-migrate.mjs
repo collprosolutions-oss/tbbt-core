@@ -1318,7 +1318,7 @@ const estimateLineTemplateArchiveMigration = readFileSync(
 );
 const materialPickupRecordedMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260929010000_material_pickup_recorded_quantities/migration.sql",
+    "../prisma/migrations/20260929011100_material_pickup_recorded_quantities/migration.sql",
     import.meta.url,
   ),
   "utf8",
@@ -1351,9 +1351,9 @@ check(
     materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "pickupRecordedAt"') &&
     materialPickupRecordedMigration.includes("20260928200000_estimate_line_template_archive") &&
     materialPickupRecordedMigration.includes("IF NOT EXISTS") &&
-    localNames.includes("20260929010000_material_pickup_recorded_quantities") &&
+    localNames.includes("20260929011100_material_pickup_recorded_quantities") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_material_pickup_recorded_quantities"),
+      localNames.indexOf("20260929011100_material_pickup_recorded_quantities"),
 );
 
 check(
