@@ -213,12 +213,47 @@ async function resolveExpenseFields(db: Db, access: BusinessAccess, input: Creat
 export const CONCURRENT_EXPENSE_RECEIPT_ERROR =
   "That receipt changed concurrently. Retry.";
 
+/**
+ * Test-only barriers. Production never sets these.
+ * - afterPreviousIdRead: concurrent callers meet after both read the
+ *   previous receiptStoredAssetId and before either writes.
+ * - beforeSwap: concurrent callers meet immediately before the
+ *   compare-and-swap updateMany.
+ * - afterSwapBeforeRelease: inject a failure after the swap and before
+ *   the previous READY asset is claimed DELETED in the same transaction.
+ */
+export const expenseReceiptWriteTestHooks: {
+  afterPreviousIdRead?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+  }) => Promise<void> | void;
+  beforeSwap?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  }) => Promise<void> | void;
+  afterSwapBeforeRelease?: (input: {
+    expenseId: string;
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  }) => Promise<void> | void;
+} = {};
+
+export type ExpenseReceiptClaimAfter = (
+  tx: Db,
+  input: {
+    previousStoredAssetId: string | null;
+    nextStoredAssetId: string | null;
+  },
+) => Promise<void>;
+
 async function claimExpenseReceiptWrite(
   db: Db,
   businessId: string,
   expenseId: string,
   previousStoredAssetId: string | null,
   data: { receiptStoredAssetId: string | null },
+  afterClaim?: ExpenseReceiptClaimAfter,
 ) {
   const run = async (tx: Db) => {
     const claimed = await tx.expense.updateMany({
@@ -232,6 +267,15 @@ async function claimExpenseReceiptWrite(
     if (claimed.count !== 1) {
       throw new ExpenseError(CONCURRENT_EXPENSE_RECEIPT_ERROR);
     }
+    await expenseReceiptWriteTestHooks.afterSwapBeforeRelease?.({
+      expenseId,
+      previousStoredAssetId,
+      nextStoredAssetId: data.receiptStoredAssetId,
+    });
+    await afterClaim?.(tx, {
+      previousStoredAssetId,
+      nextStoredAssetId: data.receiptStoredAssetId,
+    });
     return tx.expense.findFirstOrThrow({
       where: { id: expenseId, businessId },
     });
@@ -402,6 +446,7 @@ export async function attachExpenseReceipt(
   db: Db,
   access: BusinessAccess,
   input: { expenseId: string; storedAssetId: string },
+  afterClaim?: ExpenseReceiptClaimAfter,
 ) {
   await requireExpenseMutation(db, access);
   const storedAssetId = input.storedAssetId.trim();
@@ -442,9 +487,23 @@ export async function attachExpenseReceipt(
   }
 
   const previousStoredAssetId = expense.receiptStoredAssetId;
-  const updated = await claimExpenseReceiptWrite(db, access.businessId, expense.id, previousStoredAssetId, {
-    receiptStoredAssetId: asset.id,
+  await expenseReceiptWriteTestHooks.afterPreviousIdRead?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
   });
+  await expenseReceiptWriteTestHooks.beforeSwap?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+    nextStoredAssetId: asset.id,
+  });
+  const updated = await claimExpenseReceiptWrite(
+    db,
+    access.businessId,
+    expense.id,
+    previousStoredAssetId,
+    { receiptStoredAssetId: asset.id },
+    afterClaim,
+  );
   return { expense: updated, previousStoredAssetId };
 }
 
@@ -452,6 +511,7 @@ export async function removeExpenseReceipt(
   db: Db,
   access: BusinessAccess,
   input: { expenseId: string },
+  afterClaim?: ExpenseReceiptClaimAfter,
 ) {
   await requireExpenseMutation(db, access);
   const expense = requireActiveExpense(
@@ -462,9 +522,23 @@ export async function removeExpenseReceipt(
     ),
   );
   const previousStoredAssetId = expense.receiptStoredAssetId;
-  const updated = await claimExpenseReceiptWrite(db, access.businessId, expense.id, previousStoredAssetId, {
-    receiptStoredAssetId: null,
+  await expenseReceiptWriteTestHooks.afterPreviousIdRead?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
   });
+  await expenseReceiptWriteTestHooks.beforeSwap?.({
+    expenseId: expense.id,
+    previousStoredAssetId,
+    nextStoredAssetId: null,
+  });
+  const updated = await claimExpenseReceiptWrite(
+    db,
+    access.businessId,
+    expense.id,
+    previousStoredAssetId,
+    { receiptStoredAssetId: null },
+    afterClaim,
+  );
   return { expense: updated, previousStoredAssetId };
 }
 

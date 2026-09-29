@@ -42,6 +42,7 @@ import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
 import { expenseReceiptHref, isBusinessStorageConfigured } from "@/lib/business-storage";
+import { isManagedBlobUrl } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -57,6 +58,11 @@ const RANGE_OPTIONS: { value: ExpenseDateRange; label: string }[] = [
   { value: "year", label: "This year" },
   { value: "all", label: "All dates" },
 ];
+
+function legacyExpenseReceiptHref(url: string | null | undefined) {
+  if (!url || !url.startsWith("https://") || !isManagedBlobUrl(url)) return null;
+  return url;
+}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -338,8 +344,9 @@ export default async function ExpensesPage({
       hasPrivateReceipt: Boolean(expense.receiptStoredAssetId),
       hasReceipt: Boolean(expense.receiptStoredAssetId || expense.receiptUrl),
       receiptHref: expenseReceiptHref(expense.receiptStoredAssetId),
-      legacyReceiptHref:
-        !expense.receiptStoredAssetId && expense.receiptUrl ? expense.receiptUrl : null,
+      legacyReceiptHref: !expense.receiptStoredAssetId
+        ? legacyExpenseReceiptHref(expense.receiptUrl)
+        : null,
       reimbursable: expense.reimbursable,
       customerBillable: expense.customerBillable,
       reimbursementStatus: expense.reimbursementStatus,

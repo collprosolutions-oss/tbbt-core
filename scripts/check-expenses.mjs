@@ -521,6 +521,7 @@ try {
       workspaceSource.includes("Earlier receipt (stored before private storage)") &&
       workspaceSource.includes("Remove receipt") &&
       workspaceSource.includes("does not infer tax treatment") &&
+      pageSource.includes("isManagedBlobUrl") &&
       !workspaceSource.includes("expense.receiptUrl"),
   );
   const pageStorage = pageSource.includes("isBusinessStorageConfigured") && !pageSource.includes("isStorageConfigured");

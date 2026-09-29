@@ -20,9 +20,12 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { CAPABILITIES, ForbiddenError, roleHasCapability } = await import(
   "@/lib/authorization"
 );
-const { CONCURRENT_EXPENSE_RECEIPT_ERROR, createExpense, reviewExpense } = await import(
-  "@/lib/expense-ops"
-);
+const {
+  CONCURRENT_EXPENSE_RECEIPT_ERROR,
+  createExpense,
+  expenseReceiptWriteTestHooks,
+  reviewExpense,
+} = await import("@/lib/expense-ops");
 const {
   EXPENSE_RECEIPT_MAX_BYTES,
   EXPENSE_RECEIPT_PURPOSE,
@@ -70,21 +73,12 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for expense receipt test database.");
-  process.exit(push.status ?? 1);
-}
-
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
+/** @type {import("@prisma/client").PrismaClient | undefined} */
+let prisma;
 function check(label, condition) {
   if (condition) {
     console.log(`  ok  - ${label}`);
@@ -159,6 +153,56 @@ function failFinalizeAfterPut(inner) {
   };
 }
 
+function createCountBarrier(count) {
+  let arrived = 0;
+  /** @type {Array<() => void>} */
+  const waiters = [];
+  return async function wait() {
+    arrived += 1;
+    if (arrived >= count) {
+      arrived = 0;
+      const pending = waiters.splice(0, waiters.length);
+      for (const resolve of pending) resolve();
+      return;
+    }
+    await new Promise((resolve) => {
+      waiters.push(resolve);
+    });
+  };
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function dropTestDatabase() {
+  requireLocalDatabaseUrl(baseUrl, "DATABASE_URL");
+  requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
 async function accountSnapshot(businessId) {
   const account = await prisma.businessStorageAccount.findUnique({
     where: { businessId },
@@ -169,6 +213,32 @@ async function accountSnapshot(businessId) {
   return {
     usedBytes: Number(account.storageUsedBytes),
     reservedBytes: Number(account.storageReservedBytes),
+  };
+}
+
+async function readyReceiptInvariant(businessId) {
+  const ready = await prisma.storedAsset.findMany({
+    where: { businessId, purpose: EXPENSE_RECEIPT_PURPOSE, status: "READY" },
+    select: { id: true, fileSizeBytes: true },
+  });
+  const referenced = await prisma.expense.findMany({
+    where: { businessId, receiptStoredAssetId: { not: null } },
+    select: { receiptStoredAssetId: true },
+  });
+  const readyIds = new Set(ready.map((asset) => asset.id));
+  const referencedIds = new Set(
+    referenced
+      .map((expense) => expense.receiptStoredAssetId)
+      .filter((id) => typeof id === "string"),
+  );
+  const used = await accountSnapshot(businessId);
+  const sameSet =
+    readyIds.size === referencedIds.size && [...readyIds].every((id) => referencedIds.has(id));
+  return {
+    ready,
+    sameSet,
+    usedMatches: used.usedBytes === ready.reduce((sum, asset) => sum + asset.fileSizeBytes, 0),
+    usedBytes: used.usedBytes,
   };
 }
 
@@ -184,6 +254,19 @@ const heicBytes = Uint8Array.from([
 const receiptBucket = "tbbt-expense-receipts-test";
 
 try {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for expense receipt test database.");
+    failures += 1;
+    throw new Error("EXPENSE_RECEIPT_TEST_PUSH_FAILED");
+  }
+  requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
+  prisma = new PrismaClient({ datasourceUrl: testUrl });
+
   console.log("\nSTATIC — Private expense receipt wiring and storage limits");
   const receiptLib = readRepo("src/lib/business-storage/expense-receipts.ts");
   const expenseOps = readRepo("src/lib/expense-ops.ts");
@@ -271,10 +354,26 @@ try {
     "Attach/remove claim the previous receiptStoredAssetId and never amount or receiptUrl",
     expenseOps.includes("receiptStoredAssetId: previousStoredAssetId") &&
       expenseOps.includes("CONCURRENT_EXPENSE_RECEIPT_ERROR") &&
+      expenseOps.includes("afterPreviousIdRead") &&
+      expenseOps.includes("beforeSwap") &&
+      expenseOps.includes("afterSwapBeforeRelease") &&
       !expenseOps.includes("receiptUrl: null") &&
       !/data: \{[\s\S]*amount:/.test(
         expenseOps.slice(expenseOps.indexOf("export async function attachExpenseReceipt")),
       ),
+  );
+  check(
+    "Swap and previous-asset release share one transaction",
+    expenseOps.includes("await afterClaim?.(tx,") &&
+      receiptLib.includes("claimUnreferencedExpenseReceiptInTx") &&
+      receiptLib.includes("releasePreviousReceiptAfterClaim") &&
+      receiptLib.includes("bestEffortCleanupOwnedObject(deps, access.businessId, releasedObject.object)") &&
+      !receiptLib
+        .slice(
+          receiptLib.indexOf("export async function finalizeAndAttachExpenseReceipt"),
+          receiptLib.indexOf("export async function putExpenseReceiptFromBytes"),
+        )
+        .includes("releaseUnreferencedExpenseReceiptAsset(deps, access, attached.previousStoredAssetId)"),
   );
   check(
     "putExpenseReceiptFromBytes awaits finalize so abort can run",
@@ -284,7 +383,8 @@ try {
     "Presigned private download sets content type and disposition",
     r2Src.includes("ResponseContentType: input.contentType") &&
       r2Src.includes("ResponseContentDisposition: input.contentDisposition") &&
-      privateServeSrc.includes("privateAssetContentDisposition"),
+      privateServeSrc.includes("privateAssetContentDisposition") &&
+      privateServeSrc.includes("filename*=UTF-8''"),
   );
   check(
     "Actions use private put-from-bytes, not a public Blob URL",
@@ -302,6 +402,8 @@ try {
       workspaceSrc.includes("legacyReceiptHref") &&
       workspaceSrc.includes("hasPrivateReceipt") &&
       workspaceSrc.includes("Earlier receipt (stored before private storage)") &&
+      pageSrc.includes("isManagedBlobUrl") &&
+      pageSrc.includes('url.startsWith("https://")') &&
       !workspaceSrc.includes("expense.receiptUrl") &&
       !typesSrc.includes("receiptUrl") &&
       sheetSrc.includes("Limit 4 MB") &&
@@ -333,6 +435,13 @@ try {
   check(
     "Private download TTL stays short-lived",
     PRIVATE_DOWNLOAD_URL_TTL_SECONDS === 2 * 60,
+  );
+  const scriptSrc = readRepo("scripts/check-expense-receipts.mjs");
+  check(
+    "Failed schema push still drops the localhost test database",
+    scriptSrc.includes("EXPENSE_RECEIPT_TEST_PUSH_FAILED") &&
+      scriptSrc.includes("await dropTestDatabase()") &&
+      scriptSrc.includes("createCountBarrier(2)"),
   );
 
   const ownerUser = await prisma.user.create({
@@ -758,9 +867,63 @@ try {
         false,
   );
 
+  console.log("\nTEST — Injected failure between swap and release rolls back");
+  const injectExpense = await createExpense(prisma, ownerA, {
+    occurredOn: "2026-09-04",
+    description: "Injected swap failure",
+    amount: "21.00",
+    category: "OTHER",
+  });
+  const injectSeeded = await putExpenseReceiptFromBytes(deps, ownerA, {
+    expenseId: injectExpense.id,
+    originalFilename: "inject-seed.jpg",
+    mimeType: "image/jpeg",
+    body: jpegBytes,
+  });
+  const usedBeforeInject = (await accountSnapshot(businessA.id)).usedBytes;
+  expenseReceiptWriteTestHooks.afterSwapBeforeRelease = async () => {
+    throw new Error("injected failure between swap and release");
+  };
+  try {
+    await expectThrow(
+      "Replace fails when release is interrupted after the swap",
+      () =>
+        putExpenseReceiptFromBytes(deps, ownerA, {
+          expenseId: injectExpense.id,
+          originalFilename: "inject-new.jpg",
+          mimeType: "image/jpeg",
+          body: jpegReplaceA,
+        }),
+      (error) => error instanceof Error && /injected failure between swap and release/.test(error.message),
+    );
+  } finally {
+    expenseReceiptWriteTestHooks.afterSwapBeforeRelease = undefined;
+  }
+  const injectAfter = await prisma.expense.findUnique({ where: { id: injectExpense.id } });
+  const injectSeedAsset = await prisma.storedAsset.findUnique({ where: { id: injectSeeded.asset.id } });
+  const injectGhosts = await prisma.storedAsset.findMany({
+    where: { businessId: businessA.id, originalFilename: "inject-new.jpg" },
+  });
+  const injectInvariant = await readyReceiptInvariant(businessA.id);
+  check(
+    "Injected failure leaves the previous receipt attached and READY",
+    injectAfter?.receiptStoredAssetId === injectSeeded.asset.id &&
+      injectSeedAsset?.status === "READY" &&
+      Number(injectAfter?.amount.toString()) === 21,
+  );
+  check(
+    "Injected failure releases the new asset and does not keep extra used bytes",
+    injectGhosts.every((asset) => asset.status !== "READY") &&
+      (await accountSnapshot(businessA.id)).usedBytes === usedBeforeInject,
+  );
+  check(
+    "Injected failure leaves no unreferenced READY receipts",
+    injectInvariant.sameSet && injectInvariant.usedMatches,
+  );
+
   console.log("\nTEST — Concurrent replace and remove-vs-replace stay atomic");
   const raceExpense = await createExpense(prisma, ownerA, {
-    occurredOn: "2026-09-04",
+    occurredOn: "2026-09-05",
     description: "Race",
     amount: "33.00",
     category: "OTHER",
@@ -771,20 +934,38 @@ try {
     mimeType: "image/jpeg",
     body: jpegBytes,
   });
-  const replacePair = await Promise.allSettled([
-    putExpenseReceiptFromBytes(deps, ownerA, {
-      expenseId: raceExpense.id,
-      originalFilename: "race-a.jpg",
-      mimeType: "image/jpeg",
-      body: jpegReplaceA,
-    }),
-    putExpenseReceiptFromBytes(deps, ownerA, {
-      expenseId: raceExpense.id,
-      originalFilename: "race-b.jpg",
-      mimeType: "image/jpeg",
-      body: jpegReplaceB,
-    }),
-  ]);
+  const replaceBarrier = createCountBarrier(2);
+  expenseReceiptWriteTestHooks.afterPreviousIdRead = replaceBarrier;
+  expenseReceiptWriteTestHooks.beforeSwap = replaceBarrier;
+  requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
+  const replaceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const replaceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  let replacePair;
+  try {
+    replacePair = await withTimeout(
+      Promise.allSettled([
+        putExpenseReceiptFromBytes({ ...deps, db: replaceClientA }, ownerA, {
+          expenseId: raceExpense.id,
+          originalFilename: "race-a.jpg",
+          mimeType: "image/jpeg",
+          body: jpegReplaceA,
+        }),
+        putExpenseReceiptFromBytes({ ...deps, db: replaceClientB }, ownerA, {
+          expenseId: raceExpense.id,
+          originalFilename: "race-b.jpg",
+          mimeType: "image/jpeg",
+          body: jpegReplaceB,
+        }),
+      ]),
+      8000,
+      "replace-versus-replace",
+    );
+  } finally {
+    expenseReceiptWriteTestHooks.afterPreviousIdRead = undefined;
+    expenseReceiptWriteTestHooks.beforeSwap = undefined;
+    await replaceClientA.$disconnect();
+    await replaceClientB.$disconnect();
+  }
   const replaceWins = replacePair.filter((result) => result.status === "fulfilled");
   const replaceFailures = replacePair.filter((result) => result.status === "rejected");
   const replaceRetries = replaceFailures.filter(
@@ -794,43 +975,63 @@ try {
       result.reason.message === CONCURRENT_EXPENSE_RECEIPT_ERROR,
   );
   check(
-    "Two concurrent replaces succeed or fail only with a concurrent retry",
-    replaceWins.length >= 1 && replaceRetries.length === replaceFailures.length,
+    "Two concurrent replaces have exactly one winner and one concurrent retry",
+    replaceWins.length === 1 && replaceRetries.length === 1 && replaceFailures.length === 1,
   );
   const afterTwoReplaces = await prisma.expense.findUnique({ where: { id: raceExpense.id } });
   const winnerAsset = afterTwoReplaces?.receiptStoredAssetId
     ? await prisma.storedAsset.findUnique({ where: { id: afterTwoReplaces.receiptStoredAssetId } })
     : null;
-  const readyOnRace = await prisma.storedAsset.count({
-    where: { id: afterTwoReplaces?.receiptStoredAssetId ?? "__none__", status: "READY" },
-  });
-  const readyReceipts = await prisma.storedAsset.findMany({
-    where: { businessId: businessA.id, purpose: EXPENSE_RECEIPT_PURPOSE, status: "READY" },
-  });
-  const usedAfterTwoReplaces = await accountSnapshot(businessA.id);
+  const replaceInvariant = await readyReceiptInvariant(businessA.id);
   check(
     "Exactly one READY receipt stays on the raced expense",
-    readyOnRace === 1 &&
+    afterTwoReplaces?.receiptStoredAssetId != null &&
       winnerAsset?.status === "READY" &&
       Number(afterTwoReplaces?.amount.toString()) === 33,
   );
   check(
-    "storageUsedBytes equals READY receipt file sizes after concurrent replaces",
-    usedAfterTwoReplaces.usedBytes ===
-      readyReceipts.reduce((sum, asset) => sum + asset.fileSizeBytes, 0) &&
+    "READY EXPENSE_RECEIPT assets match referenced expenses after concurrent replaces",
+    replaceInvariant.sameSet &&
       winnerAsset != null &&
-      readyReceipts.some((asset) => asset.id === winnerAsset.id),
+      replaceInvariant.ready.some((asset) => asset.id === winnerAsset.id),
+  );
+  check(
+    "storageUsedBytes equals READY receipt file sizes after concurrent replaces",
+    replaceInvariant.usedMatches,
+  );
+  const seedAfterReplace = await prisma.storedAsset.findUnique({ where: { id: seeded.asset.id } });
+  check(
+    "The replaced seed receipt is no longer READY",
+    seedAfterReplace?.status === "DELETED",
   );
 
-  const removeVsReplace = await Promise.allSettled([
-    removeExpenseReceiptAttachment(deps, ownerA, raceExpense.id),
-    putExpenseReceiptFromBytes(deps, ownerA, {
-      expenseId: raceExpense.id,
-      originalFilename: "race-final.jpg",
-      mimeType: "image/jpeg",
-      body: replacementBytes,
-    }),
-  ]);
+  const removeBarrier = createCountBarrier(2);
+  expenseReceiptWriteTestHooks.afterPreviousIdRead = removeBarrier;
+  expenseReceiptWriteTestHooks.beforeSwap = removeBarrier;
+  requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
+  const removeClient = new PrismaClient({ datasourceUrl: testUrl });
+  const replaceAgainClient = new PrismaClient({ datasourceUrl: testUrl });
+  let removeVsReplace;
+  try {
+    removeVsReplace = await withTimeout(
+      Promise.allSettled([
+        removeExpenseReceiptAttachment({ ...deps, db: removeClient }, ownerA, raceExpense.id),
+        putExpenseReceiptFromBytes({ ...deps, db: replaceAgainClient }, ownerA, {
+          expenseId: raceExpense.id,
+          originalFilename: "race-final.jpg",
+          mimeType: "image/jpeg",
+          body: replacementBytes,
+        }),
+      ]),
+      8000,
+      "remove-versus-replace",
+    );
+  } finally {
+    expenseReceiptWriteTestHooks.afterPreviousIdRead = undefined;
+    expenseReceiptWriteTestHooks.beforeSwap = undefined;
+    await removeClient.$disconnect();
+    await replaceAgainClient.$disconnect();
+  }
   const removeVsReplaceWins = removeVsReplace.filter((result) => result.status === "fulfilled");
   const removeVsReplaceFailures = removeVsReplace.filter((result) => result.status === "rejected");
   const removeVsReplaceRetries = removeVsReplaceFailures.filter(
@@ -840,26 +1041,25 @@ try {
       result.reason.message === CONCURRENT_EXPENSE_RECEIPT_ERROR,
   );
   check(
-    "Remove versus replace succeeds or fails only with a concurrent retry",
-    removeVsReplaceWins.length >= 1 && removeVsReplaceRetries.length === removeVsReplaceFailures.length,
+    "Remove versus replace has exactly one winner and one concurrent retry",
+    removeVsReplaceWins.length === 1 &&
+      removeVsReplaceRetries.length === 1 &&
+      removeVsReplaceFailures.length === 1,
   );
   const afterRemoveVsReplace = await prisma.expense.findUnique({ where: { id: raceExpense.id } });
   const remainingReady = afterRemoveVsReplace?.receiptStoredAssetId
     ? await prisma.storedAsset.findUnique({ where: { id: afterRemoveVsReplace.receiptStoredAssetId } })
     : null;
-  const readyAfterRace = await prisma.storedAsset.findMany({
-    where: { businessId: businessA.id, purpose: EXPENSE_RECEIPT_PURPOSE, status: "READY" },
-  });
-  const usedAfterRace = await accountSnapshot(businessA.id);
+  const removeInvariant = await readyReceiptInvariant(businessA.id);
   check(
-    "Remove versus replace leaves at most one READY receipt on the expense",
+    "Remove versus replace leaves the expense with at most one READY receipt",
     (afterRemoveVsReplace?.receiptStoredAssetId
       ? remainingReady?.status === "READY"
       : remainingReady === null) && Number(afterRemoveVsReplace?.amount.toString()) === 33,
   );
   check(
-    "storageUsedBytes equals remaining READY receipt sizes after remove versus replace",
-    usedAfterRace.usedBytes === readyAfterRace.reduce((sum, asset) => sum + asset.fileSizeBytes, 0),
+    "READY EXPENSE_RECEIPT assets match referenced expenses after remove versus replace",
+    removeInvariant.sameSet && removeInvariant.usedMatches,
   );
   if (afterRemoveVsReplace?.receiptStoredAssetId) {
     check(
@@ -876,23 +1076,15 @@ try {
       ? "\nAll Expense receipt checks passed."
       : `\n${failures} Expense receipt check(s) failed.`,
   );
+} catch (error) {
+  if (error instanceof Error && error.message === "EXPENSE_RECEIPT_TEST_PUSH_FAILED") {
+    // Schema push already counted as a failure; still drop the test database.
+  } else {
+    throw error;
+  }
 } finally {
-  await prisma.$disconnect();
-  requireLocalDatabaseUrl(baseUrl, "DATABASE_URL");
-  requireLocalDatabaseUrl(testUrl, "Expense receipt test DATABASE_URL");
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
-    );
-  } catch {
-    /* ignore */
-  }
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  if (prisma) await prisma.$disconnect();
+  await dropTestDatabase();
 }
 
 process.exit(failures === 0 ? 0 : 1);

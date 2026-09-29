@@ -14,6 +14,7 @@ import {
   attachExpenseReceipt,
   ExpenseError,
   removeExpenseReceipt,
+  type ExpenseReceiptClaimAfter,
 } from "@/lib/expense-ops";
 import { requireSaasOperatingEntitlement } from "@/lib/saas-billing/entitlement";
 import { privateAssetPath } from "@/lib/business-storage/keys";
@@ -250,6 +251,59 @@ export async function abortExpenseReceiptUpload(
   return abortManagedUpload(deps, access.businessId, pending.id);
 }
 
+async function claimUnreferencedExpenseReceiptInTx(
+  tx: Db,
+  access: BusinessAccess,
+  assetId: string,
+  now: Date,
+) {
+  const referenced = await tx.expense.findFirst({
+    where: { receiptStoredAssetId: assetId, businessId: access.businessId },
+    select: { id: true },
+  });
+  if (referenced) return null;
+  const asset = await tx.storedAsset.findFirst({
+    where: {
+      id: assetId,
+      businessId: access.businessId,
+      purpose: EXPENSE_RECEIPT_PURPOSE,
+    },
+    include: { storageAccount: true },
+  });
+  if (!asset || asset.status !== "READY") return null;
+  const updated = await tx.storedAsset.updateMany({
+    where: {
+      id: asset.id,
+      businessId: access.businessId,
+      purpose: EXPENSE_RECEIPT_PURPOSE,
+      status: "READY",
+    },
+    data: { status: "DELETED", deletedAt: now, publicPath: null },
+  });
+  if (updated.count !== 1) return null;
+  if (asset.fileSizeBytes > 0) {
+    await tx.businessStorageAccount.update({
+      where: { id: asset.storageAccountId },
+      data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
+    });
+  }
+  return {
+    bucket: asset.storageAccount.bucketName,
+    storageKey: asset.storageKey,
+  };
+}
+
+function releasePreviousReceiptAfterClaim(
+  access: BusinessAccess,
+  now: Date,
+  sink: { object: { bucket: string; storageKey: string } | null },
+): ExpenseReceiptClaimAfter {
+  return async (tx, { previousStoredAssetId, nextStoredAssetId }) => {
+    if (!previousStoredAssetId || previousStoredAssetId === nextStoredAssetId) return;
+    sink.object = await claimUnreferencedExpenseReceiptInTx(tx, access, previousStoredAssetId, now);
+  };
+}
+
 export async function releaseUnreferencedExpenseReceiptAsset(
   deps: StorageServiceDeps,
   access: BusinessAccess,
@@ -271,42 +325,23 @@ export async function releaseUnreferencedExpenseReceiptAsset(
   if (asset.status === "DELETED" || asset.deletedAt) {
     return { released: false as const, reason: "already_deleted", assetId: asset.id };
   }
-  const referenced = await deps.db.expense.findFirst({
-    where: { receiptStoredAssetId: asset.id, businessId: access.businessId },
-    select: { id: true },
-  });
-  if (referenced) {
-    return { released: false as const, reason: "referenced", assetId: asset.id };
-  }
   const now = deps.now?.() ?? new Date();
   if (asset.status === "PENDING") {
+    const referenced = await deps.db.expense.findFirst({
+      where: { receiptStoredAssetId: asset.id, businessId: access.businessId },
+      select: { id: true },
+    });
+    if (referenced) {
+      return { released: false as const, reason: "referenced", assetId: asset.id };
+    }
     await abortManagedUpload(deps, access.businessId, asset.id);
     return { released: true as const, reason: "aborted", assetId: asset.id };
   }
   const claimed = await deps.db.$transaction(async (tx) => {
-    const updated = await tx.storedAsset.updateMany({
-      where: {
-        id: asset.id,
-        businessId: access.businessId,
-        purpose: EXPENSE_RECEIPT_PURPOSE,
-        status: "READY",
-      },
-      data: { status: "DELETED", deletedAt: now, publicPath: null },
-    });
-    if (updated.count !== 1) return false;
-    if (asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
-      });
-    }
-    return true;
+    return claimUnreferencedExpenseReceiptInTx(tx, access, asset.id, now);
   });
   if (claimed) {
-    await bestEffortCleanupOwnedObject(deps, access.businessId, {
-      bucket: asset.storageAccount.bucketName,
-      storageKey: asset.storageKey,
-    });
+    await bestEffortCleanupOwnedObject(deps, access.businessId, claimed);
     return { released: true as const, reason: "deleted", assetId: asset.id };
   }
   return { released: false as const, reason: "already_deleted", assetId: asset.id };
@@ -342,12 +377,18 @@ export async function finalizeAndAttachExpenseReceipt(
   const asset = await finalizeManagedUpload(deps, access.businessId, input.assetId);
   try {
     await assertPrivateExpenseReceiptAsset(asset);
-    const attached = await attachExpenseReceipt(deps.db, access, {
-      expenseId: input.expenseId,
-      storedAssetId: asset.id,
-    });
-    if (attached.previousStoredAssetId && attached.previousStoredAssetId !== asset.id) {
-      await releaseUnreferencedExpenseReceiptAsset(deps, access, attached.previousStoredAssetId);
+    const releasedObject = { object: null as { bucket: string; storageKey: string } | null };
+    const attached = await attachExpenseReceipt(
+      deps.db,
+      access,
+      {
+        expenseId: input.expenseId,
+        storedAssetId: asset.id,
+      },
+      releasePreviousReceiptAfterClaim(access, deps.now?.() ?? new Date(), releasedObject),
+    );
+    if (releasedObject.object) {
+      await bestEffortCleanupOwnedObject(deps, access.businessId, releasedObject.object);
     }
     return { expense: attached.expense, asset, previousStoredAssetId: attached.previousStoredAssetId };
   } catch (error) {
@@ -405,9 +446,15 @@ export async function removeExpenseReceiptAttachment(
   access: BusinessAccess,
   expenseId: string,
 ) {
-  const removed = await removeExpenseReceipt(deps.db, access, { expenseId });
-  if (removed.previousStoredAssetId) {
-    await releaseUnreferencedExpenseReceiptAsset(deps, access, removed.previousStoredAssetId);
+  const releasedObject = { object: null as { bucket: string; storageKey: string } | null };
+  const removed = await removeExpenseReceipt(
+    deps.db,
+    access,
+    { expenseId },
+    releasePreviousReceiptAfterClaim(access, deps.now?.() ?? new Date(), releasedObject),
+  );
+  if (releasedObject.object) {
+    await bestEffortCleanupOwnedObject(deps, access.businessId, releasedObject.object);
   }
   return removed;
 }
