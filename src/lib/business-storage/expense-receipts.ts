@@ -392,7 +392,12 @@ export async function finalizeAndAttachExpenseReceipt(
     }
     return { expense: attached.expense, asset, previousStoredAssetId: attached.previousStoredAssetId };
   } catch (error) {
-    await releaseUnreferencedExpenseReceiptAsset(deps, access, asset.id).catch(() => undefined);
+    await releaseUnreferencedExpenseReceiptAsset(deps, access, asset.id).catch((releaseError) => {
+      console.error("Failed to release unreferenced expense receipt after attach failure", {
+        assetId: asset.id,
+        error: releaseError,
+      });
+    });
     throw error;
   }
 }
