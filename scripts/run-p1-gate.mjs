@@ -223,7 +223,9 @@ function usesAcceptDataLoss(masked) {
 export function auditScriptSource(scriptPath, source) {
   const masked = maskComments(source);
   const candidates = [
-    firstMatch(masked, /\bnew\s+[A-Za-z_$][\w$]*Prisma[\w$]*\s*\(/),
+    // `\w*Prisma\w*` so PrismaClient matches. A leading character class
+    // would consume the "P" and then miss the literal "Prisma".
+    firstMatch(masked, /\bnew\s+\w*Prisma\w*\s*\(/),
     firstMatch(masked, /["']db["']\s*,\s*["']push["']/),
     firstExecutedDrop(masked),
   ].filter(Boolean);
@@ -338,6 +340,12 @@ function hasNextBuild() {
   }
 }
 
+export function nextBuildBlockReason(scriptPath) {
+  if (!NEXT_BUILD_SCRIPTS.has(scriptPath)) return null;
+  if (hasNextBuild()) return null;
+  return "requires prior next build (no .next directory). This gate does not run npm run build or next build.";
+}
+
 function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(2)}s`;
 }
@@ -406,10 +414,9 @@ async function runDomain(domain, options) {
       if (options.failFast) break;
       continue;
     }
-    if (NEXT_BUILD_SCRIPTS.has(scriptPath) && !hasNextBuild()) {
-      console.error(
-        `FAIL  ${scriptPath}  requires prior next build (no .next directory). This gate does not run npm run build or next build.`,
-      );
+    const buildBlock = nextBuildBlockReason(scriptPath);
+    if (buildBlock) {
+      console.error(`FAIL  ${scriptPath}  ${buildBlock}`);
       results.push({ scriptPath, status: "fail", ms: 0 });
       if (options.failFast) break;
       continue;
