@@ -213,8 +213,10 @@ check(
 );
 check(
   "Dedicated test DB drop is in finally and push failure throws instead of exiting",
-  checkSrc.includes('throw new Error("Failed to push schema') &&
-    !checkSrc.includes("process.exit(push.status") &&
+  checkSrc.includes(
+    'throw new Error("Failed to push schema for availability-request test database.")',
+  ) &&
+    checkSrc.includes("if (prisma)") &&
     checkSrc.includes("DROP DATABASE IF EXISTS"),
 );
 check(

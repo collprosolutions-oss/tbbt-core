@@ -42,10 +42,11 @@ type Db = PrismaClient | Prisma.TransactionClient;
  * Test-only barriers. Production never sets these.
  * - beforeDecideClaims: both decide transactions have read PENDING
  *   before either writes.
+ * - afterExistingExceptionCheck: existence read finished and the
+ *   membership row is not locked yet, so a concurrent owner exception
+ *   insert can commit before create.
  * - afterMembershipLock: membership row is locked; a concurrent
  *   deactivation must wait or already have committed.
- * - afterExistingExceptionCheck: existence read finished; a concurrent
- *   owner exception write can still commit before create.
  * - beforeRequestCreate: both creates have passed the pending lookup
  *   before either inserts.
  */
@@ -430,25 +431,6 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         decision,
       });
 
-      const locked = await tx.$queryRaw<Array<{ id: string; businessId: string; active: boolean }>>`
-        SELECT id, "businessId", active
-        FROM "Membership"
-        WHERE id = ${request.membershipId}
-          AND "businessId" = ${access.businessId}
-        FOR UPDATE
-      `;
-      const liveMembership = locked[0];
-      if (!liveMembership) throw new ForbiddenError();
-      access.assertOwned(liveMembership);
-
-      await availabilityRequestTestHooks.afterMembershipLock?.({
-        requestId: request.id,
-        membershipId: liveMembership.id,
-      });
-      if (!liveMembership.active) {
-        throw new WorkforceError(AVAILABILITY_REQUEST_INACTIVE_MESSAGE);
-      }
-
       const business = await tx.business.findUnique({
         where: { id: access.businessId },
         select: { timezone: true },
@@ -470,7 +452,7 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         const existing = await tx.membershipAvailabilityException.findFirst({
           where: {
             businessId: access.businessId,
-            membershipId: liveMembership.id,
+            membershipId: request.membershipId,
             date: request.date,
           },
           select: { id: true },
@@ -480,9 +462,28 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         }
         await availabilityRequestTestHooks.afterExistingExceptionCheck?.({
           requestId: request.id,
-          membershipId: liveMembership.id,
+          membershipId: request.membershipId,
           date: request.date,
         });
+      }
+
+      const locked = await tx.$queryRaw<Array<{ id: string; businessId: string; active: boolean }>>`
+        SELECT id, "businessId", active
+        FROM "Membership"
+        WHERE id = ${request.membershipId}
+          AND "businessId" = ${access.businessId}
+        FOR UPDATE
+      `;
+      const liveMembership = locked[0];
+      if (!liveMembership) throw new ForbiddenError();
+      access.assertOwned(liveMembership);
+
+      await availabilityRequestTestHooks.afterMembershipLock?.({
+        requestId: request.id,
+        membershipId: liveMembership.id,
+      });
+      if (!liveMembership.active) {
+        throw new WorkforceError(AVAILABILITY_REQUEST_INACTIVE_MESSAGE);
       }
 
       const claimed = await tx.membershipAvailabilityExceptionRequest.updateMany({
@@ -528,7 +529,10 @@ export async function decideMemberAvailabilityExceptionRequestOp(
           try {
             await tx.membershipAvailabilityException.create({ data: exceptionData });
           } catch (error) {
-            if (isExceptionDateConflict(error)) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002"
+            ) {
               throw new WorkforceError(AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE);
             }
             throw error;
@@ -545,7 +549,7 @@ export async function decideMemberAvailabilityExceptionRequestOp(
         decision,
         request: toRequestRecord(updated),
       };
-    });
+    }, { timeout: 15000, maxWait: 10000 });
   } catch (error) {
     if (error instanceof ForbiddenError || error instanceof WorkforceError) {
       throw error;
