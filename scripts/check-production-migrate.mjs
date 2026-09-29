@@ -1392,6 +1392,46 @@ check(
       .includes("sendOwnerSms"),
 );
 
+const warrantyCallbackMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929003117_warranty_and_callback_records/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const warrantyCallbackOps = readFileSync(
+  new URL("../src/lib/warranty-callback-ops.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Warranty and callback migration is additive and does not rewrite jobs, invoices, or messages",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(warrantyCallbackMigration) &&
+    !warrantyCallbackMigration.includes('ALTER TABLE "Job"') &&
+    !warrantyCallbackMigration.includes('ALTER TABLE "Invoice"') &&
+    !warrantyCallbackMigration.includes('ALTER TABLE "Customer"') &&
+    !warrantyCallbackMigration.includes('ALTER TABLE "CustomerCommunication"') &&
+    warrantyCallbackMigration.includes('CREATE TABLE IF NOT EXISTS "JobWarrantyTerm"') &&
+    warrantyCallbackMigration.includes('CREATE TABLE IF NOT EXISTS "JobWarrantyCallback"') &&
+    warrantyCallbackMigration.includes('"statement" TEXT NOT NULL') &&
+    !warrantyCallbackMigration.includes("coverageDays") &&
+    !warrantyCallbackMigration.includes("durationDays") &&
+    localNames.includes("20260929003117_warranty_and_callback_records") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929003117_warranty_and_callback_records"),
+);
+check(
+  "Warranty callbacks fail closed without request-time DDL and do not create jobs, invoices, or messages",
+  warrantyCallbackOps.includes("missingWarrantyCallbackSchema") &&
+    !warrantyCallbackOps.includes("$executeRawUnsafe") &&
+    !warrantyCallbackOps.includes("ALTER TABLE") &&
+    !warrantyCallbackOps.includes("CREATE TABLE") &&
+    !warrantyCallbackOps.includes("job.create") &&
+    !warrantyCallbackOps.includes("invoice.create") &&
+    !warrantyCallbackOps.includes("customerCommunication.create") &&
+    !warrantyCallbackOps.includes("communicationThread.create") &&
+    !warrantyCallbackOps.includes("phoneInteraction.create"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

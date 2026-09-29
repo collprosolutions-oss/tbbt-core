@@ -52,6 +52,8 @@ const VARIANTS: Record<string, BadgeVariant> = {
   UNKNOWN: "outline",
   VISIT_COMPLETED: "success",
   RE_CLEAN_REQUESTED: "warning",
+  REPORTED: "warning",
+  OUTCOME_RECORDED: "success",
 };
 
 const LABELS: Record<string, string> = {
@@ -86,6 +88,8 @@ const LABELS: Record<string, string> = {
   UNKNOWN: "Unknown",
   VISIT_COMPLETED: "Visit completed",
   RE_CLEAN_REQUESTED: "Re-clean requested",
+  REPORTED: "Reported",
+  OUTCOME_RECORDED: "Outcome recorded",
 };
 
 export function StatusBadge({ status }: { status: string }) {

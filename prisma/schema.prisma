@@ -423,6 +423,10 @@ model Business {
   /// snapshots only — never public catalog prices or approved estimates.
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
+  /// Trade-neutral warranty statements and customer callbacks. Recording
+  /// these never creates a job, an invoice, or a customer message.
+  jobWarrantyTerms          JobWarrantyTerm[]
+  jobWarrantyCallbacks      JobWarrantyCallback[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -641,6 +645,10 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedWarrantyTerms       JobWarrantyTerm[]      @relation("JobWarrantyTermRecorder")
+  recordedWarrantyCallbacks   JobWarrantyCallback[]  @relation("JobWarrantyCallbackRecorder")
+  reviewedWarrantyCallbacks   JobWarrantyCallback[]  @relation("JobWarrantyCallbackReviewer")
+  resolvedWarrantyCallbacks   JobWarrantyCallback[]  @relation("JobWarrantyCallbackResolver")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1490,6 +1498,8 @@ model Job {
   materialPurchaseOrders  MaterialPurchaseOrder[]
   crewVisit               JobCrewVisit?
   repeatVisitRequest      ServiceRequest? @relation("ServiceRequestRepeatVisitSource")
+  warrantyTerms           JobWarrantyTerm[]
+  warrantyCallbacks       JobWarrantyCallback[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -2029,6 +2039,65 @@ model JobProblemReport {
   @@index([businessId])
   @@index([jobId])
   @@index([membershipId])
+}
+
+/// OWNER-typed warranty statement for one completed job. The statement is
+/// stored exactly as entered. No coverage window or duration is inferred.
+/// Trade-neutral: any business, not a Cleaning workflow.
+model JobWarrantyTerm {
+  id                     String   @id @default(cuid())
+  businessId             String
+  jobId                  String
+  statement              String
+  recordedByMembershipId String
+  createdAt              DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  recordedBy Membership @relation("JobWarrantyTermRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([recordedByMembershipId])
+}
+
+/// Customer-reported callback against one completed job in the same business.
+/// Distinct from PhoneInteraction.callbackNeeded. Status moves
+/// REPORTED → REVIEWED → OUTCOME_RECORDED. Recording, reviewing, and
+/// recording the outcome never create a Job, Invoice, or customer message.
+model JobWarrantyCallback {
+  id                     String    @id @default(cuid())
+  businessId             String
+  jobId                  String
+  /// Snapshot of Job.customerId when the callback was recorded, and only
+  /// when that customer belongs to this business. Not client input. No
+  /// Customer relation, so this record does not alter the Customer model.
+  customerId             String?
+  report                 String
+  /// REPORTED | REVIEWED | OUTCOME_RECORDED
+  status                 String    @default("REPORTED")
+  reviewNote             String?
+  reviewedAt             DateTime?
+  reviewedByMembershipId String?
+  outcomeNote            String?
+  resolvedAt             DateTime?
+  resolvedByMembershipId String?
+  recordedByMembershipId String
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  recordedBy Membership  @relation("JobWarrantyCallbackRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("JobWarrantyCallbackReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  resolvedBy Membership? @relation("JobWarrantyCallbackResolver", fields: [resolvedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([businessId, status])
+  @@index([recordedByMembershipId])
+  @@index([reviewedByMembershipId])
+  @@index([resolvedByMembershipId])
 }
 
 /// One clocked or manually-entered interval of labor time. This is the

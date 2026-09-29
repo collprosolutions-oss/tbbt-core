@@ -25,6 +25,7 @@ import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
+import { WarrantyCallbackPanel } from "@/components/jobs/warranty-callback-panel";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { RecordOwnerAppointmentConfirmationForm } from "@/components/jobs/record-owner-appointment-confirmation-form";
@@ -100,6 +101,13 @@ import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-cle
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
+import { WARRANTY_CALLBACK_UNAVAILABLE_MESSAGE } from "@/lib/warranty-callback";
+import {
+  loadJobWarrantyCallbackReview,
+  missingWarrantyCallbackSchema,
+  WarrantyCallbackUnavailableError,
+  type WarrantyCallbackReview,
+} from "@/lib/warranty-callback-ops";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -214,6 +222,23 @@ export default async function JobPage({
     notFound();
   }
   access.assertOwned(job);
+
+  let warrantyReview: WarrantyCallbackReview | null = null;
+  let warrantySchemaMissing = false;
+  if (access.workspace.role === "OWNER") {
+    try {
+      warrantyReview = await loadJobWarrantyCallbackReview(prisma, access, job.id);
+    } catch (error) {
+      if (
+        error instanceof WarrantyCallbackUnavailableError ||
+        missingWarrantyCallbackSchema(error)
+      ) {
+        warrantySchemaMissing = true;
+      } else {
+        throw error;
+      }
+    }
+  }
 
   const recordNavItems = await loadRecordJourney(prisma, access, {
     kind: "job",
@@ -1007,6 +1032,28 @@ export default async function JobPage({
           />
         </CardContent>
       </Card>
+
+      {access.workspace.role === "OWNER" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Warranty and callbacks</CardTitle>
+            <CardDescription>
+              Record a customer-reported callback on a completed job in this
+              business, review it, and record the outcome. Only warranty terms
+              already saved for this job are shown.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {warrantySchemaMissing ? (
+              <p className="text-sm text-muted-foreground">
+                {WARRANTY_CALLBACK_UNAVAILABLE_MESSAGE}
+              </p>
+            ) : warrantyReview ? (
+              <WarrantyCallbackPanel review={warrantyReview} timeZone={timeZone} />
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
