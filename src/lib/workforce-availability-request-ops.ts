@@ -5,8 +5,8 @@
  * declines. Only ACCEPT writes MembershipAvailabilityException, and only
  * when no recorded exception exists or the owner explicitly replaces it.
  * Rechecks worker ownership, PENDING status, date bounds, and
- * expectedUpdatedAt at commit. These paths never cancel, reassign, or
- * message about Jobs.
+ * expectedUpdatedAt at commit. These paths never cancel, reassign, or message
+ * about Jobs.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";

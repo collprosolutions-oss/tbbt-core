@@ -93,8 +93,8 @@ export function AvailabilityExceptionRequestsPanel({
           Workers can request a dated exception or time off. Only owner
           acceptance writes recorded availability. If a recorded exception
           already exists for that date, accept must explicitly replace it.
-          Decline leaves weekly hours unchanged. TBBT does not cancel,
-          reassign, or message anyone about existing jobs from this list.
+          Decline leaves weekly hours unchanged. TBBT does not cancel, reassign, or message
+          anyone about existing jobs from this list.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
