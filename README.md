@@ -98,6 +98,7 @@ npm run test:marketing
 npm run test:reviews
 npm run test:growth-department
 npm run test:reports
+npm run test:customer-merge
 npm run test:production-certification
 npm run test:plan-entitlements
 npm run test:materials-suppliers

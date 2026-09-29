@@ -415,9 +415,14 @@ export default async function CustomersPage({
         actions={
           <div className="flex items-center gap-2">
             {access.workspace.role === "OWNER" ? (
-              <Button asChild size="sm" variant="outline">
-                <Link href="/customers/import">Import customers</Link>
-              </Button>
+              <>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/customers/duplicates">Review possible duplicates</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/customers/import">Import customers</Link>
+                </Button>
+              </>
             ) : null}
             <NewCustomerForm label="New Customer" />
           </div>

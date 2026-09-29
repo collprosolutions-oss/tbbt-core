@@ -244,6 +244,16 @@ export async function authorizeManagedUpload(
 
   const asset = await deps.db.$transaction(async (tx) => {
     await options?.beforeCreate?.(tx);
+    if (input.customerId) {
+      const customer = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Customer"
+        WHERE id = ${input.customerId} AND "businessId" = ${businessId}
+        FOR KEY SHARE
+      `;
+      if (customer.length === 0) {
+        throw new StorageAccessError("That customer is not available.");
+      }
+    }
     const locked = await tx.businessStorageAccount.findUniqueOrThrow({
       where: { id: account.id },
     });
