@@ -233,7 +233,7 @@ async function persistPreview(
         where: { id: existing.id, businessId, status: "CONFIRMING" },
         data: { status: "PREVIEW" },
       });
-      return refreshPreviewMatches(db, access, { ...existing, status: "PREVIEW" }, rows);
+      return refreshPreviewMatches(db, access, existing, rows);
     }
     return refreshPreviewMatches(db, access, existing, rows);
   }
@@ -284,7 +284,7 @@ async function persistPreview(
 async function refreshPreviewMatches(
   db: Db,
   access: ServiceCatalogImportAccess,
-  existing: StoredCatalogImport,
+  existing: { id: string },
   rows: StoredCatalogImportRow[],
 ): Promise<ServiceCatalogImportPreview> {
   const context = await loadCatalogImportContext(db, access.businessId);
