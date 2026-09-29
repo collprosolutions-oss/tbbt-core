@@ -3539,6 +3539,9 @@ model ControlledAiActionAttempt {
 /// Immutable published public-website snapshot. Application code must
 /// never update snapshotJson / schemaVersion / versionNumber after insert.
 /// Rollback copies this payload into a new row and moves the current pointer.
+/// OWNER restore moves Business.publishedWebsiteId to this existing row and
+/// restores each trade’s captured TenantIntakeSnapshot pointer. Restore
+/// never rewrites WebsitePublish, TenantIntakeSnapshot, or ServiceRequest.
 model WebsitePublish {
   id                       String   @id @default(cuid())
   businessId               String

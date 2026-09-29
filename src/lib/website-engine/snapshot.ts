@@ -7,6 +7,18 @@
 
 export const WEBSITE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 
+/** Newest published website versions shown to OWNER. Older rows stay restorable by id. */
+export const WEBSITE_PUBLISH_HISTORY_LIMIT = 20;
+
+export const WEBSITE_PUBLISH_RESTORE_CONFIRM_REQUIRED =
+  "Confirm you want to restore this published website version as the current public site. Website snapshot rows and historical requests stay unchanged.";
+
+export const WEBSITE_PUBLISH_RESTORE_STALE =
+  "The current published website changed. Reload history and restore again.";
+
+export const WEBSITE_PUBLISH_RESTORE_DESCRIPTION =
+  "Published website versions are immutable. Restoring an older version moves this business’s current public website pointer and restores each trade’s exact captured intake snapshot. Website snapshot rows, intake snapshot rows, and historical requests stay unchanged. An already-open hire form still submits the version it displayed.";
+
 export const WEBSITE_SNAPSHOT_SECRET_KEYS = [
   "password",
   "passwordHash",

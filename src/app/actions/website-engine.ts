@@ -6,7 +6,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
   addWebsiteGalleryItem,
-  listWebsitePublishes,
+  listOwnedWebsitePublishHistory,
   removeWebsiteGalleryItem,
   saveWebsiteLocalPageDraft,
   saveWebsiteSeoDraft,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/website-engine";
 import {
   publishWebsiteFromForm,
+  restoreWebsiteFromForm,
   rollbackWebsiteFromForm,
 } from "@/lib/website-engine/form";
 
@@ -66,6 +67,24 @@ export async function rollbackWebsiteAction(
     return { message: `Rolled back. Current version is ${result.versionNumber}.` };
   } catch (error) {
     return { error: publishError(error, "Could not roll back that website version.") };
+  }
+}
+
+export async function restoreWebsiteAction(
+  _prev: WebsiteEngineActionState,
+  formData: FormData,
+): Promise<WebsiteEngineActionState> {
+  const operating = await requireOperatingBusinessAccessForForm();
+  if (!operating.ok) return { error: operating.error };
+  try {
+    const result = await restoreWebsiteFromForm(prisma, operating.access, formData);
+    revalidatePath("/settings");
+    revalidatePath(`/hire/${operating.access.workspace.business.slug}`);
+    return {
+      message: `Restored website version ${result.versionNumber} as the current public site. Captured intake snapshots were restored. Historical requests stay unchanged.`,
+    };
+  } catch (error) {
+    return { error: publishError(error, "Could not restore that website version.") };
   }
 }
 
@@ -167,6 +186,6 @@ export async function saveWebsiteLocalPageDraftAction(
 
 export async function loadWebsitePublishHistoryAction() {
   const operating = await requireOperatingBusinessAccessForForm();
-  if (!operating.ok) return { error: operating.error, currentId: null, versions: [] };
-  return listWebsitePublishes(prisma, operating.access);
+  if (!operating.ok) return { error: operating.error, currentId: null, historyLimit: 0, versions: [] };
+  return listOwnedWebsitePublishHistory(prisma, operating.access);
 }

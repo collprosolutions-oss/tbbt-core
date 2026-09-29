@@ -6,14 +6,20 @@ import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { listActiveBusinessTrades } from "@/lib/business-trades";
 import { catalogItemIsPubliclyOffered } from "@/lib/public-request-trade";
-import { listWebsitePublishes, websiteHasUnpublishedChanges } from "@/lib/website-engine/publish";
+import {
+  listOwnedWebsitePublishHistory,
+  listWebsitePublishes,
+  websiteHasUnpublishedChanges,
+} from "@/lib/website-engine/publish";
 
 type Db = PrismaClient;
 
 export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess) {
   const [history, unpublished, reviews, galleryAssets, galleryItems, settings, areas, catalog, trades] =
     await Promise.all([
-      listWebsitePublishes(db, access),
+      access.workspace.role === "OWNER"
+        ? listOwnedWebsitePublishHistory(db, access)
+        : listWebsitePublishes(db, access),
       websiteHasUnpublishedChanges(db, access),
       db.review.findMany({
         where: { businessId: access.businessId },
@@ -70,6 +76,8 @@ export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess
 
   return {
     hasUnpublishedChanges: unpublished,
+    currentId: history.currentId,
+    historyLimit: history.historyLimit,
     currentVersion: history.versions.find((row) => row.isCurrent)?.versionNumber ?? null,
     versions: history.versions.map((row) => ({
       ...row,
