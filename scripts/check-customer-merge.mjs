@@ -318,8 +318,8 @@ try {
     "Ops require OWNER and lock both customers in one ReadCommitted transaction",
     opsSrc.includes('requireBusinessRole(access, "OWNER")') &&
       opsSrc.includes("FOR UPDATE") &&
-      opsSrc.includes("ReadCommitted") &&
-      !opsSrc.includes("Serializable"),
+      opsSrc.includes("Prisma.TransactionIsolationLevel.ReadCommitted") &&
+      !opsSrc.includes("Prisma.TransactionIsolationLevel.Serializable"),
   );
   check(
     "Merge remaps jobs, estimates, invoices, properties, and communications",
