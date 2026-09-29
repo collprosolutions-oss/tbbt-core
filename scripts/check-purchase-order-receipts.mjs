@@ -168,6 +168,7 @@ async function waitForGrantedPurchaseOrderLock(client) {
         WHERE c.relname = 'MaterialPurchaseOrder'
           AND l.granted
           AND a.datname = current_database()
+          AND a.state = 'active'
           AND a.pid <> pg_backend_pid()
       `;
       return rows[0]?.pid ?? null;
@@ -831,19 +832,52 @@ try {
     status: "ORDERED_EXTERNALLY",
   });
   const raceLine = racePo.items[0];
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION tbbt_po_receipt_race_pause() RETURNS trigger AS $$
+    BEGIN
+      PERFORM pg_sleep(1);
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+  await prisma.$executeRawUnsafe(`
+    DROP TRIGGER IF EXISTS tbbt_po_receipt_race_pause ON "MaterialPurchaseOrderItem"
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER tbbt_po_receipt_race_pause
+    BEFORE UPDATE OF "quantityReceived" ON "MaterialPurchaseOrderItem"
+    FOR EACH ROW
+    WHEN (NEW."quantityReceived" IS DISTINCT FROM OLD."quantityReceived")
+    EXECUTE FUNCTION tbbt_po_receipt_race_pause()
+  `);
+  let raceAPid = 0;
+  let raceBPid = 0;
+  let raceResults = [];
   const raceA = recordPurchaseOrderReceipt(prisma, ownerA, {
     purchaseOrderId: racePo.id,
     attemptKey: "receipt-race-a",
     items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
   });
-  const raceAPid = await waitForGrantedPurchaseOrderLock(prismaHold);
-  const raceB = recordPurchaseOrderReceipt(prismaRace, ownerA, {
-    purchaseOrderId: racePo.id,
-    attemptKey: "receipt-race-b",
-    items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
-  });
-  const raceBPid = await waitForBlockedByPid(prismaHold, raceAPid);
-  const raceResults = await Promise.allSettled([raceA, raceB]);
+  const racePending = [raceA];
+  try {
+    raceAPid = await waitForGrantedPurchaseOrderLock(prismaHold);
+    const raceB = recordPurchaseOrderReceipt(prismaRace, ownerA, {
+      purchaseOrderId: racePo.id,
+      attemptKey: "receipt-race-b",
+      items: [{ purchaseOrderItemId: raceLine.id, quantityReceived: "2" }],
+    });
+    racePending.push(raceB);
+    raceBPid = await waitForBlockedByPid(prismaHold, raceAPid);
+    raceResults = await Promise.allSettled(racePending);
+  } catch (error) {
+    raceResults = await Promise.allSettled(racePending);
+    throw error;
+  } finally {
+    await prisma.$executeRawUnsafe(
+      `DROP TRIGGER IF EXISTS tbbt_po_receipt_race_pause ON "MaterialPurchaseOrderItem"`,
+    );
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS tbbt_po_receipt_race_pause()`);
+  }
   const raceOk = raceResults.filter((row) => row.status === "fulfilled");
   const raceFailed = raceResults.filter((row) => row.status === "rejected");
   const raceLineAfter = await prisma.materialPurchaseOrderItem.findUnique({
