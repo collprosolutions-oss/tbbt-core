@@ -25,6 +25,8 @@ import {
   managementReportCsvRows,
   receivablesCsvRows,
 } from "@/lib/financial-intelligence";
+import { requestSourceReportCsvRows } from "@/lib/request-source-report";
+import { loadRequestSourceReport } from "@/lib/request-source-report-data";
 import {
   buildReport,
   parseDatePreset,
@@ -68,6 +70,10 @@ export default async function ReportsPage({
   const source = await loadFinancialSource(prisma, access.businessId);
   const report = buildReport(source, range);
   const intelligence = buildFinancialIntelligence(source, report);
+  const sourceProgression =
+    area === "request-sources"
+      ? await loadRequestSourceReport(prisma, access, { start: range.start, end: range.end })
+      : null;
 
   const laborHint = report.labor.laborCostIncomplete
     ? "Wage snapshot missing on some approved time"
@@ -118,11 +124,13 @@ export default async function ReportsPage({
           <div className="flex flex-wrap gap-2">
             <ExportReportButton
               filename={`tbbt-${area}-${formatISODate(new Date(), timeZone)}.csv`}
-              {...(area === "job-profitability"
-                ? jobProfitabilityCsvRows(intelligence)
-                : area === "receivables"
-                  ? receivablesCsvRows(intelligence)
-                  : reportCsvRows(area, report))}
+              {...(area === "request-sources" && sourceProgression
+                ? requestSourceReportCsvRows(sourceProgression)
+                : area === "job-profitability"
+                  ? jobProfitabilityCsvRows(intelligence)
+                  : area === "receivables"
+                    ? receivablesCsvRows(intelligence)
+                    : reportCsvRows(area, report))}
             />
             <ExportReportButton
               filename={`tbbt-management-${formatISODate(new Date(), timeZone)}.csv`}
@@ -166,6 +174,7 @@ export default async function ReportsPage({
           to={to || (range.end ? formatISODate(addDays(range.end, -1, timeZone), timeZone) : "")}
           report={report}
           intelligence={intelligence}
+          sourceProgression={sourceProgression}
         />
       </FounderDesignRoot>
     </PageContainer>
