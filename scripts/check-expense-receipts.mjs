@@ -174,10 +174,11 @@ try {
       false,
   );
   check(
-    "Receipt module never infers tax treatment",
+    "Receipt module never assigns or classifies tax treatment",
     !receiptLib.includes("taxCategory") &&
       !receiptLib.includes("DEDUCTIBLE") &&
-      !receiptLib.includes("infer"),
+      !receiptLib.includes("TAX_CATEGORIES") &&
+      !receiptLib.includes("normalizeTaxCategory"),
   );
   check(
     "Attach/remove only write receipt fields, never amount",
