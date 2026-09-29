@@ -135,12 +135,13 @@ function settle(run) {
 }
 
 function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    }),
-  ]);
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 async function runOrderedPointerWrites(first, second, { releaseFirst = true } = {}) {
@@ -148,30 +149,58 @@ async function runOrderedPointerWrites(first, second, { releaseFirst = true } = 
   const secondAtHold = deferred();
   const releaseA = deferred();
   const releaseB = deferred();
-  const firstRun = first(async () => {
-    firstAtHold.resolve();
-    await releaseA.promise;
-  });
-  const secondRun = second(async () => {
-    secondAtHold.resolve();
-    await releaseB.promise;
-  });
-  await withTimeout(
-    Promise.all([firstAtHold.promise, secondAtHold.promise]),
-    8000,
-    "pointer-write racers reached the in-transaction hold",
+  const firstSettled = settle(
+    first(async () => {
+      firstAtHold.resolve();
+      await releaseA.promise;
+    }),
   );
+  const secondSettled = settle(
+    second(async () => {
+      secondAtHold.resolve();
+      await releaseB.promise;
+    }),
+  );
+
+  async function releaseBothAndAwait() {
+    releaseA.resolve();
+    releaseB.resolve();
+    return Promise.all([firstSettled, secondSettled]);
+  }
+
+  let barrier;
+  try {
+    barrier = await withTimeout(
+      Promise.race([
+        Promise.all([firstAtHold.promise, secondAtHold.promise]).then(() => ({ kind: "ready" })),
+        firstSettled.then((result) => ({ kind: "early", result })),
+        secondSettled.then((result) => ({ kind: "early", result })),
+      ]),
+      8000,
+      "pointer-write racers reached the in-transaction hold",
+    );
+  } catch (error) {
+    await releaseBothAndAwait();
+    throw error;
+  }
+  if (barrier.kind === "early") {
+    await releaseBothAndAwait();
+    throw barrier.result.status === "rejected"
+      ? barrier.result.reason
+      : new Error("pointer-write racer settled before the in-transaction hold");
+  }
+
   if (releaseFirst) {
     releaseA.resolve();
-    const firstResult = await settle(firstRun);
+    const firstResult = await firstSettled;
     releaseB.resolve();
-    const secondResult = await settle(secondRun);
+    const secondResult = await secondSettled;
     return { firstResult, secondResult };
   }
   releaseB.resolve();
-  const secondResult = await settle(secondRun);
+  const secondResult = await secondSettled;
   releaseA.resolve();
-  const firstResult = await settle(firstRun);
+  const firstResult = await firstSettled;
   return { firstResult, secondResult };
 }
 
@@ -360,6 +389,8 @@ check(
     read("scripts/check-website-publish-restore.mjs").includes("WITH (FORCE)") &&
     read("scripts/check-website-publish-restore.mjs").includes("--accept-data-loss") &&
     read("scripts/check-website-publish-restore.mjs").includes("createTestClient") &&
+    read("scripts/check-website-publish-restore.mjs").includes("const firstSettled = settle(") &&
+    read("scripts/check-website-publish-restore.mjs").includes("const secondSettled = settle(") &&
     !read("scripts/check-website-publish-restore.mjs").includes("TBBT_ALLOW_" + "REMOTE_TEST_DB"),
 );
 check(
@@ -372,6 +403,27 @@ check(
 );
 
 try {
+  const earlyReject = new Error("racer-rejected-before-hold");
+  let secondHoldReleased = false;
+  let earlyObserved;
+  try {
+    await runOrderedPointerWrites(
+      async () => {
+        throw earlyReject;
+      },
+      async (hold) => {
+        await hold();
+        secondHoldReleased = true;
+      },
+    );
+  } catch (error) {
+    earlyObserved = error;
+  }
+  check(
+    "Racer rejecting before its hold still reaches cleanup",
+    earlyObserved === earlyReject && secondHoldReleased === true,
+  );
+
   const push = spawnSync(
     "npx",
     ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
