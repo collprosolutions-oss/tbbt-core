@@ -143,9 +143,9 @@ export async function loadMonthlyGoalFactSource(
       ...payment,
       amount: asNumber(payment.amount),
     })),
-    paymentsOnPaidInvoices: paymentsOnPaidInvoices
-      .filter((row): row is { businessId: string; invoiceId: string } => Boolean(row.invoiceId))
-      .map((row) => ({ businessId: row.businessId, invoiceId: row.invoiceId })),
+    paymentsOnPaidInvoices: paymentsOnPaidInvoices.flatMap((row) =>
+      row.invoiceId ? [{ businessId: row.businessId, invoiceId: row.invoiceId }] : [],
+    ),
     jobCompletionsTruncated: hitBound(jobCompletions.length),
     completedJobsTruncated: hitBound(completedJobs.length),
     paidInvoicesTruncated: hitBound(paidInvoices.length),
