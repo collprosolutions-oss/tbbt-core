@@ -1,20 +1,44 @@
 /**
  * OWNER Job location assignment and owner-schedule location filter.
  *
- * Dedicated test database: tbbt_job_location_assignment_test
+ * Dedicated localhost test database: tbbt_job_location_assignment_test
  *
- * Proves authorization, isolation, historical-job behavior, and
- * stale/concurrent edits. Assignment writes only Job.businessLocationId
- * on the existing BusinessLocation migration column.
+ * The localhost host guard runs before any @/lib import or Prisma use.
+ * CREATE DATABASE failures abort. The test database is always dropped
+ * after backends are terminated.
  *
  * Run with:
  *   npm run test:job-location-assignment
  */
-import { register } from "node:module";
-import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { register } from "node:module";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function assertLocalDatabaseUrl(urlString) {
+  if (!urlString) {
+    console.error("DATABASE_URL must be set to run this check.");
+    process.exit(1);
+  }
+  let host;
+  try {
+    host = new URL(urlString).hostname;
+  } catch {
+    console.error("DATABASE_URL is not a valid URL.");
+    process.exit(1);
+  }
+  if (!LOCAL_HOSTS.has(host)) {
+    console.error(
+      `Refusing to run job-location assignment checks against host "${host}". Host must be localhost, 127.0.0.1, or ::1.`,
+    );
+    process.exit(1);
+  }
+}
+
+assertLocalDatabaseUrl(process.env.DATABASE_URL);
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -25,41 +49,60 @@ const {
   JOB_LOCATION_FILTER_ALL,
   JOB_LOCATION_FILTER_UNASSIGNED,
   JOB_LOCATION_INACTIVE_MESSAGE,
+  JOB_LOCATION_INVOICED_MESSAGE,
   JOB_LOCATION_MISSING_JOB_MESSAGE,
   JOB_LOCATION_NOT_OWNED_MESSAGE,
   JOB_LOCATION_OWNER_ONLY_MESSAGE,
   JOB_LOCATION_STALE_MESSAGE,
+  JOB_LOCATION_TERMINAL_MESSAGE,
   jobLocationFilterWhere,
   jobLocationSnapshotsEqual,
   parseOwnerScheduleLocationFilter,
+  resolveOwnerScheduleLocationFilter,
 } = await import("@/lib/job-location");
+const { JobLocationError, assignJobBusinessLocation } = await import("@/lib/job-location-ops");
 const {
-  JobLocationError,
-  assignJobBusinessLocation,
-} = await import("@/lib/job-location-ops");
-const { createBusinessLocation, setBusinessLocationStatus } = await import(
-  "@/lib/business-location-ops"
-);
+  createBusinessLocation,
+  resolveCopyableBusinessLocationId,
+  setBusinessLocationStatus,
+} = await import("@/lib/business-location-ops");
 
 const baseUrl = process.env.DATABASE_URL;
-if (!baseUrl) {
-  console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
-}
-
 const testDbName = "tbbt_job_location_assignment_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 process.env.DATABASE_URL = testUrl;
+assertLocalDatabaseUrl(testUrl);
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
+
+function runPsql(sql) {
+  return spawnSync("psql", [adminUrl.toString(), "-v", "ON_ERROR_STOP=1", "-c", sql], {
+    encoding: "utf8",
+  });
+}
+
+function dropTestDatabase() {
+  const terminate = runPsql(
+    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+  );
+  if (terminate.status !== 0) {
+    console.warn(terminate.stderr || terminate.stdout);
+  }
+  const dropped = runPsql(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  if (dropped.status !== 0) {
+    console.error(dropped.stderr || dropped.stdout);
+    process.exitCode = 1;
+  }
+}
+
+const createDb = runPsql(`CREATE DATABASE "${testDbName}"`);
 if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
+  console.error(createDb.stderr || createDb.stdout);
+  console.error("Failed to create dedicated job-location assignment test database.");
+  process.exit(1);
 }
 
 const push = spawnSync(
@@ -69,12 +112,15 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for job-location assignment test database.");
+  dropTestDatabase();
   process.exit(push.status ?? 1);
 }
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const holder = new PrismaClient({ datasourceUrl: testUrl });
+const racer = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -112,6 +158,22 @@ function readRepo(relPath) {
   return readFileSync(new URL(`../${relPath}`, import.meta.url), "utf8");
 }
 
+async function waitUntilPeerLockWait(timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await prisma.$queryRaw`
+      SELECT COUNT(*)::int AS n
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if ((rows[0]?.n ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Peer transaction did not wait on a row lock.");
+}
+
 const schema = readRepo("prisma/schema.prisma");
 const locationMigration = readRepo(
   "prisma/migrations/20260927190000_add_business_location/migration.sql",
@@ -124,6 +186,10 @@ const jobsPage = readRepo("src/app/(app)/jobs/page.tsx");
 const jobPage = readRepo("src/app/(app)/jobs/[jobId]/page.tsx");
 const authorizationSource = readRepo("src/lib/authorization.ts");
 const locationOps = readRepo("src/lib/business-location-ops.ts");
+const thisScript = readRepo("scripts/check-job-location-assignment.mjs");
+const nextBookingOps = readRepo("src/lib/cleaning-next-booking-ops.ts");
+const correctiveOps = readRepo("src/lib/cleaning-corrective-clean-ops.ts");
+const recurringOps = readRepo("src/lib/cleaning-recurring-booking-ops.ts");
 const migrationsDir = new URL("../prisma/migrations", import.meta.url);
 const migrationNames = readdirSync(migrationsDir).filter((name) =>
   existsSync(new URL(`../prisma/migrations/${name}/migration.sql`, import.meta.url)),
@@ -136,7 +202,7 @@ const overlappingLocationMigrations = migrationNames.filter((name) => {
 console.log("\nSCHEMA OVERLAP — existing BusinessLocation column");
 check(
   "No new job-location assignment migration was added",
-  !migrationNames.some((name) => /job.location|location.assignment/i.test(name)),
+  !migrationNames.some((name) => /job.location|location.assignment|20260929010800/i.test(name)),
 );
 check(
   "Assignment reuses the existing nullable Job.businessLocationId column",
@@ -180,7 +246,7 @@ check(
 check(
   "Owner schedule filter uses the shared location where helper",
   jobsPage.includes("jobLocationFilterWhere") &&
-    jobsPage.includes("parseOwnerScheduleLocationFilter") &&
+    jobsPage.includes("resolveOwnerScheduleLocationFilter") &&
     jobsPage.includes("LocationFilterSelect"),
 );
 check(
@@ -198,12 +264,52 @@ check(
     !opsSource.includes("property.update") &&
     !actionSource.includes("business.update"),
 );
+check(
+  "Location row is locked FOR SHARE after the Job lock",
+  opsSource.includes('FROM "BusinessLocation"') &&
+    opsSource.includes("FOR SHARE") &&
+    opsSource.indexOf("const locked = await lockTenantOwnedJob") <
+      opsSource.lastIndexOf("loadOwnedAssignableLocation("),
+);
+check(
+  "Terminal and invoiced jobs are rejected before write",
+  opsSource.includes("JOB_LOCATION_TERMINAL_MESSAGE") &&
+    opsSource.includes("JOB_LOCATION_INVOICED_MESSAGE") &&
+    opsSource.includes("writeSettingsAuditLog"),
+);
+check(
+  "Directory list is bounded",
+  locationOps.includes("BUSINESS_LOCATION_DIRECTORY_LIMIT") && locationOps.includes("take:"),
+);
+check(
+  "Cleaning follow-ups apply the active-location check",
+  nextBookingOps.includes("resolveCopyableBusinessLocationId") &&
+    correctiveOps.includes("resolveCopyableBusinessLocationId") &&
+    recurringOps.includes("resolveCopyableBusinessLocationId"),
+);
+check(
+  "Test script guards localhost before any @/lib import",
+  thisScript.indexOf("assertLocalDatabaseUrl(process.env.DATABASE_URL)") <
+    thisScript.indexOf('await import("@/lib/authorization")'),
+);
+check(
+  "Failed checks set exitCode and always drop the test database",
+  thisScript.includes("process.exitCode = 1") &&
+    thisScript.includes("pg_terminate_backend") &&
+    thisScript.includes("dropTestDatabase()"),
+);
 check("Additive copy is present", /does not change timezone, Stripe/.test(JOB_LOCATION_ADDITIVE_MESSAGE));
 check(
   "Invalid schedule location query fails closed to all",
   parseOwnerScheduleLocationFilter("not a location") === JOB_LOCATION_FILTER_ALL &&
     parseOwnerScheduleLocationFilter(undefined) === JOB_LOCATION_FILTER_ALL &&
     parseOwnerScheduleLocationFilter("unassigned") === JOB_LOCATION_FILTER_UNASSIGNED,
+);
+check(
+  "Unknown well-formed location id fails closed to all instead of zero jobs",
+  resolveOwnerScheduleLocationFilter("clocationunknown", ["clocationknown"]) ===
+    JOB_LOCATION_FILTER_ALL &&
+    resolveOwnerScheduleLocationFilter("clocationknown", ["clocationknown"]) === "clocationknown",
 );
 check(
   "Location filter where matches unassigned and a specific id",
@@ -304,6 +410,17 @@ try {
       customerId: customerA.id,
       propertyId: propertyA.id,
       status: "COMPLETED",
+      updatedAt: new Date("2020-01-15T00:00:00.000Z"),
+      projectToken: randomUUID(),
+    },
+  });
+  const cancelledJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "CANCELLED",
+      updatedAt: new Date("2020-02-15T00:00:00.000Z"),
       projectToken: randomUUID(),
     },
   });
@@ -317,11 +434,40 @@ try {
       projectToken: randomUUID(),
     },
   });
+  const sparksJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T17:00:00.000Z"),
+      projectToken: randomUUID(),
+    },
+  });
   const otherLiveJob = await prisma.job.create({
     data: {
       businessId: businessA.id,
       status: "UNSCHEDULED",
       projectToken: randomUUID(),
+    },
+  });
+  const invoicedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-10-01T17:00:00.000Z"),
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: invoicedJob.id,
+      status: "DRAFT",
+      total: 100,
     },
   });
   const jobB = await prisma.job.create({
@@ -367,6 +513,7 @@ try {
         propertyId: true,
         businessLocationId: true,
         status: true,
+        updatedAt: true,
       },
       orderBy: { id: "asc" },
     });
@@ -374,6 +521,7 @@ try {
   }
 
   const beforeA = await snapshotBoundaries(businessA.id);
+  const historicalBefore = beforeA.jobs.find((job) => job.id === historicalJob.id);
   check(
     "Historical and new jobs start unassigned",
     historicalJob.businessLocationId === null &&
@@ -442,30 +590,84 @@ try {
     "Historical jobs stay unassigned when another job is assigned",
     historicalRow.businessLocationId === null &&
       historicalRow.status === "COMPLETED" &&
+      historicalRow.updatedAt.getTime() === historicalBefore.updatedAt.getTime() &&
       otherRow.businessLocationId === null,
   );
   check("Assigned job status is unchanged", assignedRow.status === "SCHEDULED");
-
-  console.log("\nTEST — Historical job remains valid, then can be assigned");
-  const historicalFresh = await prisma.job.findFirstOrThrow({ where: { id: historicalJob.id } });
-  const historicalAssigned = await assignJobBusinessLocation(prisma, ownerA, {
-    jobId: historicalJob.id,
-    locationId: locationA2.id,
-    expectedUpdatedAt: historicalFresh.updatedAt.toISOString(),
+  const assignAudits = await prisma.settingsAuditLog.findMany({
+    where: {
+      businessId: businessA.id,
+      settingArea: "locations",
+      settingKey: "job.businessLocation.assign",
+    },
   });
   check(
-    "OWNER can assign a location to a historical completed job",
-    historicalAssigned.businessLocationId === locationA2.id &&
-      historicalAssigned.status === "COMPLETED" &&
-      historicalAssigned.customerId === customerA.id &&
-      historicalAssigned.propertyId === propertyA.id,
+    "Successful assignment writes a locations audit row",
+    assignAudits.length === 1 &&
+      assignAudits[0].changedByMembershipId === ownerAMem.id &&
+      assignAudits[0].newValue?.includes(locationA1.id),
+  );
+
+  console.log("\nTEST — Historical / terminal / invoiced jobs are not rewritten");
+  const historicalFresh = await prisma.job.findFirstOrThrow({ where: { id: historicalJob.id } });
+  await expectError(
+    "OWNER cannot assign a location to a completed historical job",
+    () =>
+      assignJobBusinessLocation(prisma, ownerA, {
+        jobId: historicalJob.id,
+        locationId: locationA2.id,
+        expectedUpdatedAt: historicalFresh.updatedAt.toISOString(),
+      }),
+    (error) => error instanceof JobLocationError && error.message === JOB_LOCATION_TERMINAL_MESSAGE,
+  );
+  const historicalAfterReject = await prisma.job.findFirstOrThrow({ where: { id: historicalJob.id } });
+  check(
+    "Rejected historical assign leaves location, status, and updatedAt unchanged",
+    historicalAfterReject.businessLocationId === null &&
+      historicalAfterReject.status === "COMPLETED" &&
+      historicalAfterReject.updatedAt.getTime() === historicalFresh.updatedAt.getTime() &&
+      historicalAfterReject.customerId === customerA.id &&
+      historicalAfterReject.propertyId === propertyA.id,
+  );
+  await expectError(
+    "OWNER cannot assign a location to a cancelled job",
+    () =>
+      assignJobBusinessLocation(prisma, ownerA, {
+        jobId: cancelledJob.id,
+        locationId: locationA2.id,
+        expectedUpdatedAt: cancelledJob.updatedAt.toISOString(),
+      }),
+    (error) => error instanceof JobLocationError && error.message === JOB_LOCATION_TERMINAL_MESSAGE,
+  );
+  await expectError(
+    "OWNER cannot assign a location to an invoiced job",
+    () =>
+      assignJobBusinessLocation(prisma, ownerA, {
+        jobId: invoicedJob.id,
+        locationId: locationA1.id,
+        expectedUpdatedAt: invoicedJob.updatedAt.toISOString(),
+      }),
+    (error) => error instanceof JobLocationError && error.message === JOB_LOCATION_INVOICED_MESSAGE,
+  );
+  const invoicedAfter = await prisma.job.findFirstOrThrow({ where: { id: invoicedJob.id } });
+  check(
+    "Rejected invoiced assign leaves location and updatedAt unchanged",
+    invoicedAfter.businessLocationId === null &&
+      invoicedAfter.updatedAt.getTime() === invoicedJob.updatedAt.getTime(),
   );
   const afterHistorical = await snapshotBoundaries(businessA.id);
   check(
-    "Historical assignment still leaves timezone and Stripe untouched",
+    "Historical reject still leaves timezone and Stripe untouched",
     afterHistorical.business.timezone === "America/Los_Angeles" &&
       afterHistorical.payment.stripeAccountId === paymentA.stripeAccountId,
   );
+
+  const sparksAssigned = await assignJobBusinessLocation(prisma, ownerA, {
+    jobId: sparksJob.id,
+    locationId: locationA2.id,
+    expectedUpdatedAt: sparksJob.updatedAt.toISOString(),
+  });
+  check("OWNER can assign a second open job to the Sparks location", sparksAssigned.businessLocationId === locationA2.id);
 
   console.log("\nTEST — Owner schedule filter");
   const scopedA = { businessId: businessA.id };
@@ -489,22 +691,29 @@ try {
     where: { ...scopedA, ...jobLocationFilterWhere(locationB.id) },
     select: { id: true, businessId: true },
   });
-  check("All-locations filter keeps every same-business job", allA.length === 3);
+  check("All-locations filter keeps every same-business job", allA.length === 6);
   check(
     "Location filter shows only the Reno job",
     renoOnly.length === 1 && renoOnly[0].id === liveJob.id,
   );
   check(
-    "Location filter shows only the Sparks historical job",
-    sparksOnly.length === 1 && sparksOnly[0].id === historicalJob.id,
+    "Location filter shows only the Sparks open job",
+    sparksOnly.length === 1 && sparksOnly[0].id === sparksJob.id,
   );
   check(
-    "Unassigned filter shows the remaining same-business job",
-    unassignedOnly.length === 1 && unassignedOnly[0].id === otherLiveJob.id,
+    "Unassigned filter does not invent a location for historical jobs",
+    unassignedOnly.some((job) => job.id === historicalJob.id) &&
+      unassignedOnly.some((job) => job.id === otherLiveJob.id) &&
+      !unassignedOnly.some((job) => job.id === liveJob.id),
   );
   check(
     "Filtering A by B's location id does not leak B jobs",
     foreignFilter.length === 0 && !foreignFilter.some((job) => job.businessId === businessB.id),
+  );
+  check(
+    "Unknown directory id resolves to all instead of an empty schedule",
+    resolveOwnerScheduleLocationFilter(locationB.id, [locationA1.id, locationA2.id]) ===
+      JOB_LOCATION_FILTER_ALL,
   );
 
   console.log("\nTEST — Isolation and write-time ownership recheck");
@@ -544,31 +753,14 @@ try {
       afterB.payment.stripeAccountId === paymentB.stripeAccountId,
   );
 
-  const archived = await setBusinessLocationStatus(prisma, ownerA, {
-    locationId: locationA2.id,
-    status: "ARCHIVED",
-  });
-  check("OWNER archived the second location for the write-time check", archived.status === "ARCHIVED");
-  const otherFresh = await prisma.job.findFirstOrThrow({ where: { id: otherLiveJob.id } });
-  await expectError(
-    "Write-time recheck rejects an archived location for a new assignment",
-    () =>
-      assignJobBusinessLocation(prisma, ownerA, {
-        jobId: otherLiveJob.id,
-        locationId: locationA2.id,
-        expectedUpdatedAt: otherFresh.updatedAt.toISOString(),
-      }),
-    (error) => error instanceof JobLocationError && error.message === JOB_LOCATION_INACTIVE_MESSAGE,
-  );
-  const otherAfterArchive = await prisma.job.findFirstOrThrow({ where: { id: otherLiveJob.id } });
-  check("Archived-location reject left the unassigned job unassigned", otherAfterArchive.businessLocationId === null);
-  const historicalStill = await prisma.job.findFirstOrThrow({ where: { id: historicalJob.id } });
+  const copiedActive = await resolveCopyableBusinessLocationId(prisma, businessA.id, locationA1.id);
+  const copiedMissing = await resolveCopyableBusinessLocationId(prisma, businessA.id, locationB.id);
   check(
-    "Already-assigned historical job keeps the now-archived location",
-    historicalStill.businessLocationId === locationA2.id,
+    "Copyable location helper keeps an ACTIVE same-business location",
+    copiedActive === locationA1.id && copiedMissing === null,
   );
 
-  console.log("\nTEST — Stale and concurrent edits");
+  console.log("\nTEST — Stale edits and real concurrent barriers");
   const concurrentJob = await prisma.job.create({
     data: {
       businessId: businessA.id,
@@ -622,40 +814,57 @@ try {
     },
   });
   const raceSnapshot = raceJob.updatedAt.toISOString();
-  const raceResults = await Promise.allSettled([
-    assignJobBusinessLocation(prisma, ownerA, {
+  let assignStarted = false;
+  const assignPromise = (async () => {
+    while (!assignStarted) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return assignJobBusinessLocation(racer, ownerA, {
       jobId: raceJob.id,
       locationId: locationA1.id,
       expectedUpdatedAt: raceSnapshot,
-    }),
-    assignJobBusinessLocation(prisma, ownerA, {
-      jobId: raceJob.id,
-      locationId: locationA1.id,
-      expectedUpdatedAt: raceSnapshot,
-    }),
-  ]);
-  const raceFulfilled = raceResults.filter((result) => result.status === "fulfilled");
-  const raceRejected = raceResults.filter(
-    (result) =>
-      result.status === "rejected" &&
-      result.reason instanceof JobLocationError &&
-      result.reason.message === JOB_LOCATION_STALE_MESSAGE,
-  );
+    });
+  })();
+  await holder.$transaction(async (tx) => {
+    await tx.$queryRaw`
+      SELECT id FROM "Job"
+      WHERE id = ${raceJob.id} AND "businessId" = ${businessA.id}
+      FOR UPDATE
+    `;
+    assignStarted = true;
+    await waitUntilPeerLockWait();
+    await tx.job.update({
+      where: { id: raceJob.id },
+      data: { scheduledDurationMinutes: 45 },
+    });
+  });
+  let raceError = null;
+  try {
+    await assignPromise;
+  } catch (error) {
+    raceError = error;
+  }
   const raceFinal = await prisma.job.findFirstOrThrow({ where: { id: raceJob.id } });
   check(
-    "Concurrent assigns: one write wins and the other is stale",
-    raceFulfilled.length === 1 &&
-      raceRejected.length === 1 &&
-      raceFinal.businessLocationId === locationA1.id &&
+    "Real two-client barrier: waiting assign sees the held-lock edit as stale",
+    raceError instanceof JobLocationError &&
+      raceError.message === JOB_LOCATION_STALE_MESSAGE &&
+      raceFinal.businessLocationId === null &&
+      raceFinal.scheduledDurationMinutes === 45 &&
       raceFinal.customerId === customerA.id &&
       raceFinal.propertyId === propertyA.id &&
       raceFinal.businessId === businessA.id,
   );
 
+  const raceAssigned = await assignJobBusinessLocation(prisma, ownerA, {
+    jobId: raceJob.id,
+    locationId: locationA1.id,
+    expectedUpdatedAt: raceFinal.updatedAt.toISOString(),
+  });
   const cleared = await assignJobBusinessLocation(prisma, ownerA, {
     jobId: raceJob.id,
     locationId: null,
-    expectedUpdatedAt: raceFinal.updatedAt.toISOString(),
+    expectedUpdatedAt: raceAssigned.updatedAt.toISOString(),
   });
   check(
     "OWNER can clear a location without rewriting tenant or property",
@@ -665,6 +874,75 @@ try {
       cleared.businessId === businessA.id,
   );
 
+  console.log("\nTEST — Archive vs assign barrier");
+  const archiveTarget = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      status: "UNSCHEDULED",
+      projectToken: randomUUID(),
+    },
+  });
+  let archiveAssignStarted = false;
+  const archiveAssignPromise = (async () => {
+    while (!archiveAssignStarted) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return assignJobBusinessLocation(racer, ownerA, {
+      jobId: archiveTarget.id,
+      locationId: locationA2.id,
+      expectedUpdatedAt: archiveTarget.updatedAt.toISOString(),
+    });
+  })();
+  await holder.$transaction(async (tx) => {
+    await tx.$queryRaw`
+      SELECT id FROM "BusinessLocation"
+      WHERE id = ${locationA2.id} AND "businessId" = ${businessA.id}
+      FOR UPDATE
+    `;
+    archiveAssignStarted = true;
+    await waitUntilPeerLockWait();
+    await tx.businessLocation.update({
+      where: { id: locationA2.id },
+      data: { status: "ARCHIVED" },
+    });
+  });
+  let archiveAssignError = null;
+  try {
+    await archiveAssignPromise;
+  } catch (error) {
+    archiveAssignError = error;
+  }
+  const archiveTargetAfter = await prisma.job.findFirstOrThrow({ where: { id: archiveTarget.id } });
+  const locationA2After = await prisma.businessLocation.findFirstOrThrow({
+    where: { id: locationA2.id },
+  });
+  check(
+    "Archive-vs-assign barrier rejects after FOR SHARE sees ARCHIVED",
+    archiveAssignError instanceof JobLocationError &&
+      archiveAssignError.message === JOB_LOCATION_INACTIVE_MESSAGE &&
+      archiveTargetAfter.businessLocationId === null &&
+      locationA2After.status === "ARCHIVED",
+  );
+
+  const otherFresh = await prisma.job.findFirstOrThrow({ where: { id: otherLiveJob.id } });
+  await expectError(
+    "Write-time recheck rejects an already-archived location for a new assignment",
+    () =>
+      assignJobBusinessLocation(prisma, ownerA, {
+        jobId: otherLiveJob.id,
+        locationId: locationA2.id,
+        expectedUpdatedAt: otherFresh.updatedAt.toISOString(),
+      }),
+    (error) => error instanceof JobLocationError && error.message === JOB_LOCATION_INACTIVE_MESSAGE,
+  );
+  const copiedArchived = await resolveCopyableBusinessLocationId(prisma, businessA.id, locationA2.id);
+  check("Copyable location helper refuses an archived location", copiedArchived === null);
+  const sparksStill = await prisma.job.findFirstOrThrow({ where: { id: sparksJob.id } });
+  check(
+    "Already-assigned open job keeps the now-archived location",
+    sparksStill.businessLocationId === locationA2.id,
+  );
+
   const finalA = await snapshotBoundaries(businessA.id);
   check(
     "Final A timezone, Stripe, and tenant id remain the originals",
@@ -672,24 +950,26 @@ try {
       finalA.business.id === businessA.id &&
       finalA.payment.stripeAccountId === `acct_alpha_jobloc_${suffix}`,
   );
+  const historicalFinal = finalA.jobs.find((job) => job.id === historicalJob.id);
+  check(
+    "Historical completed job never entered this week's completed bucket",
+    historicalFinal.businessLocationId === null &&
+      historicalFinal.updatedAt.getTime() === historicalBefore.updatedAt.getTime(),
+  );
 
   if (failures > 0) {
     console.error(`\n${failures} job-location assignment check(s) failed.`);
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    console.log("\nJob location assignment checks passed.");
+    console.log(
+      "SCHEMA OVERLAP REPORT: reused prisma/migrations/20260927190000_add_business_location (Job.businessLocationId). No new migration. No Business/Stripe/Customer/Property schema change.",
+    );
   }
-  console.log("\nJob location assignment checks passed.");
-  console.log(
-    "SCHEMA OVERLAP REPORT: reused prisma/migrations/20260927190000_add_business_location (Job.businessLocationId). No new migration. No Business/Stripe/Customer/Property schema change.",
-  );
 } catch (error) {
   console.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 } finally {
-  await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
-  }
+  await Promise.allSettled([prisma.$disconnect(), holder.$disconnect(), racer.$disconnect()]);
+  dropTestDatabase();
 }

@@ -35,7 +35,7 @@ import {
   JOB_LOCATION_FILTER_ALL,
   jobLocationFilterWhere,
   ownerScheduleLocationQuery,
-  parseOwnerScheduleLocationFilter,
+  resolveOwnerScheduleLocationFilter,
 } from "@/lib/job-location";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
@@ -216,7 +216,11 @@ export default async function JobsPage({
   const q = (params.q ?? "").trim();
   const tab = parseTab(params.status);
   const crew = params.crew;
-  const locationFilter = parseOwnerScheduleLocationFilter(params.location);
+  const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
+  const locationFilter = resolveOwnerScheduleLocationFilter(
+    params.location,
+    locationDirectory.locations.map((location) => location.id),
+  );
   const locationWhere = jobLocationFilterWhere(locationFilter);
   const rangePreset = params.range && params.range !== "all" ? params.range : undefined;
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize))
@@ -320,10 +324,10 @@ export default async function JobsPage({
       orderBy: { createdAt: "desc" },
       take: UNSCHEDULED_PANEL_TAKE,
     }),
-    prisma.job.count({ where: { ...access.scope, status: "UNSCHEDULED" } }),
-    prisma.job.count({ where: { ...access.scope, status: "SCHEDULED" } }),
-    prisma.job.count({ where: { ...access.scope, status: "IN_PROGRESS" } }),
-    prisma.job.count({ where: { ...access.scope, status: "COMPLETED" } }),
+    prisma.job.count({ where: { ...access.scope, status: "UNSCHEDULED", ...locationWhere } }),
+    prisma.job.count({ where: { ...access.scope, status: "SCHEDULED", ...locationWhere } }),
+    prisma.job.count({ where: { ...access.scope, status: "IN_PROGRESS", ...locationWhere } }),
+    prisma.job.count({ where: { ...access.scope, status: "COMPLETED", ...locationWhere } }),
     prisma.job.findMany({
       where: { ...access.scope, scheduledAt: { gte: thisWeek.start, lt: thisWeek.end } },
       select: {
@@ -398,7 +402,6 @@ export default async function JobsPage({
           ...eligibleMemberRows,
         ]
       : eligibleMemberRows;
-  const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
   const availability = await loadAvailabilitySnapshot(prisma, access.businessId);
   const scheduleBufferMinutes = availability.settings.schedulingBufferMinutes;
   const canScheduling = await hasProductCapability(
@@ -731,11 +734,7 @@ export default async function JobsPage({
           <div className="lg:col-span-1">
             <UnscheduledJobsPanel
               jobs={unscheduledPanelJobs}
-              totalCount={
-                locationFilter === JOB_LOCATION_FILTER_ALL
-                  ? unscheduledCount
-                  : unscheduledPanelJobs.length
-              }
+              totalCount={unscheduledCount}
               availability={availability}
             />
           </div>

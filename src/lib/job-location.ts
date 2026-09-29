@@ -6,8 +6,10 @@
  * does not add schema, infer a location from timezone / Stripe / service
  * area, or rewrite tenant ownership, customer, or property.
  *
- * Null remains valid: historical Jobs and new Jobs created without an
- * explicit assignment stay unassigned until OWNER writes one.
+ * Null remains valid. Historical COMPLETED / CANCELLED / invoiced Jobs
+ * stay unassigned and cannot be rewritten. OWNER may assign only an
+ * open, uninvoiced Job. Cleaning follow-ups copy a location only when
+ * that location is still ACTIVE on the same business.
  */
 
 export const JOB_LOCATION_OWNER_ONLY_MESSAGE =
@@ -23,6 +25,18 @@ export const JOB_LOCATION_INACTIVE_MESSAGE =
   "That location is archived. Restore it before assigning it to a job.";
 
 export const JOB_LOCATION_MISSING_JOB_MESSAGE = "That job could not be found.";
+
+export const JOB_LOCATION_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"] as const;
+
+export const JOB_LOCATION_TERMINAL_MESSAGE =
+  "Completed or cancelled jobs keep their original location. Assign a location before the job is finished.";
+
+export const JOB_LOCATION_INVOICED_MESSAGE =
+  "Invoiced jobs keep their original location.";
+
+export function isTerminalJobLocationStatus(status: string) {
+  return (JOB_LOCATION_TERMINAL_STATUSES as readonly string[]).includes(status);
+}
 
 export const JOB_LOCATION_ADDITIVE_MESSAGE =
   "Assigning a location does not change timezone, Stripe, tenant ownership, or the customer property.";
@@ -40,8 +54,10 @@ export type OwnerScheduleLocationFilter =
   | string;
 
 /**
- * Safe parse for the owner-schedule `location` query param. Unknown or
- * malformed values fail closed to "all" so the page never throws.
+ * Safe parse for the owner-schedule `location` query param. Malformed
+ * values fail closed to "all" so the page never throws. A well-formed
+ * id still has to be resolved against this business's directory —
+ * unknown ids must not silently show zero jobs.
  */
 export function parseOwnerScheduleLocationFilter(
   raw: string | string[] | undefined,
@@ -55,6 +71,20 @@ export function parseOwnerScheduleLocationFilter(
   }
   if (LOCATION_ID_PATTERN.test(value)) {
     return value;
+  }
+  return JOB_LOCATION_FILTER_ALL;
+}
+
+export function resolveOwnerScheduleLocationFilter(
+  raw: string | string[] | undefined,
+  knownLocationIds: readonly string[],
+): OwnerScheduleLocationFilter {
+  const parsed = parseOwnerScheduleLocationFilter(raw);
+  if (parsed === JOB_LOCATION_FILTER_ALL || parsed === JOB_LOCATION_FILTER_UNASSIGNED) {
+    return parsed;
+  }
+  if (knownLocationIds.includes(parsed)) {
+    return parsed;
   }
   return JOB_LOCATION_FILTER_ALL;
 }

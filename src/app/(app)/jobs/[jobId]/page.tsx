@@ -41,7 +41,14 @@ import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
 import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { formatISODateInTimeZone, formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { JOB_LOCATION_ADDITIVE_MESSAGE, JOB_LOCATION_UNASSIGNED_LABEL } from "@/lib/job-location";
+import {
+  JOB_LOCATION_ADDITIVE_MESSAGE,
+  JOB_LOCATION_INVOICED_MESSAGE,
+  JOB_LOCATION_OWNER_ONLY_MESSAGE,
+  JOB_LOCATION_TERMINAL_MESSAGE,
+  JOB_LOCATION_UNASSIGNED_LABEL,
+  isTerminalJobLocationStatus,
+} from "@/lib/job-location";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -254,7 +261,13 @@ export default async function JobPage({
       : eligibleMemberRows;
   const viewerIsAssignee = job.assignedMembershipId === actorMembership.id;
   const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
-  const canAssignLocation = actorRole === "OWNER" && locationDirectory.available;
+  const jobIsTerminal = isTerminalJobLocationStatus(job.status);
+  const jobIsInvoiced = job.invoices.length > 0;
+  const canAssignLocation =
+    actorRole === "OWNER" &&
+    locationDirectory.available &&
+    !jobIsTerminal &&
+    !jobIsInvoiced;
   const assignableLocations = locationDirectory.locations
     .filter(
       (location) =>
@@ -843,7 +856,11 @@ export default async function JobPage({
               )
             ) : (
               <p className="text-muted-foreground">
-                Only the owner can assign a business location to a job.
+                {jobIsTerminal
+                  ? JOB_LOCATION_TERMINAL_MESSAGE
+                  : jobIsInvoiced
+                    ? JOB_LOCATION_INVOICED_MESSAGE
+                    : JOB_LOCATION_OWNER_ONLY_MESSAGE}
               </p>
             )}
           </CardContent>

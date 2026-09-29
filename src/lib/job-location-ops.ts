@@ -2,8 +2,10 @@
  * OWNER assigns a same-business BusinessLocation to a Job.
  *
  * Rechecks location ownership at write time, inside the same transaction
- * that locks the Job. Writes only Job.businessLocationId. Never updates
- * Business.timezone, tenant businessId, customer, property, or Stripe.
+ * that locks the Job, then takes FOR SHARE on the location row.
+ * Writes only Job.businessLocationId on open, uninvoiced Jobs. Never
+ * updates Business.timezone, tenant businessId, customer, property,
+ * Stripe, or a terminal Job's updatedAt.
  *
  * Schema comes only from the existing BusinessLocation migration.
  * Assignment never runs DDL.
@@ -18,16 +20,26 @@ import {
 } from "@/lib/business-location-ops";
 import {
   JOB_LOCATION_INACTIVE_MESSAGE,
+  JOB_LOCATION_INVOICED_MESSAGE,
   JOB_LOCATION_MISSING_JOB_MESSAGE,
   JOB_LOCATION_NOT_OWNED_MESSAGE,
   JOB_LOCATION_OWNER_ONLY_MESSAGE,
   JOB_LOCATION_STALE_MESSAGE,
+  JOB_LOCATION_TERMINAL_MESSAGE,
+  isTerminalJobLocationStatus,
   jobLocationSnapshotsEqual,
   parseJobLocationId,
 } from "@/lib/job-location";
+import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+type LockedLocationRow = {
+  id: string;
+  businessId: string;
+  status: string;
+};
 
 export class JobLocationError extends Error {
   constructor(message: string) {
@@ -71,6 +83,7 @@ const JOB_LOCATION_WRITE_SELECT = {
   businessLocationId: true,
   status: true,
   updatedAt: true,
+  invoices: { select: { id: true }, take: 1 },
 } as const;
 
 export type AssignedJobLocation = {
@@ -89,6 +102,21 @@ export type AssignJobBusinessLocationInput = {
   expectedUpdatedAt: string;
 };
 
+async function lockOwnedBusinessLocationForShare(
+  db: Db,
+  businessId: string,
+  locationId: string,
+): Promise<LockedLocationRow | null> {
+  const rows = await db.$queryRaw<LockedLocationRow[]>`
+    SELECT id, "businessId", status
+    FROM "BusinessLocation"
+    WHERE id = ${locationId}
+      AND "businessId" = ${businessId}
+    FOR SHARE
+  `;
+  return rows[0] ?? null;
+}
+
 async function loadOwnedAssignableLocation(
   db: Db,
   access: BusinessAccess,
@@ -96,13 +124,7 @@ async function loadOwnedAssignableLocation(
   locationId: string,
   currentLocationId: string | null,
 ) {
-  const location = await db.businessLocation.findFirst({
-    where: {
-      id: locationId,
-      businessId: access.businessId,
-    },
-    select: { id: true, businessId: true, status: true },
-  });
+  const location = await lockOwnedBusinessLocationForShare(db, access.businessId, locationId);
   if (!location || location.businessId !== jobBusinessId) {
     throw new JobLocationError(JOB_LOCATION_NOT_OWNED_MESSAGE);
   }
@@ -148,6 +170,13 @@ export async function assignJobBusinessLocation(
         }),
       );
 
+      if (isTerminalJobLocationStatus(job.status)) {
+        throw new JobLocationError(JOB_LOCATION_TERMINAL_MESSAGE);
+      }
+      if (job.invoices.length > 0) {
+        throw new JobLocationError(JOB_LOCATION_INVOICED_MESSAGE);
+      }
+
       if (!jobLocationSnapshotsEqual(input.expectedUpdatedAt, job.updatedAt)) {
         throw new JobLocationError(JOB_LOCATION_STALE_MESSAGE);
       }
@@ -176,6 +205,15 @@ export async function assignJobBusinessLocation(
         throw new JobLocationError(JOB_LOCATION_STALE_MESSAGE);
       }
 
+      await writeSettingsAuditLog(tx, {
+        businessId: access.businessId,
+        changedByMembershipId: access.workspace.membership.id,
+        settingArea: "locations",
+        settingKey: "job.businessLocation.assign",
+        previousValue: { jobId: job.id, businessLocationId: job.businessLocationId },
+        newValue: { jobId: job.id, businessLocationId: nextLocationId },
+      });
+
       const updated = access.assertOwned(
         await tx.job.findFirst({
           where: { id: job.id, businessId: access.businessId },
@@ -193,7 +231,15 @@ export async function assignJobBusinessLocation(
         throw new JobLocationError(JOB_LOCATION_STALE_MESSAGE);
       }
 
-      return updated;
+      return {
+        id: updated.id,
+        businessId: updated.businessId,
+        customerId: updated.customerId,
+        propertyId: updated.propertyId,
+        businessLocationId: updated.businessLocationId,
+        status: updated.status,
+        updatedAt: updated.updatedAt,
+      };
     });
   } catch (error) {
     throwIfLocationSchemaMissing(error);

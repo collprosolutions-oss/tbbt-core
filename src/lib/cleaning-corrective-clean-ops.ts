@@ -29,6 +29,7 @@ import {
   resolveCleaningJobTradeCode,
   visitRequestedReClean,
 } from "@/lib/cleaning-corrective-clean";
+import { resolveCopyableBusinessLocationId } from "@/lib/business-location-ops";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export class CleaningCorrectiveCleanError extends Error {
@@ -303,7 +304,11 @@ export async function scheduleCorrectiveCleanFromReCleanRequestedJob(
           scheduledDurationMinutes: fresh.scheduledDurationMinutes,
           leadSource: fresh.leadSource,
           campaignId: fresh.campaignId,
-          businessLocationId: fresh.businessLocationId,
+          businessLocationId: await resolveCopyableBusinessLocationId(
+            tx,
+            access.businessId,
+            fresh.businessLocationId,
+          ),
           serviceIntent: oneTime.serviceIntent,
           recurrenceCadence: oneTime.recurrenceCadence,
           recurrenceStatus: oneTime.recurrenceStatus,
