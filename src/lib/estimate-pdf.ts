@@ -266,15 +266,21 @@ export function renderEstimatePdf(
       y += Math.max(16, labelHeight + 2);
     };
 
-    row("Labor", docView.laborTotalLabel);
-    row("Materials", docView.materialTotalLabel);
-    if (docView.otherTotalLabel) {
-      row("Other", docView.otherTotalLabel);
+    if (docView.requiresOptionChoice) {
+      for (const option of docView.options) {
+        row(option.name, option.totalLabel);
+      }
+    } else {
+      row("Labor", docView.laborTotalLabel);
+      row("Materials", docView.materialTotalLabel);
+      if (docView.otherTotalLabel) {
+        row("Other", docView.otherTotalLabel);
+      }
+      if (docView.laborMinimumLabel && docView.laborMinimumAmountLabel) {
+        row(docView.laborMinimumLabel, docView.laborMinimumAmountLabel);
+      }
+      row(ESTIMATE_TOTAL_CUSTOMER_LABEL, docView.totalLabel, true);
     }
-    if (docView.laborMinimumLabel && docView.laborMinimumAmountLabel) {
-      row(docView.laborMinimumLabel, docView.laborMinimumAmountLabel);
-    }
-    row(ESTIMATE_TOTAL_CUSTOMER_LABEL, docView.totalLabel, true);
     if (docView.materialDepositLabel && docView.remainingBalanceLabel) {
       y += 4;
       row(MATERIAL_DEPOSIT_CUSTOMER_LABEL, docView.materialDepositLabel);

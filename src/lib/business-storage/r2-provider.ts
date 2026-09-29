@@ -153,10 +153,17 @@ export class R2StorageProvider implements StorageProvider {
     bucket: string;
     key: string;
     expiresInSeconds: number;
+    contentType?: string;
+    contentDisposition?: string;
   }): Promise<PresignedDownload> {
     const url = await getSignedUrl(
       this.client,
-      new GetObjectCommand({ Bucket: input.bucket, Key: input.key }),
+      new GetObjectCommand({
+        Bucket: input.bucket,
+        Key: input.key,
+        ResponseContentType: input.contentType,
+        ResponseContentDisposition: input.contentDisposition,
+      }),
       { expiresIn: input.expiresInSeconds },
     );
     return { url, expiresInSeconds: input.expiresInSeconds };

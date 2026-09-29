@@ -117,8 +117,9 @@ function toView(input: {
     status: string;
     total: { toString(): string };
     updatedAt: Date;
+    approvedOption?: { total: { toString(): string } } | null;
     approvedVersion: { total: { toString(): string } } | null;
-    versions: { total: { toString(): string } }[];
+    versions: { total: { toString(): string }; options?: readonly unknown[] }[];
   } | null;
   job: { id: string; status: string; updatedAt: Date; createdAt: Date } | null;
   createdAt: Date;
@@ -207,8 +208,17 @@ export async function loadPipelineSource(
             total: true,
             createdAt: true,
             updatedAt: true,
+            approvedOption: { select: { total: true } },
             approvedVersion: { select: { total: true } },
-            versions: { select: { total: true, sentAt: true }, orderBy: { sentAt: "desc" }, take: 1 },
+            versions: {
+              select: {
+                total: true,
+                sentAt: true,
+                options: { select: { id: true } },
+              },
+              orderBy: { sentAt: "desc" },
+              take: 1,
+            },
             jobs: {
               select: { id: true, status: true, createdAt: true, updatedAt: true },
               orderBy: { createdAt: "desc" },
@@ -233,8 +243,17 @@ export async function loadPipelineSource(
           select: { id: true, label: true, addressLine1: true, city: true, region: true },
         },
         lineItems: { select: { description: true }, orderBy: { createdAt: "asc" }, take: 1 },
+        approvedOption: { select: { total: true } },
         approvedVersion: { select: { total: true } },
-        versions: { select: { total: true, sentAt: true }, orderBy: { sentAt: "desc" }, take: 1 },
+        versions: {
+          select: {
+            total: true,
+            sentAt: true,
+            options: { select: { id: true } },
+          },
+          orderBy: { sentAt: "desc" },
+          take: 1,
+        },
         jobs: {
           select: { id: true, status: true, createdAt: true, updatedAt: true },
           orderBy: { createdAt: "desc" },

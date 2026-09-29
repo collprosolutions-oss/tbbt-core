@@ -182,17 +182,19 @@ export async function executeOperationalTestDataCleanup(
 
       await tx.estimate.updateMany({
         where: { businessId },
-        data: { approvedVersionId: null },
+        data: { approvedVersionId: null, approvedOptionId: null },
       });
       await tx.job.updateMany({
         where: { businessId },
-        data: { approvedEstimateVersionId: null },
+        data: { approvedEstimateVersionId: null, approvedEstimateOptionId: null },
       });
 
       await tx.payrollRunEvent.deleteMany({ where: { businessId } });
       await tx.payrollRunItem.deleteMany({ where: { businessId } });
       await tx.payrollRun.deleteMany({ where: { businessId } });
 
+      await tx.timeCorrectionDecision.deleteMany({ where: { businessId } });
+      await tx.timeCorrectionRequest.deleteMany({ where: { businessId } });
       await tx.timeEntryAdjustment.deleteMany({ where: { businessId } });
       await tx.timeEntry.deleteMany({ where: { businessId } });
       await tx.timesheetWeek.deleteMany({ where: { businessId } });
@@ -216,7 +218,9 @@ export async function executeOperationalTestDataCleanup(
       await tx.job.deleteMany({ where: { businessId } });
 
       await tx.estimateVersionLineItem.deleteMany({ where: { businessId } });
+      await tx.estimateVersionOption.deleteMany({ where: { businessId } });
       await tx.estimateVersion.deleteMany({ where: { businessId } });
+      await tx.estimateOption.deleteMany({ where: { businessId } });
       await tx.pipelineOpportunity.deleteMany({ where: { businessId } });
       await tx.estimate.deleteMany({ where: { businessId } });
 

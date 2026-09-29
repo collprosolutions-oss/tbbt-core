@@ -64,7 +64,7 @@ const {
   grantJobPhotoMarketingPermission,
   MarketingError,
   revokeJobPhotoMarketingPermission,
-  setMarketingContentPlannedFor,
+  planStudioPublicationDay,
   advanceMarketingContentStatus,
   updateMarketingStudioPackage,
 } = await import("@/lib/marketing-ops");
@@ -500,12 +500,7 @@ try {
   });
   check("Draft is created as DRAFT", draft.status === "DRAFT");
   check("Draft stores the approved photo only", draft.photos.length === 1 && draft.photos[0].jobPhotoId === otherPhoto.id);
-  check(
-    "Internal planning date persists on create",
-    draft.plannedFor?.getFullYear() === 2026 &&
-      draft.plannedFor?.getMonth() === 8 &&
-      draft.plannedFor?.getDate() === 15,
-  );
+  check("ADMIN create does not accept a planned publication day", draft.plannedFor == null);
 
   const ready = await advanceMarketingContentStatus(prisma, ownerA, { contentId: draft.id });
   check("DRAFT → READY_FOR_REVIEW", ready.status === "READY_FOR_REVIEW");
@@ -519,15 +514,17 @@ try {
     (error) => error instanceof MarketingError && /not available/.test(error.message),
   );
 
-  const replanned = await setMarketingContentPlannedFor(prisma, ownerA, {
+  const beforePlan = await prisma.marketingContent.findFirst({
+    where: { id: draft.id, businessId: businessA.id },
+  });
+  const replanned = await planStudioPublicationDay(prisma, ownerA, {
     contentId: draft.id,
     plannedFor: "2026-09-22",
+    expectedUpdatedAt: beforePlan.updatedAt,
   });
   check(
-    "Internal calendar date can be updated",
-    replanned.plannedFor?.getFullYear() === 2026 &&
-      replanned.plannedFor?.getMonth() === 8 &&
-      replanned.plannedFor?.getDate() === 22,
+    "OWNER can assign a planned publication day after approval",
+    replanned.plannedDay === "2026-09-22" && replanned.status === "APPROVED",
   );
 
   const sourceA = await loadMarketingSource(prisma, businessA.id);
@@ -733,13 +730,16 @@ try {
   check(
     "Studio update replaces photos and content in one transaction",
     updateFnSrc.includes("runInTransaction") &&
-      updateFnSrc.indexOf("deleteMany") > updateFnSrc.indexOf("runInTransaction") &&
-      updateFnSrc.indexOf("createMany") > updateFnSrc.indexOf("deleteMany") &&
-      updateFnSrc.indexOf("marketingContent.update") > updateFnSrc.indexOf("createMany"),
+      updateFnSrc.includes("updateMany") &&
+      updateFnSrc.includes("content.updatedAt") &&
+      !updateFnSrc.includes("plannedFor") &&
+      updateFnSrc.indexOf("updateMany") > updateFnSrc.indexOf("runInTransaction") &&
+      updateFnSrc.indexOf("deleteMany") > updateFnSrc.indexOf("updateMany") &&
+      updateFnSrc.indexOf("createMany") > updateFnSrc.indexOf("deleteMany"),
   );
   const reviewFnSrc = studioOpsSrc.slice(
     studioOpsSrc.indexOf("const REVIEW_PACKET_CONTENT_SELECT"),
-    studioOpsSrc.indexOf("export async function setMarketingContentPlannedFor"),
+    studioOpsSrc.indexOf("function requireOwnerStudioCalendar"),
   );
   check(
     "Review packet download is OWNER-gated after the marketing capability check",

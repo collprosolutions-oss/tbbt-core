@@ -53,6 +53,7 @@ const SOURCE_JOB_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   scheduledDurationMinutes: true,
   leadSource: true,
   campaignId: true,
@@ -98,6 +99,7 @@ export type ScheduledCleaningCorrectiveClean = {
   propertyId: string | null;
   estimateId: string | null;
   approvedEstimateVersionId: string | null;
+  approvedEstimateOptionId: string | null;
   recurrenceSourceJobId: string | null;
   nextBookingSourceJobId: string | null;
   correctiveCleanSourceJobId: string | null;
@@ -117,6 +119,7 @@ const CREATED_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   recurrenceSourceJobId: true,
   nextBookingSourceJobId: true,
   correctiveCleanSourceJobId: true,
@@ -200,6 +203,7 @@ function selectedScopeBinding(job: SourceJob, businessId: string) {
   return {
     estimateId: estimate?.id ?? null,
     approvedEstimateVersionId: approvedVersion?.id ?? null,
+    approvedEstimateOptionId: approvedVersion ? job.approvedEstimateOptionId ?? null : null,
   };
 }
 
@@ -297,6 +301,7 @@ export async function scheduleCorrectiveCleanFromReCleanRequestedJob(
           propertyId: property.id,
           estimateId: scope.estimateId,
           approvedEstimateVersionId: scope.approvedEstimateVersionId,
+          approvedEstimateOptionId: scope.approvedEstimateOptionId,
           projectToken: randomUUID(),
           status: "SCHEDULED",
           scheduledAt,

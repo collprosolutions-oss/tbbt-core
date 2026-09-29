@@ -33,6 +33,7 @@ import {
 } from "@/lib/dashboard-appointment-attention";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
+import { estimateListTotalLabel } from "@/lib/estimate-options";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
@@ -138,7 +139,13 @@ export default async function DashboardPage() {
     }),
     prisma.estimate.findMany({
       where: { ...access.scope, status: "DRAFT" },
-      select: { id: true, total: true, customer: { select: { name: true } } },
+      select: {
+        id: true,
+        total: true,
+        customer: { select: { name: true } },
+        options: { select: { id: true } },
+        approvedOption: { select: { total: true } },
+      },
       orderBy: { createdAt: "desc" },
       take: ATTENTION_TAKE,
     }),
@@ -205,6 +212,7 @@ export default async function DashboardPage() {
           select: { id: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
         },
         estimate: { select: { total: true } },
+        approvedEstimateOption: { select: { total: true } },
         approvedEstimateVersion: { select: { total: true } },
       },
       orderBy: { updatedAt: "desc" },
@@ -274,7 +282,11 @@ export default async function DashboardPage() {
   const unbilledCompletedJobs = completedJobsForBilling.filter((job) => {
     const attention = completedJobBillingAttention({
       jobStatus: "COMPLETED",
-      originalApprovedTotal: job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null,
+      originalApprovedTotal:
+        job.approvedEstimateOption?.total ??
+        job.approvedEstimateVersion?.total ??
+        job.estimate?.total ??
+        null,
       invoices: job.invoices,
       changeOrders: job.changeOrders,
     });
@@ -298,7 +310,7 @@ export default async function DashboardPage() {
       items: attentionDraftEstimates.map((estimate) => ({
         key: estimate.id,
         name: estimate.customer?.name ?? "Customer",
-        meta: formatMoney(estimate.total),
+        meta: estimateListTotalLabel(estimate, formatMoney),
         href: `/estimates/${estimate.id}`,
         action: "Open",
       })),

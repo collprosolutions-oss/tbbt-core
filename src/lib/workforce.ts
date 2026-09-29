@@ -5,6 +5,7 @@
  * Skills, progression, and scheduling status are practical dispatch
  * labels the owner records. No demographic or sensitive profiling.
  */
+import { addZonedCalendarMonths, formatISODateInTimeZone } from "@/lib/business-timezone";
 export const WORKFORCE_PROGRESSIONS = [
   "LEARNING",
   "CAPABLE",
@@ -51,6 +52,69 @@ export type OutreachTaskKind = (typeof OUTREACH_TASK_KINDS)[number];
 
 export const OUTREACH_TASK_STATUSES = ["DRAFT", "APPROVED", "DISMISSED", "DONE"] as const;
 export type OutreachTaskStatus = (typeof OUTREACH_TASK_STATUSES)[number];
+
+export const AVAILABILITY_REQUEST_STATUSES = ["PENDING", "ACCEPTED", "DECLINED"] as const;
+export type AvailabilityRequestStatus = (typeof AVAILABILITY_REQUEST_STATUSES)[number];
+
+export const AVAILABILITY_REQUEST_DECISIONS = ["ACCEPT", "DECLINE"] as const;
+export type AvailabilityRequestDecision = (typeof AVAILABILITY_REQUEST_DECISIONS)[number];
+
+export const AVAILABILITY_REQUEST_STALE_MESSAGE =
+  "That request already changed. Refresh and decide again. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_PENDING_EXISTS_MESSAGE =
+  "You already have a pending request for that date. Wait for the owner to decide, or pick another date.";
+
+export const AVAILABILITY_REQUEST_INACTIVE_MESSAGE =
+  "That worker is no longer active on this team. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_PAST_DATE_MESSAGE =
+  "Choose today or a future date in this business timezone.";
+
+export const AVAILABILITY_REQUEST_FAR_FUTURE_MESSAGE =
+  "Choose a date within the next 12 months in this business timezone.";
+
+export const AVAILABILITY_REQUEST_PAST_ACCEPT_MESSAGE =
+  "That request date is already in the past in this business timezone. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_REPLACE_REQUIRED_MESSAGE =
+  "That date already has a recorded exception. Confirm replace to overwrite it. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_AVAILABLE_HOURS_MESSAGE =
+  "Choose start and end times for an available override.";
+
+export const AVAILABILITY_REQUEST_DECIDE_CONFLICT_MESSAGE =
+  "That decision could not be recorded. Refresh and decide again. TBBT did not change recorded availability or any job.";
+
+export const AVAILABILITY_REQUEST_MAX_MONTHS = 12;
+export const AVAILABILITY_REQUEST_SELF_LIST_LIMIT = 50;
+export const AVAILABILITY_REQUEST_PENDING_LIST_LIMIT = 100;
+export const AVAILABILITY_REQUEST_RECENT_LIST_LIMIT = 20;
+
+export type RecordedAvailabilityException = {
+  kind: "AVAILABLE" | "UNAVAILABLE";
+  startMinutes: number | null;
+  endMinutes: number | null;
+  note: string;
+};
+
+export type AvailabilityExceptionRequestRecord = {
+  id: string;
+  businessId: string;
+  membershipId: string;
+  workerName: string;
+  date: string;
+  kind: "AVAILABLE" | "UNAVAILABLE";
+  startMinutes: number | null;
+  endMinutes: number | null;
+  note: string;
+  status: AvailabilityRequestStatus;
+  requestedAt: Date;
+  decidedAt: Date | null;
+  decidedByMembershipId: string | null;
+  updatedAt: Date;
+  existingException: RecordedAvailabilityException | null;
+};
 
 export const DEFAULT_FIRST_APPOINTMENT_MODE: AppointmentMode = "EXACT";
 export const DEFAULT_LATER_APPOINTMENT_MODE: AppointmentMode = "WINDOW";
@@ -312,6 +376,62 @@ export function requireIsoDate(value: string | null | undefined): string {
     throw new WorkforceValidationError("Choose a valid date.");
   }
   return value;
+}
+
+export function availabilityRequestDateBounds(now: Date, timeZone: string) {
+  return {
+    today: formatISODateInTimeZone(now, timeZone),
+    maxDate: formatISODateInTimeZone(
+      addZonedCalendarMonths(now, AVAILABILITY_REQUEST_MAX_MONTHS, timeZone),
+      timeZone,
+    ),
+  };
+}
+
+export function requireAvailabilityRequestDate(
+  value: string | null | undefined,
+  now: Date,
+  timeZone: string,
+): string {
+  const date = requireIsoDate(value);
+  const { today, maxDate } = availabilityRequestDateBounds(now, timeZone);
+  if (date < today) {
+    throw new WorkforceValidationError(AVAILABILITY_REQUEST_PAST_DATE_MESSAGE);
+  }
+  if (date > maxDate) {
+    throw new WorkforceValidationError(AVAILABILITY_REQUEST_FAR_FUTURE_MESSAGE);
+  }
+  return date;
+}
+
+export function requireAvailabilityRequestAcceptDate(
+  value: string | null | undefined,
+  now: Date,
+  timeZone: string,
+): string {
+  const date = requireIsoDate(value);
+  const { today } = availabilityRequestDateBounds(now, timeZone);
+  if (date < today) {
+    throw new WorkforceValidationError(AVAILABILITY_REQUEST_PAST_ACCEPT_MESSAGE);
+  }
+  return date;
+}
+
+export function requireAvailabilityRequestDecision(
+  value: string | null | undefined,
+): AvailabilityRequestDecision {
+  if (!(AVAILABILITY_REQUEST_DECISIONS as readonly string[]).includes(value ?? "")) {
+    throw new WorkforceValidationError("Choose accept or decline.");
+  }
+  return value as AvailabilityRequestDecision;
+}
+
+export function parseExpectedUpdatedAt(value: string | null | undefined): Date | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 const OUTREACH_ATTEMPT_ID_PATTERN =

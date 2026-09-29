@@ -27,6 +27,8 @@ export type SettingsWorkspaceProps = {
   operatingBlockedMessage: string;
   websitePublish?: {
     hasUnpublishedChanges: boolean;
+    currentId: string | null;
+    historyLimit: number;
     currentVersion: number | null;
     versions: Array<{
       id: string;

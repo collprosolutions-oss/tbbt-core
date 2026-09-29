@@ -61,12 +61,28 @@ export async function loadFinancialSource(
       where: { ...scope, approvedAt: { not: null } },
       select: {
         estimateId: true,
-        lineItems: { select: { type: true, quantity: true, total: true, description: true } },
+        estimate: { select: { approvedOptionId: true } },
+        lineItems: {
+          select: { type: true, quantity: true, total: true, description: true, optionId: true },
+        },
       },
     }),
     prisma.lineItem.findMany({
       where: { ...scope, estimateId: { not: null } },
-      select: { estimateId: true, type: true, quantity: true, total: true, description: true },
+      select: {
+        estimateId: true,
+        type: true,
+        quantity: true,
+        total: true,
+        description: true,
+        optionId: true,
+        estimate: {
+          select: {
+            approvedOptionId: true,
+            _count: { select: { options: true } },
+          },
+        },
+      },
     }),
     prisma.businessLaborBurdenSetting.findUnique({
       where: { businessId },
@@ -79,9 +95,17 @@ export async function loadFinancialSource(
 
   const approvedLineByEstimate = new Map<string, FinancialSource["estimateLines"]>();
   for (const version of approvedVersions) {
+    const approvedOptionId = version.estimate.approvedOptionId;
+    const optionTagged = version.lineItems.some((line) => line.optionId);
+    if (optionTagged && !approvedOptionId) {
+      continue;
+    }
+    const chosenLines = approvedOptionId
+      ? version.lineItems.filter((line) => line.optionId === approvedOptionId)
+      : version.lineItems;
     approvedLineByEstimate.set(
       version.estimateId,
-      version.lineItems.map((line) => ({
+      chosenLines.map((line) => ({
         estimateId: version.estimateId,
         type: line.type,
         quantity: asNumber(line.quantity),
@@ -92,14 +116,26 @@ export async function loadFinancialSource(
     );
   }
 
-  const liveLines: FinancialSource["estimateLines"] = estimateLines.map((line) => ({
-    estimateId: line.estimateId as string,
-    type: line.type,
-    quantity: asNumber(line.quantity),
-    total: asNumber(line.total),
-    description: line.description,
-    fromApprovedVersion: false,
-  }));
+  const liveLines: FinancialSource["estimateLines"] = estimateLines.flatMap((line) => {
+    const optionCount = line.estimate?._count.options ?? 0;
+    const approvedOptionId = line.estimate?.approvedOptionId ?? null;
+    if (optionCount >= 2 && !approvedOptionId) {
+      return [];
+    }
+    if (approvedOptionId && line.optionId !== approvedOptionId) {
+      return [];
+    }
+    return [
+      {
+        estimateId: line.estimateId as string,
+        type: line.type,
+        quantity: asNumber(line.quantity),
+        total: asNumber(line.total),
+        description: line.description,
+        fromApprovedVersion: false,
+      },
+    ];
+  });
 
   const estimateLinesMerged = [
     ...[...approvedLineByEstimate.values()].flat(),

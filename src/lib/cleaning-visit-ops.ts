@@ -187,7 +187,7 @@ async function upsertVisitRecord(
 }
 
 export async function setCleaningVisitCadence(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
   input: { jobId: string; cadence: string; timeZone?: string },
 ) {
@@ -213,26 +213,32 @@ export async function setCleaningVisitCadence(
         })
       : null;
 
-  await db.job.update({
-    where: { id: job.id },
-    data: {
-      serviceIntent: plan.serviceIntent,
-      recurrenceCadence: plan.recurrenceCadence,
-      recurrenceStatus: plan.recurrenceStatus,
-      nextOccurrenceAt,
-    },
-  });
-
-  const existing = await db.jobCrewVisit.findFirst({
-    where: { jobId: job.id, businessId: access.businessId },
-  });
-  if (!existing) {
-    await upsertVisitRecord(db, {
-      businessId: access.businessId,
-      jobId: job.id,
-      checklist: packCrewChecklist(),
+  await db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+    if (!locked) {
+      throw new CleaningVisitError("That job could not be updated.");
+    }
+    await tx.job.update({
+      where: { id: job.id },
+      data: {
+        serviceIntent: plan.serviceIntent,
+        recurrenceCadence: plan.recurrenceCadence,
+        recurrenceStatus: plan.recurrenceStatus,
+        nextOccurrenceAt,
+      },
     });
-  }
+
+    const existing = await tx.jobCrewVisit.findFirst({
+      where: { jobId: job.id, businessId: access.businessId },
+    });
+    if (!existing) {
+      await upsertVisitRecord(tx, {
+        businessId: access.businessId,
+        jobId: job.id,
+        checklist: packCrewChecklist(),
+      });
+    }
+  });
 
   return db.job.findFirstOrThrow({
     where: { id: job.id, businessId: access.businessId },
@@ -247,9 +253,16 @@ export async function setCleaningVisitCadence(
 }
 
 export async function attachCleaningCrewChecklist(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
-  input: { jobId: string; procedureId: string },
+  input: {
+    jobId: string;
+    procedureId: string;
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
+  },
 ) {
   if (access.workspace.role !== "OWNER") {
     throw new ForbiddenError(OWNER_SETS_CADENCE_MESSAGE);
@@ -261,11 +274,23 @@ export async function attachCleaningCrewChecklist(
     access.businessId,
     input.procedureId,
   );
-  return upsertVisitRecord(db, {
-    businessId: access.businessId,
-    jobId: job.id,
-    procedureId: procedure.id,
-    checklist: checklistForProcedure(procedure),
+  if (input.afterInitialRead) {
+    await input.afterInitialRead();
+  }
+  return db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+    if (!locked) {
+      throw new CleaningVisitError("That job could not be updated.");
+    }
+    if (input.afterLock) {
+      await input.afterLock();
+    }
+    return upsertVisitRecord(tx, {
+      businessId: access.businessId,
+      jobId: job.id,
+      procedureId: procedure.id,
+      checklist: checklistForProcedure(procedure),
+    });
   });
 }
 
@@ -328,6 +353,8 @@ export async function recordAssignedVisitOutcome(
     outcomeStatus: string;
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
   },
 ) {
   const outcome = parseRecordedVisitOutcome(input.outcomeStatus);
@@ -349,6 +376,9 @@ export async function recordAssignedVisitOutcome(
       const locked = await lockTenantOwnedJob(tx, actor.businessId, job.id);
       if (!locked || locked.assignedMembershipId !== actor.membershipId) {
         throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+      }
+      if (input.afterLock) {
+        await input.afterLock();
       }
       if (
         outcome === "VISIT_COMPLETED" &&

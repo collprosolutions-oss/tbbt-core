@@ -99,6 +99,11 @@ export type NativeJobVisit = {
   recordReclean: NativeJobVisitAction;
 };
 
+export type NativeJobChecklist = {
+  procedureTitle: string | null;
+  items: NativeJobChecklistItem[];
+};
+
 export type NativeVisitOutcomeStatus = "VISIT_COMPLETED" | "RE_CLEAN_REQUESTED";
 
 export type NativeJobPhotos = {
@@ -134,6 +139,7 @@ export type NativeJobDetail = NativeJobSummary & {
   stopPickupAction: NativeJobActivityAction;
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
+  checklist: NativeJobChecklist | null;
 };
 
 export type NativeJobPhotoAuthorizePayload = {

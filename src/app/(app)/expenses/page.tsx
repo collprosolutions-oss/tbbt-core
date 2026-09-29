@@ -16,6 +16,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   ACTIVE_EXPENSE_WHERE,
@@ -41,7 +42,8 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
-import { isStorageConfigured } from "@/lib/storage";
+import { expenseReceiptHref, isBusinessStorageConfigured } from "@/lib/business-storage";
+import { isManagedBlobUrl } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -57,6 +59,11 @@ const RANGE_OPTIONS: { value: ExpenseDateRange; label: string }[] = [
   { value: "year", label: "This year" },
   { value: "all", label: "All dates" },
 ];
+
+function legacyExpenseReceiptHref(url: string | null | undefined) {
+  if (!url || !url.startsWith("https://") || !isManagedBlobUrl(url)) return null;
+  return url;
+}
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -335,8 +342,12 @@ export default async function ExpensesPage({
       jobLabel: expense.job ? jobLabel(expense.job) : null,
       customerId: expense.customerId,
       customerName: expense.customer?.name ?? null,
-      hasReceipt: Boolean(expense.receiptUrl),
-      receiptUrl: expense.receiptUrl,
+      hasPrivateReceipt: Boolean(expense.receiptStoredAssetId),
+      hasReceipt: Boolean(expense.receiptStoredAssetId || expense.receiptUrl),
+      receiptHref: expenseReceiptHref(expense.receiptStoredAssetId),
+      legacyReceiptHref: !expense.receiptStoredAssetId
+        ? legacyExpenseReceiptHref(expense.receiptUrl)
+        : null,
       reimbursable: expense.reimbursable,
       customerBillable: expense.customerBillable,
       reimbursementStatus: expense.reimbursementStatus,
@@ -453,7 +464,8 @@ export default async function ExpensesPage({
       projectedDetail: projection.unavailableReason,
     },
     filters,
-    storageConfigured: isStorageConfigured(),
+    storageConfigured: isBusinessStorageConfigured(),
+    canChangeReceipts: roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS),
     defaultDate: formatISODate(now, timeZone),
     page,
     totalPages,
