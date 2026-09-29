@@ -44,8 +44,11 @@ export const NATIVE_CHECKLIST_STALE_MESSAGE =
   "This checklist changed after your draft. Sync was not applied.";
 export const NATIVE_CHECKLIST_NO_ITEMS_MESSAGE =
   "This job has no checklist items.";
-const NATIVE_CHECKLIST_ITEM_KEY_MAX_CHARS = 128;
-const NATIVE_CHECKLIST_MAX_ITEMS = 40;
+export const NATIVE_CHECKLIST_CLOSED_MESSAGE =
+  "This job's checklist can no longer be updated.";
+/** Worst-case 12 × 128-char keys for expected + items stays under 4096 bytes. */
+export const NATIVE_CHECKLIST_ITEM_KEY_MAX_CHARS = 128;
+export const NATIVE_CHECKLIST_MAX_ITEMS = 12;
 
 export type NativeRecordAssignedChecklistResult =
   | {
@@ -280,6 +283,34 @@ export function checklistDraftMatchesCurrent(
   );
 }
 
+export function jobChecklistIsClosed(
+  status: string,
+  outcomeStatus: string | null | undefined,
+) {
+  return (
+    status === "COMPLETED" ||
+    status === "CANCELED" ||
+    status === "CANCELLED" ||
+    (typeof outcomeStatus === "string" && outcomeStatus !== "NONE")
+  );
+}
+
+export function applyChecklistDraftState(
+  expected: NativeChecklistExpectedItem[],
+  items: NativeChecklistDraftItem[],
+): NativeChecklistExpectedItem[] {
+  let next = expected.map((item) => ({ ...item }));
+  for (const change of items) {
+    if (!next.some((item) => item.key === change.itemKey)) {
+      throw new CleaningVisitError("That checklist item is not on this visit.");
+    }
+    next = next.map((item) =>
+      item.key === change.itemKey ? { ...item, checked: change.checked } : item,
+    );
+  }
+  return next;
+}
+
 export async function syncNativeAssignedChecklistDraft(
   db: PrismaClient,
   access: NativeFieldAccess,
@@ -322,18 +353,14 @@ export async function syncNativeAssignedChecklistDraft(
   if (currentItems.length === 0) {
     return { ok: false, status: 409, error: NATIVE_CHECKLIST_NO_ITEMS_MESSAGE };
   }
-  const alreadySynced =
-    checklistDraftMatchesCurrent(currentItems, input.expectedChecklist) &&
-    input.items.every((change) =>
-      currentItems.some((item) => item.key === change.itemKey && item.checked === change.checked),
-    );
 
   if (options?.afterInitialRead) {
     await options.afterInitialRead();
   }
 
+  let alreadySynced = false;
   try {
-    await db.$transaction(async (tx) => {
+    alreadySynced = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
       if (!locked || locked.assignedMembershipId !== access.membershipId) {
         throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
@@ -345,6 +372,14 @@ export async function syncNativeAssignedChecklistDraft(
       const lockedItems = parseChecklistJson(lockedVisit?.checklistJson);
       if (!lockedVisit || lockedItems.length === 0) {
         throw new CleaningVisitError(NATIVE_CHECKLIST_NO_ITEMS_MESSAGE);
+      }
+      if (jobChecklistIsClosed(locked.status, lockedVisit.outcomeStatus)) {
+        throw new CleaningVisitError(NATIVE_CHECKLIST_CLOSED_MESSAGE);
+      }
+
+      const desired = applyChecklistDraftState(input.expectedChecklist, input.items);
+      if (checklistDraftMatchesCurrent(lockedItems, desired)) {
+        return true;
       }
       if (!checklistDraftMatchesCurrent(lockedItems, input.expectedChecklist)) {
         throw new CleaningVisitError(NATIVE_CHECKLIST_STALE_MESSAGE);
@@ -358,10 +393,14 @@ export async function syncNativeAssignedChecklistDraft(
         next = toggleChecklistItem(next, change.itemKey, change.checked);
       }
 
-      await tx.jobCrewVisit.update({
-        where: { id: lockedVisit.id },
+      const updated = await tx.jobCrewVisit.updateMany({
+        where: { id: lockedVisit.id, checklistJson: lockedVisit.checklistJson },
         data: { checklistJson: serializeChecklist(next) },
       });
+      if (updated.count !== 1) {
+        throw new CleaningVisitError(NATIVE_CHECKLIST_STALE_MESSAGE);
+      }
+      return false;
     });
   } catch (error) {
     return checklistWriteFailure(error);

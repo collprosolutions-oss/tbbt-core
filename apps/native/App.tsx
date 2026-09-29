@@ -5,6 +5,8 @@ import { isApiError, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { TodayScreen } from "./src/screens/TodayScreen";
+import { secureChecklistDraftStorage } from "./src/checklist-draft-storage";
+import { clearAllChecklistDrafts } from "./src/checklist-drafts";
 import { clearSessionToken, readSessionToken } from "./src/session";
 import type { NativeViewer, NativeWorkspace } from "./src/types";
 
@@ -31,6 +33,7 @@ export default function App() {
       if (cancelled) return;
       if (isApiError(restored)) {
         await clearSessionToken();
+        await clearAllChecklistDrafts(secureChecklistDraftStorage);
       } else {
         setSession({ token, viewer: restored.viewer, workspace: restored.workspace });
       }
@@ -46,6 +49,7 @@ export default function App() {
       await signOutNative(session.token);
     }
     await clearSessionToken();
+    await clearAllChecklistDrafts(secureChecklistDraftStorage);
     setJobId(null);
     setSession(null);
   }

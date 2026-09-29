@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { isApiError, syncNativeJobChecklistDraft } from "../api";
+import {
+  isApiError,
+  loadNativeJob,
+  NATIVE_CHECKLIST_OFFLINE_MESSAGE,
+  syncNativeJobChecklistDraft,
+} from "../api";
 import { secureChecklistDraftStorage } from "../checklist-draft-storage";
 import {
+  CHECKLIST_DRAFT_STORAGE_ERROR,
+  ChecklistDraftStorageError,
   clearChecklistDraft,
   loadChecklistDraft,
   overlayChecklistDraft,
@@ -12,6 +19,9 @@ import {
   type ChecklistDisplayItem,
 } from "../checklist-drafts";
 import type { NativeJobChecklistItem, NativeJobDetail, NativeWorkspace } from "../types";
+
+export const NATIVE_CHECKLIST_CLOSED_NOTICE =
+  "This job's checklist can no longer be updated.";
 
 function assignedChecklist(job: NativeJobDetail): {
   procedureTitle: string | null;
@@ -29,20 +39,30 @@ function assignedChecklist(job: NativeJobDetail): {
   return null;
 }
 
+function jobChecklistClosed(job: NativeJobDetail) {
+  if (job.status === "COMPLETED" || job.status === "CANCELED" || job.status === "CANCELLED") {
+    return true;
+  }
+  return Boolean(job.visit && job.visit.outcomeStatus !== "NONE");
+}
+
 export function JobChecklistSection({
   token,
   job,
   workspace,
   onJobUpdated,
+  onUnsyncedChange,
   storage = secureChecklistDraftStorage,
 }: {
   token: string;
   job: NativeJobDetail;
   workspace: NativeWorkspace;
   onJobUpdated: (job: NativeJobDetail) => void;
+  onUnsyncedChange?: (unsynced: boolean) => void;
   storage?: ChecklistDraftStorage;
 }) {
   const source = assignedChecklist(job);
+  const closed = jobChecklistClosed(job);
   const scope = useMemo(
     () => ({
       businessId: workspace.businessId,
@@ -58,13 +78,21 @@ export function JobChecklistSection({
 
   useEffect(() => {
     let cancelled = false;
-    void loadChecklistDraft(storage, scope).then((loaded) => {
-      if (!cancelled) setDraft(loaded);
-    });
+    void loadChecklistDraft(storage, scope)
+      .then((loaded) => {
+        if (!cancelled) setDraft(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) setError(CHECKLIST_DRAFT_STORAGE_ERROR);
+      });
     return () => {
       cancelled = true;
     };
   }, [scope, storage]);
+
+  useEffect(() => {
+    onUnsyncedChange?.(Boolean(draft && draft.items.length > 0));
+  }, [draft, onUnsyncedChange]);
 
   if (!source) return null;
 
@@ -72,45 +100,73 @@ export function JobChecklistSection({
   const procedureTitle = source.procedureTitle;
   const items: ChecklistDisplayItem[] = overlayChecklistDraft(serverItems, draft);
   const unsynced = Boolean(draft && draft.items.length > 0);
+  const editingLocked = closed || syncing || Boolean(pendingItemKey);
 
   async function recordLocalItem(itemKey: string, checked: boolean) {
-    if (pendingItemKey || syncing) return;
+    if (pendingItemKey || syncing || closed) return;
     setPendingItemKey(itemKey);
     setError(null);
-    const next = await persistLocalChecklistChange(storage, {
-      scope,
-      serverItems,
-      itemKey,
-      checked,
-    });
-    setDraft(next);
-    setPendingItemKey(null);
+    try {
+      const next = await persistLocalChecklistChange(storage, {
+        scope,
+        serverItems,
+        itemKey,
+        checked,
+      });
+      setDraft(next);
+    } catch (cause) {
+      setError(
+        cause instanceof ChecklistDraftStorageError
+          ? cause.message
+          : CHECKLIST_DRAFT_STORAGE_ERROR,
+      );
+    } finally {
+      setPendingItemKey(null);
+    }
+  }
+
+  async function reloadAssignedJob() {
+    const reloaded = await loadNativeJob(token, job.id);
+    if (!isApiError(reloaded)) {
+      onJobUpdated(reloaded.job);
+    }
   }
 
   async function syncDraft() {
-    if (!draft || syncing || pendingItemKey) return;
+    if (!draft || syncing || pendingItemKey || closed) return;
     setSyncing(true);
     setError(null);
-    const result = await syncNativeJobChecklistDraft(token, job.id, {
-      expectedChecklist: draft.expectedChecklist,
-      items: draft.items,
-    });
-    if (isApiError(result)) {
-      setError(result.error);
+    try {
+      const result = await syncNativeJobChecklistDraft(token, job.id, {
+        expectedChecklist: draft.expectedChecklist,
+        items: draft.items,
+      });
+      if (isApiError(result)) {
+        setError(result.error);
+        if (result.error.includes("changed after your draft")) {
+          await reloadAssignedJob();
+        }
+        return;
+      }
+      await clearChecklistDraft(storage, scope);
+      setDraft(null);
+      onJobUpdated(result.job);
+    } catch {
+      setError(NATIVE_CHECKLIST_OFFLINE_MESSAGE);
+    } finally {
       setSyncing(false);
-      return;
     }
-    await clearChecklistDraft(storage, scope);
-    setDraft(null);
-    onJobUpdated(result.job);
-    setSyncing(false);
   }
 
   async function discardDraft() {
     if (syncing) return;
-    await clearChecklistDraft(storage, scope);
-    setDraft(null);
-    setError(null);
+    try {
+      await clearChecklistDraft(storage, scope);
+      setDraft(null);
+      setError(null);
+    } catch {
+      setError(CHECKLIST_DRAFT_STORAGE_ERROR);
+    }
   }
 
   return (
@@ -119,6 +175,7 @@ export function JobChecklistSection({
       <Text style={styles.body}>
         {procedureTitle ?? "Crew checklist"}
       </Text>
+      {closed ? <Text style={styles.notice}>{NATIVE_CHECKLIST_CLOSED_NOTICE}</Text> : null}
       {unsynced ? (
         <Text style={styles.unsynced}>Unsynced checklist changes</Text>
       ) : null}
@@ -127,19 +184,19 @@ export function JobChecklistSection({
         return (
           <View key={item.key} style={styles.checklistItem}>
             <Pressable
-              disabled={Boolean(pendingItemKey) || syncing}
+              disabled={editingLocked}
               onPress={() => {
                 void recordLocalItem(item.key, !item.checked);
               }}
               style={[
                 item.checked ? styles.secondaryAction : styles.primaryAction,
                 styles.checklistAction,
-                pendingItemKey || syncing ? styles.disabled : null,
+                editingLocked ? styles.disabled : null,
               ]}
             >
               <Text style={styles.actionLabel}>
                 {pendingItemKey === item.key
-                  ? "Saving…"
+                  ? "Saved on this phone"
                   : item.checked
                     ? "Done"
                     : "Mark done"}
@@ -150,7 +207,7 @@ export function JobChecklistSection({
           </View>
         );
       })}
-      {unsynced ? (
+      {unsynced && !closed ? (
         <Pressable
           disabled={syncing || Boolean(pendingItemKey)}
           onPress={() => {
@@ -220,6 +277,11 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#fca5a5",
+  },
+  notice: {
+    color: "#fbbf24",
+    fontSize: 15,
+    lineHeight: 22,
   },
   unsynced: {
     color: "#fbbf24",

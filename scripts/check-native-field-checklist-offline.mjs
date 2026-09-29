@@ -27,6 +27,8 @@ const { NATIVE_JOB_NOT_AVAILABLE } = await import("@/lib/native-field-ops");
 const { loadNativeAssignedJob } = await import("@/lib/native-field");
 const {
   NATIVE_CHECKLIST_CHOOSE_ITEM,
+  NATIVE_CHECKLIST_CLOSED_MESSAGE,
+  NATIVE_CHECKLIST_MAX_ITEMS,
   NATIVE_CHECKLIST_NO_ITEMS_MESSAGE,
   NATIVE_CHECKLIST_STALE_MESSAGE,
   NATIVE_CHECKLIST_SYNC_JSON_MAX_BYTES,
@@ -41,8 +43,12 @@ const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
   "@/lib/saas-billing/messages"
 );
 const {
+  CHECKLIST_DRAFT_INDEX_KEY,
+  SECURE_STORE_KEY_PATTERN,
   checklistDraftStorageKey,
+  clearAllChecklistDrafts,
   createMemoryChecklistDraftStorage,
+  isSecureStoreKey,
   loadChecklistDraft,
   overlayChecklistDraft,
   persistLocalChecklistChange,
@@ -54,6 +60,23 @@ if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+
+function assertLocalTestDatabase(url) {
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    host = "";
+  }
+  if (host !== "localhost" && host !== "127.0.0.1") {
+    console.error(
+      "Refuse to CREATE DATABASE or prisma db push --accept-data-loss unless DATABASE_URL is localhost or 127.0.0.1.",
+    );
+    process.exit(1);
+  }
+}
+
+assertLocalTestDatabase(baseUrl);
 
 const testDbName = "tbbt_native_field_checklist_offline_test";
 const parsed = new URL(baseUrl);
@@ -117,6 +140,9 @@ function makeOwnerAccess(businessId, membershipId, userId) {
 }
 
 const checklistOpsSrc = readRepo("src/lib/native-field-checklist.ts");
+const visitOpsSrc = readRepo("src/lib/cleaning-visit-ops.ts");
+const appSrc = readRepo("apps/native/App.tsx");
+const signInSrc = readRepo("apps/native/src/screens/SignInScreen.tsx");
 const checklistSyncRouteSrc = readRepo(
   "src/app/api/native/v1/jobs/[jobId]/checklist/sync/route.ts",
 );
@@ -134,8 +160,12 @@ check(
     checklistOpsSrc.includes("assignedMembershipId") &&
     checklistOpsSrc.includes("NATIVE_CHECKLIST_STALE_MESSAGE") &&
     checklistOpsSrc.includes("parseChecklistJson(lockedVisit?.checklistJson)") &&
-    checklistOpsSrc.includes("jobCrewVisit.update") &&
+    checklistOpsSrc.includes("jobCrewVisit.updateMany") &&
+    checklistOpsSrc.includes("updated.count !== 1") &&
     checklistOpsSrc.includes("toggleChecklistItem") &&
+    checklistOpsSrc.includes("NATIVE_CHECKLIST_CLOSED_MESSAGE") &&
+    checklistOpsSrc.includes("alreadySynced") &&
+    !checklistOpsSrc.includes("const alreadySynced =") &&
     !checklistOpsSrc.includes("completeJobWithRunningTimeSafetyInTransaction") &&
     !checklistOpsSrc.includes("startAssignedActivityTimeInTransaction") &&
     !checklistSyncRouteSrc.includes("cookies(") &&
@@ -151,10 +181,19 @@ check(
 );
 check(
   "Native checklist UI records locally, marks unsynced, and syncs only on tap",
-  checklistSectionSrc.includes("Unsynced checklist changes") &&
+    checklistSectionSrc.includes("Unsynced checklist changes") &&
     checklistSectionSrc.includes("Sync checklist") &&
+    checklistSectionSrc.includes("Saved on this phone") &&
+    !checklistSectionSrc.includes("Saving…") &&
     checklistSectionSrc.includes("persistLocalChecklistChange") &&
     checklistSectionSrc.includes("syncNativeJobChecklistDraft") &&
+    checklistSectionSrc.includes("try {") &&
+    checklistSectionSrc.includes("finally") &&
+    checklistSectionSrc.includes("NATIVE_CHECKLIST_OFFLINE_MESSAGE") &&
+    checklistSectionSrc.includes("changed after your draft") &&
+    checklistSectionSrc.includes("loadNativeJob") &&
+    jobScreenSrc.includes("Sync or discard unsynced checklist changes before completing this job.") &&
+    jobScreenSrc.includes("Sync or discard unsynced checklist changes before recording a visit outcome.") &&
     !checklistSectionSrc.includes("completeNativeJob") &&
     !checklistSectionSrc.includes("startNativeJob") &&
     !checklistSectionSrc.includes("startNativeActivityTime") &&
@@ -168,7 +207,11 @@ check(
     jobScreenSrc.includes("JobChecklistSection") &&
     !jobScreenSrc.includes("recordNativeJobChecklistItem") &&
     nativeApiSrc.includes("/checklist/sync") &&
-    draftSrc.includes("createMemoryChecklistDraftStorage"),
+    nativeApiSrc.includes("NATIVE_CHECKLIST_OFFLINE_MESSAGE") &&
+    draftSrc.includes("createMemoryChecklistDraftStorage") &&
+    draftSrc.includes("SECURE_STORE_KEY_PATTERN") &&
+    draftSrc.includes("clearAllChecklistDrafts") &&
+    NATIVE_CHECKLIST_MAX_ITEMS === 12,
 );
 check(
   "Docs describe explicit sync, stale refusal, and the dedicated check",
@@ -176,7 +219,17 @@ check(
     docsSrc.includes("Sync checklist") &&
     docsSrc.includes("refuses a stale or reassigned draft") &&
     docsSrc.includes("does not background-write") &&
+    docsSrc.includes("Every native checklist tap is local") &&
     docsSrc.includes("test:native-field-checklist-offline"),
+);
+check(
+  "OWNER attach and cadence writes lock the Job before replacing checklistJson",
+  visitOpsSrc.includes("export async function attachCleaningCrewChecklist") &&
+    visitOpsSrc.indexOf("lockTenantOwnedJob") <
+      visitOpsSrc.indexOf("return upsertVisitRecord") &&
+    visitOpsSrc.includes('await db.$transaction(async (tx) => {') &&
+    appSrc.includes("clearAllChecklistDrafts") &&
+    signInSrc.includes("clearAllChecklistDrafts"),
 );
 
 const emptySync = parseNativeChecklistSyncJson("{}");
@@ -266,6 +319,63 @@ check(
 check(
   "Toggling back to the server state clears the local draft",
   reverted === null,
+);
+
+const cuidScope = {
+  businessId: "clxyz0123456789abcdefghij",
+  membershipId: "mem_field-worker.1",
+  jobId: "550e8400-e29b-41d4-a716-446655440000",
+};
+const generatedKeys = [
+  checklistDraftStorageKey(scope),
+  checklistDraftStorageKey(otherScope),
+  checklistDraftStorageKey(cuidScope),
+  CHECKLIST_DRAFT_INDEX_KEY,
+];
+check(
+  "Every generated draft key is a valid expo-secure-store key",
+  generatedKeys.every((key) => SECURE_STORE_KEY_PATTERN.test(key) && isSecureStoreKey(key)) &&
+    !SECURE_STORE_KEY_PATTERN.test("tbbt.native.checklist.draft:biz-a:mem-a:job-a"),
+);
+
+const indexed = createMemoryChecklistDraftStorage();
+await persistLocalChecklistChange(indexed, {
+  scope,
+  serverItems,
+  itemKey: "floors",
+  checked: true,
+});
+await persistLocalChecklistChange(indexed, {
+  scope: otherScope,
+  serverItems,
+  itemKey: "trash",
+  checked: true,
+});
+const beforeClear = await Promise.all([
+  loadChecklistDraft(indexed, scope),
+  loadChecklistDraft(indexed, otherScope),
+]);
+await clearAllChecklistDrafts(indexed);
+const afterClear = await Promise.all([
+  loadChecklistDraft(indexed, scope),
+  loadChecklistDraft(indexed, otherScope),
+]);
+check(
+  "Sign-out clears every indexed checklist draft",
+  beforeClear.every((row) => row !== null) && afterClear.every((row) => row === null),
+);
+
+const compact = await persistLocalChecklistChange(createMemoryChecklistDraftStorage(), {
+  scope,
+  serverItems,
+  itemKey: "walkthrough",
+  checked: true,
+});
+check(
+  "Persisted drafts store a base fingerprint plus only changed items",
+  Boolean(compact?.expectedFingerprint) &&
+    compact.items.length === 1 &&
+    compact.items[0].itemKey === "walkthrough",
 );
 
 try {
@@ -491,10 +601,46 @@ try {
     tradeCode: "HANDYMAN",
     assignedMembershipId: handyMem.id,
   });
+  const completedJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+    status: "COMPLETED",
+  });
+  const canceledJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+    status: "CANCELED",
+  });
+  const outcomeJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+  });
+  const concurrentJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+  });
 
-  for (const job of [memberJob, ownerJob, otherJob, raceJob, staleJob]) {
+  for (const job of [
+    memberJob,
+    ownerJob,
+    otherJob,
+    raceJob,
+    staleJob,
+    completedJob,
+    canceledJob,
+    outcomeJob,
+    concurrentJob,
+  ]) {
     await setCleaningVisitCadence(prisma, ownerA, { jobId: job.id, cadence: "WEEKLY" });
   }
+  await prisma.jobCrewVisit.update({
+    where: { jobId: outcomeJob.id },
+    data: { outcomeStatus: "VISIT_COMPLETED" },
+  });
   await prisma.jobCrewVisit.create({
     data: {
       businessId: handyBusiness.id,
@@ -735,6 +881,138 @@ try {
       ownerSync.job.checklist?.items.find((item) => item.key === "floors")?.checked === true,
   );
 
+  const replay = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    memberJob.id,
+    {
+      expectedChecklist: expectedMember,
+      items: [{ itemKey: "kitchen", checked: true }],
+    },
+  );
+  check(
+    "Replaying a committed draft succeeds as alreadySynced without rewriting",
+    replay.ok === true &&
+      replay.alreadySynced === true &&
+      replay.job.checklist?.items.find((item) => item.key === "kitchen")?.checked === true,
+  );
+
+  const completedExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, completedJob.id),
+  );
+  const completedSync = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    completedJob.id,
+    {
+      expectedChecklist: completedExpected,
+      items: [{ itemKey: "kitchen", checked: true }],
+    },
+  );
+  const canceledExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, canceledJob.id),
+  );
+  const canceledSync = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    canceledJob.id,
+    {
+      expectedChecklist: canceledExpected,
+      items: [{ itemKey: "kitchen", checked: true }],
+    },
+  );
+  const outcomeExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, outcomeJob.id),
+  );
+  const outcomeSync = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    outcomeJob.id,
+    {
+      expectedChecklist: outcomeExpected,
+      items: [{ itemKey: "kitchen", checked: true }],
+    },
+  );
+  const closedAfter = await prisma.jobCrewVisit.findMany({
+    where: { jobId: { in: [completedJob.id, canceledJob.id, outcomeJob.id] } },
+  });
+  check(
+    "Completed and canceled jobs refuse late checklist sync",
+    completedSync.ok === false &&
+      completedSync.status === 409 &&
+      completedSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE &&
+      canceledSync.ok === false &&
+      canceledSync.status === 409 &&
+      canceledSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE,
+  );
+  check(
+    "A recorded visit outcome refuses late checklist sync",
+    outcomeSync.ok === false &&
+      outcomeSync.status === 409 &&
+      outcomeSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE &&
+      closedAfter.every((row) =>
+        JSON.parse(row.checklistJson).every((item) => item.checked === false),
+      ),
+  );
+
+  const concurrentExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, concurrentJob.id),
+  );
+  let releaseBarrier;
+  let started = 0;
+  const barrier = new Promise((resolve) => {
+    releaseBarrier = resolve;
+  });
+  async function waitForPeer() {
+    started += 1;
+    if (started === 2) releaseBarrier();
+    await barrier;
+  }
+  const [left, right] = await Promise.all([
+    syncNativeAssignedChecklistDraft(
+      prisma,
+      memberAccess.access,
+      concurrentJob.id,
+      {
+        expectedChecklist: concurrentExpected,
+        items: [{ itemKey: "kitchen", checked: true }],
+      },
+      { afterInitialRead: waitForPeer },
+    ),
+    syncNativeAssignedChecklistDraft(
+      prisma,
+      memberAccess.access,
+      concurrentJob.id,
+      {
+        expectedChecklist: concurrentExpected,
+        items: [{ itemKey: "bathrooms", checked: true }],
+      },
+      { afterInitialRead: waitForPeer },
+    ),
+  ]);
+  const concurrentVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: concurrentJob.id, businessId: businessA.id },
+  });
+  const concurrentItems = JSON.parse(concurrentVisit.checklistJson);
+  const winners = [left, right].filter((row) => row.ok === true);
+  const staleLosers = [left, right].filter(
+    (row) => row.ok === false && row.status === 409 && row.error === NATIVE_CHECKLIST_STALE_MESSAGE,
+  );
+  const winnerChecked =
+    left.ok && left.alreadySynced === false
+      ? "kitchen"
+      : right.ok && right.alreadySynced === false
+        ? "bathrooms"
+        : null;
+  check(
+    "Two concurrent syncs on the same base leave exactly one winner and one stale 409",
+    winners.length === 1 &&
+      staleLosers.length === 1 &&
+      winnerChecked !== null &&
+      concurrentItems.find((item) => item.key === winnerChecked)?.checked === true &&
+      concurrentItems.filter((item) => item.checked === true).length === 1,
+  );
+
   const handySync = await syncNativeAssignedChecklistDraft(
     prisma,
     handyAccess.access,
@@ -853,6 +1131,12 @@ try {
   console.error("FAIL - live native checklist offline sync", error);
 } finally {
   await prisma.$disconnect();
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
 }
 
 console.log(

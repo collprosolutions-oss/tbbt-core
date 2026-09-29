@@ -187,7 +187,7 @@ async function upsertVisitRecord(
 }
 
 export async function setCleaningVisitCadence(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
   input: { jobId: string; cadence: string; timeZone?: string },
 ) {
@@ -213,26 +213,32 @@ export async function setCleaningVisitCadence(
         })
       : null;
 
-  await db.job.update({
-    where: { id: job.id },
-    data: {
-      serviceIntent: plan.serviceIntent,
-      recurrenceCadence: plan.recurrenceCadence,
-      recurrenceStatus: plan.recurrenceStatus,
-      nextOccurrenceAt,
-    },
-  });
-
-  const existing = await db.jobCrewVisit.findFirst({
-    where: { jobId: job.id, businessId: access.businessId },
-  });
-  if (!existing) {
-    await upsertVisitRecord(db, {
-      businessId: access.businessId,
-      jobId: job.id,
-      checklist: packCrewChecklist(),
+  await db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+    if (!locked) {
+      throw new CleaningVisitError("That job could not be updated.");
+    }
+    await tx.job.update({
+      where: { id: job.id },
+      data: {
+        serviceIntent: plan.serviceIntent,
+        recurrenceCadence: plan.recurrenceCadence,
+        recurrenceStatus: plan.recurrenceStatus,
+        nextOccurrenceAt,
+      },
     });
-  }
+
+    const existing = await tx.jobCrewVisit.findFirst({
+      where: { jobId: job.id, businessId: access.businessId },
+    });
+    if (!existing) {
+      await upsertVisitRecord(tx, {
+        businessId: access.businessId,
+        jobId: job.id,
+        checklist: packCrewChecklist(),
+      });
+    }
+  });
 
   return db.job.findFirstOrThrow({
     where: { id: job.id, businessId: access.businessId },
@@ -247,7 +253,7 @@ export async function setCleaningVisitCadence(
 }
 
 export async function attachCleaningCrewChecklist(
-  db: Db,
+  db: PrismaClient,
   access: BusinessAccess,
   input: { jobId: string; procedureId: string },
 ) {
@@ -261,11 +267,17 @@ export async function attachCleaningCrewChecklist(
     access.businessId,
     input.procedureId,
   );
-  return upsertVisitRecord(db, {
-    businessId: access.businessId,
-    jobId: job.id,
-    procedureId: procedure.id,
-    checklist: checklistForProcedure(procedure),
+  return db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+    if (!locked) {
+      throw new CleaningVisitError("That job could not be updated.");
+    }
+    return upsertVisitRecord(tx, {
+      businessId: access.businessId,
+      jobId: job.id,
+      procedureId: procedure.id,
+      checklist: checklistForProcedure(procedure),
+    });
   });
 }
 

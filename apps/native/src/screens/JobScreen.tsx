@@ -48,6 +48,7 @@ export function JobScreen({
   const [pendingOutcome, setPendingOutcome] = useState<NativeVisitOutcomeStatus | null>(
     null,
   );
+  const [unsyncedChecklist, setUnsyncedChecklist] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,6 +148,10 @@ export function JobScreen({
 
   async function completeAssignedJob() {
     if (pending) return;
+    if (unsyncedChecklist) {
+      setActionError("Sync or discard unsynced checklist changes before completing this job.");
+      return;
+    }
     setPending(true);
     setPendingAction("complete");
     setActionError(null);
@@ -164,6 +169,12 @@ export function JobScreen({
 
   async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
     if (pending) return;
+    if (unsyncedChecklist) {
+      setActionError(
+        "Sync or discard unsynced checklist changes before recording a visit outcome.",
+      );
+      return;
+    }
     setPending(true);
     setPendingOutcome(outcomeStatus);
     setActionError(null);
@@ -339,6 +350,7 @@ export function JobScreen({
           <JobChecklistSection
             job={job}
             onJobUpdated={setJob}
+            onUnsyncedChange={setUnsyncedChecklist}
             token={token}
             workspace={workspace}
           />
