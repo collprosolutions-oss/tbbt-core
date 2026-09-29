@@ -19,6 +19,7 @@ import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
   addEstimateOption,
+  claimDraftEstimate,
   collapseEstimateOptions,
   estimateOptionErrorMessage,
   removeEstimateOption,
@@ -614,39 +615,39 @@ export async function addCustomLineItem(
   }
 
   const total = quantity.mul(unitPrice);
-  let optionId: string | null;
+
   try {
-    optionId = await resolveDraftLineOptionId(prisma, {
-      estimateId: estimate.id,
-      businessId: access.businessId,
-      optionId: readString(formData, "optionId") || null,
+    await prisma.$transaction(async (tx) => {
+      await claimDraftEstimate(tx, access, estimate.id);
+      const optionId = await resolveDraftLineOptionId(tx, {
+        estimateId: estimate.id,
+        businessId: access.businessId,
+        optionId: readString(formData, "optionId") || null,
+      });
+      await tx.lineItem.create({
+        data: {
+          businessId: access.businessId,
+          estimateId: estimate.id,
+          optionId,
+          description: joinLineDescription(
+            description,
+            type === "MATERIAL"
+              ? ""
+              : typeof formData.get("includedWork") === "string"
+                ? String(formData.get("includedWork"))
+                : "",
+          ),
+          quantity,
+          unitPrice,
+          total,
+          type,
+        },
+      });
+      await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
     });
   } catch (error) {
     return { error: estimateOptionErrorMessage(error, "That priced option is not on this draft.") };
   }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.lineItem.create({
-      data: {
-        businessId: access.businessId,
-        estimateId: estimate.id,
-        optionId,
-        description: joinLineDescription(
-          description,
-          type === "MATERIAL"
-            ? ""
-            : typeof formData.get("includedWork") === "string"
-              ? String(formData.get("includedWork"))
-              : "",
-        ),
-        quantity,
-        unitPrice,
-        total,
-        type,
-      },
-    });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
 
   revalidatePath(`/estimates/${estimate.id}`);
   return {};

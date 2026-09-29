@@ -177,13 +177,27 @@ function RemoveOptionForm({
 }) {
   const [state, action, pending] = useActionState(removeDraftEstimateOption, initialState);
   return (
-    <form action={action}>
+    <form
+      action={action}
+      onSubmit={(event) => {
+        if (
+          !window.confirm(
+            "Remove this option and delete its line items? This cannot be undone.",
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
       <input type="hidden" name="estimateId" value={estimateId} />
       <input type="hidden" name="optionId" value={optionId} />
       <ActionMessage state={state} />
       <Button type="submit" size="sm" variant="ghost" disabled={pending}>
         {pending ? "Removing…" : "Remove"}
       </Button>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Removes this option and deletes its line items.
+      </p>
     </form>
   );
 }

@@ -9,8 +9,9 @@
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./estimate-options-test-loader.mjs", import.meta.url), import.meta.url);
 
@@ -48,36 +49,49 @@ const testDbName = "tbbt_estimate_options_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+const raceWorkerPath = fileURLToPath(new URL("./estimate-options-race-worker.mjs", import.meta.url));
 
-{
-  const { PrismaClient: AdminPrisma } = createRequire(import.meta.url)("@prisma/client");
-  const admin = new AdminPrisma({ datasourceUrl: baseUrl });
-  await admin.$queryRawUnsafe(
-    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-    testDbName,
+let failures = 0;
+let prisma = null;
+
+async function dropTestDatabase() {
+  assertLocalTestDatabase(baseUrl, "DROP DATABASE");
+  const { PrismaClient: CleanupPrisma } = createRequire(import.meta.url)("@prisma/client");
+  const cleanup = new CleanupPrisma({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$queryRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      testDbName,
+    );
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
+await (async () => {
+try {
+  await dropTestDatabase();
+
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
   );
-  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  await admin.$disconnect();
-}
+  if (push.status !== 0) {
+    console.error("Failed to push schema for estimate-option test database.");
+    failures += 1;
+    return;
+  }
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for estimate-option test database.");
-  process.exit(push.status ?? 1);
-}
+  process.env.DATABASE_URL = testUrl;
 
-process.env.DATABASE_URL = testUrl;
-
-const { ForbiddenError } = await import("@/lib/authorization");
-const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
-const { findCurrentEstimateVersion } = await import("@/lib/estimate-version");
-const { resolveApprovedWorkOrderScope } = await import("@/lib/job-work-order");
-const { persistDraftInvoiceFromCompletedJob } = await import("@/lib/invoice-carry-forward");
-const {
+  const { ForbiddenError } = await import("@/lib/authorization");
+  const { persistDraftEstimateTotal } = await import("@/lib/labor-minimum");
+  const { findCurrentEstimateVersion } = await import("@/lib/estimate-version");
+  const { resolveApprovedWorkOrderScope } = await import("@/lib/job-work-order");
+  const { persistDraftInvoiceFromCompletedJob } = await import("@/lib/invoice-carry-forward");
+  const {
   MAX_ESTIMATE_OPTIONS,
   OPTION_BOUND_MESSAGE,
   OPTION_EMPTY_MESSAGE,
@@ -102,11 +116,10 @@ const {
 const { sendEstimate, returnEstimateToDraft } = await import("@/app/actions/estimate");
 const { approveEstimate } = await import("@/app/actions/public-estimate");
 const { createJobFromEstimate } = await import("@/app/actions/job");
-const { prisma } = await import("@/lib/prisma");
+({ prisma } = await import("@/lib/prisma"));
 const { setTestAccess } = await import("./estimate-options-test-access.mjs");
 const { Prisma } = createRequire(import.meta.url)("@prisma/client");
 
-let failures = 0;
 function check(label, condition) {
   if (condition) {
     console.log(`  ok  - ${label}`);
@@ -230,7 +243,106 @@ async function addPricedLine(estimateId, businessId, optionId, unitPrice, descri
   });
 }
 
-try {
+function accessPayload(access) {
+  return {
+    businessId: access.businessId,
+    role: access.workspace.role,
+    membershipId: access.workspace.membership.id,
+    businessName: access.workspace.business.name,
+    businessSlug: access.workspace.business.slug,
+  };
+}
+
+function spawnRaceWorker(mode, payload) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-strip-types", raceWorkerPath], {
+      env: {
+        ...process.env,
+        DATABASE_URL: testUrl,
+        RACE_MODE: mode,
+        RACE_PAYLOAD: JSON.stringify(payload),
+      },
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      try {
+        const last = out
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .pop();
+        resolve(JSON.parse(last));
+      } catch {
+        resolve({ ok: false, error: `worker exit ${code}: ${out}` });
+      }
+    });
+  });
+}
+
+async function waitForBlockedContenders(observer, minCount, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await observer.$queryRaw`
+      SELECT DISTINCT a.pid
+      FROM pg_stat_activity a
+      JOIN pg_locks l ON l.pid = a.pid
+      WHERE a.datname = current_database()
+        AND NOT l.granted
+        AND a.pid <> pg_backend_pid()
+    `;
+    if (rows.length >= minCount) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${minCount} blocked contenders`);
+}
+
+async function runEstimateRace(estimateId, startContenders) {
+  const { PrismaClient: LockPrisma } = createRequire(import.meta.url)("@prisma/client");
+  const locker = new LockPrisma({ datasourceUrl: testUrl });
+  const observer = new LockPrisma({ datasourceUrl: testUrl });
+  let release;
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  let lockAcquired;
+  const acquired = new Promise((resolve) => {
+    lockAcquired = resolve;
+  });
+  const hold = locker.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "Estimate" WHERE id = ${estimateId} FOR UPDATE
+      `;
+      lockAcquired();
+      await released;
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
+  await acquired;
+  const workers = startContenders();
+  let blocked = [];
+  try {
+    blocked = await waitForBlockedContenders(observer, 2);
+  } catch (error) {
+    release();
+    await Promise.allSettled([hold, ...workers]);
+    await observer.$disconnect();
+    await locker.$disconnect();
+    throw error;
+  }
+  release();
+  const outcomes = await Promise.all(workers);
+  await hold;
+  await observer.$disconnect();
+  await locker.$disconnect();
+  return { outcomes, blockedCount: blocked.length };
+}
+
   const businessA = await prisma.business.create({
     data: { name: "Alpha Options", slug: "alpha-options", tradeCode: "HANDYMAN" },
   });
@@ -361,8 +473,8 @@ try {
     }),
   );
   check(
-    "duplicate approval is refused",
-    duplicate.status === "APPROVED" || Boolean(duplicate.error),
+    "duplicate approval of a different option is refused",
+    Boolean(duplicate.error) && String(duplicate.error).includes(frozen[1].name),
   );
   const stillChosen = await prisma.estimate.findUnique({ where: { id: multi.id } });
   check("duplicate approval does not change the chosen option", stillChosen.approvedOptionId === frozen[1].id);
@@ -451,7 +563,7 @@ try {
     include: { lineItems: true },
   });
   check("invoice total is the chosen $150, not $0 or $230", invoice?.total.toString() === "150");
-  const invoiceWorkLines = (invoice?.lineItems ?? []).filter((line) => line.type !== "OTHER" || true);
+  const invoiceWorkLines = (invoice?.lineItems ?? []).filter((line) => line.type !== "OTHER");
   check(
     "invoice has only the chosen option's work lines",
     invoiceWorkLines.some((line) => line.total.toString() === "150") &&
@@ -513,13 +625,20 @@ try {
       error instanceof Error &&
       String(error.message).includes("authorized business workspace"),
   );
+  const foreignDraft = await createDraft(businessB.id, 25, "Foreign base");
+  setTestAccess(ownerB);
+  await startEstimateOptions(prisma, ownerB, foreignDraft.id);
+  const foreignOptions = await prisma.estimateOption.findMany({
+    where: { estimateId: foreignDraft.id, businessId: businessB.id },
+    orderBy: { sortOrder: "asc" },
+  });
   await expectError(
     "resolveDraftLineOptionId rejects a cross-tenant option id",
     () =>
       resolveDraftLineOptionId(prisma, {
         estimateId: incomplete.id,
         businessId: businessA.id,
-        optionId: "not-this-business",
+        optionId: foreignOptions[0].id,
       }),
     (error) => error instanceof EstimateOptionError,
   );
@@ -620,24 +739,39 @@ try {
     where: { estimateVersionId: raceVersion.id },
     orderBy: { sortOrder: "asc" },
   });
-  await Promise.all([
-    approveEstimate(
-      {},
-      form({
-        publicToken: raceApprove.publicToken,
-        estimateVersionId: raceVersion.id,
-        estimateOptionId: raceFrozen[0].id,
+  const accessA = accessPayload(ownerA);
+  let raceApproveBlocked = 0;
+  let approveOutcomes = [];
+  try {
+    const raced = await runEstimateRace(raceApprove.id, () => [
+      spawnRaceWorker("approve", {
+        access: accessA,
+        approve: {
+          publicToken: raceApprove.publicToken,
+          estimateVersionId: raceVersion.id,
+          estimateOptionId: raceFrozen[0].id,
+        },
       }),
-    ),
-    approveEstimate(
-      {},
-      form({
-        publicToken: raceApprove.publicToken,
-        estimateVersionId: raceVersion.id,
-        estimateOptionId: raceFrozen[1].id,
+      spawnRaceWorker("approve", {
+        access: accessA,
+        approve: {
+          publicToken: raceApprove.publicToken,
+          estimateVersionId: raceVersion.id,
+          estimateOptionId: raceFrozen[1].id,
+        },
       }),
-    ),
-  ]);
+    ]);
+    raceApproveBlocked = raced.blockedCount;
+    approveOutcomes = raced.outcomes;
+  } catch (error) {
+    console.error("FAIL - TEST 9 barrier", error);
+    failures += 1;
+  }
+  check("both approval contenders were blocked on the Estimate row", raceApproveBlocked >= 2);
+  const approveWins = approveOutcomes.filter((outcome) => outcome.ok);
+  const approveLosses = approveOutcomes.filter((outcome) => !outcome.ok && outcome.error);
+  check("exactly one approval succeeded", approveWins.length === 1);
+  check("the other approval returned an error", approveLosses.length === 1);
   const raceRow = await prisma.estimate.findUnique({ where: { id: raceApprove.id } });
   const winnerIds = new Set([raceFrozen[0].id, raceFrozen[1].id]);
   check("estimate is APPROVED after the race", raceRow.status === "APPROVED");
@@ -667,46 +801,55 @@ try {
     where: { estimateVersionId: firstResendVersion.id },
     orderBy: { sortOrder: "asc" },
   });
-  const approveRace = approveEstimate(
-    {},
-    form({
-      publicToken: raceResend.publicToken,
-      estimateVersionId: firstResendVersion.id,
-      estimateOptionId: firstResendFrozen[1].id,
-    }),
-  );
-  const resendRace = (async () => {
-    const returnedDraft = await returnEstimateToDraft({}, form({ estimateId: raceResend.id }));
-    if (returnedDraft.error) return { returned: false, sent: false, error: returnedDraft.error };
-    const sentAgain = await sendEstimate({}, form({ estimateId: raceResend.id }));
-    return { returned: true, sent: !sentAgain.error, error: sentAgain.error ?? null };
-  })();
-  const [approveOutcome, resendOutcome] = await Promise.all([approveRace, resendRace]);
+  let resendBlocked = 0;
+  let approveOutcome = { ok: false, error: "barrier did not run" };
+  let resendOutcome = { ok: false, error: "barrier did not run" };
+  try {
+    const raced = await runEstimateRace(raceResend.id, () => [
+      spawnRaceWorker("approve", {
+        access: accessA,
+        approve: {
+          publicToken: raceResend.publicToken,
+          estimateVersionId: firstResendVersion.id,
+          estimateOptionId: firstResendFrozen[1].id,
+        },
+      }),
+      spawnRaceWorker("return_resend", {
+        access: accessA,
+        estimateId: raceResend.id,
+      }),
+    ]);
+    resendBlocked = raced.blockedCount;
+    [approveOutcome, resendOutcome] = raced.outcomes;
+  } catch (error) {
+    console.error("FAIL - TEST 10 barrier", error);
+    failures += 1;
+  }
+  check("both return/approve contenders were blocked on the Estimate row", resendBlocked >= 2);
   const afterRace = await prisma.estimate.findUnique({
     where: { id: raceResend.id },
     include: { versions: { orderBy: { versionNumber: "asc" } } },
   });
-  const latestVersion = afterRace.versions[afterRace.versions.length - 1];
-  const boundOldAfterNewSend =
-    afterRace.status === "APPROVED" &&
-    afterRace.approvedVersionId === firstResendVersion.id &&
-    afterRace.versions.length > 1;
-  check(
-    "return-to-draft plus re-send does not bind the superseded version",
-    boundOldAfterNewSend === false,
-  );
-  if (afterRace.status === "APPROVED") {
+  const approveWon = approveOutcome.ok === true;
+  const resendWon = resendOutcome.ok === true;
+  check("exactly one TEST 10 contender succeeded", approveWon !== resendWon);
+  if (approveWon) {
+    check("winning approval left the estimate APPROVED", afterRace.status === "APPROVED");
     check(
-      "winning approval binds the version that existed at commit",
-      afterRace.approvedVersionId === latestVersion.id ||
-        (afterRace.approvedVersionId === firstResendVersion.id && afterRace.versions.length === 1),
+      "winning approval binds V1",
+      afterRace.approvedVersionId === firstResendVersion.id,
     );
-  } else {
-    check("losing approval left the latest send SENT", afterRace.status === "SENT");
+    check("winning approval created no second version", afterRace.versions.length === 1);
     check(
-      "stale approval was refused or return/re-send won",
-      Boolean(approveOutcome.error) || resendOutcome.sent === true,
+      "winning approval bound the submitted option",
+      afterRace.approvedOptionId === firstResendFrozen[1].id,
     );
+    check("losing return/re-send returned an error", Boolean(resendOutcome.error));
+  } else if (resendWon) {
+    check("winning return/re-send left the estimate SENT", afterRace.status === "SENT");
+    check("winning return/re-send cleared approvedVersionId", afterRace.approvedVersionId === null);
+    check("winning return/re-send created Version 2", afterRace.versions.length === 2);
+    check("losing approval returned an error", Boolean(approveOutcome.error));
   }
 
   console.log(
@@ -715,15 +858,11 @@ try {
       : `\n${failures} estimate-option check(s) failed.`,
   );
 } finally {
-  await prisma.$disconnect();
-  assertLocalTestDatabase(baseUrl, "DROP DATABASE");
-  const { PrismaClient: CleanupPrisma } = createRequire(import.meta.url)("@prisma/client");
-  const cleanup = new CleanupPrisma({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
+  if (prisma) {
+    await prisma.$disconnect().catch(() => {});
   }
+  await dropTestDatabase();
 }
+})();
 
 process.exit(failures === 0 ? 0 : 1);

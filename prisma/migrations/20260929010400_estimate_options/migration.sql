@@ -4,8 +4,9 @@
 -- option rows and null option FKs — single-option send/approve/job
 -- behavior is unchanged.
 -- Timestamp is 20260929010400 so it does not collide with
--- 20260928200000_estimate_line_template_archive (#210) or the
--- 20260929010000–20260929010300 slots used by #213–#216.
+-- 20260928200000_estimate_line_template_archive (#210),
+-- 20260929010000 used by #213–#216, or
+-- 20260929010100–20260929010300 used by #220–#222.
 
 CREATE TABLE IF NOT EXISTS "EstimateOption" (
     "id" TEXT NOT NULL,

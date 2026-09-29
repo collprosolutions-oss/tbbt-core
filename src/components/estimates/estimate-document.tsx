@@ -112,6 +112,15 @@ export function EstimateDocument({
       )}
 
       <section className="mt-6 ml-auto w-full max-w-xs space-y-2 text-sm">
+        {estimate.requiresOptionChoice ? (
+          estimate.options.map((option) => (
+            <div key={option.id} className="flex justify-between gap-6">
+              <span className="text-neutral-600">{option.name}</span>
+              <span className="tabular-nums">{option.totalLabel}</span>
+            </div>
+          ))
+        ) : (
+          <>
         <div className="flex justify-between gap-6">
           <span className="text-neutral-600">Labor</span>
           <span className="tabular-nums">{estimate.laborTotalLabel}</span>
@@ -153,6 +162,8 @@ export function EstimateDocument({
             ) : null}
           </>
         ) : null}
+          </>
+        )}
       </section>
 
       {estimate.projectConditions || estimate.terms.length > 0 ? (

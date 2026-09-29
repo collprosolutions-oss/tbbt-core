@@ -286,7 +286,7 @@ function selectedScopeBinding(job: SourceJob, businessId: string) {
   return {
     estimateId: estimate?.id ?? null,
     approvedEstimateVersionId: approvedVersion?.id ?? null,
-    approvedEstimateOptionId: job.approvedEstimateOptionId ?? null,
+    approvedEstimateOptionId: approvedVersion ? job.approvedEstimateOptionId ?? null : null,
   };
 }
 

@@ -19,12 +19,42 @@ const NOT_READY_ERROR = "This estimate is not ready to approve.";
 const STALE_VERSION_ERROR =
   "This estimate was updated since you opened this page. Refresh to see the latest version before approving.";
 
+type ApprovedOptionRef = {
+  approvedOptionId: string | null;
+  approvedOptionName: string | null;
+};
+
 type ApproveTransactionResult =
   | { ok: true }
   | {
       ok: false;
       reason: "not_ready" | "stale" | "already_approved" | "option_required";
+      approvedOption?: ApprovedOptionRef;
     };
+
+function alreadyApprovedDifferentOptionError(
+  submittedOptionId: string,
+  approved: ApprovedOptionRef,
+): string | null {
+  if (
+    submittedOptionId &&
+    approved.approvedOptionId &&
+    submittedOptionId !== approved.approvedOptionId
+  ) {
+    const name = approved.approvedOptionName?.trim() || "the previously chosen option";
+    return `This estimate was already approved with ${name}.`;
+  }
+  return null;
+}
+
+function alreadyApprovedResult(
+  submittedOptionId: string,
+  approved: ApprovedOptionRef,
+): ApproveEstimateResult {
+  const mismatch = alreadyApprovedDifferentOptionError(submittedOptionId, approved);
+  if (mismatch) return { error: mismatch };
+  return { status: "APPROVED" };
+}
 
 export async function approveEstimate(
   _prev: ApproveEstimateResult,
@@ -53,7 +83,12 @@ export async function approveEstimate(
 
   const estimate = await prisma.estimate.findUnique({
     where: { publicToken: token },
-    select: { status: true, publicToken: true },
+    select: {
+      status: true,
+      publicToken: true,
+      approvedOptionId: true,
+      approvedOption: { select: { name: true } },
+    },
   });
 
   if (!estimate) {
@@ -61,7 +96,10 @@ export async function approveEstimate(
   }
 
   if (estimate.status === "APPROVED") {
-    return { status: estimate.status };
+    return alreadyApprovedResult(submittedOptionId, {
+      approvedOptionId: estimate.approvedOptionId,
+      approvedOptionName: estimate.approvedOption?.name ?? null,
+    });
   }
 
   if (estimate.status !== "SENT") {
@@ -75,7 +113,13 @@ export async function approveEstimate(
       `;
       const current = await tx.estimate.findFirst({
         where: { publicToken: token },
-        select: { id: true, businessId: true, status: true },
+        select: {
+          id: true,
+          businessId: true,
+          status: true,
+          approvedOptionId: true,
+          approvedOption: { select: { name: true } },
+        },
       });
 
       if (!current) {
@@ -83,7 +127,14 @@ export async function approveEstimate(
       }
 
       if (current.status === "APPROVED") {
-        return { ok: false, reason: "already_approved" };
+        return {
+          ok: false,
+          reason: "already_approved",
+          approvedOption: {
+            approvedOptionId: current.approvedOptionId,
+            approvedOptionName: current.approvedOption?.name ?? null,
+          },
+        };
       }
 
       if (current.status !== "SENT") {
@@ -183,15 +234,28 @@ export async function approveEstimate(
       return { error: OPTION_REQUIRED_MESSAGE };
     }
     if (result.reason === "already_approved") {
-      return { status: "APPROVED" };
+      return alreadyApprovedResult(
+        submittedOptionId,
+        result.approvedOption ?? {
+          approvedOptionId: null,
+          approvedOptionName: null,
+        },
+      );
     }
 
     const finalState = await prisma.estimate.findUnique({
       where: { publicToken: token },
-      select: { status: true },
+      select: {
+        status: true,
+        approvedOptionId: true,
+        approvedOption: { select: { name: true } },
+      },
     });
     if (finalState?.status === "APPROVED") {
-      return { status: "APPROVED" };
+      return alreadyApprovedResult(submittedOptionId, {
+        approvedOptionId: finalState.approvedOptionId,
+        approvedOptionName: finalState.approvedOption?.name ?? null,
+      });
     }
     return { error: NOT_READY_ERROR };
   }

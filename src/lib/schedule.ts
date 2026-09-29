@@ -293,23 +293,25 @@ export const SCHEDULE_JOB_SELECT = {
       postalCode: true,
     },
   },
-  // Only the first line item is needed for a compact scope summary; taking
-  // just one keeps this bounded no matter how many line items a Job has.
+  approvedEstimateOptionId: true,
+  // Bounded chosen-option lines for a compact scope summary. Filter to
+  // approvedEstimateOptionId in jobScopeSummary — take:1 of unfiltered
+  // lines can pick an unchosen alternative.
   approvedEstimateVersion: {
     select: {
       lineItems: {
-        take: 1,
+        take: 8,
         orderBy: { createdAt: "asc" as const },
-        select: { description: true },
+        select: { description: true, optionId: true },
       },
     },
   },
   estimate: {
     select: {
       lineItems: {
-        take: 1,
+        take: 8,
         orderBy: { createdAt: "asc" as const },
-        select: { description: true },
+        select: { description: true, optionId: true },
       },
     },
   },
@@ -360,11 +362,18 @@ export function groupJobsByAssignedMember<
 
 /** Mirrors resolveApprovedWorkOrderScope()'s priority (bound version, then legacy estimate) for a one-line summary. */
 export function jobScopeSummary(job: {
-  approvedEstimateVersion: { lineItems: { description: string }[] } | null;
-  estimate: { lineItems: { description: string }[] } | null;
+  approvedEstimateOptionId?: string | null;
+  approvedEstimateVersion: { lineItems: { description: string; optionId?: string | null }[] } | null;
+  estimate: { lineItems: { description: string; optionId?: string | null }[] } | null;
 }): string | null {
-  const line =
-    job.approvedEstimateVersion?.lineItems[0] ?? job.estimate?.lineItems[0];
+  const optionId = job.approvedEstimateOptionId ?? null;
+  const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
+  const estimateLines = job.estimate?.lineItems ?? [];
+  const source = versionLines.length > 0 ? versionLines : estimateLines;
+  const chosen = optionId
+    ? source.filter((line) => line.optionId === optionId)
+    : source;
+  const line = chosen[0];
   return line ? lineItemTitle(line.description) : null;
 }
 

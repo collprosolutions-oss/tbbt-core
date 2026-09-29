@@ -23,7 +23,12 @@ function mappedFrozenOptionId(
   sourceOptionId: string | null | undefined,
   optionIdBySource: Map<string, string>,
 ) {
-  if (!sourceOptionId) return null;
+  if (!sourceOptionId) {
+    if (optionIdBySource.size > 0) {
+      throw new Error("A snapshot line could not be mapped to a frozen priced option.");
+    }
+    return null;
+  }
   const mapped = optionIdBySource.get(sourceOptionId);
   if (!mapped) {
     throw new Error("A snapshot line could not be mapped to a frozen priced option.");

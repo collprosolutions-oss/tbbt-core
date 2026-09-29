@@ -64,7 +64,7 @@ async function requireDraftEstimate(
   return estimate;
 }
 
-async function claimDraftEstimate(
+export async function claimDraftEstimate(
   tx: Prisma.TransactionClient,
   access: BusinessAccess,
   estimateId: string,
@@ -256,6 +256,7 @@ export async function removeEstimateOption(
       return;
     }
 
+    // Removing an option also deletes that option's draft line items.
     await tx.lineItem.deleteMany({
       where: {
         estimateId: estimate.id,

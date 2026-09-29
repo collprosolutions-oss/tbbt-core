@@ -61,6 +61,7 @@ export async function notifyCustomerAppointmentProposed(
       estimate: {
         select: {
           lineItems: {
+            take: 8,
             orderBy: { createdAt: "asc" },
             select: { description: true, optionId: true },
           },
@@ -69,6 +70,7 @@ export async function notifyCustomerAppointmentProposed(
       approvedEstimateVersion: {
         select: {
           lineItems: {
+            take: 8,
             orderBy: { createdAt: "asc" },
             select: { description: true, optionId: true },
           },

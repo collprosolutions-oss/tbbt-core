@@ -287,8 +287,15 @@ export function pricedOptionRangeLabel(
   ) => string,
 ): string | null {
   if (options.length < MIN_ESTIMATE_OPTIONS) return null;
-  const first = formatMoney(options[0]!.total);
-  const last = formatMoney(options[options.length - 1]!.total);
+  let lowest = toDecimal(options[0]!.total);
+  let highest = lowest;
+  for (const option of options) {
+    const total = toDecimal(option.total);
+    if (total.lt(lowest)) lowest = total;
+    if (total.gt(highest)) highest = total;
+  }
+  const first = formatMoney(lowest);
+  const last = formatMoney(highest);
   return first === last ? first : `${first} – ${last}`;
 }
 
