@@ -115,6 +115,8 @@ export default async function FieldHomePage() {
             id: request.id,
             date: request.date,
             kind: request.kind,
+            startMinutes: request.startMinutes,
+            endMinutes: request.endMinutes,
             note: request.note,
             status: request.status,
           }))}

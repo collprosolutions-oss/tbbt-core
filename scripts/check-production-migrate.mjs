@@ -1339,7 +1339,7 @@ check(
 
 const availabilityRequestMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260929010000_workforce_availability_exception_request/migration.sql",
+    "../prisma/migrations/20260929010300_workforce_availability_exception_request/migration.sql",
     import.meta.url,
   ),
   "utf8",
@@ -1356,9 +1356,10 @@ check(
     ) &&
     availabilityRequestMigration.includes("WHERE \"status\" = 'PENDING'") &&
     availabilityRequestMigration.includes("IF NOT EXISTS") &&
-    localNames.includes("20260929010000_workforce_availability_exception_request") &&
+    localNames.includes("20260929010300_workforce_availability_exception_request") &&
+    !localNames.includes("20260929010000_workforce_availability_exception_request") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_workforce_availability_exception_request"),
+      localNames.indexOf("20260929010300_workforce_availability_exception_request"),
 );
 check(
   "Availability-request ops do not run request-time DDL and do not mutate Jobs",

@@ -272,11 +272,17 @@ export async function requestAvailabilityException(
   const date = parseUnavailableDate(readString(formData, "date"));
   if (!date) return { error: "Choose a valid date." };
 
+  const kind = readString(formData, "kind") === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE";
+  const startMinutes = timeToMinutes(readString(formData, "start"));
+  const endMinutes = timeToMinutes(readString(formData, "end"));
+
   try {
     await requestMemberAvailabilityExceptionOp(prisma, access, {
       membershipId,
       date,
-      kind: readString(formData, "kind") === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
+      kind,
+      startMinutes,
+      endMinutes,
       note: readString(formData, "note"),
     });
   } catch (error) {
@@ -313,6 +319,7 @@ export async function decideAvailabilityExceptionRequest(
       requestId,
       decision,
       expectedUpdatedAt,
+      replaceExisting: readString(formData, "replaceExisting") === "1",
     });
     revalidateWorkforce();
     return {
