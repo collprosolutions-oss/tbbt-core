@@ -44,6 +44,7 @@ export {
   EquipmentError,
   EquipmentUnavailableError,
   equipmentErrorMessage,
+  equipmentRegisterTestHooks,
   isDuplicateEquipmentAttemptError,
   isEquipmentKind,
   missingEquipmentSchema,

@@ -40,6 +40,7 @@ const {
   equipmentIsDue,
   loadEquipmentRegister,
   parseEquipmentDate,
+  equipmentRegisterTestHooks,
   recordEquipmentItem,
   recordEquipmentMaintenance,
   requireEquipmentRead,
@@ -52,6 +53,22 @@ if (!baseUrl) {
   process.exit(1);
 }
 
+let parsedBase;
+try {
+  parsedBase = new URL(baseUrl);
+} catch {
+  console.error("DATABASE_URL must be a valid URL.");
+  process.exit(1);
+}
+
+const dbHost = parsedBase.hostname;
+if (dbHost !== "localhost" && dbHost !== "127.0.0.1") {
+  console.error(
+    `Refusing to run: DATABASE_URL host must be localhost or 127.0.0.1, got ${dbHost}.`,
+  );
+  process.exit(1);
+}
+
 const testDbName = "tbbt_equipment_register_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
@@ -60,26 +77,75 @@ process.env.DATABASE_URL = testUrl;
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for equipment-register test database.");
-  process.exit(push.status ?? 1);
-}
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const clients = [];
+function trackClient(client) {
+  clients.push(client);
+  return client;
+}
+
+let exitCode = 0;
+let prisma;
+
+function createTwoRacerBarrier() {
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let arrivedCount = 0;
+  let allArrived;
+  const waiting = new Promise((resolve) => {
+    allArrived = resolve;
+  });
+  return {
+    wait: async () => {
+      arrivedCount += 1;
+      if (arrivedCount >= 2) allArrived();
+      await held;
+    },
+    arrived: waiting,
+    release: () => release(),
+  };
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function disconnectClients() {
+  while (clients.length) {
+    const client = clients.pop();
+    try {
+      await client.$disconnect();
+    } catch {
+      // Drop still runs.
+    }
+  }
+}
+
+function dropTestDatabase() {
+  const drop = spawnSync(
+    "psql",
+    [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`],
+    { encoding: "utf8" },
+  );
+  if (drop.status !== 0) {
+    console.error(drop.stderr || drop.stdout);
+    if (exitCode === 0) exitCode = drop.status ?? 1;
+  }
+}
 
 let failures = 0;
 function check(label, condition) {
@@ -122,7 +188,7 @@ function readRepo(relPath) {
 }
 
 const schema = readRepo("prisma/schema.prisma");
-const migration = readRepo("prisma/migrations/20260929010000_owner_equipment_register/migration.sql");
+const migration = readRepo("prisma/migrations/20260929010800_owner_equipment_register/migration.sql");
 const opsSource = readRepo("src/lib/equipment/ops.ts");
 const loadSource = readRepo("src/lib/equipment/load.ts");
 const datesSource = readRepo("src/lib/equipment/dates.ts");
@@ -134,10 +200,33 @@ const fieldJobsSource = readRepo("src/lib/field-jobs.ts");
 const materialsOps = readRepo("src/lib/materials/access.ts");
 const expenseOps = readRepo("src/lib/expense-ops.ts");
 
+async function main() {
 try {
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+    console.error(createDb.stderr || createDb.stdout);
+    exitCode = createDb.status ?? 1;
+    return;
+  }
+
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for equipment-register test database.");
+    exitCode = push.status ?? 1;
+    return;
+  }
+
+  prisma = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+
   console.log("\nSTATIC — Inspected Materials and Expenses; honest register limits");
   check("Route is /equipment", EQUIPMENT_ROUTE === "/equipment");
-  check("Migration name is exact", EQUIPMENT_MIGRATION_NAME === "20260929010000_owner_equipment_register");
+  check("Migration name is exact", EQUIPMENT_MIGRATION_NAME === "20260929010800_owner_equipment_register");
   check("Schema is migrate-only", EQUIPMENT_SCHEMA_SOURCE === "prisma-migrate");
   check(
     "Kinds are trade-neutral Tool and Vehicle only",
@@ -479,23 +568,38 @@ try {
   check("Duplicate maintenance submit returns the first row", oilAgain.id === oil.id && oilAgain.notes === "Oil change");
 
   const raceKey = `race-${randomUUID()}`;
-  const [firstRace, secondRace] = await Promise.all([
-    recordEquipmentItem(prisma, ownerA, {
+  const barrier = createTwoRacerBarrier();
+  equipmentRegisterTestHooks.beforeItemInsert = async (input) => {
+    if (input.attemptKey === raceKey) await barrier.wait();
+  };
+  const racerA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const racerB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const race = Promise.all([
+    recordEquipmentItem(racerA, ownerA, {
       kind: "TOOL",
       name: "Race saw A",
       attemptKey: raceKey,
     }),
-    recordEquipmentItem(prisma, ownerA, {
+    recordEquipmentItem(racerB, ownerA, {
       kind: "TOOL",
       name: "Race saw B",
       attemptKey: raceKey,
     }),
   ]);
-  check("Concurrent duplicate submit creates one item", firstRace.id === secondRace.id);
+  await withTimeout(barrier.arrived, 4000, "both racers reached insert hold");
+  barrier.release();
+  const [firstRace, secondRace] = await withTimeout(race, 4000, "duplicate submit race");
+  equipmentRegisterTestHooks.beforeItemInsert = undefined;
+  check(
+    "Concurrent duplicate submit returns the same row from both clients",
+    firstRace.id === secondRace.id &&
+      firstRace.attemptKey === raceKey &&
+      secondRace.attemptKey === raceKey,
+  );
   const raceCount = await prisma.equipmentItem.count({
     where: { businessId: businessA.id, attemptKey: raceKey },
   });
-  check("Concurrent duplicate leaves a single row", raceCount === 1);
+  check("Concurrent duplicate leaves exactly one row per attempt key", raceCount === 1);
 
   await expectError(
     "ADMIN cannot record maintenance",
@@ -640,12 +744,20 @@ try {
 
   if (failures) {
     console.error(`\n${failures} equipment-register check(s) failed.`);
-    process.exit(1);
+    exitCode = 1;
+  } else {
+    console.log("\nAll equipment-register checks passed.");
   }
-  console.log("\nAll equipment-register checks passed.");
 } catch (error) {
   console.error(error);
-  process.exit(1);
+  exitCode = 1;
 } finally {
-  await prisma.$disconnect();
+  equipmentRegisterTestHooks.beforeItemInsert = undefined;
+  await disconnectClients();
+  dropTestDatabase();
 }
+
+process.exit(exitCode);
+}
+
+await main();

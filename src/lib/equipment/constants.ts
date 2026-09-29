@@ -11,7 +11,7 @@
  */
 
 export const EQUIPMENT_ROUTE = "/equipment";
-export const EQUIPMENT_MIGRATION_NAME = "20260929010000_owner_equipment_register";
+export const EQUIPMENT_MIGRATION_NAME = "20260929010800_owner_equipment_register";
 export const EQUIPMENT_SCHEMA_SOURCE = "prisma-migrate";
 
 export const EQUIPMENT_KINDS = ["TOOL", "VEHICLE"] as const;

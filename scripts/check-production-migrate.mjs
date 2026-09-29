@@ -1406,7 +1406,7 @@ check(
 
 const ownerEquipmentRegisterMigration = readFileSync(
   new URL(
-    "../prisma/migrations/20260929010000_owner_equipment_register/migration.sql",
+    "../prisma/migrations/20260929010800_owner_equipment_register/migration.sql",
     import.meta.url,
   ),
   "utf8",
@@ -1425,10 +1425,10 @@ check(
     ownerEquipmentRegisterMigration.includes("20260928200000_estimate_line_template_archive") &&
     !/ALTER TABLE "Expense"/.test(ownerEquipmentRegisterMigration) &&
     !/ALTER TABLE "MaterialCatalogItem"/.test(ownerEquipmentRegisterMigration) &&
-    localNames.includes("20260929010000_owner_equipment_register") &&
+    localNames.includes("20260929010800_owner_equipment_register") &&
     !localNames.includes("20260928210000_owner_equipment_register") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_owner_equipment_register"),
+      localNames.indexOf("20260929010800_owner_equipment_register"),
 );
 
 console.log(

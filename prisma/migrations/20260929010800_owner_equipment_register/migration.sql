@@ -4,7 +4,7 @@
 -- Inspected MaterialCatalogItem / Expense first: this is not inventory stock,
 -- not a material purchase list, not telemetry, depreciation, tax treatment,
 -- or automated reminders. Optional purchaseExpenseId may reference one
--- same-business Expense. Timestamp is 20260929010000 so it sits after
+-- same-business Expense. Timestamp is 20260929010800 so it sits after
 -- 20260928200000_estimate_line_template_archive (#210).
 
 CREATE TABLE IF NOT EXISTS "EquipmentItem" (

@@ -56,6 +56,18 @@ export function isDuplicateEquipmentAttemptError(error: unknown) {
   return prismaErrorCode(error) === "P2002";
 }
 
+/**
+ * Test-only barrier. Production never sets this.
+ * beforeItemInsert runs after the existing-row lookup and before create,
+ * so concurrent duplicate submits can meet before either insert.
+ */
+export const equipmentRegisterTestHooks: {
+  beforeItemInsert?: (input: {
+    businessId: string;
+    attemptKey: string;
+  }) => Promise<void> | void;
+} = {};
+
 export function missingEquipmentSchema(error: unknown) {
   const code = prismaErrorCode(error);
   if (code === "P2002") return false;
@@ -223,6 +235,10 @@ export async function recordEquipmentItem(
       kind,
       input.purchaseExpenseId,
     );
+    await equipmentRegisterTestHooks.beforeItemInsert?.({
+      businessId: access.businessId,
+      attemptKey,
+    });
     return await db.equipmentItem.create({
       data: {
         businessId: access.businessId,
