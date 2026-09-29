@@ -3960,7 +3960,7 @@ model MaterialPurchaseOrderItem {
   quantity           Decimal
   /// Cumulative OWNER-recorded received quantity. Distinct from
   /// MaterialPurchaseListItem.quantityPurchased and from worker
-  /// quantityPickedUp on the native pickup PR. Default 0 — never inferred.
+  /// pickup quantities on the native pickup PR. Default 0 — never inferred.
   quantityReceived   Decimal  @default(0)
   lastReceivedAt     DateTime?
   unitCost           Decimal?

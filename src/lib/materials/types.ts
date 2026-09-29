@@ -99,7 +99,7 @@ export type PurchaseOrderReceiptQuantities = {
 /**
  * Ordered-versus-received math for one PO line. `quantityReceived` is the
  * OWNER-recorded PO receipt total — not purchase-list quantityPurchased
- * and not worker quantityPickedUp from the native pickup PR.
+ * and not worker pickup quantities from the native pickup PR.
  */
 export function purchaseOrderReceiptQuantities(input: {
   quantityOrdered: string | number;

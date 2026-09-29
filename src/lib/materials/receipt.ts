@@ -8,7 +8,7 @@
  *
  * It never creates a Payment, Expense, Invoice, or supplier order.
  * It does not write quantityPurchased, actualCost, price history, or
- * worker quantityPickedUp on MaterialPurchaseListItem.
+ * worker pickup quantities on MaterialPurchaseListItem.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";

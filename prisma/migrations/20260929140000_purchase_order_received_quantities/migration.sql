@@ -1,7 +1,7 @@
 -- OWNER-recorded received quantities on existing purchase-order items.
 -- Additive only. Prisma migrate is the authoritative schema source.
 -- Recording a receipt never creates a payment, expense, invoice, or
--- supplier order. Distinct from worker quantityPickedUp on
+-- supplier order. Distinct from worker pickup columns on
 -- MaterialPurchaseListItem (#216 native pickup-item record).
 -- Timestamp is 20260929140000 so it stays after
 -- 20260928200000_estimate_line_template_archive (#210) and after
