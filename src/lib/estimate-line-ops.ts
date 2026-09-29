@@ -7,7 +7,11 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
-import { claimDraftEstimate, resolveDraftLineOptionId } from "@/lib/estimate-option-ops";
+import {
+  claimDraftEstimate,
+  EstimateOptionError,
+  resolveDraftLineOptionId,
+} from "@/lib/estimate-option-ops";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import {
@@ -69,9 +73,28 @@ export class EstimateLineError extends Error {
   }
 }
 
+export async function requireClaimedDraftEstimate(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  estimateId: string,
+  message = "Only a draft estimate can be changed.",
+) {
+  try {
+    await claimDraftEstimate(tx, access, estimateId, message);
+  } catch (error) {
+    if (error instanceof EstimateOptionError || (error instanceof Error && error.name === "EstimateOptionError")) {
+      throw new EstimateLineError(message);
+    }
+    throw error;
+  }
+}
+
 export function estimateLineErrorMessage(error: unknown, fallback: string) {
   if (error instanceof EstimateLineError) return error.message;
   if (error instanceof Error && error.name === "EstimateLineError") return error.message;
+  if (error instanceof EstimateOptionError || (error instanceof Error && error.name === "EstimateOptionError")) {
+    return "Only a draft estimate can be changed.";
+  }
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
   if (error instanceof Error && error.name === "SaasSubscriptionRequiredError") {
     return error.message;
@@ -248,6 +271,7 @@ export async function priceDraftEstimateLine(
   const description = pricedCustomQuoteDescription(line.description);
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await tx.lineItem.update({
       where: { id: line.id },
       data: {
@@ -308,13 +332,16 @@ export async function updateDraftEstimateLineIncludedWork(
   }
 
   const parts = splitLineDescription(line.description);
-  await db.lineItem.update({
-    where: { id: line.id },
-    data: {
-      description: joinLineDescriptionFromParts(parts, {
-        includedWork: input.includedWork,
-      }),
-    },
+  await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
+    await tx.lineItem.update({
+      where: { id: line.id },
+      data: {
+        description: joinLineDescriptionFromParts(parts, {
+          includedWork: input.includedWork,
+        }),
+      },
+    });
   });
 
   return db.lineItem.findFirstOrThrow({
@@ -377,6 +404,7 @@ export async function updateDraftMaterialCustomerLine(
   const total = quantity.mul(line.unitPrice);
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await tx.lineItem.update({
       where: { id: line.id },
       data: {
@@ -537,38 +565,47 @@ export async function saveDraftEstimateLineAsCatalog(
       select: { id: true, pricingMode: true, price: true, tradeCode: true },
     }));
 
-  const catalog = existing
-    ? await db.serviceCatalogItem.update({
-        where: { id: existing.id },
-        data: {
-          name,
-          description: joinCatalogDescription(includedWork, calculatorDefinition),
-          pricingMode,
-          price: savePrice
-            ? defaultPrice ?? (pricingMode === "CUSTOM_QUOTE" ? null : existing.price)
-            : existing.price,
-          active: true,
-        },
-      })
-    : await db.serviceCatalogItem.create({
-        data: {
-          businessId: access.businessId,
-          tradeCode,
-          name,
-          description: joinCatalogDescription(includedWork, calculatorDefinition),
-          pricingMode,
-          price: defaultPrice,
-          category: DEFAULT_SERVICE_CATEGORY,
-          active: true,
-        },
-      });
+  const catalog = await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(
+      tx,
+      access,
+      estimate.id,
+      "Only a draft estimate item can be saved for reuse.",
+    );
+    const written = existing
+      ? await tx.serviceCatalogItem.update({
+          where: { id: existing.id },
+          data: {
+            name,
+            description: joinCatalogDescription(includedWork, calculatorDefinition),
+            pricingMode,
+            price: savePrice
+              ? defaultPrice ?? (pricingMode === "CUSTOM_QUOTE" ? null : existing.price)
+              : existing.price,
+            active: true,
+          },
+        })
+      : await tx.serviceCatalogItem.create({
+          data: {
+            businessId: access.businessId,
+            tradeCode,
+            name,
+            description: joinCatalogDescription(includedWork, calculatorDefinition),
+            pricingMode,
+            price: defaultPrice,
+            category: DEFAULT_SERVICE_CATEGORY,
+            active: true,
+          },
+        });
 
-  if (line.serviceCatalogItemId !== catalog.id) {
-    await db.lineItem.update({
-      where: { id: line.id },
-      data: { serviceCatalogItemId: catalog.id },
-    });
-  }
+    if (line.serviceCatalogItemId !== written.id) {
+      await tx.lineItem.update({
+        where: { id: line.id },
+        data: { serviceCatalogItemId: written.id },
+      });
+    }
+    return written;
+  });
 
   return catalog;
 }
@@ -699,6 +736,7 @@ export async function applyDraftEstimateCalculator(
   const ratesEdited = !calculatorRatesEqual(nextRates, baselineRates);
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id, "Only a draft estimate can be recalculated.");
     await tx.lineItem.update({
       where: { id: line.id },
       data: {
@@ -791,16 +829,24 @@ export async function persistDraftEstimateCalculatorRates(
     formula,
     customQuoteDisplayDescription(parts.title),
   );
-  await writeBusinessCalculatorRates(db, access, {
-    calculatorId,
-    catalogItemId: line.serviceCatalogItemId,
-    title: customQuoteDisplayDescription(parts.title),
-    includedWork: parts.includedWork,
-    rates,
-    components,
-    formula,
-    customerPolicies: input.customerPolicies,
-    lineItemId: line.id,
+  await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(
+      tx,
+      access,
+      estimate.id,
+      "Only a draft estimate can update saved calculator rates.",
+    );
+    await writeBusinessCalculatorRates(tx, access, {
+      calculatorId,
+      catalogItemId: line.serviceCatalogItemId,
+      title: customQuoteDisplayDescription(parts.title),
+      includedWork: parts.includedWork,
+      rates,
+      components,
+      formula,
+      customerPolicies: input.customerPolicies,
+      lineItemId: line.id,
+    });
   });
 
   const catalogItems = await db.serviceCatalogItem.findMany({
@@ -997,6 +1043,7 @@ export async function overrideDraftEstimateLinePrice(
   const total = line.quantity.mul(unitPrice);
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await tx.lineItem.update({
       where: { id: line.id },
       data: {

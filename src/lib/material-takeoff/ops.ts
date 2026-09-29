@@ -19,7 +19,7 @@ import {
   lineMaterialTakeoffSource,
   splitLineDescription,
 } from "@/lib/estimate-line-scope";
-import { EstimateLineError } from "@/lib/estimate-line-ops";
+import { EstimateLineError, requireClaimedDraftEstimate } from "@/lib/estimate-line-ops";
 import { descriptionsWithMaterialDeposit } from "@/lib/material-deposit";
 import { publicCatalogUnitAmount } from "@/lib/pricing-mode";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
@@ -72,13 +72,16 @@ export async function saveDraftMaterialTakeoff(
   if (!snapshot) {
     throw new EstimateLineError("That material takeoff could not be saved.");
   }
-  const { line } = await loadDraftParentLine(
+  const { line, estimate } = await loadDraftParentLine(
     db,
     access,
     input.estimateId,
     input.lineItemId,
   );
-  await persistTakeoffOnLine(db, line, snapshot);
+  await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
+    await persistTakeoffOnLine(tx, line, snapshot);
+  });
   return snapshot;
 }
 
@@ -154,7 +157,10 @@ export async function seedDraftTakeoffFromBusinessDefaults(
   const seeded = applyBusinessEstimatingDefaults(computed.snapshot, defaults, {
     mode: "seed",
   });
-  await persistTakeoffOnLine(db, line, seeded);
+  await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
+    await persistTakeoffOnLine(tx, line, seeded);
+  });
   return seeded;
 }
 
@@ -176,7 +182,7 @@ export async function recalculateDraftMaterialTakeoff(
   if (!isTakeoffTypeId(input.takeoffType)) {
     throw new EstimateLineError("Choose a material takeoff type.");
   }
-  const { line } = await loadDraftParentLine(
+  const { line, estimate } = await loadDraftParentLine(
     db,
     access,
     input.estimateId,
@@ -196,7 +202,10 @@ export async function recalculateDraftMaterialTakeoff(
   if (computed.rejected && computed.snapshot.items.length === 0) {
     throw new EstimateLineError(computed.rejected);
   }
-  await persistTakeoffOnLine(db, line, computed.snapshot);
+  await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
+    await persistTakeoffOnLine(tx, line, computed.snapshot);
+  });
   return computed;
 }
 
@@ -281,6 +290,7 @@ export async function convertDraftMaterialTakeoff(
   const nextSnapshot: TakeoffSnapshot = { ...snapshot, items: nextItems };
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     const createdIds: Record<string, string> = {};
     for (const row of creates) {
       const created = await tx.lineItem.create({
@@ -375,6 +385,7 @@ export async function applyDraftTakeoffRecommendedLabor(
   );
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await tx.lineItem.update({
       where: { id: line.id },
       data: {
@@ -459,6 +470,7 @@ export async function resetDraftTakeoffAndGeneratedMaterials(
   }
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await deleteTakeoffGeneratedMaterials(tx, {
       estimateId: estimate.id,
       businessId: access.businessId,
@@ -557,6 +569,7 @@ export async function restoreDraftOriginalRequestPricing(
     : originalWorkLines;
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     await deleteTakeoffGeneratedMaterials(tx, {
       estimateId: estimate.id,
       businessId: access.businessId,
@@ -769,6 +782,7 @@ export async function ensureDraftEstimateWorkLine(
   if (original) return original;
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, owned.id);
     if (owned.serviceRequestId) {
       await reconstructOriginalRequestWorkLines(tx, access, owned);
     } else {

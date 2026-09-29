@@ -13,7 +13,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { EstimateLineError } from "@/lib/estimate-line-ops";
+import { EstimateLineError, requireClaimedDraftEstimate } from "@/lib/estimate-line-ops";
 import {
   joinLineDescriptionFromParts,
   lineMaterialTakeoffSource,
@@ -173,6 +173,7 @@ export async function setDraftEstimateMaterialDeposit(
   }
 
   await db.$transaction(async (tx) => {
+    await requireClaimedDraftEstimate(tx, access, estimate.id);
     for (const row of updates) {
       await tx.lineItem.update({
         where: { id: row.id },

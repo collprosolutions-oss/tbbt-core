@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
@@ -22,7 +21,6 @@ import {
 import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
-import { OPTION_JOB_REQUIRED_MESSAGE } from "@/lib/estimate-options";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
@@ -44,7 +42,6 @@ import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
 import {
   computeNextOccurrenceAt,
-  jobRecurrenceFromServiceRequest,
   parseRecurrenceCadence,
   recurrenceForecastActive,
 } from "@/lib/recurrence";
@@ -71,7 +68,7 @@ import {
   conflictAcknowledgement,
   shouldAcceptConflictAcknowledgement,
 } from "@/lib/workforce-window";
-import { attachPurchaseListToCreatedJob } from "@/lib/materials/purchase";
+import { createJobFromApprovedEstimate } from "@/lib/job-from-estimate";
 
 export type JobActionState = {
   error?: string;
@@ -173,113 +170,15 @@ export async function createJobFromEstimate(
     return { error: "That estimate could not become a job." };
   }
 
-  const estimate = access.assertOwned(
-    await prisma.estimate.findFirst({
-      where: { id: estimateId, ...access.scope },
-    }),
-  );
-
-  if (estimate.status !== "APPROVED") {
-    return { error: "Only an approved estimate can become a job." };
+  const converted = await createJobFromApprovedEstimate(prisma, access, estimateId);
+  if (!converted.ok) {
+    return { error: converted.error };
   }
 
-  const frozenOptions = await prisma.estimateVersionOption.count({
-    where: {
-      businessId: access.businessId,
-      estimateVersionId: estimate.approvedVersionId ?? "",
-    },
-  });
-  if (frozenOptions > 0 && !estimate.approvedOptionId) {
-    return { error: OPTION_JOB_REQUIRED_MESSAGE };
-  }
-
-  const existing = await prisma.job.findFirst({
-    where: {
-      ...access.scope,
-      estimateId: estimate.id,
-    },
-    select: { id: true },
-  });
-
-  if (existing) {
-    redirect(`/jobs/${existing.id}`);
-  }
-
-  let propertyId: string | null = null;
-  if (estimate.propertyId) {
-    const property = await prisma.property.findFirst({
-      where: {
-        id: estimate.propertyId,
-        ...access.scope,
-        ...(estimate.customerId ? { customerId: estimate.customerId } : {}),
-      },
-    });
-    if (property) {
-      access.assertOwned(property);
-      propertyId = property.id;
-    }
-  }
-
-  let sourceRequest: {
-    serviceIntent: string;
-    recurrenceCadence: string;
-    propertyId: string | null;
-  } | null = null;
-  if (estimate.serviceRequestId) {
-    const serviceRequest = access.assertOwned(
-      await prisma.serviceRequest.findFirst({
-        where: { id: estimate.serviceRequestId, ...access.scope },
-        select: {
-          id: true,
-          businessId: true,
-          propertyId: true,
-          serviceIntent: true,
-          recurrenceCadence: true,
-        },
-      }),
-    );
-    sourceRequest = serviceRequest;
-    if (!propertyId) {
-      propertyId = serviceRequest.propertyId;
-    }
-  }
-
-  const recurrence = jobRecurrenceFromServiceRequest(sourceRequest);
-
-  const job = await prisma.job.create({
-    data: {
-      businessId: access.businessId,
-      customerId: estimate.customerId,
-      propertyId,
-      estimateId: estimate.id,
-      // Bind the Job/Work Order to the EXACT EstimateVersion the customer
-      // approved (see approveEstimate() in
-      // src/app/actions/public-estimate.ts), not just the live Estimate.
-      // Null only for the rare pre-versioning estimate that was approved
-      // with no version on record -- resolveApprovedWorkOrderScope() in
-      // src/lib/job-work-order.ts falls back safely for that case.
-      approvedEstimateVersionId: estimate.approvedVersionId,
-      approvedEstimateOptionId: estimate.approvedOptionId,
-      projectToken: randomUUID(),
-      status: "UNSCHEDULED",
-      leadSource: estimate.leadSource,
-      campaignId: estimate.campaignId,
-      serviceIntent: recurrence.serviceIntent,
-      recurrenceCadence: recurrence.recurrenceCadence,
-      recurrenceStatus: recurrence.recurrenceStatus,
-    },
-  });
-
-  await attachPurchaseListToCreatedJob(prisma, access, {
-    jobId: job.id,
-    estimateId: estimate.id,
-    estimateVersionId: estimate.approvedVersionId,
-  });
-
-  revalidatePath(`/estimates/${estimate.id}`);
+  revalidatePath(`/estimates/${estimateId}`);
   revalidatePath("/jobs");
   revalidatePath("/pipeline");
-  redirect(`/jobs/${job.id}`);
+  redirect(`/jobs/${converted.jobId}`);
 }
 
 export async function scheduleJob(

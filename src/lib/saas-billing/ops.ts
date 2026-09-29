@@ -489,8 +489,16 @@ async function resolveWebhookBusiness(
   return { ok: false, reason: "unknown_business" };
 }
 
+export const saasBillingTestHooks: {
+  afterBusinessLock?: (input: { businessId: string }) => Promise<void> | void;
+} = {};
+
+export function saasBillingLockKey(businessId: string) {
+  return `tbbt.saas-billing:${businessId}`;
+}
+
 async function recordWebhookEventSafely(
-  db: PrismaClient,
+  db: BillingClient,
   parsed: ParsedSaasBillingEvent,
   businessId: string | null,
 ) {
@@ -533,52 +541,63 @@ export async function applyParsedSaasBillingEvent(
   }
   const businessId = resolved.businessId;
 
-  const current = await loadRow(db, businessId);
-  if (isStaleSaasStripeEvent(current?.lastStripeEventCreatedAt, parsed.stripeEventCreatedAt)) {
-    const recorded = await recordWebhookEventSafely(db, parsed, businessId);
-    if (recorded === "already_processed") {
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${saasBillingLockKey(businessId)}))`;
+    await saasBillingTestHooks.afterBusinessLock?.({ businessId });
+
+    const existingInside = await tx.saasBillingWebhookEvent.findUnique({
+      where: { stripeEventId: parsed.stripeEventId },
+      select: { id: true },
+    });
+    if (existingInside) {
       return { applied: false as const, reason: "already_processed" as const, businessId };
     }
-    return { applied: false as const, reason: "stale_event" as const, businessId };
-  }
 
-  const incomingStatus = parsed.snapshot.status || current?.status || SAAS_SUBSCRIPTION_STATUS_NONE;
-  const nextStatus = resolveNextSaasStatus({
-    eventType: parsed.eventType,
-    incomingStatus,
-    currentStatus: current?.status,
-  });
-  const nextCancelAtPeriodEnd = isSaasSubscriptionObjectEvent(parsed.eventType)
-    ? parsed.snapshot.cancelAtPeriodEnd === true
-    : parsed.snapshot.cancelAtPeriodEnd != null
-      ? parsed.snapshot.cancelAtPeriodEnd
-      : current?.cancelAtPeriodEnd ?? false;
-  const nextPriceId = parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null;
-  const nextPlanCode = resolveWebhookPlanCode({
-    stripePriceId: nextPriceId,
-    currentPlanCode: current?.planCode ?? parsed.snapshot.planCode,
-  });
-  await upsertRow(db, businessId, {
-    stripeCustomerId: parsed.snapshot.stripeCustomerId ?? current?.stripeCustomerId ?? null,
-    stripeSubscriptionId:
-      parsed.snapshot.stripeSubscriptionId ?? current?.stripeSubscriptionId ?? null,
-    stripePriceId: nextPriceId,
-    status: nextStatus,
-    currentPeriodEnd: parsed.snapshot.currentPeriodEnd ?? current?.currentPeriodEnd ?? null,
-    cancelAtPeriodEnd: nextCancelAtPeriodEnd,
-    lastStripeEventCreatedAt:
-      parsed.stripeEventCreatedAt ?? current?.lastStripeEventCreatedAt ?? null,
-    planCode: nextPlanCode,
-  });
-  await applyFounderSubscriptionTransition(
-    db,
-    businessId,
-    nextStatus,
-    nextCancelAtPeriodEnd,
-  );
+    const current = await loadRow(tx, businessId);
+    if (isStaleSaasStripeEvent(current?.lastStripeEventCreatedAt, parsed.stripeEventCreatedAt)) {
+      const recorded = await recordWebhookEventSafely(tx, parsed, businessId);
+      if (recorded === "already_processed") {
+        return { applied: false as const, reason: "already_processed" as const, businessId };
+      }
+      return { applied: false as const, reason: "stale_event" as const, businessId };
+    }
 
-  try {
-    await db.saasBillingWebhookEvent.create({
+    const incomingStatus = parsed.snapshot.status || current?.status || SAAS_SUBSCRIPTION_STATUS_NONE;
+    const nextStatus = resolveNextSaasStatus({
+      eventType: parsed.eventType,
+      incomingStatus,
+      currentStatus: current?.status,
+    });
+    const nextCancelAtPeriodEnd = isSaasSubscriptionObjectEvent(parsed.eventType)
+      ? parsed.snapshot.cancelAtPeriodEnd === true
+      : parsed.snapshot.cancelAtPeriodEnd != null
+        ? parsed.snapshot.cancelAtPeriodEnd
+        : current?.cancelAtPeriodEnd ?? false;
+    const nextPriceId = parsed.snapshot.stripePriceId ?? current?.stripePriceId ?? null;
+    const nextPlanCode = resolveWebhookPlanCode({
+      stripePriceId: nextPriceId,
+      currentPlanCode: current?.planCode ?? parsed.snapshot.planCode,
+    });
+    await upsertRow(tx, businessId, {
+      stripeCustomerId: parsed.snapshot.stripeCustomerId ?? current?.stripeCustomerId ?? null,
+      stripeSubscriptionId:
+        parsed.snapshot.stripeSubscriptionId ?? current?.stripeSubscriptionId ?? null,
+      stripePriceId: nextPriceId,
+      status: nextStatus,
+      currentPeriodEnd: parsed.snapshot.currentPeriodEnd ?? current?.currentPeriodEnd ?? null,
+      cancelAtPeriodEnd: nextCancelAtPeriodEnd,
+      lastStripeEventCreatedAt:
+        parsed.stripeEventCreatedAt ?? current?.lastStripeEventCreatedAt ?? null,
+      planCode: nextPlanCode,
+    });
+    await applyFounderSubscriptionTransition(
+      tx,
+      businessId,
+      nextStatus,
+      nextCancelAtPeriodEnd,
+    );
+
+    await tx.saasBillingWebhookEvent.create({
       data: {
         stripeEventId: parsed.stripeEventId,
         eventType: parsed.eventType,
@@ -586,17 +605,14 @@ export async function applyParsedSaasBillingEvent(
         stripeEventCreatedAt: parsed.stripeEventCreatedAt,
       },
     });
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
+
+    return { applied: true as const, reason: "updated" as const, businessId };
+  }, { timeout: 15_000 }).catch((error) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return { applied: false as const, reason: "already_processed" as const, businessId };
     }
     throw error;
-  }
-
-  return { applied: true as const, reason: "updated" as const, businessId };
+  });
 }
 
 export async function requestSaasPlanChange(
