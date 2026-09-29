@@ -403,6 +403,8 @@ model Business {
   materialPurchaseListItems  MaterialPurchaseListItem[]
   materialPurchaseOrders     MaterialPurchaseOrder[]
   materialPurchaseOrderItems MaterialPurchaseOrderItem[]
+  materialPurchaseOrderReceipts MaterialPurchaseOrderReceipt[]
+  materialPurchaseOrderReceiptItems MaterialPurchaseOrderReceiptItem[]
   materialOperationAttempts  MaterialOperationAttempt[]
   vaultRecords             BusinessVaultRecord[]
   agreements               BusinessAgreement[]
@@ -701,6 +703,7 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedPurchaseOrderReceipts MaterialPurchaseOrderReceipt[] @relation("PurchaseOrderReceiptRecorder")
   recordedPurchaseListPickups MaterialPurchaseListItem[] @relation("PurchaseListItemPickupRecorder")
   recordedJobCallbacks         JobCallback[]          @relation("JobCallbackRecorder")
   reviewedJobCallbacks         JobCallback[]          @relation("JobCallbackReviewer")
@@ -4387,6 +4390,7 @@ model MaterialPurchaseOrder {
   supplier     Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   job          Job?                        @relation(fields: [jobId], references: [id], onDelete: SetNull)
   items        MaterialPurchaseOrderItem[]
+  receipts     MaterialPurchaseOrderReceipt[]
 
   @@index([businessId])
   @@index([purchaseListId])
@@ -4399,7 +4403,13 @@ model MaterialPurchaseOrderItem {
   businessId         String
   purchaseOrderId    String
   purchaseListItemId String
+  /// Ordered quantity copied from the purchase list when the PO was drafted.
   quantity           Decimal
+  /// Cumulative OWNER-recorded received quantity. Distinct from
+  /// MaterialPurchaseListItem.quantityPurchased and from worker
+  /// pickup quantities on the native pickup PR. Default 0 — never inferred.
+  quantityReceived   Decimal  @default(0)
+  lastReceivedAt     DateTime?
   unitCost           Decimal?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -4407,6 +4417,7 @@ model MaterialPurchaseOrderItem {
   business         Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
   purchaseOrder    MaterialPurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   purchaseListItem MaterialPurchaseListItem @relation(fields: [purchaseListItemId], references: [id], onDelete: Cascade)
+  receiptItems     MaterialPurchaseOrderReceiptItem[]
 
   @@unique([purchaseOrderId, purchaseListItemId])
   @@index([businessId])
@@ -4414,19 +4425,61 @@ model MaterialPurchaseOrderItem {
   @@index([purchaseListItemId])
 }
 
-/// Browser/form retry identity for convert-takeoff, draft PO, and
-/// record-purchase. Never authorizes; businessId comes from the session.
+/// One OWNER-recorded delivery against an existing purchase order.
+/// `MaterialPurchaseOrderItem.quantityReceived` stays the running total.
+/// OWNER reversal of a recorded delivery is a follow-up and is not built here.
+model MaterialPurchaseOrderReceipt {
+  id                     String   @id @default(cuid())
+  businessId             String
+  purchaseOrderId        String
+  attemptKey             String
+  recordedByMembershipId String?
+  createdAt              DateTime @default(now())
+
+  business      Business                         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder MaterialPurchaseOrder            @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  recordedBy    Membership?                      @relation("PurchaseOrderReceiptRecorder", fields: [recordedByMembershipId], references: [id], onDelete: SetNull)
+  items         MaterialPurchaseOrderReceiptItem[]
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([purchaseOrderId])
+  @@index([recordedByMembershipId])
+}
+
+model MaterialPurchaseOrderReceiptItem {
+  id                  String  @id @default(cuid())
+  businessId          String
+  receiptId           String
+  purchaseOrderItemId String
+  /// Quantity on this delivery, not the running PO-item total.
+  quantity            Decimal
+
+  business          Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  receipt           MaterialPurchaseOrderReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem MaterialPurchaseOrderItem   @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([receiptId])
+  @@index([purchaseOrderItemId])
+}
+
+/// Browser/form retry identity for convert-takeoff, draft PO,
+/// record-purchase, and record-PO-receipt. Never authorizes; businessId
+/// comes from the session.
 model MaterialOperationAttempt {
   id                 String   @id @default(cuid())
   businessId         String
   attemptKey         String
-  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE
+  /// CONVERT_TAKEOFF | CREATE_DRAFT_PO | RECORD_PURCHASE | RECORD_PO_RECEIPT
   kind               String
   purchaseListId     String?
   purchaseOrderId    String?
   purchaseListItemId String?
   expenseId          String?
   createdCount       Int?
+  /// Stable hash of the claimed payload. Receipt retries compare this.
+  payloadFingerprint String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

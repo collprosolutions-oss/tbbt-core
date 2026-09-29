@@ -44,6 +44,7 @@ const {
   MATERIALS_SUPPLIERS_SCHEMA_SOURCE,
   recordPurchaseListItemPurchased,
   recordPurchaseOperation,
+  recordPurchaseOrderReceipt,
   separateMaterialMoneyLayers,
   SUPPLIER_COMMERCE_DISCONNECTED_LIMITATION,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
@@ -139,6 +140,7 @@ try {
   const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
   const takeoffSrc = readRepo("src/lib/materials/takeoff.ts");
   const expenseSrc = readRepo("src/lib/materials/expense-link.ts");
+  const receiptSrc = readRepo("src/lib/materials/receipt.ts");
   const actionsSrc = readRepo("src/app/actions/materials.ts");
   const fieldCard = readRepo("src/components/field/assigned-job-pickup-card.tsx");
   check(
@@ -187,6 +189,7 @@ try {
     purchaseSrc,
     takeoffSrc,
     expenseSrc,
+    receiptSrc,
     actionsSrc,
   ];
   check(
@@ -953,16 +956,26 @@ try {
     purchaseOrderId: poOne.id,
     status: "ORDERED_EXTERNALLY",
   });
-  const fullyReceived = await updatePurchaseOrderStatus(prisma, ownerA, {
+  await expectError(
+    "RECEIVED cannot be set by a manual status change",
+    () => updatePurchaseOrderStatus(prisma, ownerA, { purchaseOrderId: poOne.id, status: "RECEIVED" }),
+    (error) => /cannot move from ORDERED_EXTERNALLY to RECEIVED/i.test(String(error.message)),
+  );
+  const fullyReceived = await recordPurchaseOrderReceipt(prisma, ownerA, {
     purchaseOrderId: poOne.id,
-    status: "RECEIVED",
+    attemptKey: `receipt-${poOne.id}-full`,
+    items: poOne.items.map((row) => ({
+      purchaseOrderItemId: row.id,
+      quantityReceived: row.quantity.toString(),
+    })),
   });
   check(
-    "orderedAt / receivedAt are recorded and not erased",
+    "orderedAt / receivedAt are recorded by receipt and not erased",
     receivedPo.orderedAt != null &&
-      fullyReceived.orderedAt != null &&
-      fullyReceived.receivedAt != null &&
-      fullyReceived.orderedAt.getTime() === receivedPo.orderedAt.getTime(),
+      fullyReceived.order.orderedAt != null &&
+      fullyReceived.order.receivedAt != null &&
+      fullyReceived.order.orderedAt.getTime() === receivedPo.orderedAt.getTime() &&
+      fullyReceived.replayed === false,
   );
   await expectError(
     "RECEIVED cannot silently return to DRAFT",

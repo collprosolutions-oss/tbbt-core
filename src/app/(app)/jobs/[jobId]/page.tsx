@@ -649,6 +649,7 @@ export default async function JobPage({
         variance={purchaseWorkspace.variance}
         suppliers={purchaseWorkspace.suppliers}
         canConvertTakeoff={Boolean(job.estimateId)}
+        canRecordReceipt={access.workspace.role === "OWNER"}
       />
 
       {isCompleted ? (

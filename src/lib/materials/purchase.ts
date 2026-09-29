@@ -25,6 +25,11 @@ import {
   type PurchaseItemStatus,
   type PurchaseOrderStatus,
 } from "@/lib/materials/types";
+import {
+  lockPurchaseListItemsForUpdate,
+  lockTenantOwnedPurchaseOrder,
+  lockTenantOwnedPurchaseOrderItems,
+} from "@/lib/materials/po-lock";
 import { isPrismaUniqueViolation } from "@/lib/materials/unique";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -208,7 +213,12 @@ export async function loadPurchaseListBoard(
       purchaseOrders: {
         include: {
           supplier: { select: { id: true, name: true } },
-          items: true,
+          items: {
+            include: {
+              purchaseListItem: { select: { id: true, name: true, unit: true } },
+            },
+            orderBy: { createdAt: "asc" },
+          },
         },
         orderBy: { createdAt: "asc" },
       },
@@ -694,6 +704,124 @@ export async function createPurchaseOrder(
   return outcome.result;
 }
 
+async function applyPurchaseOrderStatus(
+  db: Db,
+  access: BusinessAccess,
+  input: { purchaseOrderId: string; status: PurchaseOrderStatus },
+) {
+  const locked = await lockTenantOwnedPurchaseOrder(db, access.businessId, input.purchaseOrderId);
+  if (!locked || locked.businessId !== access.businessId) {
+    throw new MaterialsError("That purchase order was not found in this business.");
+  }
+  await lockTenantOwnedPurchaseOrderItems(db, access.businessId, locked.id);
+  const existing = access.assertOwned(
+    await db.materialPurchaseOrder.findFirst({
+      where: { id: locked.id, businessId: access.businessId },
+      include: {
+        purchaseList: true,
+        items: { select: { id: true, purchaseListItemId: true } },
+      },
+    }),
+  );
+  await requirePurchaseListWriteAccess(db as PrismaClient, access, existing.purchaseList);
+  const current = isPurchaseOrderStatus(existing.status) ? existing.status : "DRAFT";
+  const status = input.status;
+  if (!canTransitionPurchaseOrder(current, status)) {
+    throw new MaterialsError(
+      `That purchase order cannot move from ${current} to ${status}.`,
+    );
+  }
+  const listItemIds = [
+    ...new Set(existing.items.map((item) => item.purchaseListItemId).filter(Boolean)),
+  ].sort((left, right) => left.localeCompare(right));
+  await lockPurchaseListItemsForUpdate(db, access.businessId, listItemIds);
+  const listItems = listItemIds.length
+    ? await db.materialPurchaseListItem.findMany({
+        where: { businessId: access.businessId, id: { in: listItemIds } },
+        select: { id: true, status: true },
+      })
+    : [];
+  const listStatusById = new Map(listItems.map((item) => [item.id, item.status]));
+  const updated = await db.materialPurchaseOrder.update({
+    where: { id: existing.id },
+    data: {
+      status,
+      orderedAt:
+        status === "ORDERED_EXTERNALLY" ? existing.orderedAt ?? new Date() : existing.orderedAt,
+      receivedAt: existing.receivedAt,
+    },
+  });
+  if (status === "ORDERED_EXTERNALLY") {
+    if (listItemIds.length > 0) {
+      await db.materialPurchaseListItem.updateMany({
+        where: {
+          businessId: access.businessId,
+          purchaseListId: existing.purchaseListId,
+          id: { in: listItemIds },
+          NOT: { status: "RECEIVED" },
+        },
+        data: { status: "ORDERED" },
+      });
+    }
+  } else if (status === "CANCELLED" && listItemIds.length > 0) {
+    const openSiblings = await db.materialPurchaseOrderItem.findMany({
+      where: {
+        businessId: access.businessId,
+        purchaseListItemId: { in: listItemIds },
+        purchaseOrderId: { not: existing.id },
+        purchaseOrder: { status: { not: "CANCELLED" } },
+      },
+      select: {
+        purchaseListItemId: true,
+        quantity: true,
+        quantityReceived: true,
+      },
+    });
+    const siblingsByListItem = new Map<string, typeof openSiblings>();
+    for (const line of openSiblings) {
+      const rows = siblingsByListItem.get(line.purchaseListItemId) ?? [];
+      rows.push(line);
+      siblingsByListItem.set(line.purchaseListItemId, rows);
+    }
+    const receivedIds: string[] = [];
+    const cancellableIds: string[] = [];
+    for (const id of listItemIds) {
+      if (listStatusById.get(id) === "RECEIVED") continue;
+      const siblings = siblingsByListItem.get(id) ?? [];
+      if (siblings.length > 0) {
+        if (siblings.every((line) => line.quantityReceived.gte(line.quantity))) {
+          receivedIds.push(id);
+        }
+        continue;
+      }
+      cancellableIds.push(id);
+    }
+    if (receivedIds.length > 0) {
+      await db.materialPurchaseListItem.updateMany({
+        where: {
+          businessId: access.businessId,
+          purchaseListId: existing.purchaseListId,
+          id: { in: receivedIds },
+          NOT: { status: "RECEIVED" },
+        },
+        data: { status: "RECEIVED" },
+      });
+    }
+    if (cancellableIds.length > 0) {
+      await db.materialPurchaseListItem.updateMany({
+        where: {
+          businessId: access.businessId,
+          purchaseListId: existing.purchaseListId,
+          id: { in: cancellableIds },
+          NOT: { status: "RECEIVED" },
+        },
+        data: { status: "CANCELLED" },
+      });
+    }
+  }
+  return updated;
+}
+
 export async function updatePurchaseOrderStatus(
   db: Db,
   access: BusinessAccess,
@@ -702,54 +830,15 @@ export async function updatePurchaseOrderStatus(
   if (!isPurchaseOrderStatus(input.status)) {
     throw new MaterialsError("Choose a valid purchase-order status.");
   }
-  const existing = access.assertOwned(
-    await db.materialPurchaseOrder.findFirst({
-      where: { id: input.purchaseOrderId, businessId: access.businessId },
-      include: { purchaseList: true, items: true },
-    }),
-  );
-  await requirePurchaseListWriteAccess(db as PrismaClient, access, existing.purchaseList);
-  const current = isPurchaseOrderStatus(existing.status) ? existing.status : "DRAFT";
   const status = input.status as PurchaseOrderStatus;
-  if (!canTransitionPurchaseOrder(current, status)) {
-    throw new MaterialsError(
-      `That purchase order cannot move from ${current} to ${status}.`,
-    );
-  }
-  const itemStatus: PurchaseItemStatus | null =
-    status === "ORDERED_EXTERNALLY"
-      ? "ORDERED"
-      : status === "RECEIVED"
-        ? "RECEIVED"
-        : status === "PARTIALLY_RECEIVED"
-          ? "ORDERED"
-          : status === "CANCELLED"
-            ? "CANCELLED"
-            : null;
-  const updated = await db.materialPurchaseOrder.update({
-    where: { id: existing.id },
-    data: {
-      status,
-      orderedAt:
-        status === "ORDERED_EXTERNALLY" ||
-        status === "PARTIALLY_RECEIVED" ||
-        status === "RECEIVED"
-          ? existing.orderedAt ?? new Date()
-          : existing.orderedAt,
-      receivedAt: status === "RECEIVED" ? existing.receivedAt ?? new Date() : existing.receivedAt,
-    },
-  });
-  if (itemStatus) {
-    await db.materialPurchaseListItem.updateMany({
-      where: {
-        businessId: access.businessId,
-        purchaseListId: existing.purchaseListId,
-        id: { in: existing.items.map((item) => item.purchaseListItemId) },
-      },
-      data: { status: itemStatus },
+  const run = (tx: Db) => applyPurchaseOrderStatus(tx, access, { ...input, status });
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return (db as PrismaClient).$transaction((tx) => run(tx), {
+      maxWait: 15000,
+      timeout: 20000,
     });
   }
-  return updated;
+  return run(db);
 }
 
 export function purchaseItemActualCostNumber(item: {

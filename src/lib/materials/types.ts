@@ -65,8 +65,8 @@ export const PURCHASE_ORDER_TRANSITIONS: Record<
 > = {
   DRAFT: ["DRAFT", "READY", "ORDERED_EXTERNALLY", "CANCELLED"],
   READY: ["READY", "DRAFT", "ORDERED_EXTERNALLY", "CANCELLED"],
-  ORDERED_EXTERNALLY: ["ORDERED_EXTERNALLY", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
-  PARTIALLY_RECEIVED: ["PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
+  ORDERED_EXTERNALLY: ["ORDERED_EXTERNALLY", "CANCELLED"],
+  PARTIALLY_RECEIVED: ["PARTIALLY_RECEIVED", "CANCELLED"],
   RECEIVED: ["RECEIVED"],
   CANCELLED: ["CANCELLED"],
 };
@@ -76,6 +76,55 @@ export function canTransitionPurchaseOrder(
   to: PurchaseOrderStatus,
 ) {
   return PURCHASE_ORDER_TRANSITIONS[from].includes(to);
+}
+
+/** Statuses that accept an OWNER-recorded delivery against an existing PO. */
+export const PURCHASE_ORDER_RECEIPT_STATUSES = [
+  "ORDERED_EXTERNALLY",
+  "PARTIALLY_RECEIVED",
+] as const;
+export type PurchaseOrderReceiptStatus = (typeof PURCHASE_ORDER_RECEIPT_STATUSES)[number];
+
+export function canRecordPurchaseOrderReceipt(status: string) {
+  return (PURCHASE_ORDER_RECEIPT_STATUSES as readonly string[]).includes(status);
+}
+
+export const PURCHASE_ORDER_RECEIPT_QUANTITY_PATTERN = /^\d+(\.\d{1,4})?$/;
+
+export type ParsedReceiptQuantity =
+  | { status: "skip" }
+  | { status: "ok"; normalized: string }
+  | { status: "invalid" };
+
+/**
+ * Blank or 0 means this line was not on the delivery. Anything that is
+ * not a plain decimal with at most four fractional digits is rejected.
+ */
+export function parseReceiptDeliveryQuantity(raw: unknown): ParsedReceiptQuantity {
+  if (raw == null) return { status: "skip" };
+  const text = String(raw).trim();
+  if (text === "") return { status: "skip" };
+  if (!PURCHASE_ORDER_RECEIPT_QUANTITY_PATTERN.test(text)) return { status: "invalid" };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0) return { status: "invalid" };
+  if (value === 0) return { status: "skip" };
+  return { status: "ok", normalized: text };
+}
+
+export function purchaseOrderReceiptFingerprint(
+  purchaseOrderId: string,
+  items: ReadonlyArray<{ purchaseOrderItemId: string; quantity: string }>,
+) {
+  const lines = [...items]
+    .map((item) => ({
+      id: item.purchaseOrderItemId.trim(),
+      quantity: item.quantity,
+    }))
+    .filter((item) => item.id)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((item) => `${item.id}:${item.quantity}`)
+    .join("|");
+  return `${purchaseOrderId.trim()}|${lines}`;
 }
 
 export function isMaterialPriceSource(value: unknown): value is MaterialPriceSource {

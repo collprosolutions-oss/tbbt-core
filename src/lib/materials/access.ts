@@ -1,6 +1,11 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
+import {
+  CAPABILITIES,
+  ForbiddenError,
+  requireBusinessCapability,
+  requireBusinessRole,
+} from "@/lib/authorization";
 import type { FieldWorkspace } from "@/lib/field-access";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { requireProductCapability } from "@/lib/product-entitlements";
@@ -61,6 +66,10 @@ export async function assertFieldPickupJob(
     throw new ForbiddenError();
   }
   return job;
+}
+
+export function requireOwnerPurchaseReceipt(access: BusinessAccess) {
+  requireBusinessRole(access, "OWNER");
 }
 
 export function rejectMemberVendorEconomics(access: BusinessAccess) {

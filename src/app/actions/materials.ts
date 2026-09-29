@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import {
   addPurchaseListItem,
   convertTakeoffToPurchaseList,
@@ -10,6 +10,7 @@ import {
   createSupplier,
   materialsErrorMessage,
   recordPurchaseOperation,
+  recordPurchaseOrderReceipt,
   updateMaterialCatalogItem,
   updatePurchaseListItem,
   updatePurchaseOrderStatus,
@@ -22,6 +23,8 @@ import { requireOperatingProductAccessForForm } from "@/lib/saas-billing/enforce
 export type MaterialsActionState = {
   error?: string;
   message?: string;
+  alreadyRecorded?: boolean;
+  attemptKey?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -332,5 +335,47 @@ export async function updatePurchaseOrderStatusAction(
     return { message: "Purchase-order status updated. This is owner tracking only." };
   } catch (error) {
     return { error: materialsErrorMessage(error, "That purchase order could not be updated.") };
+  }
+}
+
+export async function recordPurchaseOrderReceiptAction(
+  _prev: MaterialsActionState,
+  formData: FormData,
+): Promise<MaterialsActionState> {
+  try {
+    const jobId = readString(formData, "jobId");
+    const operating = await requireOperatingProductAccessForForm(
+      jobId ? PRODUCT_CAPABILITIES.JOBS_TASKS : PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+    );
+    if (!operating.ok) return { error: operating.error };
+    requireBusinessRole(operating.access, "OWNER");
+    const items = [];
+    for (const [key, value] of formData.entries()) {
+      if (!key.startsWith("receivedQuantity:") || typeof value !== "string") continue;
+      const purchaseOrderItemId = key.slice("receivedQuantity:".length).trim();
+      const quantityReceived = value.trim();
+      if (!purchaseOrderItemId || !quantityReceived) continue;
+      items.push({ purchaseOrderItemId, quantityReceived });
+    }
+    const attemptKey = readString(formData, "attemptId");
+    const result = await recordPurchaseOrderReceipt(prisma, operating.access, {
+      purchaseOrderId: readString(formData, "purchaseOrderId"),
+      attemptKey,
+      items,
+    });
+    revalidateMaterials([
+      jobId ? `/jobs/${jobId}` : "",
+      readString(formData, "estimateId") ? `/estimates/${readString(formData, "estimateId")}` : "",
+    ].filter(Boolean));
+    if (result.replayed) {
+      return { alreadyRecorded: true, attemptKey };
+    }
+    return {
+      message:
+        "Received quantities recorded. No payment, expense, invoice, or supplier order was created.",
+      attemptKey,
+    };
+  } catch (error) {
+    return { error: materialsErrorMessage(error, "Those received quantities could not be recorded.") };
   }
 }
