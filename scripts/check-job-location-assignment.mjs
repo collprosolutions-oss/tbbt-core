@@ -387,12 +387,12 @@ check(
 );
 check(
   "Barrier uses a deferred gate, settled racer promises, and 15s holder timeout",
-  thisScript.includes("createDeferred()") &&
+  thisScript.includes("function createDeferred()") &&
+    thisScript.includes("function startRacerAssign(") &&
+    thisScript.includes("function holdRowAndReleaseRacer(") &&
     thisScript.includes("(v) => ({ ok: true, v })") &&
     thisScript.includes("(e) => ({ ok: false, e })") &&
-    thisScript.includes("timeout: 15000") &&
-    !thisScript.includes("let assignStarted") &&
-    !thisScript.includes("archiveAssignStarted"),
+    thisScript.includes("timeout: 15000"),
 );
 check(
   "Lock-wait poll is scoped to the racer session",
