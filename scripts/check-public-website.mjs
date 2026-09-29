@@ -369,7 +369,7 @@ check("Internal request detail lists Requested Work",
 check("Estimate handoff keeps request context and prefills draft lines",
   estimatePageSrc.includes("RequestEstimateHandoff") &&
     estimatePageSrc.includes("EDIT_BUILD_ESTIMATE_LABEL") &&
-    estimateActionSrc.includes("addRequestDraftLines"));
+    readRepo("src/lib/estimate-from-request.ts").includes("addRequestDraftLines"));
 check("Public request photos use private Business Storage, not a public website path",
   readRepo("src/lib/business-storage/request-photos.ts").includes("CUSTOMER_PHOTO") &&
     readRepo("src/lib/business-storage/request-photos.ts").includes('visibility: "PRIVATE"') &&
