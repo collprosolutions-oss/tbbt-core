@@ -57,6 +57,8 @@ const {
   mergeConfirmedCustomers,
   REASSIGNED_CUSTOMER_RELATION_FIELDS,
 } = await import("@/lib/customer-merge-ops");
+const { authorizeManagedUpload } = await import("@/lib/business-storage/service");
+const { StorageAccessError } = await import("@/lib/business-storage/types");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -119,6 +121,9 @@ function check(label, condition) {
   }
 }
 
+const BARRIER_WAIT_MS = 10_000;
+const LOCK_POLL_MS = 10_000;
+
 function createCount2Barrier() {
   let count = 0;
   const waiters = [];
@@ -135,9 +140,13 @@ function createCount2Barrier() {
         waiters.length = 0;
         return;
       }
-      await new Promise((resolve) => {
-        waiters.push(resolve);
-      });
+      await withTimeout(
+        new Promise((resolve) => {
+          waiters.push(resolve);
+        }),
+        BARRIER_WAIT_MS,
+        "barrier wait",
+      );
     },
     firstArrived: first,
   };
@@ -171,14 +180,45 @@ function makeAccess(businessId, role, membershipId) {
   };
 }
 
-function isSpecificMergeLoser(error) {
+function isUnavailableOrTryAgain(error) {
   return (
     error instanceof CustomerMergeError &&
-    (error.message === MERGE_ALREADY_ABSORBED_MESSAGE ||
-      error.message === CUSTOMERS_NOT_AVAILABLE_MESSAGE ||
-      error.message === MERGE_TRY_AGAIN_MESSAGE ||
-      error.message === MERGE_LEFTOVER_REFERENCES_MESSAGE)
+    (error.message === CUSTOMERS_NOT_AVAILABLE_MESSAGE || error.message === MERGE_TRY_AGAIN_MESSAGE)
   );
+}
+
+async function waitForTestDbLock(admin, label) {
+  const started = Date.now();
+  while (Date.now() - started < LOCK_POLL_MS) {
+    const rows = await admin.$queryRaw`
+      SELECT pid, wait_event_type, wait_event
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if (rows.length > 0) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`${label}: timed out waiting for wait_event_type=Lock on ${testDbName}`);
+}
+
+function memoryStorageProvider() {
+  return {
+    id: "MEMORY",
+    putObject: async () => ({ key: "memory", sizeBytes: 0 }),
+    deleteObject: async () => {},
+    getObjectMetadata: async () => null,
+    getObject: async () => null,
+    objectExists: async () => false,
+    createUploadUrl: async () => ({
+      url: "https://example.test/upload",
+      method: "PUT",
+      headers: {},
+      expiresInSeconds: 60,
+    }),
+    createDownloadUrl: async () => ({ url: "https://example.test/download", expiresInSeconds: 60 }),
+  };
 }
 
 async function terminateAndDrop(admin, name) {
@@ -263,6 +303,7 @@ try {
     "Serialization conflicts retry with a try-again message",
     opsSrc.includes("P2034") &&
       opsSrc.includes("40001") &&
+      opsSrc.includes("P2028") &&
       opsSrc.includes("MERGE_TRY_AGAIN_MESSAGE") &&
       opsSrc.includes("maxWait") &&
       opsSrc.includes("timeout") &&
@@ -278,8 +319,10 @@ try {
     opsSrc.includes("assertNoLeftoverCustomerReferences") &&
       opsSrc.includes("customerFkFieldsFromDmmf") &&
       opsSrc.indexOf("assertNoLeftoverCustomerReferences") < opsSrc.indexOf("tx.customer.delete") &&
+      !opsSrc.includes("new PrismaClient(") &&
       opsSrc.includes("possibleDuplicateCustomerId") &&
       opsSrc.includes('recordType: "CUSTOMER"') &&
+      opsSrc.includes("pendingBusinessEventWhere") &&
       opsSrc.includes('path: ["customerId"]'),
   );
   check(
@@ -295,7 +338,13 @@ try {
     "Membership merge actor FK is SET NULL",
     readSrc("prisma/schema.prisma").includes("CustomerMergeActor") &&
       readSrc("prisma/schema.prisma").includes("onDelete: SetNull") &&
-      readSrc("prisma/migrations/20260929020000_customer_merge/migration.sql").includes("ON DELETE SET NULL"),
+      readSrc("prisma/migrations/20260929020000_customer_merge/migration.sql").includes("ON DELETE SET NULL") &&
+      !/DROP NOT NULL|DROP CONSTRAINT/i.test(readSrc("prisma/migrations/20260929020000_customer_merge/migration.sql")),
+  );
+  check(
+    "Upload-create takes FOR KEY SHARE on the customer before inserting a StoredAsset",
+    readSrc("src/lib/business-storage/service.ts").includes("FOR KEY SHARE") &&
+      readSrc("src/lib/business-storage/service.ts").includes('SELECT id FROM "Customer"'),
   );
   check(
     "This harness refuses non-localhost hosts before connect or push",
@@ -1073,33 +1122,36 @@ try {
     return { left, right, leftLinks, rightLinks };
   }
 
+  const lockAdmin = new PrismaClient({ datasourceUrl: baseUrl });
+  extraClients.push(lockAdmin);
+
   console.log("\nCONCURRENT — A+B vs B+A with a count-2 barrier and separate clients");
   const raceAB = await seedPair("abba", `abba-${randomUUID().slice(0, 8)}@example.com`);
   const abBarrier = createCount2Barrier();
   const abClientA = createTestClient();
   const abClientB = createTestClient();
-  const abResults = await withTimeout(
-    Promise.allSettled([
-      mergeConfirmedCustomers(
-        abClientA,
-        alpha.owner,
-        { keepCustomerId: raceAB.left.id, absorbCustomerId: raceAB.right.id, confirmedSameCustomer: true },
-        { beforeLock: abBarrier.arrive },
-      ),
-      mergeConfirmedCustomers(
-        abClientB,
-        alpha.owner,
-        { keepCustomerId: raceAB.right.id, absorbCustomerId: raceAB.left.id, confirmedSameCustomer: true },
-        { beforeLock: abBarrier.arrive },
-      ),
-    ]),
-    25000,
-    "A+B vs B+A",
+  const abHeld = mergeConfirmedCustomers(
+    abClientA,
+    alpha.owner,
+    { keepCustomerId: raceAB.left.id, absorbCustomerId: raceAB.right.id, confirmedSameCustomer: true },
+    { afterLocked: abBarrier.arrive },
   );
+  await withTimeout(abBarrier.firstArrived, BARRIER_WAIT_MS, "A+B vs B+A entered write");
+  const abContender = mergeConfirmedCustomers(
+    abClientB,
+    alpha.owner,
+    { keepCustomerId: raceAB.right.id, absorbCustomerId: raceAB.left.id, confirmedSameCustomer: true },
+  );
+  await waitForTestDbLock(lockAdmin, "A+B vs B+A");
+  await abBarrier.arrive();
+  const abResults = await withTimeout(Promise.allSettled([abHeld, abContender]), 25000, "A+B vs B+A");
   const abWins = abResults.filter((result) => result.status === "fulfilled");
   const abLosses = abResults.filter((result) => result.status === "rejected");
   check("A+B vs B+A has exactly one winner", abWins.length === 1 && abLosses.length === 1);
-  check("A+B vs B+A loser is a specific merge error", abLosses[0] && isSpecificMergeLoser(abLosses[0].reason));
+  check(
+    "A+B vs B+A loser is not-available or try-again",
+    abLosses[0] && isUnavailableOrTryAgain(abLosses[0].reason),
+  );
   const abLeft = await prisma.customer.findUnique({ where: { id: raceAB.left.id } });
   const abRight = await prisma.customer.findUnique({ where: { id: raceAB.right.id } });
   const abRemaining = [abLeft, abRight].filter(Boolean);
@@ -1131,28 +1183,32 @@ try {
   const triangleBarrier = createCount2Barrier();
   const triangleClientA = createTestClient();
   const triangleClientC = createTestClient();
+  const triangleHeld = mergeConfirmedCustomers(
+    triangleClientA,
+    alpha.owner,
+    { keepCustomerId: customerA.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
+    { afterLocked: triangleBarrier.arrive },
+  );
+  await withTimeout(triangleBarrier.firstArrived, BARRIER_WAIT_MS, "A+B vs B+C entered write");
+  const triangleContender = mergeConfirmedCustomers(
+    triangleClientC,
+    alpha.owner,
+    { keepCustomerId: customerC.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
+  );
+  await waitForTestDbLock(lockAdmin, "A+B vs B+C");
+  await triangleBarrier.arrive();
   const triangleResults = await withTimeout(
-    Promise.allSettled([
-      mergeConfirmedCustomers(
-        triangleClientA,
-        alpha.owner,
-        { keepCustomerId: customerA.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
-        { beforeLock: triangleBarrier.arrive },
-      ),
-      mergeConfirmedCustomers(
-        triangleClientC,
-        alpha.owner,
-        { keepCustomerId: customerC.id, absorbCustomerId: customerB.id, confirmedSameCustomer: true },
-        { beforeLock: triangleBarrier.arrive },
-      ),
-    ]),
+    Promise.allSettled([triangleHeld, triangleContender]),
     25000,
     "A+B vs B+C",
   );
   const triangleWins = triangleResults.filter((result) => result.status === "fulfilled");
   const triangleLosses = triangleResults.filter((result) => result.status === "rejected");
   check("A+B vs B+C has exactly one winner", triangleWins.length === 1 && triangleLosses.length === 1);
-  check("A+B vs B+C loser is a specific merge error", triangleLosses[0] && isSpecificMergeLoser(triangleLosses[0].reason));
+  check(
+    "A+B vs B+C loser is not-available or try-again",
+    triangleLosses[0] && isUnavailableOrTryAgain(triangleLosses[0].reason),
+  );
   const afterA = await prisma.customer.findUnique({ where: { id: customerA.id } });
   const afterB = await prisma.customer.findUnique({ where: { id: customerB.id } });
   const afterC = await prisma.customer.findUnique({ where: { id: customerC.id } });
@@ -1187,11 +1243,12 @@ try {
     { keepCustomerId: editPair.left.id, absorbCustomerId: editPair.right.id, confirmedSameCustomer: true },
     { afterLocked: editBarrier.arrive },
   );
-  await withTimeout(editBarrier.firstArrived, 8000, "merge-versus-edit entered write");
+  await withTimeout(editBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-edit entered write");
   const editP = editClient.customer.update({
     where: { id: editPair.right.id },
     data: { name: "Concurrent Edit" },
   });
+  await waitForTestDbLock(lockAdmin, "merge vs edit");
   await editBarrier.arrive();
   const editResults = await withTimeout(Promise.allSettled([editMergeP, editP]), 25000, "merge vs edit");
   const editMergeResult = editResults[0];
@@ -1213,59 +1270,111 @@ try {
   );
   await assertNoOrphans(editPair.right.id, "Merge vs edit");
 
-  console.log("\nCONCURRENT — merge vs new Job/StoredAsset on the absorbed customer");
-  const latePair = await seedPair("late", `late-${randomUUID().slice(0, 8)}@example.com`);
-  const lateBarrier = createCount2Barrier();
-  const lateMergeClient = createTestClient();
-  const lateWriteClient = createTestClient();
-  const lateMergeP = mergeConfirmedCustomers(
-    lateMergeClient,
+  console.log("\nCONCURRENT — merge vs Job-alone on the absorbed customer");
+  const jobPair = await seedPair("jobrace", `jobrace-${randomUUID().slice(0, 8)}@example.com`);
+  const jobBarrier = createCount2Barrier();
+  const jobMergeClient = createTestClient();
+  const jobWriteClient = createTestClient();
+  const jobMergeP = mergeConfirmedCustomers(
+    jobMergeClient,
     alpha.owner,
-    { keepCustomerId: latePair.left.id, absorbCustomerId: latePair.right.id, confirmedSameCustomer: true },
-    { afterRelationsMoved: lateBarrier.arrive },
+    { keepCustomerId: jobPair.left.id, absorbCustomerId: jobPair.right.id, confirmedSameCustomer: true },
+    { afterLocked: jobBarrier.arrive },
   );
-  await withTimeout(lateBarrier.firstArrived, 8000, "merge-versus-insert entered after remap");
-  const lateJobP = lateWriteClient.job.create({
+  await withTimeout(jobBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-job entered write");
+  const jobCreateP = jobWriteClient.job.create({
     data: {
       businessId: alpha.business.id,
-      customerId: latePair.right.id,
+      customerId: jobPair.right.id,
       projectToken: randomUUID(),
       status: "UNSCHEDULED",
     },
   });
-  const lateAsset = await lateWriteClient.storedAsset.create({
-    data: {
-      businessId: alpha.business.id,
-      storageAccountId: alpha.storage.id,
-      customerId: latePair.right.id,
+  await waitForTestDbLock(lockAdmin, "merge vs Job");
+  await jobBarrier.arrive();
+  const jobRaceResults = await withTimeout(Promise.allSettled([jobMergeP, jobCreateP]), 25000, "merge vs Job");
+  check("Merge vs Job: merge is the single winner", jobRaceResults[0].status === "fulfilled");
+  check(
+    "Merge vs Job: job insert loses with P2003",
+    jobRaceResults[1].status === "rejected" &&
+      jobRaceResults[1].reason instanceof Prisma.PrismaClientKnownRequestError &&
+      jobRaceResults[1].reason.code === "P2003",
+  );
+  check("Merge vs Job: absorbed customer is gone", (await prisma.customer.findUnique({ where: { id: jobPair.right.id } })) === null);
+  const jobRaceJobs = await prisma.job.findMany({
+    where: { id: { in: [jobPair.leftLinks.job.id, jobPair.rightLinks.job.id] } },
+  });
+  check(
+    "Merge vs Job does not lose the original jobs",
+    jobRaceJobs.length === 2 && jobRaceJobs.every((row) => row.customerId === jobPair.left.id),
+  );
+  await assertNoOrphans(jobPair.right.id, "Merge vs Job");
+
+  console.log("\nCONCURRENT — merge vs StoredAsset-alone on the absorbed customer");
+  const assetPair = await seedPair("assetrace", `assetrace-${randomUUID().slice(0, 8)}@example.com`);
+  const assetBarrier = createCount2Barrier();
+  const assetMergeClient = createTestClient();
+  const assetWriteClient = createTestClient();
+  const assetMergeP = mergeConfirmedCustomers(
+    assetMergeClient,
+    alpha.owner,
+    { keepCustomerId: assetPair.left.id, absorbCustomerId: assetPair.right.id, confirmedSameCustomer: true },
+    { afterLocked: assetBarrier.arrive },
+  );
+  await withTimeout(assetBarrier.firstArrived, BARRIER_WAIT_MS, "merge-versus-asset entered write");
+  const assetCountBefore = await prisma.storedAsset.count({
+    where: { businessId: alpha.business.id, customerId: assetPair.right.id },
+  });
+  const assetUploadP = authorizeManagedUpload(
+    {
+      db: assetWriteClient,
+      provider: memoryStorageProvider(),
+      bucketName: alpha.storage.bucketName,
+    },
+    alpha.business.id,
+    {
       category: "CUSTOMER_PHOTO",
-      originalFilename: "late.jpg",
-      storageKey: `late-${randomUUID()}`,
+      originalFilename: "race.jpg",
       mimeType: "image/jpeg",
       fileSizeBytes: 64,
+      visibility: "PRIVATE",
+      customerId: assetPair.right.id,
     },
+  );
+  await waitForTestDbLock(lockAdmin, "merge vs StoredAsset");
+  await assetBarrier.arrive();
+  const assetRaceResults = await withTimeout(
+    Promise.allSettled([assetMergeP, assetUploadP]),
+    25000,
+    "merge vs StoredAsset",
+  );
+  check("Merge vs StoredAsset: merge is the single winner", assetRaceResults[0].status === "fulfilled");
+  check(
+    "Merge vs StoredAsset: upload loses because the customer row is gone",
+    assetRaceResults[1].status === "rejected" &&
+      assetRaceResults[1].reason instanceof StorageAccessError &&
+      assetRaceResults[1].reason.message === "That customer is not available.",
+  );
+  check(
+    "Merge vs StoredAsset: absorbed customer is gone",
+    (await prisma.customer.findUnique({ where: { id: assetPair.right.id } })) === null,
+  );
+  check(
+    "Merge vs StoredAsset: no dangling upload row",
+    (await prisma.storedAsset.count({
+      where: { businessId: alpha.business.id, originalFilename: "race.jpg" },
+    })) === 0,
+  );
+  const movedAssets = await prisma.storedAsset.findMany({
+    where: { id: { in: [assetPair.leftLinks.asset.id, assetPair.rightLinks.asset.id] } },
   });
-  await lateBarrier.arrive();
-  const lateMergeResult = await withTimeout(Promise.allSettled([lateMergeP]), 25000, "merge vs insert");
-  const lateJobResult = await withTimeout(Promise.allSettled([lateJobP]), 25000, "blocked job insert");
   check(
-    "Merge vs new Job/StoredAsset: insert wins and merge loses with leftover-reference error",
-    lateMergeResult[0].status === "rejected" &&
-      lateMergeResult[0].reason instanceof CustomerMergeError &&
-      lateMergeResult[0].reason.message === MERGE_LEFTOVER_REFERENCES_MESSAGE &&
-      lateJobResult[0].status === "fulfilled",
+    "Merge vs StoredAsset remaps the original assets",
+    movedAssets.length === 2 &&
+      movedAssets.every((row) => row.customerId === assetPair.left.id) &&
+      assetCountBefore === 1,
   );
-  const lateJob = lateJobResult[0].status === "fulfilled" ? lateJobResult[0].value : null;
-  const lateAbsorb = await prisma.customer.findUnique({ where: { id: latePair.right.id } });
-  const lateJobAfter = lateJob ? await prisma.job.findUnique({ where: { id: lateJob.id } }) : null;
-  const lateAssetAfter = await prisma.storedAsset.findUnique({ where: { id: lateAsset.id } });
-  check("Absorbed customer still exists after leftover abort", Boolean(lateAbsorb));
-  check("Concurrent job is not orphaned", lateJobAfter?.customerId === latePair.right.id);
-  check("Concurrent stored asset is not orphaned", lateAssetAfter?.customerId === latePair.right.id);
-  check(
-    "Original absorbed job is still on the absorbed customer after leftover abort",
-    (await prisma.job.findUnique({ where: { id: latePair.rightLinks.job.id } }))?.customerId === latePair.right.id,
-  );
+  await assertNoOrphans(assetPair.right.id, "Merge vs StoredAsset");
 } catch (error) {
   console.error(error);
   failures += 1;

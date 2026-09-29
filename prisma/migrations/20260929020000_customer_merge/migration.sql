@@ -28,8 +28,6 @@ CREATE INDEX IF NOT EXISTS "CustomerMerge_absorbedCustomerId_idx"
 
 DO $$
 BEGIN
-  ALTER TABLE "CustomerMerge" ALTER COLUMN "mergedByMembershipId" DROP NOT NULL;
-
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'CustomerMerge_businessId_fkey'
   ) THEN
@@ -38,13 +36,11 @@ BEGIN
       FOREIGN KEY ("businessId") REFERENCES "Business"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'CustomerMerge_mergedByMembershipId_fkey'
   ) THEN
-    ALTER TABLE "CustomerMerge" DROP CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey";
+    ALTER TABLE "CustomerMerge"
+      ADD CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey"
+      FOREIGN KEY ("mergedByMembershipId") REFERENCES "Membership"("id") ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
-
-  ALTER TABLE "CustomerMerge"
-    ADD CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey"
-    FOREIGN KEY ("mergedByMembershipId") REFERENCES "Membership"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 END $$;

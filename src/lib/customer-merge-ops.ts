@@ -6,7 +6,7 @@
  * deletes the absorbed row inside one transaction. Browser-supplied
  * businessId is never authorization.
  */
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { requireBusinessRole } from "@/lib/authorization";
 import { resolveStoredSmsConsent } from "@/lib/customer-messaging/consent";
@@ -405,10 +405,28 @@ function clientDelegateName(modelName: string) {
 }
 
 type RowDelegate = {
-  count: (args: { where: Record<string, unknown> }) => Promise<number>;
   findMany: (args: { where: Record<string, unknown>; select: { id: true } }) => Promise<Array<{ id: string }>>;
-  findUnique: (args: { where: { id: string } }) => Promise<Record<string, unknown> | null>;
 };
+
+function pendingBusinessEventWhere(businessId: string, absorbId: string): Prisma.BusinessEventWhereInput {
+  return {
+    businessId,
+    AND: [
+      {
+        OR: [
+          { payload: { path: ["customerId"], equals: absorbId } },
+          { subjectType: "CUSTOMER", subjectId: absorbId },
+        ],
+      },
+      {
+        OR: [
+          { runs: { none: {} } },
+          { runs: { some: { status: { in: ["PENDING", "PROCESSING"] } } } },
+        ],
+      },
+    ],
+  };
+}
 
 type SoftLeftover = {
   delegate: keyof Tx;
@@ -528,20 +546,15 @@ async function reassignCustomerId(
     data: { customerId: keepId },
   });
   await tx.externalLeadImportRow.updateMany({
-    where: { possibleDuplicateCustomerId: absorbId },
+    where: { businessId, possibleDuplicateCustomerId: absorbId },
     data: { possibleDuplicateCustomerId: keepId },
   });
   await tx.leadAttributionCorrection.updateMany({
-    where: { recordType: "CUSTOMER", recordId: absorbId },
+    where: { businessId, recordType: "CUSTOMER", recordId: absorbId },
     data: { recordId: keepId },
   });
   const pendingEvents = await tx.businessEvent.findMany({
-    where: {
-      OR: [
-        { payload: { path: ["customerId"], equals: absorbId } },
-        { subjectType: "CUSTOMER", subjectId: absorbId },
-      ],
-    },
+    where: pendingBusinessEventWhere(businessId, absorbId),
     select: { id: true, payload: true, subjectType: true, subjectId: true },
   });
   for (const event of pendingEvents) {
@@ -570,7 +583,7 @@ const SOFT_CUSTOMER_REFS: SoftLeftover[] = [
   { delegate: "leadAttributionCorrection", field: "recordId", extraWhere: { recordType: "CUSTOMER" } },
 ];
 
-async function leftoverRows(reader: Tx | Db, absorbId: string) {
+async function leftoverRows(reader: Tx | Db, absorbId: string, businessId: string) {
   const rows: Array<{ delegate: string; field: string; id: string }> = [];
   const delegates = reader as unknown as Record<string, RowDelegate | undefined>;
   for (const ref of customerFkFieldsFromDmmf()) {
@@ -592,12 +605,7 @@ async function leftoverRows(reader: Tx | Db, absorbId: string) {
     for (const row of found) rows.push({ delegate: String(ref.delegate), field: ref.field, id: row.id });
   }
   const events = await reader.businessEvent.findMany({
-    where: {
-      OR: [
-        { payload: { path: ["customerId"], equals: absorbId } },
-        { subjectType: "CUSTOMER", subjectId: absorbId },
-      ],
-    },
+    where: pendingBusinessEventWhere(businessId, absorbId),
     select: { id: true },
   });
   for (const event of events) {
@@ -606,27 +614,10 @@ async function leftoverRows(reader: Tx | Db, absorbId: string) {
   return rows;
 }
 
-async function assertNoLeftoverCustomerReferences(
-  tx: Tx,
-  absorbId: string,
-  knownAbsorbRefs: Set<string>,
-) {
-  const inTx = await leftoverRows(tx, absorbId);
-  if (inTx.length > 0) {
+async function assertNoLeftoverCustomerReferences(tx: Tx, absorbId: string, businessId: string) {
+  const leftovers = await leftoverRows(tx, absorbId, businessId);
+  if (leftovers.length > 0) {
     throw new CustomerMergeError(MERGE_LEFTOVER_REFERENCES_MESSAGE);
-  }
-
-  const reader = new PrismaClient();
-  try {
-    const committed = await leftoverRows(reader, absorbId);
-    for (const row of committed) {
-      const key = `${row.delegate}:${row.id}`;
-      if (!knownAbsorbRefs.has(key)) {
-        throw new CustomerMergeError(MERGE_LEFTOVER_REFERENCES_MESSAGE);
-      }
-    }
-  } finally {
-    await reader.$disconnect();
   }
 }
 
@@ -679,6 +670,10 @@ function isSerializationFailure(error: unknown) {
     if (error.message.includes("40001")) return true;
   }
   return error instanceof Error && /could not serialize|40001/i.test(error.message);
+}
+
+function isTransactionTimeout(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2028";
 }
 
 function isAlreadyMergedPrisma(error: unknown) {
@@ -762,17 +757,13 @@ async function mergeConfirmedCustomersOnce(
         await afterLocked(tx);
       }
 
-      const knownAbsorbRefs = new Set(
-        (await leftoverRows(tx, absorb.id)).map((row) => `${row.delegate}:${row.id}`),
-      );
-
       await reassignCustomerId(tx, access.businessId, absorbId, keepId);
 
       if (afterRelationsMoved) {
         await afterRelationsMoved(tx);
       }
 
-      await assertNoLeftoverCustomerReferences(tx, absorb.id, knownAbsorbRefs);
+      await assertNoLeftoverCustomerReferences(tx, absorb.id, access.businessId);
 
       const nextConsent = mergeSmsConsentStates(keep.smsConsentStatus, absorb.smsConsentStatus);
       const keepConsent = resolveStoredSmsConsent(keep.smsConsentStatus);
@@ -846,6 +837,9 @@ export async function mergeConfirmedCustomers(
       return await mergeConfirmedCustomersOnce(db, access, input, hooks);
     } catch (error) {
       if (error instanceof CustomerMergeError) throw error;
+      if (isTransactionTimeout(error)) {
+        throw new CustomerMergeError(MERGE_TRY_AGAIN_MESSAGE);
+      }
       if (isSerializationFailure(error)) {
         lastSerializationError = error;
         continue;
