@@ -852,6 +852,7 @@ try {
     },
   });
   const parsedLegacy = parseWebsiteSnapshot(legacy.snapshotJson);
+  const reparsedLegacy = parseWebsiteSnapshot(parsedLegacy);
   const legacyRestore = await restoreOwnedWebsitePublish(prisma, ownerA, {
     publishId: legacy.id,
     confirmed: true,
@@ -872,6 +873,7 @@ try {
   check(
     "Legacy uncaptured restore reports unchanged intake and leaves the pointer",
     parsedLegacy.trades.every((trade) => trade.tenantIntakeCaptured !== true) &&
+      reparsedLegacy.trades.every((trade) => trade.tenantIntakeCaptured !== true) &&
       legacyRestore.restoredIntakeCount === 0 &&
       legacyMessage.includes(WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED) &&
       !legacyMessage.includes("Captured intake snapshots were restored.") &&

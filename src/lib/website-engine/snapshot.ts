@@ -305,7 +305,9 @@ function parseTradeTenantIntake(row: Record<string, unknown>): {
   tenantIntake: PublishedTradeTenantIntake | null;
   tenantIntakeCaptured: boolean;
 } {
-  if (!("tenantIntake" in row) && row.tenantIntakeCaptured !== true) {
+  // Explicit false wins. Re-parsing an already-parsed legacy trade has
+  // tenantIntake: null plus tenantIntakeCaptured: false; that must stay uncaptured.
+  if (row.tenantIntakeCaptured === false || (!("tenantIntake" in row) && row.tenantIntakeCaptured !== true)) {
     return { tenantIntake: null, tenantIntakeCaptured: false };
   }
   if (row.tenantIntake == null) {
