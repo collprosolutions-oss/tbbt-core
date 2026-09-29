@@ -15,6 +15,12 @@ export async function resolve(specifier, context, nextResolve) {
   if (specifier === "next/navigation") {
     return { shortCircuit: true, url: new URL("./mocks/next-navigation.mjs", here).href };
   }
+  if (specifier === "next/headers") {
+    return { shortCircuit: true, url: new URL("./mocks/next-headers.mjs", here).href };
+  }
+  if (specifier.startsWith("next/") && !specifier.endsWith(".js")) {
+    return nextResolve(`${specifier}.js`, context);
+  }
   if (specifier === "server-only") {
     return { shortCircuit: true, url: new URL("./mocks/server-only.mjs", here).href };
   }
