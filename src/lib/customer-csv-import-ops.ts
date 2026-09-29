@@ -485,14 +485,54 @@ async function applyConfirmedRow(
   }
 
   return db.$transaction(async (tx) => {
-    const current = await tx.customerCsvImportRow.findFirst({
-      where: {
-        id: row.id,
-        businessId: access.businessId,
-        importId: row.importId,
-      },
-    });
-    if (!current || current.businessId !== access.businessId) {
+    // READ COMMITTED: lock this staged row before inspecting createdCustomerId
+    // so two confirms cannot both create a customer for the same row.
+    const locked = await tx.$queryRaw<
+      Array<{
+        id: string;
+        businessId: string;
+        importId: string;
+        createdCustomerId: string | null;
+        createdPropertyId: string | null;
+        reusedExistingCustomer: boolean;
+        name: string;
+        email: string | null;
+        phone: string | null;
+        propertyLabel: string | null;
+        streetAddress: string | null;
+        unit: string | null;
+        city: string | null;
+        region: string | null;
+        postalCode: string | null;
+      }>
+    >`
+      SELECT
+        id,
+        "businessId",
+        "importId",
+        "createdCustomerId",
+        "createdPropertyId",
+        "reusedExistingCustomer",
+        name,
+        email,
+        phone,
+        "propertyLabel",
+        "streetAddress",
+        unit,
+        city,
+        region,
+        "postalCode"
+      FROM "CustomerCsvImportRow"
+      WHERE id = ${row.id}
+        AND "businessId" = ${access.businessId}
+      FOR UPDATE
+    `;
+    const current = locked[0];
+    if (
+      !current ||
+      current.businessId !== access.businessId ||
+      current.importId !== row.importId
+    ) {
       throw new CustomerCsvImportError(IMPORT_NOT_AVAILABLE_MESSAGE);
     }
     if (current.createdCustomerId) {

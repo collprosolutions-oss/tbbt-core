@@ -100,6 +100,19 @@ if (!baseUrl) {
   process.exit(1);
 }
 
+function isLocalDatabaseHost(hostname) {
+  const host = (hostname ?? "").replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+const parsedBase = new URL(baseUrl);
+if (!isLocalDatabaseHost(parsedBase.hostname)) {
+  console.error(
+    `customer CSV import checks refuse a remote DATABASE_URL host (${parsedBase.hostname}).`,
+  );
+  process.exit(1);
+}
+
 const testDbName = "tbbt_customer_csv_import_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
@@ -108,27 +121,17 @@ process.env.DATABASE_URL = testUrl;
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for customer CSV import test database.");
-  process.exit(push.status ?? 1);
-}
 
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
+const clients = [];
+function trackClient(client) {
+  clients.push(client);
+  return client;
+}
+
+let prisma;
 let failures = 0;
 function check(label, condition) {
   if (condition) {
@@ -158,6 +161,24 @@ function csv(rows) {
 }
 
 try {
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+    console.warn(createDb.stderr || createDb.stdout);
+  }
+
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    throw new Error("Failed to push schema for customer CSV import test database.");
+  }
+
+  prisma = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+
   console.log("\nSTATIC — bounds, wording, isolation of shared files");
   check("File bound is 256 KB", MAX_CUSTOMER_CSV_IMPORT_BYTES === 256 * 1024);
   check("Row bound is 200", MAX_CUSTOMER_CSV_IMPORT_ROWS === 200);
@@ -249,6 +270,28 @@ try {
       !opsSrc.includes("customer.update") &&
       opsSrc.includes("reusedExisting = true") &&
       featureSource.includes("isIgnoredConsentHeader"),
+  );
+  const applyConfirmedSlice = opsSrc.slice(
+    opsSrc.indexOf("async function applyConfirmedRow"),
+    opsSrc.indexOf("export type ConfirmCustomerImportResult"),
+  );
+  check(
+    "applyConfirmedRow locks the staged row with FOR UPDATE before reading createdCustomerId",
+    applyConfirmedSlice.includes('FROM "CustomerCsvImportRow"') &&
+      applyConfirmedSlice.includes("FOR UPDATE") &&
+      applyConfirmedSlice.indexOf("FOR UPDATE") <
+        applyConfirmedSlice.indexOf("if (current.createdCustomerId)"),
+  );
+  const harnessSrc = readSrc("scripts/check-customer-csv-import.mjs");
+  check(
+    "Harness refuses a remote DATABASE_URL host and drops the dedicated DB",
+    harnessSrc.includes('host === "localhost"') &&
+      harnessSrc.includes('host === "127.0.0.1"') &&
+      harnessSrc.includes('host === "::1"') &&
+      harnessSrc.includes('DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)') &&
+      !/process\.exit\(/.test(
+        harnessSrc.slice(harnessSrc.indexOf("try {"), harnessSrc.lastIndexOf("process.exitCode")),
+      ),
   );
   check(
     "Fingerprint is stable for the same sanitized identity and address",
@@ -901,16 +944,91 @@ try {
   );
   check("Same-file customer stays UNKNOWN for SMS consent", pat[0]?.smsConsentStatus === "UNKNOWN");
 
+  console.log("\nRACE — two confirms at once create one customer and one property");
+  const raceCsv = Buffer.from(
+    [
+      "name,email,phone,label,street,city,region,postal",
+      "Race Ada,race-ada@example.com,2395550333,Home,33 Race St,Naples,FL,34102",
+    ].join("\n"),
+  );
+  const racePreview = await previewCustomerCsvUpload(prisma, ownerA, {
+    filename: "race-confirm.csv",
+    bytes: raceCsv,
+  });
+  check(
+    "Race preview has one ready row and no existing same-business customer",
+    racePreview.validCount === 1 &&
+      racePreview.possibleDuplicateCount === 0 &&
+      racePreview.rows[0]?.createdCustomerId == null,
+  );
+
+  let releaseRaceBarrier;
+  const raceBarrier = new Promise((resolve) => {
+    releaseRaceBarrier = resolve;
+  });
+  let raceArrivals = 0;
+  function arriveAtRaceBarrier() {
+    raceArrivals += 1;
+    if (raceArrivals >= 2) releaseRaceBarrier();
+    return raceBarrier;
+  }
+
+  const racerA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const racerB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const raceResults = await Promise.allSettled([
+    arriveAtRaceBarrier().then(() =>
+      confirmCustomerCsvImport(racerA, ownerA, { importId: racePreview.id }),
+    ),
+    arriveAtRaceBarrier().then(() =>
+      confirmCustomerCsvImport(racerB, ownerA, { importId: racePreview.id }),
+    ),
+  ]);
+  check(
+    "Both concurrent confirms settle and are observed",
+    raceResults.length === 2 && raceResults.every((result) => result.status === "fulfilled"),
+  );
+  const raceCustomers = await prisma.customer.findMany({
+    where: { businessId: businessA.id, email: "race-ada@example.com" },
+    include: { properties: true },
+  });
+  check("Concurrent confirms create exactly one customer", raceCustomers.length === 1);
+  check(
+    "Concurrent confirms create exactly one property for that row",
+    raceCustomers[0]?.properties.length === 1 &&
+      raceCustomers[0].properties[0]?.addressLine1 === "33 Race St" &&
+      raceCustomers[0].properties[0]?.businessId === businessA.id,
+  );
+  const raceRowAfter = await prisma.customerCsvImportRow.findFirst({
+    where: { importId: racePreview.id, businessId: businessA.id },
+  });
+  check(
+    "Both racers reuse the same created customer and property ids",
+    raceRowAfter?.createdCustomerId === raceCustomers[0]?.id &&
+      raceRowAfter?.createdPropertyId === raceCustomers[0]?.properties[0]?.id &&
+      raceResults
+        .filter((result) => result.status === "fulfilled")
+        .every((result) => result.value.createdCustomerIds[0] === raceCustomers[0]?.id),
+  );
+
   console.log("\nCustomer CSV import check complete.");
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
-  await prisma.$disconnect();
+  for (const client of clients) {
+    await client.$disconnect().catch(() => {});
+  }
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`);
+  } finally {
+    await cleanup.$disconnect().catch(() => {});
+  }
 }
 
 if (failures > 0) {
   console.error(`\n${failures} customer CSV import check(s) failed.`);
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log("All customer CSV import checks passed.");
 }
-console.log("All customer CSV import checks passed.");
