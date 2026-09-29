@@ -45,6 +45,7 @@ const {
   COLLECTIONS_ROUTE,
   COLLECTIONS_UNKNOWN_INVOICE_MESSAGE,
   CollectionWorkItemError,
+  collectionWorkItemLockKey,
   collectionsWorklistReadAllowed,
   collectionsWorklistWriteAllowed,
   loadCollectionsWorklist,
@@ -96,6 +97,75 @@ const clients = [];
 function trackClient(client) {
   clients.push(client);
   return client;
+}
+
+const observedPromises = [];
+function observe(promise) {
+  const settled = Promise.resolve(promise).then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+  observedPromises.push(settled);
+  return settled;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const tracked = Promise.resolve(promise);
+  tracked.then(
+    () => {},
+    () => {},
+  );
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+  });
+  return Promise.race([tracked, timeout]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
+async function countUngrantedCollectionLocks(client, lockKey) {
+  const rows = await client.$queryRaw`
+    SELECT COUNT(*)::int AS n
+    FROM pg_locks
+    WHERE locktype = 'advisory'
+      AND granted = false
+      AND objsubid = 1
+      AND classid = CASE WHEN hashtext(${lockKey}) < 0 THEN -1 ELSE 0 END
+      AND objid = hashtext(${lockKey})
+  `;
+  return Number(rows[0]?.n ?? 0);
+}
+
+async function waitForUngrantedCollectionLocks(client, lockKey, expected, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const waiting = await withTimeout(
+      countUngrantedCollectionLocks(client, lockKey),
+      remaining,
+      `polling advisory locks on ${lockKey}`,
+    );
+    if (waiting >= expected) return;
+    const slack = deadline - Date.now();
+    if (slack <= 0) break;
+    await withTimeout(
+      delay(Math.min(20, slack)),
+      slack,
+      `advisory lock poll delay on ${lockKey}`,
+    );
+  }
+  throw new Error(
+    `Timed out waiting for ${expected} ungranted advisory locks on ${lockKey}`,
+  );
 }
 
 let prisma;
@@ -613,55 +683,145 @@ async function main() {
     total: "33.00",
     createdAt: daysAgo(3, now),
   });
-  function createBarrier(count) {
-    let arrived = 0;
-    let release;
-    const ready = new Promise((resolve) => {
-      release = resolve;
-    });
-    return {
-      async wait() {
-        arrived += 1;
-        if (arrived === count) release();
-        await ready;
-      },
-    };
-  }
-  const barrier = createBarrier(2);
+  const lockKey = collectionWorkItemLockKey({
+    businessId: businessA.id,
+    invoiceId: raceInvoice.invoice.id,
+  });
+  const holderUrl = new URL(testUrl);
+  holderUrl.searchParams.set("connection_limit", "1");
+  const holder = trackClient(new PrismaClient({ datasourceUrl: holderUrl.toString() }));
   const raceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
   const raceB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
-  const raceResults = await Promise.all([
-    (async () => {
-      await barrier.wait();
-      return recordCollectionNextStep(raceA, ownerA, {
-        invoiceId: raceInvoice.invoice.id,
-        nextStep: "CALL",
-        note: "race-A",
-      });
-    })(),
-    (async () => {
-      await barrier.wait();
-      return recordCollectionNextStep(raceB, ownerA, {
-        invoiceId: raceInvoice.invoice.id,
-        nextStep: "WAIT",
-        note: "race-B",
-      });
-    })(),
-  ]);
-  const raceIds = new Set(raceResults.map((row) => row.workItem.id));
+  await holder.$connect();
+  await withTimeout(
+    holder.$executeRaw`SELECT pg_advisory_lock(hashtext(${lockKey}))`,
+    10_000,
+    "holder collection advisory lock",
+  );
+
+  const raceAPromise = recordCollectionNextStep(raceA, ownerA, {
+    invoiceId: raceInvoice.invoice.id,
+    nextStep: "CALL",
+    note: "race-A",
+  });
+  observe(raceAPromise);
+  const raceBPromise = recordCollectionNextStep(raceB, ownerA, {
+    invoiceId: raceInvoice.invoice.id,
+    nextStep: "WAIT",
+    note: "race-B",
+  });
+  observe(raceBPromise);
+
+  let twoWaiters = false;
+  try {
+    await waitForUngrantedCollectionLocks(prisma, lockKey, 2, 10_000);
+    twoWaiters = true;
+  } catch (error) {
+    console.error(error);
+  }
+  check(
+    "Both next-step racers wait on the collection work-item advisory lock",
+    twoWaiters,
+  );
+
+  try {
+    await withTimeout(
+      holder.$executeRaw`SELECT pg_advisory_unlock(hashtext(${lockKey}))`,
+      10_000,
+      "holder collection advisory unlock",
+    );
+  } catch (error) {
+    console.error(error);
+  }
+
+  let raceSettled = [];
+  try {
+    raceSettled = await withTimeout(
+      Promise.allSettled([raceAPromise, raceBPromise]),
+      10_000,
+      "collection next-step racers",
+    );
+  } catch (error) {
+    console.error(error);
+  }
+  const fulfilledRaces = raceSettled.filter((row) => row.status === "fulfilled");
+  const raceIds = new Set(fulfilledRaces.map((row) => row.value.workItem.id));
   const raceCount = await prisma.invoiceCollectionWorkItem.count({
     where: { businessId: businessA.id, invoiceId: raceInvoice.invoice.id },
   });
   check(
     "Concurrent next-step writes on separate clients produce one work item",
-    raceIds.size === 1 && raceCount === 1,
+    raceSettled.length === 2 &&
+      raceSettled.every((row) => row.status === "fulfilled") &&
+      raceIds.size === 1 &&
+      raceCount === 1,
+  );
+
+  const fallbackInvoice = await seedSentInvoice({
+    businessId: businessA.id,
+    customerId: customer.id,
+    total: "21.00",
+    createdAt: daysAgo(4, now),
+  });
+  const existingFallback = await prisma.invoiceCollectionWorkItem.create({
+    data: {
+      businessId: businessA.id,
+      invoiceId: fallbackInvoice.invoice.id,
+      customerId: customer.id,
+      status: "OPEN",
+      nextStep: "EMAIL",
+      note: "existing-unique",
+      createdByMembershipId: ownerMem.id,
+      updatedByMembershipId: ownerMem.id,
+    },
+  });
+  let fallbackResult;
+  let fallbackError;
+  try {
+    fallbackResult = await withTimeout(
+      recordCollectionNextStep(prisma, ownerA, {
+        invoiceId: fallbackInvoice.invoice.id,
+        nextStep: "CALL",
+        note: "p2002-fallback",
+      }),
+      10_000,
+      "P2002 fallback next-step write",
+    );
+  } catch (error) {
+    fallbackError = error;
+    console.error(error);
+  }
+  check(
+    "Later next-step write returns the existing unique work item",
+    !fallbackError && fallbackResult?.workItem.id === existingFallback.id,
+  );
+  check(
+    "P2002 fallback returns the existing work item",
+    writeSrc.includes('error.code === "P2002"') &&
+      writeSrc.includes("const raced = await findOwnedWorkItem") &&
+      writeSrc.includes("workItem: raced"),
   );
   } catch (error) {
     console.error(error);
     failures += 1;
   } finally {
+    if (observedPromises.length > 0) {
+      try {
+        await withTimeout(
+          Promise.allSettled(observedPromises),
+          10_000,
+          "observed racer cleanup",
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    }
     for (const client of clients) {
-      await client.$disconnect();
+      try {
+        await client.$disconnect();
+      } catch {
+        // DROP must still run even if a client disconnect fails.
+      }
     }
     spawnSync("psql", [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}" WITH (FORCE)`], {
       encoding: "utf8",
