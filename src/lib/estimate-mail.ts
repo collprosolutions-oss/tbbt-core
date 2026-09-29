@@ -30,19 +30,33 @@ export function buildEstimateReadyEmail(input: {
   businessName: string;
   customerName: string | null;
   total: { toString(): string };
+  optionTotals?: Array<{ name: string; total: { toString(): string } }>;
   address: string | null;
   approveUrl: string;
 }) {
   const firstName = customerFirstName(input.customerName);
   const greeting = firstName ? `Hi ${firstName},` : "Hi,";
-  const total = formatMoney(input.total);
+  const optionTotals = input.optionTotals ?? [];
+  const totalLines =
+    optionTotals.length >= 2
+      ? optionTotals.map((option) => `${option.name}: ${formatMoney(option.total)}`)
+      : [`Estimate total: ${formatMoney(input.total)}`];
+  const totalHtml =
+    optionTotals.length >= 2
+      ? optionTotals
+          .map(
+            (option) =>
+              `<p><strong>${escapeHtml(option.name)}: ${escapeHtml(formatMoney(option.total))}</strong></p>`,
+          )
+          .join("")
+      : `<p><strong>Estimate total: ${escapeHtml(formatMoney(input.total))}</strong></p>`;
   const addressBlock = serviceAddressEmail(input.address);
 
   const text = [
     greeting,
     "",
     `${input.businessName} has an estimate ready for you.`,
-    `Estimate total: ${total}`,
+    ...totalLines,
     addressBlock.text,
     "",
     "View and approve your estimate:",
@@ -61,7 +75,7 @@ export function buildEstimateReadyEmail(input: {
   <body style="margin:0;padding:24px;background:#f8fafc;color:#0f172a;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;">
     <p>${escapeHtml(greeting)}</p>
     <p>${escapeHtml(input.businessName)} has an estimate ready for you.</p>
-    <p><strong>Estimate total: ${escapeHtml(total)}</strong></p>
+    ${totalHtml}
     ${addressBlock.html}
     <p>
       <a href="${escapeHtml(input.approveUrl)}" style="display:inline-block;padding:12px 18px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;">View &amp; Approve Estimate</a>

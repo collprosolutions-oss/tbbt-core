@@ -1393,7 +1393,7 @@ check(
 );
 
 const estimateOptionsMigration = readFileSync(
-  new URL("../prisma/migrations/20260929010000_estimate_options/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260929010400_estimate_options/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -1405,11 +1405,12 @@ check(
     estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateVersionOption"') &&
     estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedOptionId"') &&
     estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedEstimateOptionId"') &&
-    localNames.includes("20260929010000_estimate_options") &&
+    localNames.includes("20260929010400_estimate_options") &&
+    !localNames.includes("20260929010000_estimate_options") &&
     !localNames.includes("20260928200000_estimate_options") &&
     localNames.includes("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_estimate_options"),
+      localNames.indexOf("20260929010400_estimate_options"),
 );
 
 const materialsSchema = readFileSync(

@@ -1437,18 +1437,22 @@ export async function sendEstimate(
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    const current = await tx.estimate.findFirst({
+    await tx.$queryRaw`
+      SELECT id FROM "Estimate"
+      WHERE id = ${estimate.id} AND "businessId" = ${access.businessId}
+      FOR UPDATE
+    `;
+    const locked = await tx.estimate.findFirst({
       where: { id: estimate.id, businessId: access.businessId },
       include: {
         lineItems: { select: { id: true, description: true, unitPrice: true, optionId: true } },
         options: { select: { id: true, name: true, sortOrder: true }, orderBy: { sortOrder: "asc" } },
       },
     });
-
-    if (!current) {
+    if (!locked) {
       return { error: "That estimate could not be sent." };
     }
-    const currentBlocked = draftEstimateSendError(current);
+    const currentBlocked = draftEstimateSendError(locked);
     if (currentBlocked) {
       return { error: currentBlocked };
     }
@@ -1593,6 +1597,16 @@ export async function emailSentEstimate(
             postalCode: true,
           },
         },
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          take: 1,
+          select: {
+            options: {
+              orderBy: { sortOrder: "asc" },
+              select: { name: true, total: true },
+            },
+          },
+        },
       },
     }),
   );
@@ -1618,6 +1632,7 @@ export async function emailSentEstimate(
     businessName: access.workspace.business.name,
     customerName: estimate.customer?.name ?? null,
     total: estimate.total,
+    optionTotals: estimate.versions[0]?.options ?? [],
     address: formatEstimateServiceAddress(estimate.property),
     approveUrl:
       tenantEstimateUrl(access.workspace.business.slug, estimate.publicToken) ??

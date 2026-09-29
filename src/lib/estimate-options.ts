@@ -279,3 +279,49 @@ export function isolateSameBusinessOptions<T extends { businessId: string }>(
 ): T[] {
   return rows.filter((row) => row.businessId === businessId);
 }
+
+export function pricedOptionRangeLabel(
+  options: ReadonlyArray<{ total: Prisma.Decimal | { toString(): string } | number | string }>,
+  formatMoney: (
+    value: Prisma.Decimal | { toString(): string } | number | string,
+  ) => string,
+): string | null {
+  if (options.length < MIN_ESTIMATE_OPTIONS) return null;
+  const first = formatMoney(options[0]!.total);
+  const last = formatMoney(options[options.length - 1]!.total);
+  return first === last ? first : `${first} – ${last}`;
+}
+
+export function estimateListTotalLabel(
+  estimate: {
+    total: Prisma.Decimal | { toString(): string } | number | string;
+    approvedOption?: { total: Prisma.Decimal | { toString(): string } | number | string } | null;
+    options?: ReadonlyArray<{
+      id?: string;
+      total?: Prisma.Decimal | { toString(): string } | number | string;
+    }> | null;
+    versions?: ReadonlyArray<{
+      options?: ReadonlyArray<{
+        total: Prisma.Decimal | { toString(): string } | number | string;
+      }> | null;
+    }> | null;
+  },
+  formatMoney: (
+    value: Prisma.Decimal | { toString(): string } | number | string,
+  ) => string,
+): string {
+  if (estimate.approvedOption) {
+    return formatMoney(estimate.approvedOption.total);
+  }
+  const versionOptions = estimate.versions?.[0]?.options ?? [];
+  const versionRange = pricedOptionRangeLabel(versionOptions, formatMoney);
+  if (versionRange) return versionRange;
+  const live = estimate.options ?? [];
+  if (live.length >= MIN_ESTIMATE_OPTIONS) {
+    const withTotals = live.filter((option) => option.total != null) as Array<{
+      total: Prisma.Decimal | { toString(): string } | number | string;
+    }>;
+    return pricedOptionRangeLabel(withTotals, formatMoney) ?? "Options";
+  }
+  return formatMoney(estimate.total);
+}

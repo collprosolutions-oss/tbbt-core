@@ -57,12 +57,12 @@ export async function notifyCustomerAppointmentProposed(
           postalCode: true,
         },
       },
+      approvedEstimateOptionId: true,
       estimate: {
         select: {
           lineItems: {
             orderBy: { createdAt: "asc" },
-            select: { description: true },
-            take: 1,
+            select: { description: true, optionId: true },
           },
         },
       },
@@ -70,8 +70,7 @@ export async function notifyCustomerAppointmentProposed(
         select: {
           lineItems: {
             orderBy: { createdAt: "asc" },
-            select: { description: true },
-            take: 1,
+            select: { description: true, optionId: true },
           },
         },
       },
@@ -158,7 +157,16 @@ export async function notifyCustomerAppointmentProposed(
     scheduledAt: input.scheduledAt,
     scheduledDurationMinutes: input.scheduledDurationMinutes,
     serviceDescription: appointmentServiceDescription(
-      job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems,
+      (() => {
+        const optionId = job.approvedEstimateOptionId ?? null;
+        const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
+        const estimateLines = job.estimate?.lineItems ?? [];
+        const source = versionLines.length > 0 ? versionLines : estimateLines;
+        const chosen = optionId
+          ? source.filter((line) => line.optionId === optionId)
+          : source;
+        return chosen.slice(0, 1);
+      })(),
     ),
     projectUrl:
       tenantProjectUrl(job.business.slug, job.projectToken) ??

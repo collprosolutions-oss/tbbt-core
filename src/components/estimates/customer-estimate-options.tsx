@@ -16,9 +16,9 @@ export function CustomerEstimateOptions({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {selectable
-          ? "Choose one priced option. Approval records only that scope."
-          : "Approved scope"}
+        {selectedOptionId || options.some((option) => option.approved)
+          ? "Approved scope"
+          : "Priced options: choose one below"}
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         {options.map((option) => {

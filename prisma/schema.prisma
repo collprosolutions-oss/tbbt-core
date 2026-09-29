@@ -1220,6 +1220,7 @@ model Estimate {
   @@index([businessId])
   @@index([propertyId])
   @@index([campaignId])
+  @@index([approvedOptionId])
 }
 
 /// OWNER-named, business-scoped set of draft estimate line snapshots.
@@ -1578,6 +1579,7 @@ model Job {
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
   @@index([campaignId])
+  @@index([approvedEstimateOptionId])
 }
 
 /// Append-only appointment communication/confirmation history for one Job.

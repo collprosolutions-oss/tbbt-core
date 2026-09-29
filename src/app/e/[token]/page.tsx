@@ -108,6 +108,7 @@ export default async function PublicEstimatePage({
                       : estimate.options
                   }
                   selectable={false}
+                  selectedOptionId={estimate.approvedOptionId ?? undefined}
                 />
               ) : hasLines ? (
                 <CustomerEstimateLineSections

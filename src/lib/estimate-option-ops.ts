@@ -214,6 +214,7 @@ export async function renameEstimateOption(
       id: input.optionId,
       estimateId: estimate.id,
       businessId: access.businessId,
+      estimate: { status: "DRAFT" },
     },
     data: { name: parsed.name },
   });

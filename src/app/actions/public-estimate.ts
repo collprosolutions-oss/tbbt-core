@@ -70,6 +70,9 @@ export async function approveEstimate(
 
   const result = await prisma.$transaction(
     async (tx): Promise<ApproveTransactionResult> => {
+      await tx.$queryRaw`
+        SELECT id FROM "Estimate" WHERE "publicToken" = ${token} FOR UPDATE
+      `;
       const current = await tx.estimate.findFirst({
         where: { publicToken: token },
         select: { id: true, businessId: true, status: true },
@@ -139,7 +142,11 @@ export async function approveEstimate(
       }
 
       const updated = await tx.estimate.updateMany({
-        where: { id: current.id, status: "SENT" },
+        where: {
+          id: current.id,
+          status: "SENT",
+          approvedVersionId: null,
+        },
         data: {
           status: "APPROVED",
           approvedVersionId: currentVersion.id,

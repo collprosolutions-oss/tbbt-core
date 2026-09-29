@@ -37,6 +37,10 @@ export async function loadJobProfitabilityCloseout(
       createdAt: true,
       scheduledDurationMinutes: true,
       customer: { select: { name: true } },
+      approvedEstimateOptionId: true,
+      approvedEstimateOption: {
+        select: { id: true, total: true, laborMinimumAdjustment: true },
+      },
       approvedEstimateVersion: {
         select: {
           id: true,
@@ -44,7 +48,13 @@ export async function loadJobProfitabilityCloseout(
           versionNumber: true,
           approvedAt: true,
           lineItems: {
-            select: { type: true, quantity: true, total: true, description: true },
+            select: {
+              type: true,
+              quantity: true,
+              total: true,
+              description: true,
+              optionId: true,
+            },
             take: CLOSEOUT_READ_BOUND,
           },
         },
@@ -207,9 +217,16 @@ export async function loadJobProfitabilityCloseout(
   // Canonical Actual-vs-Estimate baseline is the Job's exact approved
   // EstimateVersion. Do not scan every historical approvedAt version.
   const pinnedVersion = job.approvedEstimateVersion;
+  const chosenOptionId =
+    job.approvedEstimateOptionId ?? job.approvedEstimateOption?.id ?? null;
+  const pinnedLines = pinnedVersion
+    ? chosenOptionId
+      ? pinnedVersion.lineItems.filter((line) => line.optionId === chosenOptionId)
+      : pinnedVersion.lineItems
+    : [];
   const approvedVersionLines: JobCloseoutInputLines[] =
     pinnedVersion && estimateId
-      ? pinnedVersion.lineItems.map((line) => ({
+      ? pinnedLines.map((line) => ({
           estimateId,
           type: line.type,
           quantity: asNumber(line.quantity),
@@ -277,9 +294,11 @@ export async function loadJobProfitabilityCloseout(
       createdAt: job.createdAt,
       scheduledDurationMinutes: job.scheduledDurationMinutes,
       approvedEstimateVersionId: job.approvedEstimateVersion?.id ?? null,
-      approvedEstimateVersionTotal: job.approvedEstimateVersion
-        ? asNumber(job.approvedEstimateVersion.total)
-        : null,
+      approvedEstimateVersionTotal: job.approvedEstimateOption
+        ? asNumber(job.approvedEstimateOption.total)
+        : job.approvedEstimateVersion
+          ? asNumber(job.approvedEstimateVersion.total)
+          : null,
       approvedEstimateVersionNumber: job.approvedEstimateVersion?.versionNumber ?? null,
     },
     estimates: estimates.map((estimate) => ({

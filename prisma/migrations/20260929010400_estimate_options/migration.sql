@@ -3,8 +3,9 @@
 -- statement is IF NOT EXISTS. No backfill. Existing estimates keep zero
 -- option rows and null option FKs — single-option send/approve/job
 -- behavior is unchanged.
--- Timestamp is 20260929010000 so it does not collide with
--- 20260928200000_estimate_line_template_archive (#210).
+-- Timestamp is 20260929010400 so it does not collide with
+-- 20260928200000_estimate_line_template_archive (#210) or the
+-- 20260929010000–20260929010300 slots used by #213–#216.
 
 CREATE TABLE IF NOT EXISTS "EstimateOption" (
     "id" TEXT NOT NULL,
