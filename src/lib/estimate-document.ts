@@ -542,10 +542,21 @@ async function withPaymentSummary(
     id: string;
     businessId: string;
     total: Prisma.Decimal;
-    lineItems: Array<{ type: string; total: Prisma.Decimal; description: string }>;
+    approvedOptionId?: string | null;
+    lineItems: Array<{
+      type: string;
+      total: Prisma.Decimal;
+      description: string;
+      optionId?: string | null;
+    }>;
     versions?: Array<{
       total: Prisma.Decimal;
-      lineItems: Array<{ type: string; total: Prisma.Decimal; description: string }>;
+      lineItems: Array<{
+        type: string;
+        total: Prisma.Decimal;
+        description: string;
+        optionId?: string | null;
+      }>;
     }>;
   },
   document: EstimateDocumentView,
@@ -556,7 +567,7 @@ async function withPaymentSummary(
   const chosen = resolveChosenCommercialScope({
     total: estimate.total,
     lineItems: estimate.lineItems,
-    approvedOptionId: "approvedOptionId" in estimate ? estimate.approvedOptionId : null,
+    approvedOptionId: estimate.approvedOptionId ?? null,
     approvedVersion: version
       ? {
           total: version.total,

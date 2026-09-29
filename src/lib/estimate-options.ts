@@ -206,12 +206,10 @@ export function isMultiOptionEstimate(
   return (options?.length ?? 0) >= MIN_ESTIMATE_OPTIONS;
 }
 
-export function resolveChosenCommercialScope<
-  TLine extends { optionId?: string | null },
->(input: {
+export function resolveChosenCommercialScope<TLive, TVersion = TLive>(input: {
   total: Prisma.Decimal | { toString(): string } | number | string;
   laborMinimumAdjustment?: Prisma.Decimal | { toString(): string } | number | string;
-  lineItems: TLine[];
+  lineItems: TLive[];
   approvedOptionId?: string | null;
   approvedOption?: {
     id: string;
@@ -222,7 +220,7 @@ export function resolveChosenCommercialScope<
   approvedVersion?: {
     total: Prisma.Decimal | { toString(): string } | number | string;
     laborMinimumAdjustment?: Prisma.Decimal | { toString(): string } | number | string;
-    lineItems?: TLine[];
+    lineItems?: TVersion[];
     options?: Array<{
       id: string;
       name?: string | null;
@@ -230,21 +228,25 @@ export function resolveChosenCommercialScope<
       laborMinimumAdjustment?: Prisma.Decimal | { toString(): string } | number | string;
     }>;
   } | null;
-}): ChosenCommercialScope<TLine> {
+}): ChosenCommercialScope<TLive | TVersion> {
   const version = input.approvedVersion ?? null;
   const optionId = input.approvedOptionId ?? input.approvedOption?.id ?? null;
   const option =
     input.approvedOption ??
     version?.options?.find((row) => row.id === optionId) ??
     null;
-  const versionLines = version?.lineItems ?? input.lineItems;
+  const versionLines = (version?.lineItems ?? input.lineItems) as Array<TLive | TVersion>;
+  const lineOptionId = (line: TLive | TVersion) =>
+    line && typeof line === "object" && "optionId" in line
+      ? (line as { optionId?: string | null }).optionId
+      : null;
   if (optionId && option) {
     return {
       total: toDecimal(option.total),
       laborMinimumAdjustment: option.laborMinimumAdjustment
         ? toDecimal(option.laborMinimumAdjustment)
         : undefined,
-      lineItems: versionLines.filter((line) => line.optionId === optionId),
+      lineItems: versionLines.filter((line) => lineOptionId(line) === optionId),
       optionId,
       optionName: option.name ?? null,
     };

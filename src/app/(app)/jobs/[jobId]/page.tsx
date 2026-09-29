@@ -148,7 +148,6 @@ export default async function JobPage({
       // from -- see resolveApprovedWorkOrderScope() in
       // src/lib/job-work-order.ts for why this is preferred over the (live,
       // mutable) `estimate` relation above.
-      approvedEstimateOptionId: true,
       approvedEstimateOption: {
         select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
       },
