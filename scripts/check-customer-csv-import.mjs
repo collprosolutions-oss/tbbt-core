@@ -160,6 +160,36 @@ function csv(rows) {
   return ["name,email,phone,label,street,city,region,postal", ...rows].join("\n");
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function observeSettled(promise) {
+  const settled = promise.then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+  return { promise, settled };
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  timeout.catch(() => {});
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
+function dedicatedClientUrl(applicationName) {
+  const url = new URL(testUrl);
+  url.searchParams.set("connection_limit", "1");
+  url.searchParams.set("application_name", applicationName);
+  return url.toString();
+}
+
 try {
   const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
     encoding: "utf8",
@@ -292,6 +322,18 @@ try {
       !/process\.exit\(/.test(
         harnessSrc.slice(harnessSrc.indexOf("try {"), harnessSrc.lastIndexOf("process.exitCode")),
       ),
+  );
+  const raceSlice = harnessSrc.slice(harnessSrc.indexOf("RACE — two confirms"));
+  check(
+    "Race test holds the staged row lock and waits until both racers block",
+    raceSlice.includes("SELECT id") &&
+      raceSlice.includes('FROM "CustomerCsvImportRow"') &&
+      raceSlice.includes("FOR UPDATE") &&
+      raceSlice.includes("pg_stat_activity") &&
+      raceSlice.includes("pg_locks") &&
+      raceSlice.includes("wait_event_type") &&
+      raceSlice.includes("Promise.allSettled") &&
+      raceSlice.includes("observeSettled"),
   );
   check(
     "Fingerprint is stable for the same sanitized identity and address",
@@ -962,27 +1004,115 @@ try {
       racePreview.rows[0]?.createdCustomerId == null,
   );
 
-  let releaseRaceBarrier;
-  const raceBarrier = new Promise((resolve) => {
-    releaseRaceBarrier = resolve;
-  });
-  let raceArrivals = 0;
-  function arriveAtRaceBarrier() {
-    raceArrivals += 1;
-    if (raceArrivals >= 2) releaseRaceBarrier();
-    return raceBarrier;
-  }
+  const raceRowId = racePreview.rows[0]?.id;
+  check("Race row is staged for the lock-holder confirm", Boolean(raceRowId));
 
-  const racerA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
-  const racerB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
-  const raceResults = await Promise.allSettled([
-    arriveAtRaceBarrier().then(() =>
+  const RACE_HOLDER_APP = "tbbt-csv-import-race-holder";
+  const RACE_RACER_A_APP = "tbbt-csv-import-racer-a";
+  const RACE_RACER_B_APP = "tbbt-csv-import-racer-b";
+  const holder = trackClient(
+    new PrismaClient({ datasourceUrl: dedicatedClientUrl(RACE_HOLDER_APP) }),
+  );
+  const racerA = trackClient(
+    new PrismaClient({ datasourceUrl: dedicatedClientUrl(RACE_RACER_A_APP) }),
+  );
+  const racerB = trackClient(
+    new PrismaClient({ datasourceUrl: dedicatedClientUrl(RACE_RACER_B_APP) }),
+  );
+  await holder.$executeRaw`SELECT set_config('application_name', ${RACE_HOLDER_APP}, false)`;
+  await racerA.$executeRaw`SELECT set_config('application_name', ${RACE_RACER_A_APP}, false)`;
+  await racerB.$executeRaw`SELECT set_config('application_name', ${RACE_RACER_B_APP}, false)`;
+
+  let releaseHolderLock = () => {};
+  const holderReleased = new Promise((resolve) => {
+    releaseHolderLock = resolve;
+  });
+  let signalHolderLocked = () => {};
+  const holderLocked = new Promise((resolve) => {
+    signalHolderLocked = resolve;
+  });
+  const holderState = { pid: null };
+  const holderObserved = observeSettled(
+    holder.$transaction(
+      async (tx) => {
+        const pidRows = await tx.$queryRaw`SELECT pg_backend_pid()::int AS pid`;
+        holderState.pid = pidRows[0]?.pid ?? null;
+        const locked = await tx.$queryRaw`
+          SELECT id
+          FROM "CustomerCsvImportRow"
+          WHERE id = ${raceRowId}
+            AND "businessId" = ${businessA.id}
+          FOR UPDATE
+        `;
+        if (!locked[0]?.id) {
+          throw new Error("holder could not lock the race CustomerCsvImportRow");
+        }
+        signalHolderLocked();
+        await holderReleased;
+      },
+      { maxWait: 5_000, timeout: 30_000 },
+    ),
+  );
+
+  let raceResults = [];
+  try {
+    await withTimeout(holderLocked, 5_000, "holder FOR UPDATE");
+    const racerAObserved = observeSettled(
       confirmCustomerCsvImport(racerA, ownerA, { importId: racePreview.id }),
-    ),
-    arriveAtRaceBarrier().then(() =>
+    );
+    const racerBObserved = observeSettled(
       confirmCustomerCsvImport(racerB, ownerA, { importId: racePreview.id }),
-    ),
-  ]);
+    );
+
+    const waitDeadline = Date.now() + 10_000;
+    let waitingCount = 0;
+    while (Date.now() < waitDeadline) {
+      const waited = await prisma.$queryRaw`
+        SELECT COUNT(DISTINCT a.pid)::int AS n
+        FROM pg_stat_activity a
+        JOIN pg_locks w ON w.pid = a.pid AND NOT w.granted
+        JOIN pg_locks h
+          ON h.granted
+         AND h.pid = ${holderState.pid}
+         AND h.locktype = w.locktype
+         AND h.database IS NOT DISTINCT FROM w.database
+         AND h.relation IS NOT DISTINCT FROM w.relation
+         AND h.page IS NOT DISTINCT FROM w.page
+         AND h.tuple IS NOT DISTINCT FROM w.tuple
+         AND h.virtualxid IS NOT DISTINCT FROM w.virtualxid
+         AND h.transactionid IS NOT DISTINCT FROM w.transactionid
+         AND h.classid IS NOT DISTINCT FROM w.classid
+         AND h.objid IS NOT DISTINCT FROM w.objid
+         AND h.objsubid IS NOT DISTINCT FROM w.objsubid
+        WHERE a.datname = current_database()
+          AND a.wait_event_type = 'Lock'
+          AND a.application_name IN (${RACE_RACER_A_APP}, ${RACE_RACER_B_APP})
+      `;
+      waitingCount = waited[0]?.n ?? 0;
+      if (waitingCount >= 2) break;
+      await delay(25);
+    }
+    check(
+      "Both racers wait on the held CustomerCsvImportRow lock",
+      waitingCount >= 2,
+    );
+    if (waitingCount < 2) {
+      throw new Error(
+        `Expected both racers to wait on the held row lock (wait_event_type=Lock); saw ${waitingCount}`,
+      );
+    }
+
+    releaseHolderLock();
+    await withTimeout(holderObserved.settled, 5_000, "holder release");
+    raceResults = await withTimeout(
+      Promise.allSettled([racerAObserved.promise, racerBObserved.promise]),
+      15_000,
+      "concurrent confirms",
+    );
+  } finally {
+    releaseHolderLock();
+    await holderObserved.settled.catch(() => {});
+  }
   check(
     "Both concurrent confirms settle and are observed",
     raceResults.length === 2 && raceResults.every((result) => result.status === "fulfilled"),
