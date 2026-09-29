@@ -36,6 +36,7 @@ export {
   discardReadyManagedUpload,
   authorizeBusinessUpload,
   authorizeManagedUpload,
+  bestEffortCleanupOwnedObject,
   createPrivateDownloadUrl,
   deleteStoredAsset,
   ensureBusinessStorageAccount,
@@ -72,6 +73,23 @@ export type {
   StoredAssetCategory,
   StoredAssetVisibility,
 } from "@/lib/business-storage/types";
+export {
+  EXPENSE_RECEIPT_CATEGORY,
+  EXPENSE_RECEIPT_MAX_BYTES,
+  EXPENSE_RECEIPT_PURPOSE,
+  abortExpenseReceiptUpload,
+  authorizeExpenseReceiptUpload,
+  detectExpenseReceiptMimeType,
+  expenseReceiptHref,
+  expenseReceiptMaxBytesLabel,
+  finalizeAndAttachExpenseReceipt,
+  inspectExpenseReceiptUpload,
+  isExpenseReceiptMimeType,
+  putExpenseReceiptFromBytes,
+  releaseUnreferencedExpenseReceiptAsset,
+  removeExpenseReceiptAttachment,
+  resolveExpenseReceiptMimeType,
+} from "@/lib/business-storage/expense-receipts";
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
   FIELD_JOB_PHOTO_PURPOSE,

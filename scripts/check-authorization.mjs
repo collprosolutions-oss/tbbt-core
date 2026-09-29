@@ -267,6 +267,7 @@ try {
     CAPABILITIES.AUTHORIZE_PAYROLL,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
+    CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
   ];
   check(
     "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
@@ -592,6 +593,15 @@ try {
   });
   await expectAllowed("ADMIN can pass the Expenses management capability gate", () => {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSES);
+  });
+  check("OWNER has MANAGE_EXPENSE_RECEIPTS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("ADMIN does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("MEMBER does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  await expectForbidden("ADMIN cannot pass the expense receipt mutation capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
+  });
+  await expectAllowed("OWNER can pass the expense receipt mutation capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   });
 
   console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");

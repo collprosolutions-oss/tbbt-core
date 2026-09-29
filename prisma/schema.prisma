@@ -1700,6 +1700,7 @@ model StoredAsset {
   jobPhotos            JobPhoto[]
   websiteGalleryItems  WebsiteGalleryItem[]
   vaultRecords         BusinessVaultRecord[]
+  expenseReceipts      Expense[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
@@ -2319,6 +2320,9 @@ model PayrollRunEvent {
 /// customerBillable marks a possible customer charge later. It never
 /// creates or updates an Invoice / LineItem.
 /// voidedAt is a soft void -- the row stays for job-cost history.
+/// receiptStoredAssetId is the private managed receipt. receiptUrl is
+/// a legacy pointer and is not cleared by private attach/remove. New
+/// receipts never write a public file URL.
 model Expense {
   id                    String    @id @default(cuid())
   businessId            String
@@ -2331,6 +2335,7 @@ model Expense {
   jobId                 String?
   customerId            String?
   receiptUrl            String?
+  receiptStoredAssetId  String?   @unique
   reimbursable          Boolean   @default(false)
   customerBillable      Boolean   @default(false)
   voidedAt              DateTime?
@@ -2356,6 +2361,7 @@ model Expense {
   reviewer   Membership? @relation("ExpenseReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
   job        Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
   customer   Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  receiptAsset StoredAsset? @relation(fields: [receiptStoredAssetId], references: [id], onDelete: SetNull)
   parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
   splits     Expense[]   @relation("ExpenseSplit")
   materialPurchaseItem MaterialPurchaseListItem?
