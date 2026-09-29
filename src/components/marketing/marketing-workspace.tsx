@@ -5,7 +5,7 @@ import { CreateContentForm } from "@/components/marketing/create-content-form";
 import { ExportPackageButton } from "@/components/marketing/export-package-button";
 import { ReviewPacketButton } from "@/components/marketing/review-packet-button";
 import { PhotoPermissionButton } from "@/components/marketing/photo-permission-button";
-import { PlannedDateForm } from "@/components/marketing/planned-date-form";
+import { StudioContentCalendar } from "@/components/marketing/studio-content-calendar";
 import { StudioEditForm } from "@/components/marketing/studio-edit-form";
 import { StudioPackagePreview } from "@/components/marketing/studio-package-preview";
 import type { MarketingWorkspaceProps } from "@/components/marketing/types";
@@ -15,12 +15,10 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
-import { formatISODate } from "@/lib/schedule";
 import { GenerateMarketingAiPanel } from "@/components/marketing/generate-ai-panel";
 import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } from "@/app/actions/campaigns";
 import { ActionForm } from "@/components/action-form";
 import {
-  CALENDAR_INTERNAL_MESSAGE,
   canDownloadMarketingReviewPacket,
   canExportCreatorPackage,
   COMING_NEXT_MESSAGE,
@@ -89,7 +87,14 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
         </FounderRegion>
 
         <FounderRegion id="calendar">
-          {area === "calendar" || area === "overview" ? <CalendarBody source={source} compact={area === "overview"} /> : null}
+          {area === "calendar" || area === "overview" ? (
+            <StudioContentCalendar
+              calendar={source.contentCalendar}
+              weeklyPlanCount={source.weeklyPlan.length}
+              viewerRole={viewerRole}
+              compact={area === "overview"}
+            />
+          ) : null}
         </FounderRegion>
       </div>
 
@@ -105,6 +110,9 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
             <p>{source.counts.awaitingReview} item{source.counts.awaitingReview === 1 ? "" : "s"} awaiting owner review.</p>
             <Button asChild size="sm" variant="outline">
               <Link href="/marketing?area=approval-queue">Open weekly approval queue</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/marketing?area=calendar">Open content calendar</Link>
             </Button>
             <p className="text-xs text-muted-foreground">Review / referral follow-up is a later module. Not built here.</p>
             <Button asChild size="sm" variant="outline">
@@ -555,50 +563,5 @@ function ContentBody({
         ))
       )}
     </div>
-  );
-}
-
-function CalendarBody({
-  source,
-  compact,
-}: {
-  source: MarketingWorkspaceProps["source"];
-  compact?: boolean;
-}) {
-  const dated = source.contents.filter((row) => row.plannedFor);
-  const items = compact ? dated.slice(0, 4) : source.contents;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Content calendar</CardTitle>
-        <CardDescription>
-          {CALENDAR_INTERNAL_MESSAGE} This week has {source.weeklyPlan.length} planned item{source.weeklyPlan.length === 1 ? "" : "s"}.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No marketing content has an internal planning date yet.</p>
-        ) : (
-          items.map((row) => (
-            <div key={row.id} className="space-y-2 rounded-lg border border-border/70 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-medium">{row.title}</p>
-                <StatusBadge status={row.status} />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {row.plannedFor ? `Planned ${formatDate(row.plannedFor)}` : "No planned date"}
-              </p>
-              {!compact ? (
-                <PlannedDateForm
-                  contentId={row.id}
-                  plannedFor={row.plannedFor ? formatISODate(row.plannedFor) : ""}
-                />
-              ) : null}
-            </div>
-          ))
-        )}
-      </CardContent>
-    </Card>
   );
 }
