@@ -273,6 +273,37 @@ export async function recordNativeJobChecklistItem(
   return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
+export async function syncNativeJobChecklistDraft(
+  token: string,
+  jobId: string,
+  input: {
+    expectedChecklist: Array<{ key: string; checked: boolean }>;
+    items: Array<{ itemKey: string; checked: boolean }>;
+  },
+): Promise<{ job: NativeJobDetail; alreadySynced: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/checklist/sync`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error:
+        typeof body.error === "string"
+          ? body.error
+          : "Those checklist changes could not be synced.",
+    };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadySynced: boolean };
+}
+
 export async function recordNativeJobVisit(
   token: string,
   jobId: string,

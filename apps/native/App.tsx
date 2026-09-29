@@ -71,7 +71,12 @@ export default function App() {
   if (jobId) {
     return (
       <>
-        <JobScreen jobId={jobId} onBack={() => setJobId(null)} token={session.token} />
+        <JobScreen
+          jobId={jobId}
+          onBack={() => setJobId(null)}
+          token={session.token}
+          workspace={session.workspace}
+        />
         <StatusBar style="light" />
       </>
     );

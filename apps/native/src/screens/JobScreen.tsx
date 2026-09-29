@@ -12,23 +12,30 @@ import {
   completeNativeJob,
   isApiError,
   loadNativeJob,
-  recordNativeJobChecklistItem,
   recordNativeJobVisit,
   startNativeActivityTime,
   startNativeJob,
   stopNativeActivityTime,
   stopNativeJobRunningTime,
 } from "../api";
-import type { NativeFieldActivityType, NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
+import type {
+  NativeFieldActivityType,
+  NativeJobDetail,
+  NativeVisitOutcomeStatus,
+  NativeWorkspace,
+} from "../types";
+import { JobChecklistSection } from "./JobChecklistSection";
 import { JobPhotosSection } from "./JobPhotosSection";
 
 export function JobScreen({
   token,
   jobId,
+  workspace,
   onBack,
 }: {
   token: string;
   jobId: string;
+  workspace: NativeWorkspace;
   onBack: () => void;
 }) {
   const [job, setJob] = useState<NativeJobDetail | null>(null);
@@ -41,7 +48,6 @@ export function JobScreen({
   const [pendingOutcome, setPendingOutcome] = useState<NativeVisitOutcomeStatus | null>(
     null,
   );
-  const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,23 +160,6 @@ export function JobScreen({
     await reloadAssignedJob(result.job);
     setPending(false);
     setPendingAction(null);
-  }
-
-  async function recordChecklistItem(itemKey: string, checked: boolean) {
-    if (pending) return;
-    setPending(true);
-    setPendingItemKey(itemKey);
-    setActionError(null);
-    const result = await recordNativeJobChecklistItem(token, jobId, { itemKey, checked });
-    if (isApiError(result)) {
-      setPending(false);
-      setPendingItemKey(null);
-      setActionError(result.error);
-      return;
-    }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingItemKey(null);
   }
 
   async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
@@ -347,40 +336,14 @@ export function JobScreen({
           ) : job.completeAction.reason && !job.startAction.available && !job.startAction.reason ? (
             <Text style={styles.notice}>{job.completeAction.reason}</Text>
           ) : null}
+          <JobChecklistSection
+            job={job}
+            onJobUpdated={setJob}
+            token={token}
+            workspace={workspace}
+          />
           {job.visit ? (
             <View style={styles.visit}>
-              {job.visit.checklist.length > 0 ? (
-                <View style={styles.checklist}>
-                  <Text style={styles.groupTitle}>Crew checklist</Text>
-                  <Text style={styles.body}>
-                    {job.visit.procedureTitle ?? "Cleaning pack crew checklist"}
-                  </Text>
-                  {job.visit.checklist.map((item) => (
-                    <View key={item.key} style={styles.checklistItem}>
-                      <Pressable
-                        disabled={pending}
-                        onPress={() => {
-                          void recordChecklistItem(item.key, !item.checked);
-                        }}
-                        style={[
-                          item.checked ? styles.secondaryAction : styles.primaryAction,
-                          styles.checklistAction,
-                          pending ? styles.primaryActionDisabled : null,
-                        ]}
-                      >
-                        <Text style={styles.primaryActionLabel}>
-                          {pendingItemKey === item.key
-                            ? "Saving…"
-                            : item.checked
-                              ? "Done"
-                              : "Mark done"}
-                        </Text>
-                      </Pressable>
-                      <Text style={styles.body}>{item.title}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
               <Text style={styles.groupTitle}>Visit outcome</Text>
               <Text style={styles.body}>
                 {job.visit.cadenceLabel !== "One-time"
@@ -514,17 +477,6 @@ const styles = StyleSheet.create({
   visit: {
     gap: 8,
     marginTop: 4,
-  },
-  checklist: {
-    gap: 8,
-  },
-  checklistItem: {
-    gap: 6,
-  },
-  checklistAction: {
-    alignSelf: "flex-start",
-    paddingVertical: 10,
-    marginTop: 0,
   },
   secondaryAction: {
     backgroundColor: "#1f2937",
