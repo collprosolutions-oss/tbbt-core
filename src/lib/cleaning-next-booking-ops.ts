@@ -27,6 +27,7 @@ import {
   parseOwnerNextBookingStart,
   resolveCleaningJobTradeCode,
 } from "@/lib/cleaning-next-booking";
+import { resolveCopyableBusinessLocationId } from "@/lib/business-location-ops";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export class CleaningNextBookingError extends Error {
@@ -301,7 +302,11 @@ export async function createNextBookingFromCompletedCleaningJob(
           scheduledDurationMinutes: fresh.scheduledDurationMinutes,
           leadSource: fresh.leadSource,
           campaignId: fresh.campaignId,
-          businessLocationId: fresh.businessLocationId,
+          businessLocationId: await resolveCopyableBusinessLocationId(
+            tx,
+            access.businessId,
+            fresh.businessLocationId,
+          ),
           serviceIntent: oneTime.serviceIntent,
           recurrenceCadence: oneTime.recurrenceCadence,
           recurrenceStatus: oneTime.recurrenceStatus,

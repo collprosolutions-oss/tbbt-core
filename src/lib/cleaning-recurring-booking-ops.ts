@@ -50,6 +50,7 @@ import {
 import { evaluateProposedSchedule, hasScheduleWarning } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { computeNextOccurrenceAt, parseRecurrenceCadence } from "@/lib/recurrence";
+import { resolveCopyableBusinessLocationId } from "@/lib/business-location-ops";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import { loadCapacityJobs, loadSchedulingPolicy } from "@/lib/workforce-data";
@@ -542,7 +543,11 @@ async function materializeUpcoming(
         pickupDurationMinutes: input.source.pickupDurationMinutes,
         leadSource: input.source.leadSource,
         campaignId: input.source.campaignId,
-        businessLocationId: input.source.businessLocationId,
+        businessLocationId: await resolveCopyableBusinessLocationId(
+          tx,
+          input.access.businessId,
+          input.source.businessLocationId,
+        ),
         serviceIntent: plan.serviceIntent,
         recurrenceCadence: plan.recurrenceCadence,
         recurrenceStatus: plan.recurrenceStatus,
