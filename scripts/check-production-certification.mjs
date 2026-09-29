@@ -80,6 +80,7 @@ const lifecycle = [
   ["Versioned intake schema", "src/lib/intake-schema.ts"],
   ["Cleaning starter catalog", "src/lib/cleaning-starter-catalog.ts"],
   ["CRM customers", "src/app/(app)/customers/page.tsx"],
+  ["Customer merge review", "src/app/(app)/customers/duplicates/page.tsx"],
   ["Requests", "src/app/(app)/requests/page.tsx"],
   ["Owner log lead", "src/app/(app)/requests/log-lead/page.tsx"],
   ["Request record", "src/app/(app)/requests/[requestId]/page.tsx"],

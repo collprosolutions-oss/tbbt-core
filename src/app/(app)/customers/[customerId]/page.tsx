@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { EditCustomerForm } from "@/components/customers/edit-customer-form";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
@@ -19,6 +19,11 @@ import {
 import { CustomerCommunicationsCard } from "@/components/customers/communications-timeline-card";
 import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import { pairHref } from "@/lib/customer-merge";
+import {
+  findSurvivorForAbsorbedCustomer,
+  loadDuplicateReview,
+} from "@/lib/customer-merge-ops";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   emptyCustomerCommunicationHistory,
@@ -56,9 +61,20 @@ export default async function CustomerProfilePage({
   });
 
   if (!customer) {
+    const survivorId = await findSurvivorForAbsorbedCustomer(prisma, access, customerId);
+    if (survivorId) {
+      redirect(`/customers/${survivorId}`);
+    }
     notFound();
   }
   access.assertOwned(customer);
+
+  const possiblePairs =
+    access.workspace.role === "OWNER"
+      ? (await loadDuplicateReview(prisma, access)).pairs.filter(
+          (pair) => pair.left.id === customer.id || pair.right.id === customer.id,
+        )
+      : [];
 
   const recordNavItems = await loadRecordJourney(prisma, access, {
     kind: "customer",
@@ -97,6 +113,32 @@ export default async function CustomerProfilePage({
           />
         </CardContent>
       </Card>
+
+      {possiblePairs.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Possible same-business duplicates</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              These records share a recorded email or phone. Matching names do not prove identity.
+            </p>
+            {possiblePairs.map((pair) => {
+              const other = pair.left.id === customer.id ? pair.right : pair.left;
+              return (
+                <div key={`${pair.left.id}:${pair.right.id}`} className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-foreground">
+                    {other.name} · shared {pair.reasons.join(" and ")}
+                  </p>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={pairHref(pair.left.id, pair.right.id)}>Review</Link>
+                  </Button>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card id="service-addresses">
         <CardHeader>

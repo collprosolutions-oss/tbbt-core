@@ -1392,6 +1392,20 @@ check(
       .includes("sendOwnerSms"),
 );
 
+const customerMergeMigration = readFileSync(
+  new URL("../prisma/migrations/20260929020000_customer_merge/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Customer merge audit migration is additive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(customerMergeMigration) &&
+    customerMergeMigration.includes('CREATE TABLE IF NOT EXISTS "CustomerMerge"') &&
+    customerMergeMigration.includes('"survivorCustomerId"') &&
+    customerMergeMigration.includes('"absorbedCustomerId"') &&
+    customerMergeMigration.includes('"absorbedSnapshot"') &&
+    localNames.includes("20260929020000_customer_merge"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

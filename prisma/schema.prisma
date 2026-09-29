@@ -423,6 +423,7 @@ model Business {
   /// snapshots only — never public catalog prices or approved estimates.
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
+  customerMerges            CustomerMerge[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -641,6 +642,7 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  confirmedCustomerMerges     CustomerMerge[] @relation("CustomerMergeActor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -684,6 +686,29 @@ model Customer {
 
   @@index([businessId])
   @@index([firstCampaignId])
+}
+
+/// OWNER-confirmed merge of two same-business customers. The absorbed
+/// customer id is stored without an FK so that row can be deleted after
+/// every relation moves. Matching names never create this record.
+model CustomerMerge {
+  id                   String   @id @default(cuid())
+  businessId           String
+  survivorCustomerId   String
+  absorbedCustomerId   String
+  absorbedSnapshot     Json
+  /// Comma-separated email and/or phone. Never "name".
+  matchReasons         String
+  mergedByMembershipId String
+  createdAt            DateTime @default(now())
+
+  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  mergedBy Membership @relation("CustomerMergeActor", fields: [mergedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, absorbedCustomerId])
+  @@index([businessId])
+  @@index([survivorCustomerId])
+  @@index([absorbedCustomerId])
 }
 
 /// Durable business/customer communication thread. One customer-level
