@@ -48,6 +48,10 @@ export type PurchaseListItemView = {
   pickupLocationDescription: string | null;
   pickupDurationMinutes: number | null;
   pickupReady: boolean;
+  quantityPickedUp: string | null;
+  pickupException: string | null;
+  pickupExceptionNote: string | null;
+  pickupRecordedAt: string | null;
   status: string;
   supplierId: string | null;
   supplierName: string | null;
@@ -325,6 +329,18 @@ function PurchaseItemForm({
         Expense {item.financialCost ? formatMoney(item.financialCost) : "not linked"}
         {item.expenseId ? " (no double count)" : ""}
       </p>
+      {item.pickupRequired ? (
+        <p className="text-xs text-muted-foreground">
+          Field pickup{" "}
+          {item.quantityPickedUp
+            ? `${item.quantityPickedUp} ${item.unit}`
+            : item.pickupException
+              ? "exception recorded"
+              : "not recorded"}
+          {item.pickupException ? ` · ${item.pickupException}` : ""}
+          {item.pickupExceptionNote ? ` · ${item.pickupExceptionNote}` : ""}
+        </p>
+      ) : null}
       <form action={purchaseAction} className="flex flex-wrap items-end gap-2">
         <FormStatus state={purchaseState} />
         <input type="hidden" name="itemId" value={item.id} />

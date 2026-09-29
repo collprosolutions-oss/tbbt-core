@@ -12,8 +12,8 @@
  * src/lib/field-access.ts: businessId + assignedMembershipId in one
  * query. There is no fetch-then-compare step. Assigned-worker writes
  * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-activity.ts`,
- * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`, and
- * `src/lib/native-field-checklist.ts`.
+ * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`,
+ * `src/lib/native-field-checklist.ts`, and `src/lib/native-field-pickup.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -43,6 +43,8 @@ import {
 } from "@/lib/time-cards";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
 import type { StorageProvider } from "@/lib/business-storage/types";
+import { listAssignedJobPickupView } from "@/lib/materials/pickup";
+import type { FieldJobPickupView } from "@/lib/materials/types";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -219,6 +221,23 @@ export type NativeJobPhotos = {
   upload: NativeJobPhotoUploadAction;
 };
 
+export type NativeJobPickupItem = {
+  id: string;
+  name: string;
+  quantityNeeded: string;
+  unit: string;
+  supplierName: string | null;
+  pickupLocationDescription: string | null;
+  pickupDurationMinutes: number | null;
+  pickupReady: boolean;
+  status: string;
+  quantityPickedUp: string | null;
+  pickupException: string | null;
+  pickupExceptionLabel: string | null;
+  pickupExceptionNote: string | null;
+  pickupRecorded: boolean;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -240,6 +259,7 @@ export type NativeJobDetail = NativeJobSummary & {
   stopTravelAction: NativeJobActivityAction;
   startPickupAction: NativeJobActivityAction;
   stopPickupAction: NativeJobActivityAction;
+  pickupItems: NativeJobPickupItem[];
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
@@ -649,9 +669,38 @@ export async function loadNativeAssignedJob(
     stopTravelAction: nativeActivityStopAction(travelTime.running),
     startPickupAction: nativeActivityStartAction(pickupTime.running),
     stopPickupAction: nativeActivityStopAction(pickupTime.running),
+    pickupItems: await loadNativeAssignedJobPickupItems(db, access, job.id),
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     visit: await loadNativeAssignedJobVisit(db, access, job),
     checklist: await loadNativeAssignedJobChecklist(db, access, job),
+  };
+}
+
+export async function loadNativeAssignedJobPickupItems(
+  db: Db,
+  access: Pick<NativeFieldAccess, "businessId" | "membershipId">,
+  jobId: string,
+): Promise<NativeJobPickupItem[]> {
+  const items = await listAssignedJobPickupView(db, access, jobId);
+  return items.map(toNativeJobPickupItem);
+}
+
+function toNativeJobPickupItem(item: FieldJobPickupView): NativeJobPickupItem {
+  return {
+    id: item.id,
+    name: item.name,
+    quantityNeeded: item.quantityNeeded,
+    unit: item.unit,
+    supplierName: item.supplierName,
+    pickupLocationDescription: item.pickupLocationDescription,
+    pickupDurationMinutes: item.pickupDurationMinutes,
+    pickupReady: item.pickupReady,
+    status: item.status,
+    quantityPickedUp: item.quantityPickedUp,
+    pickupException: item.pickupException,
+    pickupExceptionLabel: item.pickupExceptionLabel,
+    pickupExceptionNote: item.pickupExceptionNote,
+    pickupRecorded: item.pickupRecorded,
   };
 }
 
