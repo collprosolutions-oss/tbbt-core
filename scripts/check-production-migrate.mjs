@@ -1316,6 +1316,13 @@ const estimateLineTemplateArchiveMigration = readFileSync(
   ),
   "utf8",
 );
+const materialPickupRecordedMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010000_material_pickup_recorded_quantities/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 check(
   "Estimate line template archive migration is additive and after owner SMS destination",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
@@ -1335,6 +1342,18 @@ check(
       localNames.indexOf("20260928200000_estimate_line_template_archive") &&
     localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") <
       localNames.indexOf("20260928200000_estimate_line_template_archive"),
+);
+check(
+  "Material pickup recorded-quantity migration is additive and after #210",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(materialPickupRecordedMigration) &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "quantityPickedUp"') &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "pickupException"') &&
+    materialPickupRecordedMigration.includes('ADD COLUMN IF NOT EXISTS "pickupRecordedAt"') &&
+    materialPickupRecordedMigration.includes("20260928200000_estimate_line_template_archive") &&
+    materialPickupRecordedMigration.includes("IF NOT EXISTS") &&
+    localNames.includes("20260929010000_material_pickup_recorded_quantities") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_material_pickup_recorded_quantities"),
 );
 
 check(

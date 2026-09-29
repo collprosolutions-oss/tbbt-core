@@ -4,6 +4,7 @@ import type {
   NativeJobDetail,
   NativeJobPhotoAuthorizePayload,
   NativeJobPhotoStage,
+  NativePickupException,
   NativeSessionPayload,
   NativeTodayPayload,
   NativeViewer,
@@ -268,6 +269,39 @@ export async function recordNativeJobChecklistItem(
         typeof body.error === "string"
           ? body.error
           : "That checklist item could not be updated.",
+    };
+  }
+  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
+}
+
+export async function recordNativeJobPickupItem(
+  token: string,
+  jobId: string,
+  input: {
+    itemId: string;
+    quantityPickedUp?: string | null;
+    pickupException?: NativePickupException | null;
+    pickupExceptionNote?: string | null;
+  },
+): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/pickup`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error:
+        typeof body.error === "string"
+          ? body.error
+          : "That pickup item could not be recorded.",
     };
   }
   return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };

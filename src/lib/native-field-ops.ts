@@ -3,14 +3,16 @@
  *
  * Reads stay in `src/lib/native-field.ts`. Assigned-worker writes are
  * Start job, Complete job, Stop job time, TRAVEL / MATERIAL_PICKUP
- * time, assigned job photos, Cleaning visit outcomes, and Cleaning
- * checklist progress on the caller's own assigned Job. Photo storage
- * lives in `src/lib/native-field-photos.ts`. Visit outcomes live in
+ * time, assigned job photos, Cleaning visit outcomes, Cleaning
+ * checklist progress, and purchase-list pickup recording on the
+ * caller's own assigned Job. Photo storage lives in
+ * `src/lib/native-field-photos.ts`. Visit outcomes live in
  * `src/lib/native-field-visits.ts` and reuse `recordAssignedVisitOutcome`.
  * Checklist writes live in `src/lib/native-field-checklist.ts` and reuse
  * `setAssignedChecklistItem`. Assigned TRAVEL / MATERIAL_PICKUP writes
  * live in `src/lib/native-field-activity.ts` and reuse the canonical
- * activity-time writes.
+ * activity-time writes. Pickup item writes live in
+ * `src/lib/native-field-pickup.ts` and reuse `recordAssignedJobPickup`.
  *
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).

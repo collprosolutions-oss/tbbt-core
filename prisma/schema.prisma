@@ -641,6 +641,7 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedPurchaseListPickups MaterialPurchaseListItem[] @relation("PurchaseListItemPickupRecorder")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -3899,6 +3900,14 @@ model MaterialPurchaseListItem {
   pickupLocationDescription String?
   pickupDurationMinutes     Int?
   pickupReady               Boolean   @default(false)
+  /// Worker-recorded picked-up quantity. Distinct from quantityPurchased.
+  /// Recording pickup never purchases, prices, or expenses.
+  quantityPickedUp          Decimal?
+  /// UNAVAILABLE | SHORT | DAMAGED | CLOSED | OTHER
+  pickupException           String?
+  pickupExceptionNote       String?
+  pickupRecordedAt          DateTime?
+  pickupRecordedByMembershipId String?
   /// NEEDED | PLANNED | ORDERED | PURCHASED | RECEIVED | CANCELLED
   status                    String    @default("NEEDED")
   expenseId                 String?   @unique
@@ -3912,6 +3921,7 @@ model MaterialPurchaseListItem {
   supplier       Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   lineItem       LineItem?             @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
   expense        Expense?              @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  pickupRecordedBy Membership?         @relation("PurchaseListItemPickupRecorder", fields: [pickupRecordedByMembershipId], references: [id], onDelete: SetNull)
   priceHistory   MaterialPriceHistory[]
   purchaseOrderItems MaterialPurchaseOrderItem[]
 
@@ -3921,6 +3931,7 @@ model MaterialPurchaseListItem {
   @@index([materialId])
   @@index([supplierId])
   @@index([lineItemId])
+  @@index([pickupRecordedByMembershipId])
 }
 
 /// Lightweight operational Purchase Order. Not supplier EDI.

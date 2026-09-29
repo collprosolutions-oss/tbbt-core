@@ -46,7 +46,7 @@ export async function requirePurchaseListWriteAccess(
 
 export async function assertFieldPickupJob(
   db: Db,
-  field: FieldWorkspace,
+  field: Pick<FieldWorkspace, "businessId" | "membershipId">,
   jobId: string,
 ) {
   const job = await db.job.findFirst({

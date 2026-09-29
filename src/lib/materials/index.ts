@@ -24,7 +24,13 @@ export {
   ownerEnteredMarkupPercent,
   separateMaterialMoneyLayers,
 } from "@/lib/materials/markup";
-export { listAssignedJobPickupView, listJobMaterialPickupRequirements } from "@/lib/materials/pickup";
+export {
+  ASSIGNED_PICKUP_ONLY_MESSAGE,
+  PICKUP_ITEM_NOT_ON_JOB,
+  listAssignedJobPickupView,
+  listJobMaterialPickupRequirements,
+  recordAssignedJobPickup,
+} from "@/lib/materials/pickup";
 export { appendMaterialPriceHistory, listMaterialPriceHistory } from "@/lib/materials/price-history";
 export {
   addPurchaseListItem,
@@ -54,7 +60,10 @@ export {
   isPurchaseItemStatus,
   isPurchaseOrderStatus,
   normalizeMaterialName,
+  PICKUP_EXCEPTIONS,
+  PICKUP_EXCEPTION_LABELS,
   PURCHASE_ORDER_TRANSITIONS,
+  isPickupException,
 } from "@/lib/materials/types";
 export type {
   FieldJobPickupView,
@@ -62,6 +71,7 @@ export type {
   MaterialActualCostLink,
   MaterialPriceSource,
   MaterialVarianceRow,
+  PickupException,
   PurchaseItemStatus,
   PurchaseOrderStatus,
   SupplierAdapterState,

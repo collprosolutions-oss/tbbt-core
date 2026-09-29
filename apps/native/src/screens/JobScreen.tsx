@@ -21,6 +21,7 @@ import {
 } from "../api";
 import type { NativeFieldActivityType, NativeJobDetail, NativeVisitOutcomeStatus } from "../types";
 import { JobPhotosSection } from "./JobPhotosSection";
+import { JobPickupSection } from "./JobPickupSection";
 
 export function JobScreen({
   token,
@@ -436,6 +437,14 @@ export function JobScreen({
               </Text>
             ))
           )}
+          {job.pickupItems?.length ? (
+            <JobPickupSection
+              items={job.pickupItems}
+              jobId={job.id}
+              onJobUpdated={setJob}
+              token={token}
+            />
+          ) : null}
           {job.photos ? (
             <JobPhotosSection
               jobId={job.id}
