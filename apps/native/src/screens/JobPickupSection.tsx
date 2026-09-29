@@ -84,8 +84,7 @@ export function JobPickupSection({
     <View style={styles.section}>
       <Text style={styles.groupTitle}>Material pickup items</Text>
       <Text style={styles.body}>
-        Pickup for this assigned job only. Recording a quantity or exception does
-        not purchase the item or start pickup time.
+        Pickup for this assigned job only. Recording a quantity or exception does not purchase the item or start pickup time.
       </Text>
       {items.map((item) => {
         const draft = drafts[item.id] ?? emptyDraft(item);
