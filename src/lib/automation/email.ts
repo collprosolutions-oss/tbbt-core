@@ -123,6 +123,16 @@ export async function attemptAutomationEmail(
         publicToken: true,
         total: true,
         customer: { select: { name: true } },
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          take: 1,
+          select: {
+            options: {
+              orderBy: { sortOrder: "asc" },
+              select: { name: true, total: true },
+            },
+          },
+        },
       },
     });
     if (!estimate) return { status: "SKIPPED", failureReason: "Estimate is not in this business." };
@@ -133,6 +143,7 @@ export async function attemptAutomationEmail(
       businessName: input.businessName,
       customerName: estimate.customer?.name ?? null,
       total: estimate.total,
+      optionTotals: estimate.versions[0]?.options ?? [],
       address: null,
       approveUrl: url,
     });

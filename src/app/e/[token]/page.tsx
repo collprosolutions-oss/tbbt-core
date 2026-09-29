@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ApproveEstimateButton } from "@/components/estimates/approve-estimate-button";
+import { CustomerEstimateOptions } from "@/components/estimates/customer-estimate-options";
 import { CustomerEstimateHeader } from "@/components/estimates/customer-estimate-header";
 import { CustomerEstimateLineSections } from "@/components/estimates/customer-estimate-line-sections";
 import { CustomerEstimateTotals } from "@/components/estimates/customer-estimate-totals";
@@ -68,6 +69,13 @@ export default async function PublicEstimatePage({
     remainingProjectBalance: estimate.remainingProjectBalanceLabel,
     depositStatus: estimate.depositStatus,
     paymentReady: paymentStatus.onlineCheckoutPossible,
+    options: estimate.requiresOptionChoice
+      ? estimate.options.map((option) => ({
+          id: option.id,
+          name: option.name,
+          totalLabel: option.totalLabel,
+        }))
+      : undefined,
   };
 
   return (
@@ -92,7 +100,17 @@ export default async function PublicEstimatePage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {hasLines ? (
+              {estimate.options.length >= 2 ? (
+                <CustomerEstimateOptions
+                  options={
+                    estimate.status === "APPROVED"
+                      ? estimate.options.filter((option) => option.approved)
+                      : estimate.options
+                  }
+                  selectable={false}
+                  selectedOptionId={estimate.approvedOptionId ?? undefined}
+                />
+              ) : hasLines ? (
                 <CustomerEstimateLineSections
                   laborLines={estimate.laborLines}
                   materialLines={estimate.materialLines}

@@ -1382,6 +1382,34 @@ check(
       localNames.indexOf("20260929010100_time_correction_requests"),
 );
 
+const serviceCatalogImportMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010200_service_catalog_import/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Service catalog CSV import migration is additive and after estimate-template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"|UPDATE\s+"ServiceCatalogItem"/i.test(
+    serviceCatalogImportMigration,
+  ) &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImport"') &&
+    serviceCatalogImportMigration.includes('CREATE TABLE IF NOT EXISTS "ServiceCatalogImportRow"') &&
+    serviceCatalogImportMigration.includes("ServiceCatalogImport_businessId_contentSha256_key") &&
+    serviceCatalogImportMigration.includes('"matchDecision" TEXT NOT NULL DEFAULT \'SKIP\'') &&
+    serviceCatalogImportMigration.includes('"confirmingAt" TIMESTAMP(3)') &&
+    serviceCatalogImportMigration.includes("never LineItem") &&
+    serviceCatalogImportMigration.includes("hourly") &&
+    serviceCatalogImportMigration.includes("20260929010200") &&
+    localNames.includes("20260929010200_service_catalog_import") &&
+    !localNames.includes("20260929010000_service_catalog_import") &&
+    !localNames.includes("20260928200000_service_catalog_import") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010200_service_catalog_import"),
+);
+
 const availabilityRequestMigration = readFileSync(
   new URL(
     "../prisma/migrations/20260929010300_workforce_availability_exception_request/migration.sql",
@@ -1468,6 +1496,38 @@ check(
         studioWeeklyReminderOps.indexOf("function asReminder"),
       )
       .includes("sendOwnerSms"),
+);
+
+const estimateOptionsMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010400_estimate_options/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Estimate options migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
+    estimateOptionsMigration,
+  ) &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateOption"') &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateVersionOption"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedOptionId"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedEstimateOptionId"') &&
+    localNames.includes("20260929010400_estimate_options") &&
+    !localNames.includes("20260929010000_estimate_options") &&
+    !localNames.includes("20260928200000_estimate_options") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010400_estimate_options"),
+);
+
+const monthlyBusinessGoalMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010700_monthly_business_goal/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Monthly business goal migration is additive and IF NOT EXISTS",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(monthlyBusinessGoalMigration) &&
+    monthlyBusinessGoalMigration.includes('CREATE TABLE IF NOT EXISTS "MonthlyBusinessGoal"') &&
+    localNames.includes("20260929010700_monthly_business_goal"),
 );
 
 const materialsSchema = readFileSync(

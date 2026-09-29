@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ExportReportButton } from "@/components/reports/export-report-button";
 import { ReportsWorkspace } from "@/components/reports/reports-workspace";
 import { FounderDesignRoot } from "@/components/founder-design/root";
@@ -17,6 +18,7 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { formatMoney } from "@/lib/format";
+import { MONTHLY_GOALS_PATH } from "@/lib/monthly-goals";
 import { prisma } from "@/lib/prisma";
 import { loadFinancialSource } from "@/lib/financial-intelligence-data";
 import {
@@ -143,6 +145,12 @@ export default async function ReportsPage({
         title="Reports"
         description={`Business reports for ${access.workspace.business.name}. Collected cash is Payment rows plus legacy PAID invoices that have no Payment rows. PAID invoice status totals can differ from collected cash when a payment is partial or missing. Profit & Loss uses PAID invoice status minus recorded expenses — that is not collected cash and not full accounting or tax books.`}
       />
+      <p className="mb-4 text-sm text-muted-foreground">
+        <Link href={MONTHLY_GOALS_PATH} className="font-medium text-foreground underline underline-offset-4">
+          Monthly goals
+        </Link>{" "}
+        compare owner-set targets with recorded jobs completed, invoices paid, and collected payments.
+      </p>
 
       <FounderDesignRoot
         pageKey="reports"

@@ -28,6 +28,7 @@ import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { isUsableEmail } from "@/lib/mail";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { draftEstimateSendState } from "@/lib/request-estimate-draft";
+import { estimateListTotalLabel } from "@/lib/estimate-options";
 import { prisma } from "@/lib/prisma";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
@@ -174,6 +175,18 @@ export default async function EstimatesPage({
         },
         jobs: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
         lineItems: { orderBy: { createdAt: "asc" } },
+        approvedOption: { select: { total: true } },
+        options: { select: { id: true } },
+        versions: {
+          orderBy: { versionNumber: "desc" },
+          take: 1,
+          select: {
+            options: {
+              select: { total: true },
+              orderBy: { sortOrder: "asc" },
+            },
+          },
+        },
         _count: { select: { versions: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -222,7 +235,7 @@ export default async function EstimatesPage({
     return {
       id: estimate.id,
       status: estimate.status,
-      totalLabel: formatMoney(estimate.total),
+      totalLabel: estimateListTotalLabel(estimate, formatMoney),
       createdAtLabel: formatDate(estimate.createdAt),
       serviceLabel,
       isManual,

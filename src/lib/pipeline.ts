@@ -215,15 +215,24 @@ export function pickPrimaryEstimate<T extends { status: string; updatedAt: Date 
 export function estimateDealValue(estimate: {
   status: string;
   total: { toString(): string } | number | string;
+  approvedOption?: { total: { toString(): string } | number | string } | null;
   approvedVersion?: { total: { toString(): string } | number | string } | null;
-  versions?: readonly { total: { toString(): string } | number | string }[];
+  versions?: readonly {
+    total: { toString(): string } | number | string;
+    options?: readonly unknown[];
+  }[];
 } | null): string | null {
   if (!estimate) return null;
+  if (estimate.status === "APPROVED" && estimate.approvedOption) {
+    return decimalString(estimate.approvedOption.total);
+  }
   if (estimate.status === "APPROVED" && estimate.approvedVersion) {
     return decimalString(estimate.approvedVersion.total);
   }
   if (estimate.status === "SENT" && estimate.versions && estimate.versions.length > 0) {
-    return decimalString(estimate.versions[0]!.total);
+    const current = estimate.versions[0]!;
+    if ((current.options?.length ?? 0) >= 2) return null;
+    return decimalString(current.total);
   }
   const raw = decimalString(estimate.total);
   if (estimate.status === "DRAFT" && Number(raw) <= 0) return null;

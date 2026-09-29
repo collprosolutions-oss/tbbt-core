@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Plus } from "lucide-react";
 import { AddServiceSheet } from "@/components/services/add-service-sheet";
 import { ServiceCatalogPanel } from "@/components/services/service-catalog-panel";
@@ -15,6 +16,7 @@ import type {
 import { FounderRegion } from "@/components/founder-design/region";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { Button } from "@/components/ui/button";
+import { SERVICE_CATALOG_IMPORT_ROUTE } from "@/lib/service-catalog-import-copy";
 
 function pickInitialServiceId(
   items: ServiceCatalogListItem[],
@@ -41,6 +43,7 @@ export function ServicesWorkspace({
   starterPlans = [],
   activeTrades = [],
   initialServiceId,
+  canImportCatalog = false,
 }: {
   items: ServiceCatalogListItem[];
   preferredCategoryOrder: readonly string[];
@@ -51,6 +54,7 @@ export function ServicesWorkspace({
   starterPlans?: TradeStarterCatalogPlan[];
   activeTrades?: ActiveCatalogTradeOption[];
   initialServiceId?: string;
+  canImportCatalog?: boolean;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     pickInitialServiceId(items, initialServiceId),
@@ -67,10 +71,17 @@ export function ServicesWorkspace({
       <PageHeaderControls
         title="Services"
         actions={
-          <Button size="sm" onClick={() => setAddOpen(true)}>
-            <Plus className="size-4" />
-            Add Service
-          </Button>
+          <div className="flex items-center gap-2">
+            {canImportCatalog ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={SERVICE_CATALOG_IMPORT_ROUTE}>Import CSV</Link>
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" />
+              Add Service
+            </Button>
+          </div>
         }
       />
 

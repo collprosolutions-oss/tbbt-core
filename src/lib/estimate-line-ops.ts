@@ -7,6 +7,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { claimDraftEstimate, resolveDraftLineOptionId } from "@/lib/estimate-option-ops";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import {
@@ -102,6 +103,7 @@ export async function addCatalogItemToDraftEstimate(
     catalogItemId: string;
     quantity: Prisma.Decimal;
     unitPrice?: Prisma.Decimal | null;
+    optionId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -156,10 +158,17 @@ export async function addCatalogItemToDraftEstimate(
 
   let createdId = "";
   await db.$transaction(async (tx) => {
+    await claimDraftEstimate(tx, access, estimate.id);
+    const optionId = await resolveDraftLineOptionId(tx, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      optionId: input.optionId,
+    });
     const created = await tx.lineItem.create({
       data: {
         businessId: access.businessId,
         estimateId: estimate.id,
+        optionId,
         serviceCatalogItemId: catalogItem.id,
         description: joinLineDescription(
           title,
