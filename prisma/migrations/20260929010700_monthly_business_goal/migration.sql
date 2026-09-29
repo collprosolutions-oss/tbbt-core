@@ -23,8 +23,6 @@ CREATE TABLE IF NOT EXISTS "MonthlyBusinessGoal" (
 
 CREATE UNIQUE INDEX IF NOT EXISTS "MonthlyBusinessGoal_businessId_year_month_key"
   ON "MonthlyBusinessGoal"("businessId", "year", "month");
-CREATE INDEX IF NOT EXISTS "MonthlyBusinessGoal_businessId_idx"
-  ON "MonthlyBusinessGoal"("businessId");
 
 DO $$
 BEGIN

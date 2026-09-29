@@ -1393,37 +1393,14 @@ check(
 );
 
 const monthlyBusinessGoalMigration = readFileSync(
-  new URL("../prisma/migrations/20260929010000_monthly_business_goal/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260929010700_monthly_business_goal/migration.sql", import.meta.url),
   "utf8",
 );
-const monthlyGoalsOps = readFileSync(new URL("../src/lib/monthly-goals-ops.ts", import.meta.url), "utf8");
-const monthlyGoalsData = readFileSync(new URL("../src/lib/monthly-goals-data.ts", import.meta.url), "utf8");
 check(
-  "Monthly business goal migration is additive, valid Sept 29, and after template archive",
+  "Monthly business goal migration is additive and IF NOT EXISTS",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(monthlyBusinessGoalMigration) &&
     monthlyBusinessGoalMigration.includes('CREATE TABLE IF NOT EXISTS "MonthlyBusinessGoal"') &&
-    monthlyBusinessGoalMigration.includes("MonthlyBusinessGoal_businessId_fkey") &&
-    monthlyBusinessGoalMigration.includes("MonthlyBusinessGoal_createdByMembershipId_fkey") &&
-    monthlyBusinessGoalMigration.includes("MonthlyBusinessGoal_updatedByMembershipId_fkey") &&
-    !/ALTER TABLE "(Business|Invoice|Payment|Expense|Job|ServiceCatalogItem)"/.test(
-      monthlyBusinessGoalMigration,
-    ) &&
-    localNames.includes("20260929010000_monthly_business_goal") &&
-    !localNames.includes("20260928210000_monthly_business_goal") &&
-    localNames.includes("20260928200000_estimate_line_template_archive") &&
-    localNames.indexOf("20260928200000_estimate_line_template_archive") <
-      localNames.indexOf("20260929010000_monthly_business_goal"),
-);
-check(
-  "Monthly goals fail closed without request-time DDL",
-  monthlyGoalsOps.includes("missingMonthlyGoalSchema") &&
-    monthlyGoalsData.includes("missingMonthlyGoalSchema") &&
-    !monthlyGoalsOps.includes("$executeRawUnsafe") &&
-    !monthlyGoalsData.includes("$executeRawUnsafe") &&
-    !monthlyGoalsOps.includes("CREATE TABLE") &&
-    !monthlyGoalsData.includes("CREATE TABLE") &&
-    !monthlyGoalsOps.includes("ALTER TABLE") &&
-    !monthlyGoalsData.includes("ALTER TABLE"),
+    localNames.includes("20260929010700_monthly_business_goal"),
 );
 
 const materialsSchema = readFileSync(

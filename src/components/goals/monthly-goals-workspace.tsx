@@ -113,9 +113,11 @@ export function MonthlyGoalsWorkspace({ workspace }: { workspace: MonthlyGoalsWo
           <Button asChild variant="outline" size="sm">
             <Link href={monthlyGoalHref(period.previousKey)}>Previous month</Link>
           </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href={monthlyGoalHref(period.nextKey)}>Next month</Link>
-          </Button>
+          {period.nextKey !== period.key ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={monthlyGoalHref(period.nextKey)}>Next month</Link>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -140,7 +142,7 @@ export function MonthlyGoalsWorkspace({ workspace }: { workspace: MonthlyGoalsWo
       {unclockedCompletedJobs > 0 ? (
         <p className="text-sm text-muted-foreground">
           {unclockedCompletedJobs} completed job{unclockedCompletedJobs === 1 ? "" : "s"} have no
-          JOB_COMPLETED event. {UNCLOCKED_COMPLETED_JOBS_MESSAGE}
+          recorded completion date. {UNCLOCKED_COMPLETED_JOBS_MESSAGE}
         </p>
       ) : null}
 
@@ -183,7 +185,7 @@ export function MonthlyGoalsWorkspace({ workspace }: { workspace: MonthlyGoalsWo
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="revenueReceived">Revenue received target</Label>
+                <Label htmlFor="revenueReceived">Collected payments (recorded) target</Label>
                 <Input
                   id="revenueReceived"
                   name="revenueReceived"

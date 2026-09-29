@@ -10,6 +10,7 @@
  * a JOB_COMPLETED event is not a completion clock. SENT invoices are not
  * paid and not cash in. Reads stay bounded.
  */
+import { Prisma } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
   ForbiddenError,
@@ -25,8 +26,24 @@ import {
   zonedCivilToUtc,
   zonedDateParts,
 } from "@/lib/business-timezone";
+import { collectedPaymentsInRange } from "@/lib/financial-intelligence/cash-flow";
+import type { FinancialSource } from "@/lib/financial-intelligence/source";
 import { asNumber } from "@/lib/reports";
 import { roundMoney } from "@/lib/time-cards";
+
+const ZERO = new Prisma.Decimal(0);
+
+export function toMonthlyGoalMoney(value: { toString(): string } | number | string) {
+  return new Prisma.Decimal(typeof value === "number" ? value.toString() : value.toString());
+}
+
+export function missingMonthlyGoalSchema(error: unknown) {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  return code === "P2021" || code === "P2022";
+}
 
 export const MONTHLY_GOALS_PATH = "/goals";
 export const MONTHLY_GOALS_READ_BOUND = 200;
@@ -43,7 +60,7 @@ export type MonthlyGoalMetric = (typeof MONTHLY_GOAL_METRICS)[number];
 export const MONTHLY_GOAL_METRIC_LABELS: Record<MonthlyGoalMetric, string> = {
   "jobs-completed": "Jobs completed",
   "invoices-paid": "Invoices paid",
-  "revenue-received": "Revenue received",
+  "revenue-received": "Collected payments (recorded)",
 };
 
 export const TARGET_KIND = "target" as const;
@@ -56,16 +73,16 @@ export const TARGET_NOT_BANK_BALANCE_MESSAGE =
   "Targets and recorded progress are not a bank balance. Banking is Not Connected. TBBT does not invent cash on hand.";
 
 export const JOBS_COMPLETED_FACT_MESSAGE =
-  "Jobs completed this month are distinct JOB_COMPLETED business events whose occurredAt falls in the Business.timezone civil month. Job.status COMPLETED without that event is not a completion clock and is not counted here.";
+  "Jobs completed this month are recorded completion events whose time falls in the Business.timezone civil month. A completed job without a recorded completion date is not a completion clock and is not counted here.";
 
 export const INVOICES_PAID_FACT_MESSAGE =
-  "Invoices paid this month are Invoice rows with status PAID and paidAt in the Business.timezone civil month. SENT invoices are not paid.";
+  "Invoices paid this month are Invoice rows with status PAID and paidAt in the Business.timezone civil month. SENT, DRAFT, and VOID invoices are not paid.";
 
 export const REVENUE_RECEIVED_FACT_MESSAGE =
-  "Revenue received is TBBT-recorded collected cash: Payment.receivedAt in the Business.timezone month, plus legacy PAID invoices that have no Payment rows using paidAt. That is not bank balance and not unpaid invoice value.";
+  "Collected payments (recorded) are TBBT-recorded collected cash for the Business.timezone month: Payment rows by receivedAt, including material deposits, plus legacy PAID invoices that have no Payment rows using paidAt. That is not bank balance and not unpaid invoice value.";
 
 export const UNCLOCKED_COMPLETED_JOBS_MESSAGE =
-  "Some completed jobs have no JOB_COMPLETED event, so their completion month is unavailable and they are not counted toward this month.";
+  "Some completed jobs have no recorded completion date, so their completion month is unavailable and they are not counted toward this month.";
 
 export const READ_BOUND_MESSAGE =
   "A recorded-fact read hit the monthly-goals bound, so this actual is a bounded sample and may be incomplete.";
@@ -199,16 +216,18 @@ export function monthlyGoalPeriod(year: number, month: number, timeZone: string)
   const previous = addZonedCalendarMonths(start, -1, timeZone);
   const previousParts = zonedDateParts(previous, timeZone);
   const nextParts = zonedDateParts(end, timeZone);
+  const key = formatMonthlyGoalKey(year, month);
+  const atLastMonth = year === 2100 && month === 12;
   return {
     year,
     month,
-    key: formatMonthlyGoalKey(year, month),
+    key,
     start,
     end,
     timeZone,
     label: start.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone }),
     previousKey: formatMonthlyGoalKey(previousParts.year, previousParts.month),
-    nextKey: formatMonthlyGoalKey(nextParts.year, nextParts.month),
+    nextKey: atLastMonth ? key : formatMonthlyGoalKey(nextParts.year, nextParts.month),
   };
 }
 
@@ -228,16 +247,19 @@ export function parseCountTarget(raw: string | null | undefined): { value: numbe
   return { value, error: null };
 }
 
-export function parseMoneyTarget(raw: string | null | undefined): { value: number | null; error: string | null } {
+export function parseMoneyTarget(
+  raw: string | null | undefined,
+): { value: Prisma.Decimal | null; error: string | null } {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) return { value: null, error: null };
-  const value = Number(trimmed);
-  if (!Number.isFinite(value) || value <= 0 || value > MONTHLY_GOAL_REVENUE_MAX) {
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
     return { value: null, error: INVALID_REVENUE_TARGET_MESSAGE };
   }
-  const rounded = roundMoney(value);
-  if (rounded <= 0) return { value: null, error: INVALID_REVENUE_TARGET_MESSAGE };
-  return { value: rounded, error: null };
+  const value = new Prisma.Decimal(trimmed);
+  if (value.lte(0) || value.gt(MONTHLY_GOAL_REVENUE_MAX)) {
+    return { value: null, error: INVALID_REVENUE_TARGET_MESSAGE };
+  }
+  return { value, error: null };
 }
 
 export function parseMonthlyGoalTargets(input: {
@@ -253,7 +275,7 @@ export function parseMonthlyGoalTargets(input: {
     targets: {
       jobsCompleted: jobs.value,
       invoicesPaid: invoices.value,
-      revenueReceived: revenue.value,
+      revenueReceived: revenue.value == null ? null : Number(revenue.value.toFixed(2)),
     },
     errors,
   };
@@ -286,7 +308,7 @@ export function compareActualToGoal(input: {
     };
   }
 
-  if (input.actualIncomplete && input.actual < goal) {
+  if (input.actualIncomplete && (input.metric === "revenue-received" || input.actual < goal)) {
     return {
       metric: input.metric,
       kind: TARGET_KIND,
@@ -348,9 +370,8 @@ export function countJobsCompletedInPeriod(source: MonthlyGoalFactSource, period
   return {
     actual: jobIds.size,
     unclockedCompletedJobs,
-    incomplete:
-      isolated.jobCompletionsTruncated ||
-      isolated.completedJobsTruncated,
+    unclockedDisclosureIncomplete: isolated.completedJobsTruncated,
+    incomplete: isolated.jobCompletionsTruncated,
   };
 }
 
@@ -367,30 +388,48 @@ export function countInvoicesPaidInPeriod(source: MonthlyGoalFactSource, period:
 
 export function collectedRevenueInPeriod(source: MonthlyGoalFactSource, period: MonthlyGoalPeriod) {
   const isolated = isolateMonthlyGoalFacts(source);
-  const seenPayments = new Set<string>();
-  let fromPayments = 0;
-  for (const payment of isolated.payments) {
-    if (seenPayments.has(payment.id)) continue;
-    if (!inMonthlyGoalPeriod(payment.receivedAt, period)) continue;
-    seenPayments.add(payment.id);
-    fromPayments += payment.amount;
-  }
-  const paidInvoiceIdsWithPayments = new Set(
-    isolated.paymentsOnPaidInvoices.map((row) => row.invoiceId).filter(Boolean),
+  const presencePayments = isolated.paymentsOnPaidInvoices.map((row, index) => ({
+    id: `presence:${row.invoiceId}:${index}`,
+    businessId: row.businessId,
+    customerId: null,
+    jobId: null,
+    invoiceId: row.invoiceId,
+    purpose: "INVOICE_BALANCE",
+    amount: 0,
+    method: "CASH",
+    receivedAt: new Date(0),
+  }));
+  const collected = collectedPaymentsInRange(
+    {
+      payments: [
+        ...isolated.payments.map((payment) => ({
+          id: payment.id,
+          businessId: payment.businessId,
+          customerId: null,
+          jobId: null,
+          invoiceId: payment.invoiceId,
+          purpose: "INVOICE_BALANCE",
+          amount: Number(toMonthlyGoalMoney(payment.amount).toFixed(2)),
+          method: "CASH",
+          receivedAt: payment.receivedAt,
+        })),
+        ...presencePayments,
+      ],
+      invoices: isolated.paidInvoices.map((invoice) => ({
+        ...invoice,
+        total: Number(toMonthlyGoalMoney(invoice.total).toFixed(2)),
+      })),
+    } as FinancialSource,
+    period,
   );
-  let fromLegacy = 0;
-  let legacyCount = 0;
-  for (const invoice of isolated.paidInvoices) {
-    if (invoice.status !== "PAID" || invoice.paidAt == null) continue;
-    if (!inMonthlyGoalPeriod(invoice.paidAt, period)) continue;
-    if (paidInvoiceIdsWithPayments.has(invoice.id)) continue;
-    fromLegacy += invoice.total;
-    legacyCount += 1;
-  }
+  const actual = collected.collected.reduce(
+    (sum, row) => sum.add(toMonthlyGoalMoney(row.amount)),
+    ZERO,
+  );
   return {
-    actual: roundMoney(fromPayments + fromLegacy),
-    paymentCount: seenPayments.size,
-    legacyInvoiceCount: legacyCount,
+    actual: Number(actual.toFixed(2)),
+    paymentCount: collected.payments.length,
+    legacyInvoiceCount: collected.legacyPaid.length,
     incomplete:
       isolated.paymentsTruncated ||
       isolated.paidInvoicesTruncated ||
@@ -458,8 +497,6 @@ export function toSavedMonthlyBusinessGoal(row: {
   invoicesPaidTarget: number | null;
   revenueReceivedTarget: { toString(): string } | number | null;
 }): SavedMonthlyBusinessGoal {
-  const revenue =
-    row.revenueReceivedTarget == null ? null : asNumber(row.revenueReceivedTarget);
   return {
     id: row.id,
     businessId: row.businessId,
@@ -467,7 +504,8 @@ export function toSavedMonthlyBusinessGoal(row: {
     month: row.month,
     jobsCompletedTarget: row.jobsCompletedTarget,
     invoicesPaidTarget: row.invoicesPaidTarget,
-    revenueReceivedTarget: revenue != null && revenue > 0 ? revenue : row.revenueReceivedTarget == null ? null : revenue,
+    revenueReceivedTarget:
+      row.revenueReceivedTarget == null ? null : asNumber(row.revenueReceivedTarget),
   };
 }
 

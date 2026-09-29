@@ -6,7 +6,6 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { asNumber } from "@/lib/reports";
 import {
   GOAL_UNAVAILABLE_MESSAGE,
   MONTHLY_GOALS_READ_BOUND,
@@ -14,8 +13,10 @@ import {
   buildMonthlyGoalProgress,
   isolateMonthlyGoalFacts,
   isolateSameBusinessRows,
+  missingMonthlyGoalSchema,
   resolveMonthlyGoalPeriod,
   targetsFromSavedGoal,
+  toMonthlyGoalMoney,
   toSavedMonthlyBusinessGoal,
   type MonthlyGoalFactSource,
   type MonthlyGoalPeriod,
@@ -23,6 +24,8 @@ import {
   type MonthlyGoalTargets,
   type SavedMonthlyBusinessGoal,
 } from "@/lib/monthly-goals";
+
+export { missingMonthlyGoalSchema };
 
 export type MonthlyGoalsWorkspaceData = {
   period: MonthlyGoalPeriod;
@@ -38,19 +41,6 @@ export type MonthlyGoalsWorkspaceData = {
   unavailableMessage: string | null;
   unclockedCompletedJobs: number;
 };
-
-function missingMonthlyGoalSchema(error: unknown) {
-  const code =
-    error && typeof error === "object" && "code" in error
-      ? String((error as { code?: string }).code)
-      : "";
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    code === "P2021" ||
-    code === "P2022" ||
-    /MonthlyBusinessGoal|monthlyBusinessGoal|does not exist/i.test(message)
-  );
-}
 
 function hitBound(count: number) {
   return count > MONTHLY_GOALS_READ_BOUND;
@@ -114,10 +104,9 @@ export async function loadMonthlyGoalFactSource(
         })
       : Promise.resolve([]),
     paidInvoiceIds.length
-      ? prisma.payment.findMany({
+      ? prisma.payment.groupBy({
+          by: ["invoiceId"],
           where: { ...scope, invoiceId: { in: paidInvoiceIds } },
-          select: { businessId: true, invoiceId: true },
-          take: takeBound(),
         })
       : Promise.resolve([]),
   ]);
@@ -137,20 +126,20 @@ export async function loadMonthlyGoalFactSource(
     })),
     paidInvoices: paidInvoices.map((invoice) => ({
       ...invoice,
-      total: asNumber(invoice.total),
+      total: Number(toMonthlyGoalMoney(invoice.total).toFixed(2)),
     })),
     payments: payments.map((payment) => ({
       ...payment,
-      amount: asNumber(payment.amount),
+      amount: Number(toMonthlyGoalMoney(payment.amount).toFixed(2)),
     })),
     paymentsOnPaidInvoices: paymentsOnPaidInvoices.flatMap((row) =>
-      row.invoiceId ? [{ businessId: row.businessId, invoiceId: row.invoiceId }] : [],
+      row.invoiceId ? [{ businessId, invoiceId: row.invoiceId }] : [],
     ),
     jobCompletionsTruncated: hitBound(jobCompletions.length),
     completedJobsTruncated: hitBound(completedJobs.length),
     paidInvoicesTruncated: hitBound(paidInvoices.length),
     paymentsTruncated: hitBound(payments.length),
-    paymentsOnPaidInvoicesTruncated: hitBound(paymentsOnPaidInvoices.length),
+    paymentsOnPaidInvoicesTruncated: false,
   });
 }
 

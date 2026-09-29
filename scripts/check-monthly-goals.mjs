@@ -26,7 +26,6 @@ if (generateEarly.status !== 0) {
 const { CAPABILITIES, ForbiddenError, roleHasCapability, canAccessManagementConsole } = await import(
   "@/lib/authorization"
 );
-const { visibleAppNav } = await import("@/lib/nav");
 const {
   GOAL_UNAVAILABLE_MESSAGE,
   INVALID_COUNT_TARGET_MESSAGE,
@@ -34,6 +33,7 @@ const {
   INVALID_REVENUE_TARGET_MESSAGE,
   INVOICES_PAID_FACT_MESSAGE,
   JOBS_COMPLETED_FACT_MESSAGE,
+  MONTHLY_GOAL_METRIC_LABELS,
   MONTHLY_GOALS_PATH,
   MONTHLY_GOALS_READ_BOUND,
   NO_AUTOMATIC_MESSAGE_MESSAGE,
@@ -54,6 +54,7 @@ const {
   countInvoicesPaidInPeriod,
   countJobsCompletedInPeriod,
   isolateMonthlyGoalFacts,
+  missingMonthlyGoalSchema,
   monthlyGoalPeriod,
   parseCountTarget,
   parseMoneyTarget,
@@ -61,9 +62,18 @@ const {
   parseMonthlyGoalTargets,
   resolveMonthlyGoalPeriod,
 } = await import("@/lib/monthly-goals");
-const { loadMonthlyGoalFactSource, loadMonthlyGoalsWorkspace, loadSavedMonthlyBusinessGoal } =
-  await import("@/lib/monthly-goals-data");
-const { saveMonthlyBusinessGoal } = await import("@/lib/monthly-goals-ops");
+const {
+  loadMonthlyGoalFactSource,
+  loadMonthlyGoalsWorkspace,
+  loadSavedMonthlyBusinessGoal,
+  missingMonthlyGoalSchema: dataMissingMonthlyGoalSchema,
+} = await import("@/lib/monthly-goals-data");
+const {
+  MonthlyBusinessGoalUnavailableError,
+  monthlyGoalWriteTestHooks,
+  saveMonthlyBusinessGoal,
+  missingMonthlyGoalSchema: opsMissingMonthlyGoalSchema,
+} = await import("@/lib/monthly-goals-ops");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -71,10 +81,41 @@ if (!baseUrl) {
   process.exit(1);
 }
 
+let parsed;
+try {
+  parsed = new URL(baseUrl);
+} catch {
+  console.error("DATABASE_URL must be a valid URL.");
+  process.exit(1);
+}
+
+const databaseHost = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+if (!["localhost", "127.0.0.1", "::1"].includes(databaseHost)) {
+  console.error(
+    `Refusing to run monthly-goals checks: DATABASE_URL host must be localhost, 127.0.0.1, or ::1 (got ${parsed.hostname}).`,
+  );
+  process.exit(1);
+}
+
 const testDbName = "tbbt_monthly_goals_test";
-const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+
+const require = createRequire(import.meta.url);
+const { PrismaClient, Prisma } = require("@prisma/client");
+
+async function dropMonthlyGoalsTestDatabase() {
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
 const push = spawnSync(
   "npx",
   ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
@@ -82,11 +123,14 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for monthly goals test database.");
+  try {
+    await dropMonthlyGoalsTestDatabase();
+  } catch (error) {
+    console.error(error);
+  }
   process.exit(push.status ?? 1);
 }
 
-const require = createRequire(import.meta.url);
-const { PrismaClient, Prisma } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
@@ -150,8 +194,10 @@ const opsSrc = readRepo("src/lib/monthly-goals-ops.ts");
 const actionSrc = readRepo("src/app/actions/monthly-goals.ts");
 const pageSrc = readRepo("src/app/(app)/goals/page.tsx");
 const uiSrc = readRepo("src/components/goals/monthly-goals-workspace.tsx");
+const reportsSrc = readRepo("src/app/(app)/reports/page.tsx");
+const navSrc = readRepo("src/lib/nav.ts");
 const schemaSrc = readRepo("prisma/schema.prisma");
-const migrationSrc = readRepo("prisma/migrations/20260929010000_monthly_business_goal/migration.sql");
+const migrationSrc = readRepo("prisma/migrations/20260929010700_monthly_business_goal/migration.sql");
 const packageSrc = readRepo("package.json");
 const allFeatureSrc = [libSrc, dataSrc, opsSrc, actionSrc, pageSrc, uiSrc].join("\n");
 
@@ -164,17 +210,46 @@ try {
   );
   check("OWNER/ADMIN can access the management console", canAccessManagementConsole("OWNER") && canAccessManagementConsole("ADMIN"));
   check("MEMBER cannot access the management console", canAccessManagementConsole("MEMBER") === false);
-  check("Monthly goals nav is visible to OWNER", visibleAppNav("OWNER").some((item) => item.href === "/goals"));
-  check("Monthly goals nav is visible to ADMIN", visibleAppNav("ADMIN").some((item) => item.href === "/goals"));
-  check("Monthly goals nav is hidden from MEMBER", !visibleAppNav("MEMBER").some((item) => item.href === "/goals"));
+  check("Global nav does not add /goals", !navSrc.includes('href: "/goals"'));
+  check("Reports links to /goals", reportsSrc.includes("MONTHLY_GOALS_PATH") && reportsSrc.includes("Monthly goals"));
   check("MEMBER does not have VIEW_REPORTS", !roleHasCapability("MEMBER", CAPABILITIES.VIEW_REPORTS));
+  check(
+    "Write action requires REPORTING_INSIGHTS operating access",
+    actionSrc.includes("requireOperatingProductAccess") && actionSrc.includes("REPORTING_INSIGHTS"),
+  );
+  check("Page does not say MEMBER is denied", !pageSrc.includes("ADMIN may view. MEMBER is denied."));
+  check("Workspace does not show raw JOB_COMPLETED", !uiSrc.includes("JOB_COMPLETED"));
+  check(
+    "Workspace hides Next month at 2100-12",
+    uiSrc.includes("period.nextKey !== period.key"),
+  );
+  check(
+    "Ops upserts on businessId_year_month",
+    opsSrc.includes("prisma.monthlyBusinessGoal.upsert") && opsSrc.includes("businessId_year_month"),
+  );
+  check(
+    "Payment presence uses groupBy invoiceId",
+    dataSrc.includes("prisma.payment.groupBy") && dataSrc.includes('by: ["invoiceId"]'),
+  );
+  check(
+    "missingMonthlyGoalSchema is one shared P2021/P2022 copy",
+    missingMonthlyGoalSchema === dataMissingMonthlyGoalSchema &&
+      missingMonthlyGoalSchema === opsMissingMonthlyGoalSchema &&
+      missingMonthlyGoalSchema({ code: "P2021" }) &&
+      missingMonthlyGoalSchema({ code: "P2022" }) &&
+      !missingMonthlyGoalSchema({ code: "P2025" }),
+  );
   check("npm script is dedicated", packageSrc.includes("test:monthly-goals") && packageSrc.includes("check-monthly-goals.mjs"));
   check("Targets are labeled targets, not forecasts", libSrc.includes(TARGET_NOT_FORECAST_MESSAGE) && TARGET_KIND === "target");
   check("Recorded facts stay recorded-fact", RECORDED_FACT_KIND === "recorded-fact");
   check("Bank balance is not claimed", libSrc.includes(TARGET_NOT_BANK_BALANCE_MESSAGE) && uiSrc.includes("TARGET_NOT_BANK_BALANCE_MESSAGE"));
   check("Jobs completed use JOB_COMPLETED events", JOBS_COMPLETED_FACT_MESSAGE.includes("JOB_COMPLETED"));
   check("Invoices paid use paidAt", INVOICES_PAID_FACT_MESSAGE.includes("paidAt"));
-  check("Revenue received uses collected cash, not bank", REVENUE_RECEIVED_FACT_MESSAGE.includes("Payment.receivedAt"));
+  check(
+    "Collected payments copy includes material deposits",
+    MONTHLY_GOAL_METRIC_LABELS["revenue-received"] === "Collected payments (recorded)" &&
+      REVENUE_RECEIVED_FACT_MESSAGE.includes("material deposits"),
+  );
   check("Reads are bounded", MONTHLY_GOALS_READ_BOUND === 200 && dataSrc.includes("MONTHLY_GOALS_READ_BOUND"));
   check("Write ops do not touch books", !/prisma\.(invoice|payment|expense|job|serviceCatalogItem|estimate|lineItem)\./.test(opsSrc));
   check("Action does not send messages", !/sendOwnerSms|sendEmail|resend|twilio/i.test(actionSrc));
@@ -202,6 +277,32 @@ try {
   check("September 2026 NY starts 2026-09-01", nySeptember.key === "2026-09" && nySeptember.start.toISOString() === "2026-09-01T04:00:00.000Z");
   check("September 2026 NY ends October 1 NY", nySeptember.end.toISOString() === "2026-10-01T04:00:00.000Z");
   check("September 2026 LA starts later than NY", laSeptember.start.getTime() > nySeptember.start.getTime());
+  const nyMarch = monthlyGoalPeriod(2026, 3, "America/New_York");
+  const laMarch = monthlyGoalPeriod(2026, 3, "America/Los_Angeles");
+  const nyNovember = monthlyGoalPeriod(2026, 11, "America/New_York");
+  const laNovember = monthlyGoalPeriod(2026, 11, "America/Los_Angeles");
+  check("March 2026 NY starts 2026-03-01T05:00:00.000Z", nyMarch.start.toISOString() === "2026-03-01T05:00:00.000Z");
+  check("March 2026 NY ends April 1 NY daylight", nyMarch.end.toISOString() === "2026-04-01T04:00:00.000Z");
+  check("March 2026 LA starts 2026-03-01T08:00:00.000Z", laMarch.start.toISOString() === "2026-03-01T08:00:00.000Z");
+  check("March 2026 LA ends April 1 LA daylight", laMarch.end.toISOString() === "2026-04-01T07:00:00.000Z");
+  check("November 2026 NY starts 2026-11-01T04:00:00.000Z", nyNovember.start.toISOString() === "2026-11-01T04:00:00.000Z");
+  check("November 2026 NY ends December 1 NY standard", nyNovember.end.toISOString() === "2026-12-01T05:00:00.000Z");
+  check("November 2026 LA starts 2026-11-01T07:00:00.000Z", laNovember.start.toISOString() === "2026-11-01T07:00:00.000Z");
+  check("November 2026 LA ends December 1 LA standard", laNovember.end.toISOString() === "2026-12-01T08:00:00.000Z");
+  check(
+    "Null Business.timezone falls back to America/New_York",
+    resolveMonthlyGoalPeriod(new Date("2026-09-15T16:00:00.000Z"), { timezone: null }).timeZone ===
+      "America/New_York",
+  );
+  check(
+    "Invalid Business.timezone falls back to America/New_York",
+    resolveMonthlyGoalPeriod(new Date("2026-09-15T16:00:00.000Z"), { timezone: "Not/AZone" }).timeZone ===
+      "America/New_York",
+  );
+  check(
+    "Next month is not linked past 2100-12",
+    monthlyGoalPeriod(2100, 12, "America/New_York").nextKey === "2100-12",
+  );
   check("Invalid month key is rejected", parseMonthlyGoalKey("2026-13") === null && parseMonthlyGoalKey("2026-9") === null);
   check("Valid month key parses", parseMonthlyGoalKey("2026-09")?.year === 2026 && parseMonthlyGoalKey("2026-09")?.month === 9);
   check(
@@ -211,7 +312,15 @@ try {
   check("Blank count target clears", parseCountTarget("").value === null && parseCountTarget("").error === null);
   check("Zero count target is invalid", parseCountTarget("0").error === INVALID_COUNT_TARGET_MESSAGE);
   check("Fractional count target is invalid", parseCountTarget("2.5").error === INVALID_COUNT_TARGET_MESSAGE);
-  check("Money target rounds", parseMoneyTarget("12.345").value === 12.35);
+  const twoDecimalMoney = parseMoneyTarget("12.35");
+  check(
+    "Money target accepts two decimals as Decimal",
+    twoDecimalMoney.error === null &&
+      twoDecimalMoney.value instanceof Prisma.Decimal &&
+      twoDecimalMoney.value.toString() === "12.35",
+  );
+  check("Money target rejects a third decimal", parseMoneyTarget("12.345").error === INVALID_REVENUE_TARGET_MESSAGE);
+  check("Money target rejects currency symbols", parseMoneyTarget("$12").error === INVALID_REVENUE_TARGET_MESSAGE);
   check("Zero money target is invalid", parseMoneyTarget("0").error === INVALID_REVENUE_TARGET_MESSAGE);
   check("Invalid month parse surfaces", parseMonthlyGoalTargets({ jobsCompleted: "8" }).targets.jobsCompleted === 8);
 
@@ -241,7 +350,19 @@ try {
     goal: 10,
     actualIncomplete: true,
   });
-  check("Incomplete actual already at/over goal can still be met", incompleteMet.status === "met" && incompleteMet.met === true);
+  check("Incomplete jobs already at/over goal can still be met", incompleteMet.status === "met" && incompleteMet.met === true);
+  const incompleteRevenue = compareActualToGoal({
+    metric: "revenue-received",
+    actual: 600,
+    goal: 500,
+    actualIncomplete: true,
+  });
+  check(
+    "Incomplete collected-payments actual never reports met",
+    incompleteRevenue.status === "actual-incomplete" &&
+      incompleteRevenue.met === null &&
+      incompleteRevenue.remaining === null,
+  );
 
   const businessA = await prisma.business.create({
     data: {
@@ -595,6 +716,221 @@ try {
   check("Loader payments exclude Beta", source.payments.every((row) => row.businessId === businessA.id));
   check("Goals unavailable message stays honest", GOAL_UNAVAILABLE_MESSAGE.includes("migration"));
 
+  function emptyFactSource(overrides = {}) {
+    return {
+      businessId: businessA.id,
+      timeZone: "America/New_York",
+      jobCompletions: [],
+      completedJobs: [],
+      completionEventsForCompletedJobs: [],
+      paidInvoices: [],
+      payments: [],
+      paymentsOnPaidInvoices: [],
+      jobCompletionsTruncated: false,
+      completedJobsTruncated: false,
+      paidInvoicesTruncated: false,
+      paymentsTruncated: false,
+      paymentsOnPaidInvoicesTruncated: false,
+      ...overrides,
+    };
+  }
+
+  const octPeriod = monthlyGoalPeriod(2026, 10, "America/New_York");
+  const partialFact = emptyFactSource({
+    paidInvoices: [
+      {
+        businessId: businessA.id,
+        id: "legacy-partial",
+        status: "PAID",
+        total: 400,
+        paidAt: new Date("2026-10-05T16:00:00.000Z"),
+      },
+      {
+        businessId: businessA.id,
+        id: "void-paidAt",
+        status: "VOID",
+        total: 999,
+        paidAt: new Date("2026-10-10T16:00:00.000Z"),
+      },
+      {
+        businessId: businessA.id,
+        id: "draft-paidAt",
+        status: "DRAFT",
+        total: 888,
+        paidAt: new Date("2026-10-10T16:00:00.000Z"),
+      },
+      {
+        businessId: businessA.id,
+        id: "sent-paidAt",
+        status: "SENT",
+        total: 777,
+        paidAt: new Date("2026-10-10T16:00:00.000Z"),
+      },
+    ],
+    payments: [
+      {
+        businessId: businessA.id,
+        id: "p-partial",
+        amount: 50,
+        invoiceId: "legacy-partial",
+        receivedAt: new Date("2026-10-06T16:00:00.000Z"),
+      },
+    ],
+    paymentsOnPaidInvoices: [{ businessId: businessA.id, invoiceId: "legacy-partial" }],
+  });
+  check(
+    "Production collected-payments counts only the partial Payment on a legacy PAID invoice",
+    collectedRevenueInPeriod(partialFact, octPeriod).actual === 50,
+  );
+  check(
+    "VOID/DRAFT/SENT invoices with paidAt are excluded from invoices paid",
+    countInvoicesPaidInPeriod(partialFact, octPeriod).actual === 1,
+  );
+  check(
+    "VOID/DRAFT/SENT invoices with paidAt are excluded from collected payments",
+    collectedRevenueInPeriod(partialFact, octPeriod).actual === 50,
+  );
+
+  const truncatedJobs = countJobsCompletedInPeriod(
+    emptyFactSource({
+      jobCompletions: [
+        {
+          businessId: businessA.id,
+          jobId: "bound-job",
+          occurredAt: new Date("2026-09-02T12:00:00.000Z"),
+        },
+      ],
+      jobCompletionsTruncated: true,
+    }),
+    nySeptember,
+  );
+  check(
+    "Jobs incomplete comes only from the in-month JOB_COMPLETED bound",
+    truncatedJobs.incomplete === true && truncatedJobs.actual === 1,
+  );
+  const allTimeCapOnly = countJobsCompletedInPeriod(
+    emptyFactSource({
+      completedJobs: [{ businessId: businessA.id, id: "unc" }],
+      completedJobsTruncated: true,
+    }),
+    nySeptember,
+  );
+  check(
+    "All-time completed-jobs cap is only for unclocked disclosure",
+    allTimeCapOnly.incomplete === false && allTimeCapOnly.unclockedDisclosureIncomplete === true,
+  );
+  check(
+    "Invoice actual is incomplete when the paid-invoice read is truncated",
+    countInvoicesPaidInPeriod(emptyFactSource({ paidInvoicesTruncated: true }), nySeptember).incomplete ===
+      true,
+  );
+  check(
+    "Collected-payments actual is incomplete when the payment read is truncated",
+    collectedRevenueInPeriod(emptyFactSource({ paymentsTruncated: true }), nySeptember).incomplete === true,
+  );
+  check(
+    "Collected-payments actual is incomplete when the paid-invoice read is truncated",
+    collectedRevenueInPeriod(emptyFactSource({ paidInvoicesTruncated: true }), nySeptember).incomplete ===
+      true,
+  );
+
+  const octPaidPartial = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "PAID",
+      total: new Prisma.Decimal(400),
+      paidAt: new Date("2026-10-05T16:00:00.000Z"),
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      invoiceId: octPaidPartial.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(50),
+      method: "CASH",
+      receivedAt: new Date("2026-10-06T16:00:00.000Z"),
+    },
+  });
+  for (const status of ["VOID", "DRAFT", "SENT"]) {
+    await prisma.invoice.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        status,
+        total: new Prisma.Decimal(999),
+        paidAt: new Date("2026-10-10T16:00:00.000Z"),
+      },
+    });
+  }
+  const workspaceOctober = await loadMonthlyGoalsWorkspace(
+    prisma,
+    ownerA,
+    { month: "2026-10" },
+    new Date("2026-10-20T15:00:00.000Z"),
+  );
+  check("October loader counts only the PAID invoice", workspaceOctober.progress.invoicesPaid.actual === 1);
+  check(
+    "October loader counts only the $50 Payment, not the $400 invoice total",
+    workspaceOctober.progress.revenueReceived.actual === 50,
+  );
+
+  console.log("\nRACE — two OWNER upserts released together");
+  function createTwoPartyBarrier() {
+    let arrived = 0;
+    let release;
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    return {
+      async arrive() {
+        arrived += 1;
+        if (arrived >= 2) release();
+        await released;
+      },
+    };
+  }
+  const barrier = createTwoPartyBarrier();
+  monthlyGoalWriteTestHooks.beforeUpsert = () => barrier.arrive();
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  try {
+    const [left, right] = await Promise.allSettled([
+      saveMonthlyBusinessGoal(raceClientA, ownerA, {
+        month: "2026-07",
+        jobsCompleted: "11",
+        invoicesPaid: "8",
+        revenueReceived: "1000",
+      }),
+      saveMonthlyBusinessGoal(raceClientB, ownerA, {
+        month: "2026-07",
+        jobsCompleted: "12",
+        invoicesPaid: "9",
+        revenueReceived: "1100",
+      }),
+    ]);
+    const raceRows = await prisma.monthlyBusinessGoal.findMany({
+      where: { businessId: businessA.id, year: 2026, month: 7 },
+    });
+    const bothFulfilled = left.status === "fulfilled" && right.status === "fulfilled";
+    const unavailable =
+      (left.status === "rejected" && left.reason instanceof MonthlyBusinessGoalUnavailableError) ||
+      (right.status === "rejected" && right.reason instanceof MonthlyBusinessGoalUnavailableError) ||
+      [left, right].some(
+        (result) =>
+          result.status === "fulfilled" && String(result.value.message).toLowerCase().includes("unavailable"),
+      );
+    check("Two OWNER saves released together both succeed", bothFulfilled);
+    check("Race leaves exactly one monthly goal row", raceRows.length === 1);
+    check("Race never reports unavailable", !unavailable);
+  } finally {
+    monthlyGoalWriteTestHooks.beforeUpsert = undefined;
+    await raceClientA.$disconnect();
+    await raceClientB.$disconnect();
+  }
+
   const invoiceCountBefore = await prisma.invoice.count({ where: { businessId: businessA.id } });
   const paymentCountBefore = await prisma.payment.count({ where: { businessId: businessA.id } });
   await saveMonthlyBusinessGoal(prisma, ownerA, {
@@ -618,6 +954,12 @@ try {
   failures += 1;
 } finally {
   await prisma.$disconnect();
+  try {
+    await dropMonthlyGoalsTestDatabase();
+  } catch (error) {
+    console.error(error);
+    failures += 1;
+  }
 }
 
 process.exit(failures === 0 ? 0 : 1);

@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBusinessAccess } from "@/lib/access";
 import { MONTHLY_GOALS_PATH } from "@/lib/monthly-goals";
 import { monthlyBusinessGoalErrorMessage, saveMonthlyBusinessGoal } from "@/lib/monthly-goals-ops";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
 
 export type MonthlyBusinessGoalActionState = { error?: string; message?: string };
 
@@ -18,7 +19,7 @@ export async function saveMonthlyBusinessGoalAction(
   formData: FormData,
 ): Promise<MonthlyBusinessGoalActionState> {
   try {
-    const access = await requireBusinessAccess();
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.REPORTING_INSIGHTS);
     const result = await saveMonthlyBusinessGoal(prisma, access, {
       month: readString(formData, "month"),
       jobsCompleted: readString(formData, "jobsCompleted"),

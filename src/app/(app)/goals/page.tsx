@@ -29,7 +29,7 @@ export default async function MonthlyGoalsPage({
     <PageContainer>
       <PageHeader
         title="Monthly goals"
-        description="OWNER-set monthly targets compared with recorded jobs completed, invoices paid, and revenue received. Targets are not forecasts and not a bank balance. ADMIN may view. MEMBER is denied."
+        description="OWNER-set monthly targets compared with recorded jobs completed, invoices paid, and collected payments. Targets are not forecasts and not a bank balance."
       />
       <MonthlyGoalsWorkspace workspace={workspace} />
     </PageContainer>

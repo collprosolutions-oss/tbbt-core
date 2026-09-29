@@ -4,7 +4,7 @@
  * MonthlyBusinessGoal rows — never invoices, payments, expenses, jobs,
  * catalog prices, or recorded facts. Does not send messages.
  */
-import { Prisma, type PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError } from "@/lib/authorization";
 import {
@@ -14,11 +14,15 @@ import {
   NO_AUTOMATIC_PRICE_CHANGE_MESSAGE,
   SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE,
   assertCanWriteMonthlyGoals,
+  missingMonthlyGoalSchema,
   parseMonthlyGoalKey,
   parseMonthlyGoalTargets,
+  parseMoneyTarget,
   toSavedMonthlyBusinessGoal,
   type SavedMonthlyBusinessGoal,
 } from "@/lib/monthly-goals";
+
+export { missingMonthlyGoalSchema };
 
 export class MonthlyBusinessGoalError extends Error {
   constructor(message: string) {
@@ -34,18 +38,7 @@ export class MonthlyBusinessGoalUnavailableError extends MonthlyBusinessGoalErro
   }
 }
 
-export function missingMonthlyGoalSchema(error: unknown) {
-  const code =
-    error && typeof error === "object" && "code" in error
-      ? String((error as { code?: string }).code)
-      : "";
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    code === "P2021" ||
-    code === "P2022" ||
-    /MonthlyBusinessGoal|monthlyBusinessGoal|does not exist/i.test(message)
-  );
-}
+export const monthlyGoalWriteTestHooks: { beforeUpsert?: () => Promise<void> } = {};
 
 export function monthlyBusinessGoalErrorMessage(error: unknown, fallback: string) {
   if (
@@ -82,40 +75,39 @@ export async function saveMonthlyBusinessGoal(
   if (parsed.errors.length > 0) {
     throw new MonthlyBusinessGoalError(parsed.errors[0]!);
   }
+  const revenue = parseMoneyTarget(input.revenueReceived);
+  if (revenue.error) {
+    throw new MonthlyBusinessGoalError(revenue.error);
+  }
 
   const data = {
     jobsCompletedTarget: parsed.targets.jobsCompleted,
     invoicesPaidTarget: parsed.targets.invoicesPaid,
-    revenueReceivedTarget:
-      parsed.targets.revenueReceived == null
-        ? null
-        : new Prisma.Decimal(parsed.targets.revenueReceived),
+    revenueReceivedTarget: revenue.value,
     updatedByMembershipId: access.workspace.membership.id,
   };
 
   try {
-    const existing = await prisma.monthlyBusinessGoal.findFirst({
-      where: { businessId: access.businessId, year: period.year, month: period.month },
-      select: { id: true, businessId: true },
-    });
-    if (existing && existing.businessId !== access.businessId) {
-      throw new ForbiddenError();
+    if (monthlyGoalWriteTestHooks.beforeUpsert) {
+      await monthlyGoalWriteTestHooks.beforeUpsert();
     }
-
-    const row = existing
-      ? await prisma.monthlyBusinessGoal.update({
-          where: { id: existing.id },
-          data,
-        })
-      : await prisma.monthlyBusinessGoal.create({
-          data: {
-            ...data,
-            businessId: access.businessId,
-            year: period.year,
-            month: period.month,
-            createdByMembershipId: access.workspace.membership.id,
-          },
-        });
+    const row = await prisma.monthlyBusinessGoal.upsert({
+      where: {
+        businessId_year_month: {
+          businessId: access.businessId,
+          year: period.year,
+          month: period.month,
+        },
+      },
+      create: {
+        ...data,
+        businessId: access.businessId,
+        year: period.year,
+        month: period.month,
+        createdByMembershipId: access.workspace.membership.id,
+      },
+      update: data,
+    });
 
     if (row.businessId !== access.businessId) {
       throw new ForbiddenError();

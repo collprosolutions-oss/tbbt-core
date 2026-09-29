@@ -544,7 +544,6 @@ model MonthlyBusinessGoal {
   updatedBy Membership? @relation("MonthlyBusinessGoalUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, year, month])
-  @@index([businessId])
 }
 
 model Membership {
