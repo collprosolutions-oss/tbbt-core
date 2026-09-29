@@ -1417,7 +1417,8 @@ try {
       completeRunningAfter.endedAt == null &&
       completeJobAfter.status === "IN_PROGRESS",
   );
-  const startRunning = await insertRunning(spanStartJob.id, "JOB", spanStart);
+  const startOtherJob = await spanJob();
+  const startRunning = await insertRunning(startOtherJob.id, "JOB", spanStart);
   const startResult = await startJobWithRunningTimeSafety(prisma, {
     businessId: businessA.id,
     jobId: spanStartJob.id,
