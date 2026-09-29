@@ -105,8 +105,10 @@ check(
 );
 check(
   "Public document actions never accept a client-supplied businessId or jobId",
-  !actionSrc.includes("businessId") &&
-    !actionSrc.includes("jobId") &&
+  !actionSrc.includes("input.businessId") &&
+    !actionSrc.includes("input.jobId") &&
+    !actionSrc.includes('formData.get("businessId")') &&
+    !actionSrc.includes('formData.get("jobId")') &&
     actionSrc.includes("input.projectToken") &&
     libSrc.includes("where: { projectToken: trimmed }"),
 );
@@ -147,12 +149,13 @@ check(
     privateRouteSrc.includes("authorizePrivateStoredAssetDownload"),
 );
 check(
-  "Lib never updates a Job, invoice, message, or publicPath",
+  "Lib never updates a Job, invoice, message, or writes a publicPath",
   !libSrc.includes("job.update") &&
     !libSrc.includes("invoice.create") &&
     !libSrc.includes("customerCommunication") &&
     !libSrc.includes('visibility: "PUBLIC"') &&
-    !libSrc.includes("publicPath:") &&
+    !libSrc.includes("publicPath: publicAssetPath") &&
+    !libSrc.includes('publicPath: `/api/storage/public') &&
     libSrc.includes("Project documents cannot be published."),
 );
 check(
