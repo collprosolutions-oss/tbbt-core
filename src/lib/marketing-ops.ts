@@ -7,6 +7,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   buildCreatorPackagePreview,
   buildMarketingReviewPacket,
@@ -22,22 +23,29 @@ import {
   nextContentStatus,
   OWNER_REVIEW_PACKET_MESSAGE,
   OWNER_STUDIO_APPROVAL_MESSAGE,
+  OWNER_STUDIO_CALENDAR_MESSAGE,
   STUDIO_APPROVE_NOT_READY_MESSAGE,
   STUDIO_APPROVAL_QUEUE_STATUS,
+  STUDIO_CALENDAR_PACKAGE_NOT_FOUND_MESSAGE,
+  STUDIO_PACKAGE_STALE_MESSAGE,
+  STUDIO_PLANNED_DAY_INVALID_MESSAGE,
+  STUDIO_PLANNED_DAY_SNAPSHOT_REQUIRED_MESSAGE,
+  STUDIO_PLANNED_DAY_STALE_MESSAGE,
   STUDIO_RETURN_FOR_CHANGES_MESSAGE,
   STUDIO_RETURN_NOT_READY_MESSAGE,
   parseHashtags,
-  parseMarketingDate,
   parseRequiredShotList,
   parseRequiredStoryboard,
   parseShotList,
   parseStoryboard,
+  parseStudioPublicationDay,
   PHOTO_PERMISSION_APPROVED,
   PHOTO_PERMISSION_PRIVATE,
   PHOTO_PERMISSION_REVOKED_MESSAGE,
   serializeShotList,
   serializeStoryboard,
   studioPhotosEligible,
+  studioPublicationDayKey,
   type CreatorPackage,
   type MarketingReviewPacket,
 } from "@/lib/marketing";
@@ -74,7 +82,6 @@ export type CreateMarketingContentInput = {
   channelIntent?: string;
   jobId?: string;
   photoIds?: string[];
-  plannedFor?: string;
   campaignId?: string;
   catalogItemId?: string;
   storyboardJson?: string;
@@ -91,7 +98,6 @@ export type UpdateMarketingStudioInput = {
   shotListJson?: string;
   hashtags?: string;
   photoIds?: string[];
-  plannedFor?: string;
   channelIntent?: string;
 };
 
@@ -225,7 +231,6 @@ export async function createMarketingContent(
     throw new MarketingError("Select a job photo that already has marketing permission.");
   }
 
-  const plannedFor = input.plannedFor ? parseMarketingDate(input.plannedFor) : null;
   let campaignId: string | null = null;
   if (input.campaignId) {
     const campaign = access.assertOwned(
@@ -258,7 +263,7 @@ export async function createMarketingContent(
       body,
       channelIntent,
       status: "DRAFT",
-      plannedFor,
+      plannedFor: null,
       storyboardJson: serializeStoryboard(parseStoryboard(input.storyboardJson ?? "[]")),
       shotListJson: serializeShotList(parseShotList(input.shotListJson ?? "[]")),
       hashtags: formatHashtags(parseHashtags(input.hashtags ?? "")),
@@ -308,15 +313,6 @@ export async function updateMarketingStudioPackage(
   if (!isMarketingChannel(channelIntent)) {
     throw new MarketingError("Choose a channel intent.");
   }
-  const plannedFor =
-    input.plannedFor !== undefined
-      ? input.plannedFor
-        ? parseMarketingDate(input.plannedFor)
-        : null
-      : content.plannedFor;
-  if (input.plannedFor && !plannedFor) {
-    throw new MarketingError("Enter a valid internal planning date.");
-  }
 
   let storyboardJson = content.storyboardJson;
   if (input.storyboardJson !== undefined) {
@@ -343,6 +339,24 @@ export async function updateMarketingStudioPackage(
   }
 
   return runInTransaction(db, async (tx) => {
+    const claimed = await tx.marketingContent.updateMany({
+      where: {
+        id: content.id,
+        businessId: access.businessId,
+        updatedAt: content.updatedAt,
+      },
+      data: {
+        title,
+        body,
+        channelIntent,
+        storyboardJson,
+        shotListJson,
+        hashtags,
+      },
+    });
+    if (claimed.count !== 1) {
+      throw new MarketingError(STUDIO_PACKAGE_STALE_MESSAGE);
+    }
     if (photos) {
       await tx.marketingContentPhoto.deleteMany({
         where: { contentId: content.id, ...access.scope },
@@ -355,19 +369,12 @@ export async function updateMarketingStudioPackage(
         })),
       });
     }
-    return tx.marketingContent.update({
-      where: { id: content.id },
-      data: {
-        title,
-        body,
-        channelIntent,
-        plannedFor,
-        storyboardJson,
-        shotListJson,
-        hashtags,
-      },
-      include: { photos: true },
-    });
+    return access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: content.id, ...access.scope },
+        include: { photos: true },
+      }),
+    );
   });
 }
 
@@ -606,24 +613,137 @@ export async function downloadMarketingReviewPacket(
   };
 }
 
-export async function setMarketingContentPlannedFor(
+function requireOwnerStudioCalendar(access: BusinessAccess) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(OWNER_STUDIO_CALENDAR_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+}
+
+function parseExpectedUpdatedAt(raw: string | Date | undefined): Date | null {
+  if (!raw) return null;
+  if (raw instanceof Date) {
+    return Number.isNaN(raw.getTime()) ? null : raw;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function studioCalendarWriteWhere(
+  access: BusinessAccess,
+  contentId: string,
+  updatedAt: Date,
+) {
+  return {
+    id: contentId,
+    businessId: access.businessId,
+    updatedAt,
+  };
+}
+
+export type PlanStudioPublicationDayInput = {
+  contentId: string;
+  plannedFor: string;
+  expectedUpdatedAt: string | Date;
+};
+
+export type PlanStudioPublicationDayResult = {
+  id: string;
+  status: string;
+  plannedFor: Date;
+  plannedDay: string;
+  exportedAt: Date | null;
+  reviewedByMembershipId: string | null;
+  updatedAt: Date;
+  published: false;
+  posted: false;
+  customerMessageSent: false;
+  providerConnectionClaimed: false;
+};
+
+export async function planStudioPublicationDay(
   db: Db,
   access: BusinessAccess,
-  input: { contentId: string; plannedFor: string },
-) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
-  const content = access.assertOwned(
-    await db.marketingContent.findFirst({
-      where: { id: input.contentId, ...access.scope },
-    }),
-  );
-  const plannedFor = parseMarketingDate(input.plannedFor);
-  if (!plannedFor) {
-    throw new MarketingError("Enter a valid internal planning date.");
-  }
-  return db.marketingContent.update({
-    where: { id: content.id },
-    data: { plannedFor },
+  input: PlanStudioPublicationDayInput,
+): Promise<PlanStudioPublicationDayResult> {
+  requireOwnerStudioCalendar(access);
+  return runInTransaction(db, async (tx) => {
+    const business = await tx.business.findFirst({
+      where: { id: access.businessId },
+      select: { timezone: true },
+    });
+    const timeZone = resolveBusinessTimeZone(business);
+    const plannedFor = parseStudioPublicationDay(input.plannedFor, timeZone);
+    if (!plannedFor) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_INVALID_MESSAGE);
+    }
+
+    const content = access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: input.contentId, ...access.scope },
+      }),
+    );
+    if (!isMarketingContentStatus(content.status)) {
+      throw new MarketingError(STUDIO_CALENDAR_PACKAGE_NOT_FOUND_MESSAGE);
+    }
+
+    const expectedUpdatedAt = parseExpectedUpdatedAt(input.expectedUpdatedAt);
+    if (!expectedUpdatedAt) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_SNAPSHOT_REQUIRED_MESSAGE);
+    }
+    if (expectedUpdatedAt.getTime() !== content.updatedAt.getTime()) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_STALE_MESSAGE);
+    }
+
+    const currentDay = content.plannedFor
+      ? studioPublicationDayKey(content.plannedFor, timeZone)
+      : null;
+    if (currentDay === input.plannedFor.trim() && content.plannedFor) {
+      return {
+        id: content.id,
+        status: content.status,
+        plannedFor: content.plannedFor,
+        plannedDay: currentDay,
+        exportedAt: content.exportedAt,
+        reviewedByMembershipId: content.reviewedByMembershipId,
+        updatedAt: content.updatedAt,
+        published: false,
+        posted: false,
+        customerMessageSent: false,
+        providerConnectionClaimed: false,
+      };
+    }
+
+    const claimed = await tx.marketingContent.updateMany({
+      where: studioCalendarWriteWhere(access, content.id, content.updatedAt),
+      data: { plannedFor },
+    });
+    if (claimed.count !== 1) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_STALE_MESSAGE);
+    }
+
+    const updated = access.assertOwned(
+      await tx.marketingContent.findFirst({
+        where: { id: content.id, ...access.scope },
+      }),
+    );
+    if (!updated.plannedFor) {
+      throw new MarketingError(STUDIO_PLANNED_DAY_INVALID_MESSAGE);
+    }
+    return {
+      id: updated.id,
+      status: updated.status,
+      plannedFor: updated.plannedFor,
+      plannedDay: studioPublicationDayKey(updated.plannedFor, timeZone),
+      exportedAt: updated.exportedAt,
+      reviewedByMembershipId: updated.reviewedByMembershipId,
+      updatedAt: updated.updatedAt,
+      published: false,
+      posted: false,
+      customerMessageSent: false,
+      providerConnectionClaimed: false,
+    };
   });
 }
 

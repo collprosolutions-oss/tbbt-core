@@ -54,6 +54,20 @@ export async function persistDraftEstimateTotal(
     return;
   }
 
+  const optionCount = await tx.estimateOption.count({
+    where: { estimateId, businessId },
+  });
+  if (optionCount > 0) {
+    await tx.estimate.update({
+      where: { id: estimate.id },
+      data: {
+        laborMinimumAdjustment: ZERO,
+        total: ZERO,
+      },
+    });
+    return;
+  }
+
   const items = await tx.lineItem.findMany({
     where: { estimateId, businessId },
     select: { total: true, type: true, description: true },

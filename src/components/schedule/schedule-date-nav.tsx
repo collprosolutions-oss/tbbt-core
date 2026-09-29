@@ -18,12 +18,14 @@ export function ScheduleDateNav({
   label,
   todayIso,
   timeZone,
+  extraQuery = "",
 }: {
   view: ScheduleView;
   date: Date;
   label: string;
   todayIso: string;
   timeZone?: string;
+  extraQuery?: string;
 }) {
   const step = view === "week" ? 7 : 1;
   const prevDate =
@@ -34,19 +36,20 @@ export function ScheduleDateNav({
     view === "month" || view === "crew"
       ? addMonths(date, 1, timeZone)
       : addDays(date, step, timeZone);
+  const suffix = extraQuery ? `&${extraQuery}` : "";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button asChild size="sm" variant="outline">
-        <Link href={`/jobs?view=${view}&date=${formatISODate(prevDate, timeZone)}`}>
+        <Link href={`/jobs?view=${view}&date=${formatISODate(prevDate, timeZone)}${suffix}`}>
           ← Prev
         </Link>
       </Button>
       <Button asChild size="sm" variant="outline">
-        <Link href={`/jobs?view=${view}&date=${todayIso}`}>Today</Link>
+        <Link href={`/jobs?view=${view}&date=${todayIso}${suffix}`}>Today</Link>
       </Button>
       <Button asChild size="sm" variant="outline">
-        <Link href={`/jobs?view=${view}&date=${formatISODate(nextDate, timeZone)}`}>
+        <Link href={`/jobs?view=${view}&date=${formatISODate(nextDate, timeZone)}${suffix}`}>
           Next →
         </Link>
       </Button>

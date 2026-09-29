@@ -138,6 +138,21 @@ export function describeProblemReportResolved(): string {
   return "Job problem report resolution was recorded.";
 }
 
+export function describeJobCallbackRecorded(): string {
+  return "Customer-reported callback was recorded.";
+}
+
+export function describeJobCallbackReviewed(): string {
+  return "Customer-reported callback review was recorded.";
+}
+
+export function describeJobCallbackOutcome(outcome: string | null): string {
+  if (!outcome) {
+    return "Customer-reported callback outcome was recorded.";
+  }
+  return `Customer-reported callback outcome was recorded as ${outcome}.`;
+}
+
 export function describeReviewRequestRecorded(): string {
   return "Review request send was recorded.";
 }

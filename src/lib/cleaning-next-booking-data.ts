@@ -44,6 +44,7 @@ export async function loadCleaningNextBookingReview(
       propertyId: true,
       estimateId: true,
       approvedEstimateVersionId: true,
+      approvedEstimateOptionId: true,
       customer: { select: { id: true, businessId: true, name: true } },
       property: {
         select: {
@@ -67,6 +68,7 @@ export async function loadCleaningNextBookingReview(
             select: {
               description: true,
               quantity: true,
+              optionId: true,
               serviceCatalogItem: { select: { tradeCode: true } },
             },
           },
@@ -78,7 +80,7 @@ export async function loadCleaningNextBookingReview(
           businessId: true,
           lineItems: {
             orderBy: { createdAt: "asc" },
-            select: { description: true, quantity: true },
+            select: { description: true, quantity: true, optionId: true },
           },
         },
       },
@@ -97,6 +99,7 @@ export async function loadCleaningNextBookingReview(
     return null;
   }
 
+  const optionId = job.approvedEstimateOptionId ?? null;
   const versionLines =
     job.approvedEstimateVersion && job.approvedEstimateVersion.businessId === access.businessId
       ? job.approvedEstimateVersion.lineItems
@@ -105,7 +108,9 @@ export async function loadCleaningNextBookingReview(
     versionLines.length === 0 && job.estimate && job.estimate.businessId === access.businessId
       ? job.estimate.lineItems
       : [];
-  const scopeSource = versionLines.length > 0 ? versionLines : estimateLines;
+  const scopeSource = (versionLines.length > 0 ? versionLines : estimateLines).filter(
+    (line) => !optionId || line.optionId === optionId,
+  );
   const scopeLines: NextBookingScopeLine[] = scopeSource.map((line) => ({
     title: lineItemTitle(line.description),
     quantity: line.quantity.toString(),

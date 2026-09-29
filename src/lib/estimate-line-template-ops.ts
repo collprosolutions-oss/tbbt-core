@@ -309,10 +309,16 @@ async function applyCollectedTemplateLinesInTx(
     throw new EstimateLineTemplateError(DRAFT_ONLY_APPLY_MESSAGE);
   }
 
+  const firstOption = await tx.estimateOption.findFirst({
+    where: { estimateId: input.estimateId, businessId: access.businessId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true },
+  });
   await tx.lineItem.createMany({
     data: input.lines.map((line) => ({
       businessId: access.businessId,
       estimateId: input.estimateId,
+      optionId: firstOption?.id ?? null,
       description: line.description,
       quantity: line.quantity,
       unitPrice: line.unitPrice,

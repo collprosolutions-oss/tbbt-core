@@ -298,6 +298,8 @@ model Business {
   estimates                Estimate[]
   estimateVersions         EstimateVersion[]
   estimateVersionLineItems EstimateVersionLineItem[]
+  estimateOptions          EstimateOption[]
+  estimateVersionOptions   EstimateVersionOption[]
   jobs                     Job[]
   appointmentEvents        JobAppointmentEvent[]
   invoices                 Invoice[]
@@ -307,13 +309,20 @@ model Business {
   additionalWorkRequests      AdditionalWorkRequest[]
   additionalWorkRequestItems  AdditionalWorkRequestItem[]
   jobProblemReports           JobProblemReport[]
+  jobCallbacks                JobCallback[]
+  jobCallbackEvents           JobCallbackEvent[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
+  timeCorrectionRequests   TimeCorrectionRequest[]
+  timeCorrectionDecisions  TimeCorrectionDecision[]
   timesheetWeeks           TimesheetWeek[]
   payrollRuns              PayrollRun[]
   payrollRunItems          PayrollRunItem[]
   payrollRunEvents         PayrollRunEvent[]
   expenses                 Expense[]
+  /// Owner-recorded tools and vehicles. Not inventory stock.
+  equipmentItems           EquipmentItem[]
+  equipmentMaintenanceEntries EquipmentMaintenanceEntry[]
   marketingContents        MarketingContent[]
   marketingContentPhotos   MarketingContentPhoto[]
   marketingStudioWeeklyReminders MarketingStudioWeeklyReminder[]
@@ -384,6 +393,7 @@ model Business {
   membershipSkills         MembershipSkill[]
   membershipWeeklyAvailability MembershipWeeklyAvailability[]
   membershipAvailabilityExceptions MembershipAvailabilityException[]
+  membershipAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[]
   fillInBenchWorkers       FillInBenchWorker[]
   workforceOutreachTasks   WorkforceOutreachTask[]
   suppliers                  Supplier[]
@@ -411,6 +421,13 @@ model Business {
   partnerVendorOpportunities PartnerVendorOpportunity[]
   externalLeadImports      ExternalLeadImport[]
   externalLeadImportRows   ExternalLeadImportRow[]
+  customerCsvImports       CustomerCsvImport[]
+  customerCsvImportRows    CustomerCsvImportRow[]
+  /// OWNER-reviewed CSV preview/confirm for this business's catalog.
+  /// Confirm writes ServiceCatalogItem only — never LineItem snapshots
+  /// or published hourly rates.
+  serviceCatalogImports    ServiceCatalogImport[]
+  serviceCatalogImportRows ServiceCatalogImportRow[]
   regulatoryIntelligenceNotes RegulatoryIntelligenceNote[]
   /// OWNER-authored extra intake questions + allowlisted visibility rules.
   /// Drafts stay off public hire forms until published as TenantIntakeSnapshot.
@@ -423,6 +440,13 @@ model Business {
   /// snapshots only — never public catalog prices or approved estimates.
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
+  /// OWNER-recorded Job milestones. Separate table so Job columns stay
+  /// untouched. Completion is explicit — never inferred from Job.status.
+  jobMilestones             JobMilestone[]
+  jobMilestoneEvents        JobMilestoneEvent[]
+  /// OWNER-set monthly targets for recorded jobs completed, invoices paid,
+  /// and collected payments (recorded). Targets are not forecasts or bank balance.
+  monthlyBusinessGoals      MonthlyBusinessGoal[]
   /// OWNER-recorded collections next steps / resolutions. Not payments.
   invoiceCollectionWorkItems InvoiceCollectionWorkItem[]
 }
@@ -519,6 +543,32 @@ model OwnerScenarioAssumptionSet {
   @@index([businessId, updatedAt])
 }
 
+/// OWNER-set monthly targets for recorded jobs completed, invoices paid,
+/// and collected payments (recorded). One row per business civil month. Targets are
+/// not forecasts, projected cash, or bank balance. Actuals are computed
+/// from recorded TBBT facts using Business.timezone month boundaries.
+/// ADMIN may view; MEMBER is denied. businessId comes from access.
+model MonthlyBusinessGoal {
+  id                    String   @id @default(cuid())
+  businessId            String
+  year                  Int
+  /// Civil month 1-12 in Business.timezone.
+  month                 Int
+  jobsCompletedTarget   Int?
+  invoicesPaidTarget    Int?
+  revenueReceivedTarget Decimal?
+  createdByMembershipId String?
+  updatedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership? @relation("MonthlyBusinessGoalCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  updatedBy Membership? @relation("MonthlyBusinessGoalUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, year, month])
+}
+
 model Membership {
   id         String         @id @default(cuid())
   userId     String
@@ -571,6 +621,8 @@ model Membership {
   /// Adjustments this membership authored (owner/admin corrections, or a
   /// MEMBER's own correction request). Not the entries they worked.
   authoredAdjustments TimeEntryAdjustment[] @relation("TimeEntryAdjustmentActor")
+  requestedTimeCorrections TimeCorrectionRequest[] @relation("TimeCorrectionRequester")
+  timeCorrectionDecisions  TimeCorrectionDecision[] @relation("TimeCorrectionDecisionActor")
   approvedTimesheets  TimesheetWeek[]       @relation("TimesheetWeekApprover")
   payrollRunItems     PayrollRunItem[]
   payrollRunEvents    PayrollRunEvent[]     @relation("PayrollRunEventActor")
@@ -620,6 +672,8 @@ model Membership {
   workforceSkills                 MembershipSkill[]
   weeklyAvailability              MembershipWeeklyAvailability[]
   availabilityExceptions          MembershipAvailabilityException[]
+  availabilityExceptionRequests   MembershipAvailabilityExceptionRequest[]
+  decidedAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[] @relation("AvailabilityRequestDecider")
   fillInBenchWorkers              FillInBenchWorker[]
   workforceOutreachCreated        WorkforceOutreachTask[]   @relation("WorkforceOutreachCreator")
   workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
@@ -640,9 +694,24 @@ model Membership {
   reviewedPartnerVendorOpportunities PartnerVendorOpportunity[] @relation("PartnerVendorOpportunityReviewer")
   createdExternalLeadImports      ExternalLeadImport[] @relation("ExternalLeadImportCreator")
   confirmedExternalLeadImports    ExternalLeadImport[] @relation("ExternalLeadImportConfirmer")
+  createdCustomerCsvImports       CustomerCsvImport[] @relation("CustomerCsvImportCreator")
+  confirmedCustomerCsvImports     CustomerCsvImport[] @relation("CustomerCsvImportConfirmer")
+  createdServiceCatalogImports    ServiceCatalogImport[] @relation("ServiceCatalogImportCreator")
+  confirmedServiceCatalogImports  ServiceCatalogImport[] @relation("ServiceCatalogImportConfirmer")
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedJobCallbacks         JobCallback[]          @relation("JobCallbackRecorder")
+  reviewedJobCallbacks         JobCallback[]          @relation("JobCallbackReviewer")
+  outcomeJobCallbacks          JobCallback[]          @relation("JobCallbackOutcome")
+  jobCallbackEvents            JobCallbackEvent[]     @relation("JobCallbackEventActor")
+  createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
+  createdEquipmentMaintenanceEntries EquipmentMaintenanceEntry[] @relation("EquipmentMaintenanceCreator")
+  recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
+  completedJobMilestones JobMilestone[] @relation("JobMilestoneCompleter")
+  jobMilestoneEvents JobMilestoneEvent[] @relation("JobMilestoneEventActor")
+  createdMonthlyBusinessGoals MonthlyBusinessGoal[] @relation("MonthlyBusinessGoalCreator")
+  updatedMonthlyBusinessGoals MonthlyBusinessGoal[] @relation("MonthlyBusinessGoalUpdater")
   createdInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemCreator")
   updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
 
@@ -686,6 +755,7 @@ model Customer {
   referralsGiven   Referral[] @relation("ReferralSourceCustomer")
   referralsReceived Referral[] @relation("ReferralReferredCustomer")
   growthActionRequests GrowthActionRequest[]
+  jobCallbacks         JobCallback[]
 
   @@index([businessId])
   @@index([firstCampaignId])
@@ -1187,6 +1257,10 @@ model Estimate {
   /// exactly once, in the same transaction that flips status SENT ->
   /// APPROVED, and never changed afterward.
   approvedVersionId      String?
+  /// The frozen EstimateVersionOption the customer chose. Null for
+  /// single-option estimates (existing behavior) and for any estimate
+  /// that is not yet APPROVED. Set exactly once with approvedVersionId.
+  approvedOptionId       String?
   leadSource             String?
   campaignId             String?
   createdAt              DateTime @default(now())
@@ -1204,6 +1278,11 @@ model Estimate {
   /// sent. Application code must never update or delete an existing row.
   versions        EstimateVersion[] @relation("EstimateVersions")
   approvedVersion EstimateVersion?  @relation("EstimateApprovedVersion", fields: [approvedVersionId], references: [id], onDelete: SetNull)
+  /// Live OWNER-authored priced alternatives. Zero rows means a
+  /// single-option estimate. Two or three rows is the only multi-option
+  /// shape. Mutable only while this Estimate is DRAFT.
+  options         EstimateOption[]
+  approvedOption  EstimateVersionOption? @relation("EstimateApprovedOption", fields: [approvedOptionId], references: [id], onDelete: SetNull)
   /// Owner-managed sales state only for standalone estimates (no
   /// ServiceRequest). Request-linked estimates reuse the request's
   /// PipelineOpportunity -- never a second opportunity row.
@@ -1214,6 +1293,7 @@ model Estimate {
   @@index([businessId])
   @@index([propertyId])
   @@index([campaignId])
+  @@index([approvedOptionId])
 }
 
 /// OWNER-named, business-scoped set of draft estimate line snapshots.
@@ -1268,6 +1348,63 @@ model EstimateLineTemplateLine {
   @@index([templateId, sortOrder])
 }
 
+/// OWNER-authored priced alternative on a DRAFT estimate. Live rows are
+/// mutable only while the parent Estimate is DRAFT. Sending freezes a
+/// copy onto EstimateVersionOption. Zero rows means a single-option
+/// estimate (existing behavior). Two or three rows is the only
+/// multi-option shape this product supports. Application code must never
+/// write these rows for SENT or APPROVED estimates.
+model EstimateOption {
+  id         String   @id @default(cuid())
+  businessId String
+  estimateId String
+  /// Owner-facing label, e.g. "Good", "Better", "Best".
+  name       String
+  /// 1, 2, or 3. Unique per estimate.
+  sortOrder  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  estimate  Estimate   @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  lineItems LineItem[]
+
+  @@unique([estimateId, sortOrder])
+  @@index([businessId])
+  @@index([estimateId])
+}
+
+/// Frozen priced alternative captured at send. Application code must never
+/// update snapshot fields (sourceOptionId, name, sortOrder, total,
+/// laborMinimumAdjustment). The only field written after creation is
+/// approvedAt, and only on the single option the customer approved.
+model EstimateVersionOption {
+  id                     String    @id @default(cuid())
+  businessId             String
+  estimateVersionId      String
+  /// The live EstimateOption.id this snapshot was copied from. Used so
+  /// approval can detect a stale choice after Return to Draft + Send.
+  /// Not a foreign key — the live row may later be edited or removed.
+  sourceOptionId         String
+  name                   String
+  sortOrder              Int
+  total                  Decimal
+  laborMinimumAdjustment Decimal
+  /// Set exactly once, only on the option the customer actually approved.
+  approvedAt             DateTime?
+  createdAt              DateTime  @default(now())
+
+  business            Business                  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  estimateVersion     EstimateVersion           @relation(fields: [estimateVersionId], references: [id], onDelete: Cascade)
+  lineItems           EstimateVersionLineItem[]
+  approvedOnEstimates Estimate[]                @relation("EstimateApprovedOption")
+  jobsApprovedFrom    Job[]                     @relation("JobApprovedEstimateOption")
+
+  @@unique([estimateVersionId, sortOrder])
+  @@index([businessId])
+  @@index([estimateVersionId])
+}
+
 /// Immutable historical snapshot of an Estimate exactly as it was SENT to a
 /// customer. Created exactly once per successful DRAFT -> SENT transition,
 /// in the same transaction as that transition. Application code must never
@@ -1310,6 +1447,7 @@ model EstimateVersion {
   /// Job.approvedEstimateVersionId).
   jobsApprovedFrom    Job[]                     @relation("JobApprovedEstimateVersion")
   lineItems           EstimateVersionLineItem[]
+  options             EstimateVersionOption[]
   materialPurchaseLists MaterialPurchaseList[]
 
   @@unique([estimateId, versionNumber])
@@ -1323,6 +1461,10 @@ model EstimateVersionLineItem {
   id                String       @id @default(cuid())
   businessId        String
   estimateVersionId String
+  /// Null on single-option snapshots (existing behavior). On a multi-option
+  /// send this points at the frozen EstimateVersionOption this line belongs
+  /// to. Never edited after insert.
+  optionId          String?
   description       String
   quantity          Decimal
   unitPrice         Decimal
@@ -1330,11 +1472,13 @@ model EstimateVersionLineItem {
   type              LineItemType
   createdAt         DateTime     @default(now())
 
-  business        Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  estimateVersion EstimateVersion @relation(fields: [estimateVersionId], references: [id], onDelete: Cascade)
+  business        Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  estimateVersion EstimateVersion        @relation(fields: [estimateVersionId], references: [id], onDelete: Cascade)
+  option          EstimateVersionOption? @relation(fields: [optionId], references: [id], onDelete: SetNull)
 
   @@index([businessId])
   @@index([estimateVersionId])
+  @@index([optionId])
 }
 
 model Job {
@@ -1358,6 +1502,10 @@ model Job {
   /// see resolveApprovedWorkOrderScope() in src/lib/job-work-order.ts for
   /// the safe fallback used when it is null.
   approvedEstimateVersionId String?
+  /// The frozen EstimateVersionOption whose lines are this Job's approved
+  /// scope. Null for single-option jobs and legacy jobs. Set once at Job
+  /// creation from Estimate.approvedOptionId. Never fabricated later.
+  approvedEstimateOptionId  String?
   /// The single field employee assigned to perform this Job -- Phase 3 /
   /// Step 4's Employee Field Workflow. References Membership (the existing
   /// business-user identity), NOT a separate Employee table -- see the note
@@ -1461,6 +1609,7 @@ model Job {
   businessLocation        BusinessLocation?       @relation(fields: [businessLocationId], references: [id], onDelete: SetNull)
   estimate                Estimate?               @relation(fields: [estimateId], references: [id], onDelete: SetNull)
   approvedEstimateVersion EstimateVersion?        @relation("JobApprovedEstimateVersion", fields: [approvedEstimateVersionId], references: [id], onDelete: SetNull)
+  approvedEstimateOption  EstimateVersionOption?  @relation("JobApprovedEstimateOption", fields: [approvedEstimateOptionId], references: [id], onDelete: SetNull)
   assignedMembership      Membership?             @relation("JobAssignment", fields: [assignedMembershipId], references: [id], onDelete: SetNull)
   appointmentConfirmedBy Membership?            @relation("JobAppointmentConfirmedBy", fields: [appointmentConfirmedByMembershipId], references: [id], onDelete: SetNull)
   startWithoutConfirmationBy Membership?       @relation("JobStartWithoutConfirmationBy", fields: [startWithoutConfirmationByMembershipId], references: [id], onDelete: SetNull)
@@ -1474,6 +1623,7 @@ model Job {
   changeOrders            ChangeOrder[]
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
+  callbacks               JobCallback[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
   payments                Payment[]
@@ -1495,6 +1645,10 @@ model Job {
   materialPurchaseOrders  MaterialPurchaseOrder[]
   crewVisit               JobCrewVisit?
   repeatVisitRequest      ServiceRequest? @relation("ServiceRequestRepeatVisitSource")
+  /// OWNER-recorded milestones. Relation only — Job itself stores no
+  /// milestone columns, so concurrent Job-column migrations do not collide.
+  milestones              JobMilestone[]
+  milestoneEvents         JobMilestoneEvent[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -1503,6 +1657,7 @@ model Job {
   @@index([appointmentConfirmedByMembershipId])
   @@index([startWithoutConfirmationByMembershipId])
   @@index([campaignId])
+  @@index([approvedEstimateOptionId])
 }
 
 /// Append-only appointment communication/confirmation history for one Job.
@@ -1534,6 +1689,68 @@ model JobAppointmentEvent {
   @@index([businessId])
   @@index([jobId])
   @@index([businessId, createdAt])
+}
+
+/// OWNER-recorded, ordered Job milestones.
+/// Completion is an explicit OWNER mark only — never inferred from
+/// Job.status, Invoice, or JobCrewVisit.checklistJson.
+/// Customer Project Portal shows a row only when customerVisible is true
+/// for that token-scoped Job. Application code must never send email or
+/// SMS from these rows.
+model JobMilestone {
+  id                      String    @id @default(cuid())
+  businessId              String
+  jobId                   String
+  title                   String
+  /// Lowercased trimmed title for per-job duplicate detection.
+  titleKey                String
+  sortOrder               Int
+  /// OWNER-chosen portal exposure. Default hidden from the customer token.
+  customerVisible         Boolean   @default(false)
+  /// OPEN | COMPLETED. Explicit OWNER mark only.
+  status                  String    @default("OPEN")
+  completedAt             DateTime?
+  completedByMembershipId String?
+  createdByMembershipId   String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job         Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdBy   Membership?  @relation("JobMilestoneRecorder", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  completedBy Membership?  @relation("JobMilestoneCompleter", fields: [completedByMembershipId], references: [id], onDelete: SetNull)
+  events      JobMilestoneEvent[]
+
+  @@unique([jobId, sortOrder])
+  @@unique([jobId, titleKey])
+  @@index([businessId])
+  @@index([jobId, sortOrder])
+  @@index([businessId, jobId])
+}
+
+/// Append-only milestone history. Application code must never update or
+/// delete an existing row. Status on the event is a snapshot of the
+/// milestone at write time, not a live Job/Invoice derivation.
+model JobMilestoneEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  jobId             String
+  milestoneId       String
+  /// RECORDED | COMPLETED | CUSTOMER_EXPOSED | CUSTOMER_HIDDEN
+  eventType         String
+  status            String
+  actorMembershipId String?
+  payload           String?
+  createdAt         DateTime @default(now())
+
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  milestone JobMilestone  @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  actor     Membership?   @relation("JobMilestoneEventActor", fields: [actorMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([milestoneId, createdAt])
 }
 
 /// Private, owner-facing job documentation by default. Stores only a
@@ -1632,6 +1849,7 @@ model StoredAsset {
   jobPhotos            JobPhoto[]
   websiteGalleryItems  WebsiteGalleryItem[]
   vaultRecords         BusinessVaultRecord[]
+  expenseReceipts      Expense[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
@@ -1879,6 +2097,11 @@ model LineItem {
   /// column, and only while the parent ChangeOrder is still DRAFT; once
   /// SENT, no code path mutates them again (see ChangeOrder.status below).
   changeOrderId        String?
+  /// Live priced-option assignment on a DRAFT estimate. Null on
+  /// single-option estimates. Must belong to an EstimateOption on the
+  /// same estimate and business. Ignored for job/invoice/change-order
+  /// lines.
+  optionId             String?
   /// Snapshot fields. Catalog price changes must not rewrite these.
   /// Optional Scope / Included Work is encoded in description after
   /// INCLUDED_WORK_MARKER. Internal calculator snapshots use
@@ -1903,6 +2126,7 @@ model LineItem {
   job                Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
   invoice            Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   changeOrder        ChangeOrder?        @relation(fields: [changeOrderId], references: [id], onDelete: SetNull)
+  option             EstimateOption?     @relation(fields: [optionId], references: [id], onDelete: SetNull)
   materialPurchaseListItems MaterialPurchaseListItem[]
 
   @@index([businessId])
@@ -1910,6 +2134,7 @@ model LineItem {
   @@index([jobId])
   @@index([invoiceId])
   @@index([changeOrderId])
+  @@index([optionId])
 }
 
 /// A separately-approved, post-contract scope/pricing change on a Job,
@@ -2068,6 +2293,79 @@ model JobProblemReport {
   @@index([membershipId])
 }
 
+/// OWNER-recorded customer-reported callback against a completed
+/// same-business Job. Trade-neutral operational review only — never a
+/// warranty coverage or legal determination, and never an invoice,
+/// scheduled Job, or customer message by itself. Distinct from
+/// AdditionalWorkRequest (portal/field extra-work review) and
+/// JobProblemReport (assigned-member field issues).
+///
+/// Status: RECORDED -> UNDER_REVIEW -> OUTCOME_RECORDED.
+/// At most one open (RECORDED | UNDER_REVIEW) row per Job is enforced by
+/// a partial unique index in the migration, not here — Prisma cannot
+/// express that WHERE clause.
+model JobCallback {
+  id                       String    @id @default(cuid())
+  businessId               String
+  jobId                    String
+  customerId               String?
+  /// Customer-reported description as the OWNER recorded it.
+  description              String
+  /// PHONE | TEXT | EMAIL | IN_PERSON | PORTAL | OTHER
+  reportedVia              String
+  /// RECORDED | UNDER_REVIEW | OUTCOME_RECORDED
+  status                   String    @default("RECORDED")
+  /// WILL_FOLLOW_UP | NO_RETURN_VISIT | CUSTOMER_WITHDREW | RECORDED_ONLY
+  /// Operational outcome only — never COVERED / NOT_COVERED.
+  outcome                  String?
+  outcomeNotes             String?
+  recordedByMembershipId   String
+  reviewedByMembershipId   String?
+  outcomeByMembershipId    String?
+  recordedAt               DateTime  @default(now())
+  reviewedAt               DateTime?
+  outcomeAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  recordedBy Membership @relation("JobCallbackRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+  reviewedBy Membership? @relation("JobCallbackReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  outcomeBy  Membership? @relation("JobCallbackOutcome", fields: [outcomeByMembershipId], references: [id], onDelete: SetNull)
+  events     JobCallbackEvent[]
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([businessId, status])
+  @@index([customerId])
+}
+
+/// Append-only status history for one JobCallback.
+/// Application code must never update or delete an existing row.
+model JobCallbackEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  callbackId        String
+  /// RECORDED | REVIEWED | OUTCOME_RECORDED
+  eventType         String
+  fromStatus        String?
+  toStatus          String
+  actorMembershipId String
+  /// Non-sensitive JSON (reportedVia, outcome, note length). Never a
+  /// coverage determination or customer message payload.
+  payload           String?
+  createdAt         DateTime @default(now())
+
+  business Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  callback JobCallback @relation(fields: [callbackId], references: [id], onDelete: Cascade)
+  actor    Membership  @relation("JobCallbackEventActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([callbackId, createdAt])
+}
+
 /// One clocked or manually-entered interval of labor time. This is the
 /// source of labor-hour truth (Time Cards). Distinct from Job.status,
 /// which remains operational truth (UNSCHEDULED / SCHEDULED /
@@ -2105,6 +2403,7 @@ model TimeEntry {
   membership Membership             @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   job        Job?                   @relation(fields: [jobId], references: [id], onDelete: SetNull)
   adjustments TimeEntryAdjustment[]
+  correctionRequests TimeCorrectionRequest[]
 
   @@index([businessId])
   @@index([membershipId])
@@ -2114,14 +2413,15 @@ model TimeEntry {
 }
 
 /// Auditable change history for a TimeEntry. Created on every create,
-/// edit, correction-request, approve, and reopen. Application code must
-/// never update or delete an existing row -- append only.
+/// edit, correction-request, owner decision, approve, and reopen.
+/// Application code must never update or delete an existing row --
+/// append only.
 model TimeEntryAdjustment {
   id                String   @id @default(cuid())
   businessId        String
   timeEntryId       String
   actorMembershipId String
-  /// CREATE | UPDATE | CORRECT | CORRECTION_REQUEST | APPROVE | REOPEN
+  /// CREATE | UPDATE | CORRECT | CORRECTION_REQUEST | CORRECTION_DECLINED | APPROVE | REOPEN
   action            String
   reason            String?
   previousJson      Json?
@@ -2134,6 +2434,59 @@ model TimeEntryAdjustment {
 
   @@index([businessId])
   @@index([timeEntryId])
+}
+
+/// Worker request to correct their own recorded TimeEntry. Proposed
+/// times and the original clock live here so an OWNER decision never
+/// silently rewrites the entry, an approved week, or a payroll result.
+/// status: PENDING | ACCEPTED | DECLINED
+/// One PENDING row per timeEntryId is enforced by a partial unique
+/// index in the migration (TimeCorrectionRequest_timeEntryId_pending_key).
+model TimeCorrectionRequest {
+  id                      String   @id @default(cuid())
+  businessId              String
+  timeEntryId             String
+  requestedByMembershipId String
+  status                  String   @default("PENDING")
+  reason                  String
+  originalStartedAt       DateTime
+  originalEndedAt         DateTime
+  proposedStartedAt       DateTime
+  proposedEndedAt         DateTime
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  timeEntry   TimeEntry                @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  requestedBy Membership               @relation("TimeCorrectionRequester", fields: [requestedByMembershipId], references: [id], onDelete: Cascade)
+  decisions   TimeCorrectionDecision[]
+
+  @@index([businessId])
+  @@index([timeEntryId])
+  @@index([businessId, status])
+  @@index([requestedByMembershipId])
+}
+
+/// Append-only OWNER decision for one TimeCorrectionRequest. One row
+/// per request (unique requestId). Application code must never update
+/// or delete an existing row.
+model TimeCorrectionDecision {
+  id                String   @id @default(cuid())
+  businessId        String
+  requestId         String
+  actorMembershipId String
+  /// ACCEPTED | DECLINED
+  decision          String
+  reason            String?
+  createdAt         DateTime @default(now())
+
+  business Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  request  TimeCorrectionRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor    Membership            @relation("TimeCorrectionDecisionActor", fields: [actorMembershipId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId])
+  @@index([businessId])
+  @@index([actorMembershipId])
 }
 
 /// Weekly approval unit for one worker in one business. Payroll Ready
@@ -2283,6 +2636,9 @@ model PayrollRunEvent {
 /// customerBillable marks a possible customer charge later. It never
 /// creates or updates an Invoice / LineItem.
 /// voidedAt is a soft void -- the row stays for job-cost history.
+/// receiptStoredAssetId is the private managed receipt. receiptUrl is
+/// a legacy pointer and is not cleared by private attach/remove. New
+/// receipts never write a public file URL.
 model Expense {
   id                    String    @id @default(cuid())
   businessId            String
@@ -2295,6 +2651,7 @@ model Expense {
   jobId                 String?
   customerId            String?
   receiptUrl            String?
+  receiptStoredAssetId  String?   @unique
   reimbursable          Boolean   @default(false)
   customerBillable      Boolean   @default(false)
   voidedAt              DateTime?
@@ -2320,10 +2677,14 @@ model Expense {
   reviewer   Membership? @relation("ExpenseReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
   job        Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
   customer   Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  receiptAsset StoredAsset? @relation(fields: [receiptStoredAssetId], references: [id], onDelete: SetNull)
   parent     Expense?    @relation("ExpenseSplit", fields: [parentExpenseId], references: [id], onDelete: SetNull)
   splits     Expense[]   @relation("ExpenseSplit")
   materialPurchaseItem MaterialPurchaseListItem?
   materialPriceHistory MaterialPriceHistory[]
+  /// Optional durable-equipment purchase reference. One expense can
+  /// back at most one register item. Not inventory or tax treatment.
+  equipmentItem        EquipmentItem?
 
   @@index([businessId])
   @@index([businessId, occurredOn])
@@ -3576,6 +3937,9 @@ model ControlledAiActionAttempt {
 /// Immutable published public-website snapshot. Application code must
 /// never update snapshotJson / schemaVersion / versionNumber after insert.
 /// Rollback copies this payload into a new row and moves the current pointer.
+/// OWNER restore moves Business.publishedWebsiteId to this existing row and
+/// restores each trade’s captured TenantIntakeSnapshot pointer. Restore
+/// never rewrites WebsitePublish, TenantIntakeSnapshot, or ServiceRequest.
 model WebsitePublish {
   id                       String   @id @default(cuid())
   businessId               String
@@ -3698,6 +4062,37 @@ model MembershipWeeklyAvailability {
 
   @@unique([membershipId, weekday])
   @@index([businessId])
+}
+
+/// Worker-requested dated availability exception or time off.
+/// PENDING until an OWNER accepts or declines. Only ACCEPT writes
+/// MembershipAvailabilityException. Decline does not change recorded
+/// availability. These rows never cancel, reassign, or message Jobs.
+model MembershipAvailabilityExceptionRequest {
+  id           String   @id @default(cuid())
+  businessId   String
+  membershipId String
+  /// Business-timezone civil date. YYYY-MM-DD. Not a UTC instant.
+  date         String
+  /// AVAILABLE | UNAVAILABLE
+  kind         String
+  startMinutes Int?
+  endMinutes   Int?
+  note         String   @default("")
+  /// PENDING | ACCEPTED | DECLINED
+  status       String   @default("PENDING")
+  requestedAt  DateTime @default(now())
+  decidedAt    DateTime?
+  decidedByMembershipId String?
+  updatedAt    DateTime @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  decidedBy  Membership? @relation("AvailabilityRequestDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([membershipId, date])
+  @@index([decidedByMembershipId])
 }
 
 /// One-day availability exception for a membership. YYYY-MM-DD.
@@ -4514,6 +4909,164 @@ model ExternalLeadImportRow {
   @@index([rowFingerprint])
 }
 
+/// OWNER-reviewed existing-customer CSV import. Preview is stored first;
+/// invalid staged rows can be corrected or rejected; Customer and Property
+/// rows are created only after explicit OWNER confirmation. Same-business
+/// duplicate flags are email/phone matches, not scores. Confirm never
+/// overwrites an existing customer or SMS consent. This is not outreach.
+model CustomerCsvImport {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// CSV_UPLOAD. Server-side source-URL fetch is not implemented.
+  sourceKind              String
+  /// Sanitized filename. Display only.
+  sourceLabel             String
+  /// SHA-256 of the exact CSV bytes used for this preview.
+  contentSha256           String
+  capturedAt              DateTime
+  /// PREVIEW | CONFIRMING | CONFIRMED
+  status                  String   @default("PREVIEW")
+  rowCount                Int
+  validCount              Int
+  invalidCount            Int
+  possibleDuplicateCount  Int
+  createdByMembershipId   String
+  confirmedAt             DateTime?
+  confirmedByMembershipId String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership  @relation("CustomerCsvImportCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  confirmedBy Membership? @relation("CustomerCsvImportConfirmer", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  rows        CustomerCsvImportRow[]
+
+  @@unique([businessId, contentSha256])
+  @@index([businessId])
+  @@index([createdByMembershipId])
+  @@index([confirmedByMembershipId])
+}
+
+/// One sanitized existing-customer CSV row captured at preview time.
+/// Invalid rows stay staged so the OWNER can correct or reject them before
+/// confirm. REJECTED is terminal. Possible duplicates never overwrite the
+/// matched customer or SMS consent.
+model CustomerCsvImportRow {
+  id                          String   @id @default(cuid())
+  businessId                  String
+  importId                    String
+  rowNumber                   Int
+  /// VALID | INVALID | POSSIBLE_DUPLICATE | REJECTED
+  previewStatus               String
+  invalidReason               String?
+  rowFingerprint              String
+  name                        String
+  email                       String?
+  phone                       String?
+  propertyLabel               String?
+  streetAddress               String?
+  unit                        String?
+  city                        String?
+  region                      String?
+  postalCode                  String?
+  possibleDuplicateCustomerId String?
+  createdCustomerId           String?
+  createdPropertyId           String?
+  reusedExistingCustomer      Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+
+  business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import   CustomerCsvImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowFingerprint])
+}
+
+/// OWNER-reviewed service catalog CSV. Preview is stored first; catalog
+/// rows are added or updated only after explicit OWNER confirmation.
+/// Duplicate-name matches are same-business + same-trade name matches,
+/// not scores. Confirm never rewrites LineItem / EstimateVersionLineItem
+/// snapshots and never publishes hourly rates.
+model ServiceCatalogImport {
+  id                      String   @id @default(cuid())
+  businessId              String
+  /// CSV_UPLOAD. Server-side source-URL fetch is not implemented.
+  sourceKind              String
+  /// Sanitized filename. Display only.
+  sourceLabel             String
+  /// SHA-256 of the exact CSV bytes used for this preview.
+  contentSha256           String
+  capturedAt              DateTime
+  /// PREVIEW | CONFIRMING | CONFIRMED
+  status                  String   @default("PREVIEW")
+  rowCount                Int
+  validCount              Int
+  invalidCount            Int
+  nameMatchCount          Int
+  createdByMembershipId   String
+  confirmedAt             DateTime?
+  confirmedByMembershipId String?
+  /// Set when status is CONFIRMING. Re-upload and a second confirm may
+  /// recover only after CATALOG_IMPORT_CONFIRMING_LEASE_MS.
+  confirmingAt            DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business    Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy   Membership @relation("ServiceCatalogImportCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  confirmedBy Membership? @relation("ServiceCatalogImportConfirmer", fields: [confirmedByMembershipId], references: [id], onDelete: SetNull)
+  rows        ServiceCatalogImportRow[]
+
+  @@unique([businessId, contentSha256])
+  @@index([businessId])
+  @@index([createdByMembershipId])
+  @@index([confirmedByMembershipId])
+}
+
+/// One sanitized catalog CSV row captured at preview time. Invalid rows
+/// block confirm. NAME_MATCH rows stay skipped until the owner picks
+/// update or add-as-new. Blank optional cells keep existing catalog
+/// values on update. Confirm writes ServiceCatalogItem only.
+model ServiceCatalogImportRow {
+  id                   String   @id @default(cuid())
+  businessId           String
+  importId             String
+  rowNumber            Int
+  /// VALID | INVALID | NAME_MATCH
+  previewStatus        String
+  invalidReason        String?
+  rowFingerprint       String
+  name                 String
+  description          String?
+  pricingMode          String
+  price                Decimal?
+  /// Null means the CSV cell was blank — keep the existing category on update.
+  category             String?
+  tradeCode            String
+  unitLabel            String   @default("")
+  /// Null means the CSV cell was blank — keep the existing value on update.
+  recurrenceEligible   Boolean?
+  /// Null means the CSV cell was blank — never reactivate an archived service.
+  active               Boolean?
+  matchedCatalogItemId String?
+  writtenCatalogItemId String?
+  /// ADD | UPDATE after confirm; null while still a preview or skipped.
+  writeAction          String?
+  /// SKIP | UPDATE | ADD_NEW. Only NAME_MATCH rows use this. Default SKIP.
+  matchDecision        String   @default("SKIP")
+  createdAt            DateTime @default(now())
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import   ServiceCatalogImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowFingerprint])
+}
+
 /// Provider-neutral e-sign boundary. No live provider is wired in this PR.
 model BusinessEsignBoundary {
   id             String   @id @default(cuid())
@@ -4556,6 +5109,64 @@ model JobCrewVisit {
   @@index([businessId, outcomeStatus])
   @@index([procedureId])
   @@index([outcomeRecordedByMembershipId])
+}
+
+/// Owner-recorded tool or vehicle. Trade-neutral register — not inventory
+/// stock, telemetry, depreciation, tax treatment, or automated reminders.
+/// Due status uses the owner-entered serviceOn date only.
+model EquipmentItem {
+  id                    String    @id @default(cuid())
+  businessId            String
+  /// TOOL | VEHICLE
+  kind                  String
+  name                  String
+  notes                 String    @default("")
+  /// Optional same-business Expense purchase reference. Null means none.
+  /// Never invents cost, depreciation, or tax treatment from this link.
+  purchaseExpenseId     String?   @unique
+  /// Owner-entered service calendar date. Null means none recorded.
+  /// The due list includes this item only when this date is on or before
+  /// today in the business timezone. TBBT never invents the next date.
+  serviceOn             DateTime?
+  createdByMembershipId String?
+  /// Browser/form retry identity. Unique per business. Never authorizes.
+  attemptKey            String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business           Business                      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseExpense    Expense?                      @relation(fields: [purchaseExpenseId], references: [id], onDelete: SetNull)
+  createdBy          Membership?                   @relation("EquipmentItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  maintenanceEntries EquipmentMaintenanceEntry[]
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([businessId, serviceOn])
+  @@index([businessId, kind])
+  @@index([createdByMembershipId])
+}
+
+/// Manual owner maintenance log for one EquipmentItem. Historical dates
+/// only — never a reminder engine and never used to invent the next service.
+model EquipmentMaintenanceEntry {
+  id                    String   @id @default(cuid())
+  businessId            String
+  equipmentId           String
+  /// Owner-entered maintenance calendar date.
+  occurredOn            DateTime
+  notes                 String
+  createdByMembershipId String?
+  attemptKey            String
+  createdAt             DateTime @default(now())
+
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  equipment EquipmentItem @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  createdBy Membership?   @relation("EquipmentMaintenanceCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([equipmentId, occurredOn])
+  @@index([createdByMembershipId])
 }
 
 /// Tenant-scoped official-source regulatory note. Read-only application
