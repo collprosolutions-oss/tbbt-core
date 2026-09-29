@@ -33,6 +33,7 @@ import {
   lockTenantOwnedJob,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { parseRecurrenceCadence } from "@/lib/recurrence";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -326,6 +327,9 @@ export async function setAssignedChecklistItem(
     if (!locked || locked.assignedMembershipId !== actor.membershipId) {
       throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
     }
+    if (!(await exactActiveMembershipHeld(tx, actor))) {
+      throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+    }
 
     const lockedVisit = await tx.jobCrewVisit.findFirst({
       where: { jobId: job.id, businessId: actor.businessId },
@@ -375,6 +379,9 @@ export async function recordAssignedVisitOutcome(
     return await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, actor.businessId, job.id);
       if (!locked || locked.assignedMembershipId !== actor.membershipId) {
+        throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+      }
+      if (!(await exactActiveMembershipHeld(tx, actor))) {
         throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
       }
       if (input.afterLock) {

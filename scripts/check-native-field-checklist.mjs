@@ -96,6 +96,7 @@ function makeOwnerAccess(businessId, membershipId, userId) {
 }
 
 const checklistOpsSrc = readRepo("src/lib/native-field-checklist.ts");
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const visitLibSrc = readRepo("src/lib/native-field.ts");
 const canonicalOpsSrc = readRepo("src/lib/cleaning-visit-ops.ts");
 const checklistRouteSrc = readRepo(
@@ -127,12 +128,23 @@ check(
   canonicalChecklistSrc.includes("lockTenantOwnedJob") &&
     canonicalChecklistSrc.includes("assignedMembershipId") &&
     canonicalChecklistSrc.includes("afterInitialRead") &&
+    canonicalChecklistSrc.includes("exactActiveMembershipHeld") &&
     canonicalChecklistSrc.indexOf("lockTenantOwnedJob") <
       canonicalChecklistSrc.indexOf("jobCrewVisit.update") &&
     canonicalChecklistSrc.indexOf("locked.assignedMembershipId") <
       canonicalChecklistSrc.indexOf("jobCrewVisit.update") &&
+    canonicalChecklistSrc.indexOf("exactActiveMembershipHeld") <
+      canonicalChecklistSrc.indexOf("jobCrewVisit.update") &&
     canonicalChecklistSrc.indexOf("parseChecklistJson(lockedVisit.checklistJson)") <
       canonicalChecklistSrc.indexOf("jobCrewVisit.update"),
+);
+check(
+  "Exact active membership guard locks THIS membership in THIS business",
+  membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    membershipGuardSrc.includes("actor.membershipId") &&
+    membershipGuardSrc.includes('actor.businessId') &&
+    !membershipGuardSrc.includes("userId"),
 );
 check(
   "Native checklist route uses Bearer helpers, caps JSON, and never uses cookies()",
@@ -705,6 +717,75 @@ try {
     "Reassigned Job after the initial read leaves no checklist write",
     JSON.parse(raceVisit.checklistJson).every((item) => item.checked === false) &&
       raceJobAfter?.assignedMembershipId === otherMem.id,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Checklist Worker",
+      email: `deactivate-${randomUUID()}@native-checklist.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation checklist fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation checklist fixture access failed.");
+  }
+  const deactivateJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Checklist Canary",
+  });
+  await setCleaningVisitCadence(prisma, ownerA, { jobId: deactivateJob.id, cadence: "WEEKLY" });
+  const deactivate = await recordNativeAssignedChecklistItem(
+    prisma,
+    deactivateAccess.access,
+    deactivateJob.id,
+    { itemKey: "kitchen", checked: true },
+    {
+      afterInitialRead: async () => {
+        const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+        try {
+          await otherClient.membership.update({
+            where: { id: deactivateMem.id },
+            data: { active: false },
+          });
+        } finally {
+          await otherClient.$disconnect();
+        }
+      },
+    },
+  );
+  const deactivateVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true, status: true },
+  });
+  check(
+    "Deactivated membership after the initial read refuses the checklist tap",
+    deactivate.ok === false &&
+      deactivate.status === 404 &&
+      deactivate.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated checklist tap leaves no checklist write",
+    JSON.parse(deactivateVisit.checklistJson).every((item) => item.checked === false) &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id &&
+      deactivateJobAfter?.status === "IN_PROGRESS",
   );
 
   const leftoverB = await prisma.jobCrewVisit.findMany({ where: { businessId: businessB.id } });

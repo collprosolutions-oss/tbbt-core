@@ -199,8 +199,20 @@ const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photo
 const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
 const photoPreviewRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/[photoId]/route.ts");
 const completeOpsSrc = readRepo("src/lib/native-field-ops.ts");
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
 const limitsSrc = readRepo("src/lib/native-session-limits.ts");
+const stopFnSrc = completeOpsSrc.slice(
+  completeOpsSrc.indexOf("export async function stopNativeAssignedJobRunningTime"),
+  completeOpsSrc.indexOf("export async function completeNativeAssignedJob"),
+);
+const completeFnSrc = completeOpsSrc.slice(
+  completeOpsSrc.indexOf("export async function completeNativeAssignedJob"),
+  completeOpsSrc.indexOf("export async function startNativeAssignedJob"),
+);
+const startFnSrc = completeOpsSrc.slice(
+  completeOpsSrc.indexOf("export async function startNativeAssignedJob"),
+);
 check(
   "Native routes authenticate with Bearer helpers, not cookies()",
   sessionRouteSrc.includes("readBearerToken") &&
@@ -239,8 +251,30 @@ check(
     completeOpsSrc.includes("assignedMembershipId") &&
     completeOpsSrc.includes("afterInitialRead") &&
     completeOpsSrc.includes("requireSaasOperatingEntitlement") &&
+    completeOpsSrc.includes("exactActiveMembershipHeld") &&
     completeRouteSrc.includes("completeNativeAssignedJob") &&
     !completeOpsSrc.includes("completeJobAndSendInvoice"),
+);
+check(
+  "Exact active membership is rechecked after the Job lock on start, complete, and stop",
+  membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    membershipGuardSrc.includes("actor.membershipId") &&
+    membershipGuardSrc.includes('actor.businessId') &&
+    !membershipGuardSrc.includes("userId") &&
+    completeFnSrc.includes("exactActiveMembershipHeld") &&
+    startFnSrc.includes("exactActiveMembershipHeld") &&
+    stopFnSrc.includes("exactActiveMembershipHeld") &&
+    completeFnSrc.indexOf("lockTenantOwnedJob") <
+      completeFnSrc.indexOf("exactActiveMembershipHeld") &&
+    completeFnSrc.indexOf("exactActiveMembershipHeld") <
+      completeFnSrc.indexOf("completeJobWithRunningTimeSafetyInTransaction") &&
+    startFnSrc.indexOf("lockTenantOwnedJob") < startFnSrc.indexOf("exactActiveMembershipHeld") &&
+    startFnSrc.indexOf("exactActiveMembershipHeld") <
+      startFnSrc.indexOf("startJobWithRunningTimeSafetyInTransaction") &&
+    stopFnSrc.indexOf("lockTenantOwnedJob") < stopFnSrc.indexOf("exactActiveMembershipHeld") &&
+    stopFnSrc.indexOf("exactActiveMembershipHeld") <
+      stopFnSrc.indexOf("stopRunningAssignedJobTimeInTransaction"),
 );
 check(
   "Start job reuses assigned-job scope and the canonical status + time-card write",
@@ -958,6 +992,40 @@ try {
     });
   }
 
+  async function createDeactivationWorker(label) {
+    const user = await prisma.user.create({
+      data: {
+        name: `${label} Worker`,
+        email: `${label}-${randomUUID()}@native-deactivate.example`,
+        passwordHash,
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: user.id, businessId: businessA.id, role: "MEMBER" },
+    });
+    const signIn = await signInNativeField(prisma, { email: user.email, password });
+    if (!signIn.ok) {
+      throw new Error(`${label} deactivation fixture sign-in failed.`);
+    }
+    const resolved = await resolveNativeFieldAccess(prisma, { token: signIn.token });
+    if (!resolved.ok) {
+      throw new Error(`${label} deactivation fixture access failed.`);
+    }
+    return { membership, access: resolved.access };
+  }
+
+  async function deactivateExactMembership(membershipId) {
+    const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+    try {
+      await otherClient.membership.update({
+        where: { id: membershipId },
+        data: { active: false },
+      });
+    } finally {
+      await otherClient.$disconnect();
+    }
+  }
+
   const inProgressJob = await createScopedJob({
     businessId: businessA.id,
     assignedMembershipId: memberMembership.id,
@@ -1244,6 +1312,79 @@ try {
       raceTimeAfter?.membershipId === memberMembership.id &&
       raceEventsAfter === raceEventsBefore &&
       raceEventsAfter === 0,
+  );
+
+  const deactivateCompleteWorker = await createDeactivationWorker("ops-complete");
+  const deactivateCompleteJob = await createScopedJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateCompleteWorker.membership.id,
+    customerName: "Deactivate Complete Canary",
+    status: "IN_PROGRESS",
+  });
+  const deactivateCompleteStartedAt = new Date(Date.now() - 90_000);
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: deactivateCompleteWorker.membership.id,
+      jobId: deactivateCompleteJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: deactivateCompleteStartedAt,
+      source: "CLOCK",
+    },
+  });
+  const deactivateCompleteEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: deactivateCompleteJob.id,
+    },
+  });
+  const deactivateComplete = await completeNativeAssignedJob(
+    prisma,
+    deactivateCompleteWorker.access,
+    deactivateCompleteJob.id,
+    {
+      afterInitialRead: () =>
+        deactivateExactMembership(deactivateCompleteWorker.membership.id),
+    },
+  );
+  const deactivateCompleteJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateCompleteJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateCompleteTimeAfter = await prisma.timeEntry.findFirst({
+    where: { jobId: deactivateCompleteJob.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const deactivateCompleteEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_COMPLETED",
+      subjectId: deactivateCompleteJob.id,
+    },
+  });
+  const deactivateCompleteMembershipAfter = await prisma.membership.findFirst({
+    where: { id: deactivateCompleteWorker.membership.id, businessId: businessA.id },
+    select: { active: true },
+  });
+  check(
+    "Deactivated membership after the initial read refuses Complete job",
+    deactivateComplete.ok === false &&
+      deactivateComplete.status === 404 &&
+      deactivateComplete.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated Complete job leaves Job, running time, and completion event unchanged",
+    deactivateCompleteJobAfter?.status === "IN_PROGRESS" &&
+      deactivateCompleteJobAfter?.assignedMembershipId ===
+        deactivateCompleteWorker.membership.id &&
+      deactivateCompleteTimeAfter?.status === "RUNNING" &&
+      deactivateCompleteTimeAfter?.endedAt === null &&
+      deactivateCompleteTimeAfter?.membershipId === deactivateCompleteWorker.membership.id &&
+      deactivateCompleteEventsAfter === deactivateCompleteEventsBefore &&
+      deactivateCompleteEventsAfter === 0 &&
+      deactivateCompleteMembershipAfter?.active === false,
   );
 
   const rollbackStartedAt = new Date(Date.now() - 60_000);
@@ -1625,6 +1766,56 @@ try {
       raceStartTimeAfter === 0 &&
       raceStartEventsAfter === raceStartEventsBefore &&
       raceStartEventsAfter === 0,
+  );
+
+  const deactivateStartWorker = await createDeactivationWorker("ops-start");
+  const deactivateStartJob = await createStartJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateStartWorker.membership.id,
+    customerName: "Deactivate Start Canary",
+  });
+  const deactivateStartEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_STARTED",
+      subjectId: deactivateStartJob.id,
+    },
+  });
+  const deactivateStart = await startNativeAssignedJob(
+    prisma,
+    deactivateStartWorker.access,
+    deactivateStartJob.id,
+    {
+      afterInitialRead: () => deactivateExactMembership(deactivateStartWorker.membership.id),
+    },
+  );
+  const deactivateStartJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateStartJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateStartTimeAfter = await prisma.timeEntry.count({
+    where: { jobId: deactivateStartJob.id, businessId: businessA.id },
+  });
+  const deactivateStartEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: "JOB_STARTED",
+      subjectId: deactivateStartJob.id,
+    },
+  });
+  check(
+    "Deactivated membership after the initial read refuses Start job",
+    deactivateStart.ok === false &&
+      deactivateStart.status === 404 &&
+      deactivateStart.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated Start job leaves Job, time, and start event unchanged",
+    deactivateStartJobAfter?.status === "SCHEDULED" &&
+      deactivateStartJobAfter?.assignedMembershipId === deactivateStartWorker.membership.id &&
+      deactivateStartTimeAfter === 0 &&
+      deactivateStartEventsAfter === deactivateStartEventsBefore &&
+      deactivateStartEventsAfter === 0,
   );
 
   const rollbackStart = await startNativeAssignedJob(
@@ -2092,6 +2283,70 @@ try {
       raceStopTimeAfter?.membershipId === memberMembership.id &&
       raceStopEventsAfter === raceStopEventsBefore &&
       raceStopEventsAfter === 0,
+  );
+
+  const deactivateStopWorker = await createDeactivationWorker("ops-stop");
+  const deactivateStopJob = await createStopJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateStopWorker.membership.id,
+    customerName: "Deactivate Stop Canary",
+  });
+  const deactivateStopTime = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: deactivateStopWorker.membership.id,
+      jobId: deactivateStopJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: new Date(Date.now() - 90_000),
+      source: "CLOCK",
+    },
+  });
+  const deactivateStopEventsBefore = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: deactivateStopJob.id,
+    },
+  });
+  const deactivateStop = await stopNativeAssignedJobRunningTime(
+    prisma,
+    deactivateStopWorker.access,
+    deactivateStopJob.id,
+    {
+      afterInitialRead: () => deactivateExactMembership(deactivateStopWorker.membership.id),
+    },
+  );
+  const deactivateStopJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateStopJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateStopTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: deactivateStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, membershipId: true },
+  });
+  const deactivateStopEventsAfter = await prisma.businessEvent.count({
+    where: {
+      businessId: businessA.id,
+      type: { in: ["JOB_STARTED", "JOB_COMPLETED"] },
+      subjectId: deactivateStopJob.id,
+    },
+  });
+  check(
+    "Deactivated membership after the initial read refuses Stop job time",
+    deactivateStop.ok === false &&
+      deactivateStop.status === 404 &&
+      deactivateStop.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated Stop job time leaves Job, running time, and events unchanged",
+    deactivateStopJobAfter?.status === "IN_PROGRESS" &&
+      deactivateStopJobAfter?.assignedMembershipId === deactivateStopWorker.membership.id &&
+      deactivateStopTimeAfter?.status === "RUNNING" &&
+      deactivateStopTimeAfter?.endedAt === null &&
+      deactivateStopTimeAfter?.membershipId === deactivateStopWorker.membership.id &&
+      deactivateStopEventsAfter === deactivateStopEventsBefore &&
+      deactivateStopEventsAfter === 0,
   );
 
   await prisma.timesheetWeek.create({

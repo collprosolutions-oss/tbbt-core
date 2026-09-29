@@ -162,6 +162,7 @@ const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
 const recordFnSrc = pickupOpsSrc.slice(
   pickupOpsSrc.indexOf("export async function recordAssignedJobPickup"),
 );
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 
 console.log("\nSTATIC — Reuse purchase lists, lock recheck, and no purchase side effects");
 check(
@@ -178,11 +179,17 @@ check(
   recordFnSrc.includes("lockTenantOwnedJob") &&
     recordFnSrc.includes("assignedMembershipId") &&
     recordFnSrc.includes("afterInitialRead") &&
+    recordFnSrc.includes("exactActiveMembershipHeld") &&
     recordFnSrc.includes("lockTenantOwnedPurchaseListItem") &&
     recordFnSrc.indexOf("lockTenantOwnedJob") <
       recordFnSrc.indexOf("lockTenantOwnedPurchaseListItem") &&
     recordFnSrc.indexOf("lockedJob.assignedMembershipId") <
-      recordFnSrc.indexOf("materialPurchaseListItem.update"),
+      recordFnSrc.indexOf("materialPurchaseListItem.update") &&
+    recordFnSrc.indexOf("exactActiveMembershipHeld") <
+      recordFnSrc.indexOf("materialPurchaseListItem.update") &&
+    membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    !membershipGuardSrc.includes("userId"),
 );
 check(
   "Pickup write does not purchase, price, expense, or start time",
@@ -882,6 +889,70 @@ try {
     raceItem.quantityPickedUp == null &&
       raceItem.pickupException == null &&
       raceJobAfter?.assignedMembershipId === otherMem.id,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Pickup Worker",
+      email: `deactivate-${randomUUID()}@native-pickup.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation pickup fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation pickup fixture access failed.");
+  }
+  const deactivateFixture = await createPickupJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Pickup Canary",
+  });
+  const deactivate = await recordNativeAssignedPickupItem(
+    prisma,
+    deactivateAccess.access,
+    deactivateFixture.job.id,
+    { itemId: deactivateFixture.pickupItem.id, quantityPickedUp: "8" },
+    {
+      afterInitialRead: async () => {
+        const otherClient = trackedPrisma();
+        await otherClient.membership.update({
+          where: { id: deactivateMem.id },
+          data: { active: false },
+        });
+      },
+    },
+  );
+  const deactivateItem = await prisma.materialPurchaseListItem.findFirst({
+    where: { id: deactivateFixture.pickupItem.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateFixture.job.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  check(
+    "Deactivated membership after the initial read refuses the pickup tap",
+    deactivate.ok === false &&
+      deactivate.status === 404 &&
+      deactivate.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated pickup tap leaves no pickup write",
+    deactivateItem.quantityPickedUp == null &&
+      deactivateItem.pickupException == null &&
+      deactivateItem.pickupRecordedAt == null &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
   );
 
   const purchasedAfter = await prisma.materialPurchaseListItem.findFirst({

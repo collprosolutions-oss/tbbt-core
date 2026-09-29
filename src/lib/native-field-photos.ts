@@ -32,6 +32,7 @@ import {
   assignmentStillHeld,
   NATIVE_JOB_NOT_AVAILABLE,
 } from "@/lib/native-field-ops";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   loadNativeAssignedJob,
@@ -380,6 +381,9 @@ export async function finalizeNativeAssignedJobPhoto(
     const written = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.jobId);
       if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
 

@@ -173,7 +173,11 @@ function makeOwnerAccess(businessId, membershipId, userId) {
 }
 
 const checklistOpsSrc = readRepo("src/lib/native-field-checklist.ts");
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const visitOpsSrc = readRepo("src/lib/cleaning-visit-ops.ts");
+const syncFnSrc = checklistOpsSrc.slice(
+  checklistOpsSrc.indexOf("export async function syncNativeAssignedChecklistDraft"),
+);
 const timeCardSrc = readRepo("src/lib/time-card-ops.ts");
 const offlineCheckSrc = readRepo("scripts/check-native-field-checklist-offline.mjs");
 const appSrc = readRepo("apps/native/App.tsx");
@@ -193,6 +197,7 @@ check(
   checklistOpsSrc.includes("syncNativeAssignedChecklistDraft") &&
     checklistOpsSrc.includes("lockTenantOwnedJob") &&
     checklistOpsSrc.includes("assignedMembershipId") &&
+    checklistOpsSrc.includes("exactActiveMembershipHeld") &&
     checklistOpsSrc.includes("NATIVE_CHECKLIST_STALE_MESSAGE") &&
     checklistOpsSrc.includes("parseChecklistJson(lockedVisit?.checklistJson)") &&
     checklistOpsSrc.includes("jobCrewVisit.updateMany") &&
@@ -205,7 +210,13 @@ check(
     !checklistOpsSrc.includes("startAssignedActivityTimeInTransaction") &&
     !checklistSyncRouteSrc.includes("cookies(") &&
     checklistSyncRouteSrc.includes("readBearerToken") &&
-    checklistSyncRouteSrc.includes("syncNativeAssignedChecklistDraft"),
+    checklistSyncRouteSrc.includes("syncNativeAssignedChecklistDraft") &&
+    syncFnSrc.indexOf("lockTenantOwnedJob") < syncFnSrc.indexOf("exactActiveMembershipHeld") &&
+    syncFnSrc.indexOf("exactActiveMembershipHeld") <
+      syncFnSrc.indexOf("jobCrewVisit.updateMany") &&
+    membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    !membershipGuardSrc.includes("userId"),
 );
 check(
   "Sync is trade-neutral when the Job already has checklist items",
@@ -1426,6 +1437,79 @@ try {
     "Reassigned Job after the initial read leaves no checklist write",
     JSON.parse(raceVisit.checklistJson).every((item) => item.checked === false) &&
       raceJobAfter?.assignedMembershipId === otherMem.id,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Offline Worker",
+      email: `deactivate-${randomUUID()}@native-checklist-offline.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation offline checklist fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation offline checklist fixture access failed.");
+  }
+  const deactivateJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Offline Checklist",
+  });
+  await setCleaningVisitCadence(prisma, ownerA, { jobId: deactivateJob.id, cadence: "WEEKLY" });
+  const deactivateExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, deactivateAccess.access, deactivateJob.id),
+  );
+  const deactivate = await syncNativeAssignedChecklistDraft(
+    prisma,
+    deactivateAccess.access,
+    deactivateJob.id,
+    syncPayload(deactivateExpected, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
+    {
+      afterInitialRead: async () => {
+        const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+        try {
+          await otherClient.membership.update({
+            where: { id: deactivateMem.id },
+            data: { active: false },
+          });
+        } finally {
+          await otherClient.$disconnect();
+        }
+      },
+    },
+  );
+  const deactivateVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  check(
+    "Deactivated membership after the initial read refuses the checklist sync",
+    deactivate.ok === false &&
+      deactivate.status === 404 &&
+      deactivate.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated checklist sync leaves no checklist write",
+    JSON.parse(deactivateVisit.checklistJson).every((item) => item.checked === false) &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
   );
 
   const thirtyLiveScope = {
