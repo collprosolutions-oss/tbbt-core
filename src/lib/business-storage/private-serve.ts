@@ -151,6 +151,11 @@ export async function authorizePrivateStoredAssetDownload(
       bucket: authorized.asset.storageAccount.bucketName,
       key: authorized.asset.storageKey,
       expiresInSeconds: PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+      contentType: authorized.asset.mimeType,
+      contentDisposition: privateAssetContentDisposition({
+        mimeType: authorized.asset.mimeType,
+        originalFilename: authorized.asset.originalFilename,
+      }),
     });
     return {
       ok: true,

@@ -80,7 +80,7 @@ export async function finalizeProjectDocumentUpload(input: {
     }
     return {
       assetId: asset.id,
-      message: "We received your document. The owner will review it.",
+      message: "Received. Private to the business.",
     };
   } catch (error) {
     return { error: projectDocumentError(error) };

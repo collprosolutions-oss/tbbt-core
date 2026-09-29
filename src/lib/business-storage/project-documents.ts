@@ -3,8 +3,9 @@
  * authorize → PUT → finalize path. Authorization is the Job's own
  * unguessable projectToken — never a client-supplied businessId or jobId.
  *
- * Upload stores a PRIVATE DOCUMENT for owner review. It does not approve,
- * publish, message, invoice, or change Job status.
+ * Project tokens have no expiry or revocation. Upload stores a PRIVATE
+ * DOCUMENT. It does not approve, publish, message, invoice, or change
+ * Job status.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -14,7 +15,11 @@ import {
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
-import { inspectProjectDocumentUpload } from "@/lib/business-storage/project-document-rules";
+import {
+  inspectProjectDocumentUpload,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
+  projectDocumentBytesMatchMime,
+} from "@/lib/business-storage/project-document-rules";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
   PROJECT_DOCUMENT_MAX_COUNT,
@@ -24,6 +29,7 @@ import {
 } from "@/lib/business-storage/types";
 
 export const PROJECT_DOCUMENT_PURPOSE = "project-portal-document";
+export const PROJECT_DOCUMENT_RECEIVED_COPY = "Received. Private to the business.";
 export { PROJECT_DOCUMENT_MAX_BYTES, PROJECT_DOCUMENT_MAX_COUNT };
 
 export {
@@ -31,12 +37,18 @@ export {
   isProjectDocumentMimeType,
   projectDocumentMaxBytesLabel,
   resolveProjectDocumentMimeType,
+  sanitizeProjectDocumentFilename,
+  projectDocumentBytesMatchMime,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
 } from "@/lib/business-storage/project-document-rules";
 
 const PROJECT_LINK_UNAVAILABLE = "This project link is not available.";
+const PROJECT_CLOSED = "This project is closed and is not accepting documents.";
 const NOT_PRIVATE_PROJECT_DOCUMENT = "That file is not a private project document.";
 const DOCUMENT_CANNOT_BE_PUBLISHED = "Project documents cannot be published.";
 const DOCUMENT_LIMIT_REACHED = `You can add up to ${PROJECT_DOCUMENT_MAX_COUNT} documents for this project.`;
+
+const CLOSED_OR_CANCELLED_JOB_STATUSES = new Set(["CANCELLED", "CLOSED", "COMPLETED"]);
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -48,6 +60,10 @@ type ProjectTokenJob = {
   status: string;
   projectToken: string;
 };
+
+function isClosedOrCancelledJobStatus(status: string) {
+  return CLOSED_OR_CANCELLED_JOB_STATUSES.has(status.trim().toUpperCase());
+}
 
 function isPrivateUnpublishedProjectDocument(asset: {
   category: string;
@@ -90,7 +106,32 @@ async function requireJobByProjectToken(db: Db, token: string): Promise<ProjectT
   if (!job) {
     throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
   }
+  if (isClosedOrCancelledJobStatus(job.status)) {
+    throw new StorageAccessError(PROJECT_CLOSED);
+  }
   return job;
+}
+
+async function lockJobForProjectDocument(
+  tx: Prisma.TransactionClient,
+  job: ProjectTokenJob,
+) {
+  const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+    SELECT id, status
+    FROM "Job"
+    WHERE id = ${job.id}
+      AND "businessId" = ${job.businessId}
+      AND "projectToken" = ${job.projectToken}
+    FOR UPDATE
+  `;
+  const row = locked[0];
+  if (!row) {
+    throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
+  }
+  if (isClosedOrCancelledJobStatus(row.status)) {
+    throw new StorageAccessError(PROJECT_CLOSED);
+  }
+  return row;
 }
 
 export async function countActiveProjectDocuments(
@@ -138,26 +179,34 @@ export async function authorizeProjectTokenDocument(
   }
 
   const now = deps.now?.() ?? new Date();
-  const active = await countActiveProjectDocuments(deps.db, {
-    businessId: job.businessId,
-    jobId: job.id,
-    now,
-  });
-  if (remainingProjectDocumentSlots(active) <= 0) {
-    throw new StorageError(DOCUMENT_LIMIT_REACHED);
-  }
-
-  return authorizeManagedUpload(deps, job.businessId, {
-    category: "DOCUMENT",
-    purpose: PROJECT_DOCUMENT_PURPOSE,
-    originalFilename: inspection.fileName,
-    mimeType: inspection.mimeType,
-    fileSizeBytes: inspection.fileSizeBytes,
-    visibility: "PRIVATE",
-    jobId: job.id,
-    customerId: job.customerId,
-    propertyId: job.propertyId,
-  });
+  return authorizeManagedUpload(
+    deps,
+    job.businessId,
+    {
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: inspection.fileName,
+      mimeType: inspection.mimeType,
+      fileSizeBytes: inspection.fileSizeBytes,
+      visibility: "PRIVATE",
+      jobId: job.id,
+      customerId: job.customerId,
+      propertyId: job.propertyId,
+    },
+    {
+      async beforeCreate(tx) {
+        await lockJobForProjectDocument(tx, job);
+        const active = await countActiveProjectDocuments(tx, {
+          businessId: job.businessId,
+          jobId: job.id,
+          now,
+        });
+        if (remainingProjectDocumentSlots(active) <= 0) {
+          throw new StorageError(DOCUMENT_LIMIT_REACHED);
+        }
+      },
+    },
+  );
 }
 
 export async function finalizeProjectTokenDocument(
@@ -194,6 +243,22 @@ export async function finalizeProjectTokenDocument(
     throw new StorageError(NOT_PRIVATE_PROJECT_DOCUMENT);
   }
 
+  const account = await deps.db.businessStorageAccount.findUniqueOrThrow({
+    where: { id: candidate.storageAccountId },
+  });
+  const provider = await resolveStorageProvider(deps);
+  const object = await provider.getObject({
+    bucket: account.bucketName,
+    key: candidate.storageKey,
+  });
+  if (!object || object.body.byteLength <= 0) {
+    throw new StorageError("The file was not found in storage. Upload it again.");
+  }
+  if (!projectDocumentBytesMatchMime(candidate.mimeType, object.body)) {
+    await abortManagedUpload(deps, job.businessId, candidate.id);
+    throw new StorageError(PROJECT_DOCUMENT_TYPE_MISMATCH);
+  }
+
   const asset = await finalizeManagedUpload(deps, job.businessId, assetId);
   if (
     !isPrivateUnpublishedProjectDocument(asset) ||
@@ -216,6 +281,10 @@ export async function abortProjectTokenDocument(
       id: assetId,
       businessId: job.businessId,
       jobId: job.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      visibility: "PRIVATE",
+      status: "PENDING",
     },
     select: { id: true },
   });
@@ -249,7 +318,7 @@ export async function putProjectTokenDocumentFromBytes(
     });
     return finalizeProjectTokenDocument(deps, token, authorized.asset.id);
   } catch (error) {
-    await abortProjectTokenDocument(deps, token, authorized.asset.id);
+    await abortProjectTokenDocument(deps, token, authorized.asset.id).catch(() => undefined);
     throw error;
   }
 }
@@ -322,7 +391,7 @@ async function listReadyPrivateProjectDocuments(
 
 /**
  * Customer-visible receipts for this project token. Filenames only —
- * private bytes stay on the authenticated owner download path.
+ * private bytes stay on the authenticated owner/admin download path.
  */
 export async function listProjectDocumentsForPortal(db: Db, token: string) {
   const job = await findJobByProjectToken(db, token);
@@ -342,7 +411,7 @@ export async function listProjectDocumentsForPortal(db: Db, token: string) {
 }
 
 /**
- * Same-business owner/admin review list. The caller must already have
+ * Same-business OWNER/ADMIN review list. The caller must already have
  * resolved the workspace business; this never reads a browser businessId.
  */
 export async function listProjectDocumentsForOwnerReview(

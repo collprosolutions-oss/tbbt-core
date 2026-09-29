@@ -172,6 +172,10 @@ async function releaseExpiredReservations(
   }
 }
 
+export type AuthorizeManagedUploadOptions = {
+  beforeCreate?: (tx: Prisma.TransactionClient) => Promise<void>;
+};
+
 export async function authorizeManagedUpload(
   deps: StorageServiceDeps,
   businessId: string,
@@ -186,6 +190,7 @@ export async function authorizeManagedUpload(
     propertyId?: string | null;
     jobId?: string | null;
   },
+  options?: AuthorizeManagedUploadOptions,
 ) {
   if (input.fileSizeBytes <= 0) {
     throw new StorageError("Choose a file to upload.");
@@ -234,6 +239,7 @@ export async function authorizeManagedUpload(
   assertKeyBelongsToBusiness(key, businessId);
 
   const asset = await deps.db.$transaction(async (tx) => {
+    await options?.beforeCreate?.(tx);
     const locked = await tx.businessStorageAccount.findUniqueOrThrow({
       where: { id: account.id },
     });

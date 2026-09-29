@@ -997,8 +997,8 @@ export default async function JobPage({
           <CardTitle>Customer Documents</CardTitle>
           <CardDescription>
             Private files the customer uploaded from their project portal.
-            Reviewing a file does not approve, publish, message, invoice, or
-            change this job.
+            OWNER and ADMIN can open them. Opening a file does not approve,
+            publish, message, invoice, or change this job.
           </CardDescription>
         </CardHeader>
         <CardContent>

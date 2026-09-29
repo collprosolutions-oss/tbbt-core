@@ -53,6 +53,7 @@ export const REQUEST_PHOTO_MAX_BYTES = 12 * 1024 * 1024;
 export const PROJECT_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
 /** Hard cap of ready + pending documents per project token. */
 export const PROJECT_DOCUMENT_MAX_COUNT = 5;
+export const PROJECT_DOCUMENT_MAX_FILENAME_LENGTH = 200;
 
 export type StorageObjectMeta = {
   key: string;
@@ -107,6 +108,8 @@ export interface StorageProvider {
     bucket: string;
     key: string;
     expiresInSeconds: number;
+    contentType?: string;
+    contentDisposition?: string;
   }): Promise<PresignedDownload>;
 }
 

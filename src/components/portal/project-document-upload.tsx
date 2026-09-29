@@ -95,7 +95,7 @@ export function ProjectDocumentUpload({
       }
 
       form.reset();
-      setMessage(finalized.message || "We received your document.");
+      setMessage(finalized.message || "Received. Private to the business.");
     } catch {
       if (assetId) {
         await abortProjectDocumentUpload({ projectToken, assetId }).catch(() => undefined);
@@ -115,7 +115,8 @@ export function ProjectDocumentUpload({
               <p className="font-medium">{document.originalFilename}</p>
               <p className="text-muted-foreground">
                 Received {formatDate(document.createdAt)} ·{" "}
-                {formatStorageBytes(document.fileSizeBytes)} · pending owner review
+                {formatStorageBytes(document.fileSizeBytes)}. Private to the
+                business.
               </p>
             </li>
           ))}

@@ -59,6 +59,7 @@ export {
   StorageQuotaError,
   PROJECT_DOCUMENT_MAX_BYTES,
   PROJECT_DOCUMENT_MAX_COUNT,
+  PROJECT_DOCUMENT_MAX_FILENAME_LENGTH,
   REQUEST_PHOTO_MAX_BYTES,
   WEBSITE_PHOTO_MAX_BYTES,
 } from "@/lib/business-storage/types";
@@ -88,6 +89,8 @@ export {
 } from "@/lib/business-storage/field-job-photos";
 export {
   PROJECT_DOCUMENT_PURPOSE,
+  PROJECT_DOCUMENT_RECEIVED_COPY,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
   abortProjectTokenDocument,
   authorizeProjectTokenDocument,
   countActiveProjectDocuments,
@@ -96,9 +99,11 @@ export {
   isProjectDocumentMimeType,
   listProjectDocumentsForOwnerReview,
   listProjectDocumentsForPortal,
+  projectDocumentBytesMatchMime,
   projectDocumentMaxBytesLabel,
   putProjectTokenDocumentFromBytes,
   remainingProjectDocumentSlots,
+  sanitizeProjectDocumentFilename,
 } from "@/lib/business-storage/project-documents";
 export type {
   ProjectDocumentReceiptItem,

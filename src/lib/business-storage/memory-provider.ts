@@ -90,7 +90,11 @@ export class MemoryStorageProvider implements StorageProvider {
     bucket: string;
     key: string;
     expiresInSeconds: number;
+    contentType?: string;
+    contentDisposition?: string;
   }): Promise<PresignedDownload> {
+    void input.contentType;
+    void input.contentDisposition;
     return {
       url: `memory://download/${input.bucket}/${input.key}`,
       expiresInSeconds: input.expiresInSeconds,

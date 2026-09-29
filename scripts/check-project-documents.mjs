@@ -1,14 +1,16 @@
 /**
- * Project-token private documents: customer upload + OWNER review.
+ * Project-token private documents: customer upload + OWNER/ADMIN review.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-project-documents.mjs
+ *
+ * Refuses any DATABASE_URL that is not localhost / 127.0.0.1 before
+ * `prisma db push --accept-data-loss`. Uses MemoryStorageProvider only.
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -16,7 +18,9 @@ const {
   MemoryStorageProvider,
   PROJECT_DOCUMENT_MAX_BYTES,
   PROJECT_DOCUMENT_MAX_COUNT,
+  PROJECT_DOCUMENT_MAX_FILENAME_LENGTH,
   PROJECT_DOCUMENT_PURPOSE,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   StorageAccessError,
   StorageError,
@@ -28,8 +32,10 @@ const {
   listProjectDocumentsForOwnerReview,
   listProjectDocumentsForPortal,
   privateAssetPath,
+  projectDocumentBytesMatchMime,
   putProjectTokenDocumentFromBytes,
   remainingProjectDocumentSlots,
+  sanitizeProjectDocumentFilename,
   servePublicStoredAsset,
 } = await import("@/lib/business-storage/index");
 const { servePrivateStoredAsset } = await import(
@@ -45,8 +51,15 @@ if (!baseUrl) {
   process.exit(1);
 }
 
-const testDbName = "tbbt_project_documents_test";
 const parsed = new URL(baseUrl);
+if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+  console.error(
+    "Refusing to run: DATABASE_URL host must be localhost or 127.0.0.1 before db push --accept-data-loss.",
+  );
+  process.exit(1);
+}
+
+const testDbName = "tbbt_project_documents_test";
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 
@@ -83,90 +96,6 @@ async function expectThrow(label, fn, match) {
   }
 }
 
-function readRepo(path) {
-  return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-}
-
-const libSrc = readRepo("src/lib/business-storage/project-documents.ts");
-const actionSrc = readRepo("src/app/actions/public-project-documents.ts");
-const portalFormSrc = readRepo("src/components/portal/project-document-upload.tsx");
-const ownerListSrc = readRepo("src/components/jobs/project-document-review-list.tsx");
-const portalPageSrc = readRepo("src/app/p/[token]/page.tsx");
-const jobPageSrc = readRepo("src/app/(app)/jobs/[jobId]/page.tsx");
-const privateRouteSrc = readRepo("src/app/api/storage/private/[assetId]/route.ts");
-
-console.log("\nSTATIC — Token scope, private storage, no side effects");
-check(
-  "Authorize payload is metadata only (filename / MIME / size)",
-  actionSrc.includes("originalFilename: input.originalFilename") &&
-    actionSrc.includes("mimeType: input.mimeType") &&
-    actionSrc.includes("fileSizeBytes: input.fileSizeBytes") &&
-    actionSrc.includes("The file body never enters this action"),
-);
-check(
-  "Public document actions never accept a client-supplied businessId or jobId",
-  !actionSrc.includes("input.businessId") &&
-    !actionSrc.includes("input.jobId") &&
-    !actionSrc.includes('formData.get("businessId")') &&
-    !actionSrc.includes('formData.get("jobId")') &&
-    actionSrc.includes("input.projectToken") &&
-    libSrc.includes("where: { projectToken: trimmed }"),
-);
-check(
-  "Upload stays DOCUMENT + PRIVATE with the project-portal purpose",
-  libSrc.includes('category: "DOCUMENT"') &&
-    libSrc.includes('visibility: "PRIVATE"') &&
-    libSrc.includes('PROJECT_DOCUMENT_PURPOSE = "project-portal-document"'),
-);
-check(
-  "Portal form PUTs to the presigned URL and aborts on failure",
-  portalFormSrc.includes("authorizeProjectDocumentUpload") &&
-    portalFormSrc.includes("fetch(authorized.uploadUrl") &&
-    portalFormSrc.includes("abortProjectDocumentUpload") &&
-    portalFormSrc.includes("finalizeProjectDocumentUpload"),
-);
-check(
-  "Portal receipts show filename only — no private download href for the customer",
-  portalFormSrc.includes("pending owner review") &&
-    !portalFormSrc.includes("/api/storage/private/") &&
-    !portalFormSrc.includes("reviewHref"),
-);
-check(
-  "Owner review uses the authenticated private asset path",
-  ownerListSrc.includes("privateAssetPath") &&
-    ownerListSrc.includes("Review file") &&
-    ownerListSrc.includes("Not approved, published, or attached to an invoice"),
-);
-check(
-  "Portal and job pages mention review without auto-approve or job change",
-  portalPageSrc.includes("does not approve work, publish anything") &&
-    jobPageSrc.includes("does not approve, publish, message, invoice, or") &&
-    jobPageSrc.includes("listProjectDocumentsForOwnerReview"),
-);
-check(
-  "Private download route still requires a business session",
-  privateRouteSrc.includes("requireBusinessAccess") &&
-    privateRouteSrc.includes("authorizePrivateStoredAssetDownload"),
-);
-check(
-  "Lib never updates a Job, invoice, message, or writes a publicPath",
-  !libSrc.includes("job.update") &&
-    !libSrc.includes("invoice.create") &&
-    !libSrc.includes("customerCommunication") &&
-    !libSrc.includes('visibility: "PUBLIC"') &&
-    !libSrc.includes("publicPath: publicAssetPath") &&
-    !libSrc.includes('publicPath: `/api/storage/public') &&
-    libSrc.includes("Project documents cannot be published."),
-);
-check(
-  "Configured document ceiling is 8 MB and 5 files per project",
-  PROJECT_DOCUMENT_MAX_BYTES === 8 * 1024 * 1024 &&
-    PROJECT_DOCUMENT_MAX_COUNT === 5 &&
-    remainingProjectDocumentSlots(0) === 5 &&
-    remainingProjectDocumentSlots(5) === 0 &&
-    remainingProjectDocumentSlots(16) === 0,
-);
-
 const pdfOk = inspectProjectDocumentUpload({
   type: "application/pdf",
   name: "permit.pdf",
@@ -187,8 +116,23 @@ const oversizeNo = inspectProjectDocumentUpload({
   name: "huge.pdf",
   size: PROJECT_DOCUMENT_MAX_BYTES + 1,
 });
+const nanNo = inspectProjectDocumentUpload({
+  type: "application/pdf",
+  name: "nan.pdf",
+  size: Number.NaN,
+});
+const floatNo = inspectProjectDocumentUpload({
+  type: "application/pdf",
+  name: "float.pdf",
+  size: 12.5,
+});
+const dirtyName = inspectProjectDocumentUpload({
+  type: "application/pdf",
+  name: `bad\n\t${"x".repeat(250)}.pdf`,
+  size: 1024,
+});
 
-console.log("\nPURE — MIME and size gates");
+console.log("\nPURE — MIME, size, filename, and magic gates");
 check("PDF documents are accepted", pdfOk.ok === true && pdfOk.mimeType === "application/pdf");
 check("JPEG scans are accepted", jpegOk.ok === true && jpegOk.mimeType === "image/jpeg");
 check(
@@ -199,13 +143,49 @@ check(
   "Configured max upload size is enforced",
   oversizeNo.ok === false && oversizeNo.error.includes("too large"),
 );
-
+check(
+  "NaN and non-integer sizes are refused",
+  nanNo.ok === false && floatNo.ok === false,
+);
+check(
+  "Filenames are clipped to 200 characters and stripped of control characters",
+  dirtyName.ok === true &&
+    dirtyName.fileName.length <= PROJECT_DOCUMENT_MAX_FILENAME_LENGTH &&
+    !/[\u0000-\u001F\u007F]/.test(dirtyName.fileName) &&
+    sanitizeProjectDocumentFilename("a\nb.pdf").includes("b.pdf"),
+);
+check(
+  "Configured document ceiling is 8 MB and 5 files per project",
+  PROJECT_DOCUMENT_MAX_BYTES === 8 * 1024 * 1024 &&
+    PROJECT_DOCUMENT_MAX_COUNT === 5 &&
+    remainingProjectDocumentSlots(0) === 5 &&
+    remainingProjectDocumentSlots(5) === 0 &&
+    remainingProjectDocumentSlots(16) === 0,
+);
 const pdfBytes = Buffer.from("%PDF-1.4 customer-doc\n%%EOF\n");
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9, 1, 2, 3, 4]);
+const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const webp = Buffer.concat([
+  Buffer.from("RIFF"),
+  Buffer.from([16, 0, 0, 0]),
+  Buffer.from("WEBP"),
+  Buffer.from([0, 0, 0, 0]),
+]);
+check("PDF magic matches application/pdf", projectDocumentBytesMatchMime("application/pdf", pdfBytes));
+check("JPEG magic matches image/jpeg", projectDocumentBytesMatchMime("image/jpeg", jpeg));
+check("PNG magic matches image/png", projectDocumentBytesMatchMime("image/png", png));
+check("WEBP magic matches image/webp", projectDocumentBytesMatchMime("image/webp", webp));
+check(
+  "JPEG bytes do not match a PDF declaration",
+  projectDocumentBytesMatchMime("application/pdf", jpeg) === false,
+);
 
 try {
   const ownerUser = await prisma.user.create({
     data: { name: "Olivia Owner", email: `owner-pdoc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const adminUser = await prisma.user.create({
+    data: { name: "Amir Admin", email: `admin-pdoc-${randomUUID()}@example.com`, passwordHash: "x" },
   });
   const memberUser = await prisma.user.create({
     data: { name: "Mia Member", email: `member-pdoc-${randomUUID()}@example.com`, passwordHash: "x" },
@@ -221,6 +201,9 @@ try {
   });
   const ownerMem = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const adminMem = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
   });
   const memberMem = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
@@ -264,6 +247,27 @@ try {
       status: "SCHEDULED",
     },
   });
+  const cancelledJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      projectToken: randomUUID(),
+      status: "CANCELLED",
+    },
+  });
+  const closedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      projectToken: randomUUID(),
+      status: "COMPLETED",
+    },
+  });
+  const parallelJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+    },
+  });
 
   const provider = new MemoryStorageProvider();
   const deps = {
@@ -287,7 +291,7 @@ try {
 
   const before = await snapshot(jobA.id);
 
-  console.log("\nDB — Invalid / foreign token refusal");
+  console.log("\nDB — Invalid / foreign / closed token refusal");
   await expectThrow(
     "Empty token is refused",
     () =>
@@ -307,6 +311,26 @@ try {
         fileSizeBytes: pdfBytes.byteLength,
       }),
     (error) => error instanceof StorageAccessError && error.message.includes("not available"),
+  );
+  await expectThrow(
+    "Cancelled job token is refused",
+    () =>
+      authorizeProjectTokenDocument(deps, cancelledJob.projectToken, {
+        originalFilename: "permit.pdf",
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBytes.byteLength,
+      }),
+    (error) => error instanceof StorageAccessError && error.message.includes("closed"),
+  );
+  await expectThrow(
+    "Completed/closed job token is refused",
+    () =>
+      authorizeProjectTokenDocument(deps, closedJob.projectToken, {
+        originalFilename: "permit.pdf",
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBytes.byteLength,
+      }),
+    (error) => error instanceof StorageAccessError && error.message.includes("closed"),
   );
 
   const authorized = await authorizeProjectTokenDocument(deps, jobA.projectToken, {
@@ -358,7 +382,7 @@ try {
     stillPending.status === "PENDING" && stillPending.businessId === businessA.id,
   );
 
-  console.log("\nDB — File limits");
+  console.log("\nDB — File limits and abort scope");
   await expectThrow(
     "Unsupported MIME is rejected before a stored asset is created",
     () =>
@@ -382,13 +406,57 @@ try {
   await expectThrow(
     "Finalize without a PUT does not mark the document READY",
     () => finalizeProjectTokenDocument(deps, jobA.projectToken, authorized.asset.id),
-    () => true,
+    (error) =>
+      error instanceof StorageError && error.message.includes("not found in storage"),
   );
   await abortProjectTokenDocument(deps, jobA.projectToken, authorized.asset.id);
   const failedAsset = await prisma.storedAsset.findUniqueOrThrow({
     where: { id: authorized.asset.id },
   });
   check("Failed upload is marked FAILED, not READY", failedAsset.status === "FAILED");
+
+  const receipt = await authorizeManagedUpload(deps, businessA.id, {
+    category: "ATTACHMENT",
+    purpose: "expense-receipt",
+    originalFilename: "receipt.pdf",
+    mimeType: "application/pdf",
+    fileSizeBytes: pdfBytes.byteLength,
+    visibility: "PRIVATE",
+    jobId: jobA.id,
+  });
+  await expectThrow(
+    "Token cannot abort a job-linked expense receipt",
+    () => abortProjectTokenDocument(deps, jobA.projectToken, receipt.asset.id),
+    (error) => error instanceof StorageAccessError,
+  );
+  const receiptAfter = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: receipt.asset.id },
+  });
+  check(
+    "Foreign-purpose job-linked upload stays PENDING after refused abort",
+    receiptAfter.status === "PENDING" && receiptAfter.purpose === "expense-receipt",
+  );
+
+  const mismatchAuth = await authorizeProjectTokenDocument(deps, jobA.projectToken, {
+    originalFilename: "fake.pdf",
+    mimeType: "application/pdf",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  await provider.putObject({
+    bucket: mismatchAuth.account.bucketName,
+    key: mismatchAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "application/pdf",
+  });
+  await expectThrow(
+    "Finalize aborts when magic bytes do not match the declared MIME",
+    () => finalizeProjectTokenDocument(deps, jobA.projectToken, mismatchAuth.asset.id),
+    (error) => error instanceof StorageError && error.message === PROJECT_DOCUMENT_TYPE_MISMATCH,
+  );
+  const mismatchAfter = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: mismatchAuth.asset.id },
+  });
+  check("MIME-mismatch finalize leaves the asset FAILED, not READY", mismatchAfter.status === "FAILED");
 
   console.log("\nDB — Happy path stays private and does not change the Job");
   const saved = await putProjectTokenDocumentFromBytes(deps, jobA.projectToken, {
@@ -405,6 +473,11 @@ try {
       saved.businessId === businessA.id &&
       saved.category === "DOCUMENT" &&
       saved.purpose === PROJECT_DOCUMENT_PURPOSE,
+  );
+  await expectThrow(
+    "Token cannot abort a READY project document",
+    () => abortProjectTokenDocument(deps, jobA.projectToken, saved.id),
+    (error) => error instanceof StorageAccessError,
   );
 
   const after = await snapshot(jobA.id);
@@ -433,7 +506,7 @@ try {
     jobId: jobA.id,
   });
   check(
-    "Same-business OWNER review list includes the private download path",
+    "Same-business review list includes the private download path",
     ownerList.length === 1 &&
       ownerList[0].id === saved.id &&
       ownerList[0].reviewHref === privateAssetPath(saved.id),
@@ -453,6 +526,7 @@ try {
 
   console.log("\nDB — Private download authorization and tenant isolation");
   const ownerViewer = { role: "OWNER", membershipId: ownerMem.id };
+  const adminViewer = { role: "ADMIN", membershipId: adminMem.id };
   const memberViewer = { role: "MEMBER", membershipId: memberMem.id };
   const betaViewer = { role: "OWNER", membershipId: betaMem.id };
 
@@ -462,13 +536,21 @@ try {
     businessA.id,
     { provider, viewer: ownerViewer },
   );
+  const adminRead = await authorizePrivateStoredAssetDownload(
+    prisma,
+    saved.id,
+    businessA.id,
+    { provider, viewer: adminViewer },
+  );
   check(
-    "Same-business OWNER gets an authorized private download redirect",
+    "Same-business OWNER and ADMIN get an authorized private download redirect",
     ownerRead.ok === true &&
       ownerRead.status === 302 &&
       ownerRead.url === `memory://download/tbbt-project-docs-test/${saved.storageKey}` &&
       ownerRead.expiresInSeconds === PRIVATE_DOWNLOAD_URL_TTL_SECONDS &&
-      !("body" in ownerRead),
+      !("body" in ownerRead) &&
+      adminRead.ok === true &&
+      adminRead.url === ownerRead.url,
   );
 
   const ownerBytes = await servePrivateStoredAsset(prisma, saved.id, businessA.id, {
@@ -611,11 +693,61 @@ try {
       afterLimit.invoices === 0 &&
       afterLimit.messages === 0,
   );
+
+  console.log("\nDB — Atomic cap under parallel authorize");
+  const parallel = await Promise.allSettled(
+    Array.from({ length: 8 }, (_, index) =>
+      authorizeProjectTokenDocument(deps, parallelJob.projectToken, {
+        originalFilename: `race-${index}.pdf`,
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBytes.byteLength,
+      }),
+    ),
+  );
+  const parallelOk = parallel.filter((result) => result.status === "fulfilled");
+  const parallelDenied = parallel.filter(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof StorageError &&
+      String(result.reason.message).includes("up to"),
+  );
+  const pendingOnParallel = await prisma.storedAsset.count({
+    where: {
+      jobId: parallelJob.id,
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      status: "PENDING",
+    },
+  });
+  check(
+    "At most 5 of 8 parallel authorizes succeed",
+    parallelOk.length <= PROJECT_DOCUMENT_MAX_COUNT &&
+      parallelOk.length + parallelDenied.length === 8 &&
+      pendingOnParallel <= PROJECT_DOCUMENT_MAX_COUNT,
+  );
+  check(
+    "Exactly 5 parallel authorizes succeed against the locked job row",
+    parallelOk.length === PROJECT_DOCUMENT_MAX_COUNT &&
+      parallelDenied.length === 3 &&
+      pendingOnParallel === PROJECT_DOCUMENT_MAX_COUNT,
+  );
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
   await prisma.$disconnect();
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
 }
 
 if (failures > 0) {
