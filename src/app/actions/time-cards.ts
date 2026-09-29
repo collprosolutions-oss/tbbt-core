@@ -6,7 +6,10 @@
  * businessId. OWNER/ADMIN management mutations require
  * CAPABILITIES.MANAGE_TIME_CARDS. MEMBER may only clock themselves
  * (and only onto an assigned Job for JOB time) -- that gate lives in
- * src/lib/time-card-ops.ts.
+ * src/lib/time-card-ops.ts. Worker time-correction requests stay on
+ * the caller's own recorded entry. OWNER accept/decline uses
+ * CAPABILITIES.DECIDE_TIME_CORRECTIONS and never silently rewrites an
+ * approved week or payroll snapshot.
  */
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
@@ -20,6 +23,7 @@ import {
   clockOutTime,
   correctTimeEntry,
   createManualTimeEntry,
+  decideTimeCorrectionRequest,
   reopenTimesheetWeek,
   requestTimeCorrection,
   timeCardErrorMessage,
@@ -55,7 +59,8 @@ export async function clockInAction(
     const activityType = readString(formData, "activityType");
     const jobId = readString(formData, "jobId") || null;
     const note = readString(formData, "note") || null;
-    await clockInTime(prisma, access, { membershipId, activityType, jobId, note });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    await clockInTime(prisma, access, { membershipId, activityType, jobId, note, timeZone });
     revalidateTimeCards(jobId);
     return { message: "Clocked in." };
   } catch (error) {
@@ -71,7 +76,8 @@ export async function clockOutAction(
     const access = await requireOperatingBusinessAccess();
     const membershipId = readString(formData, "membershipId") || access.workspace.membership.id;
     const note = readString(formData, "note") || null;
-    const result = await clockOutTime(prisma, access, { membershipId, note });
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const result = await clockOutTime(prisma, access, { membershipId, note, timeZone });
     revalidateTimeCards(result.jobId);
     return { message: "Clocked out." };
   } catch (error) {
@@ -93,6 +99,7 @@ export async function createManualTimeEntryAction(
     const endedAt = parseDateTimeInput(readString(formData, "endDate"), readString(formData, "endTime"));
     if (!membershipId) return { error: "Choose a worker." };
     if (!startedAt || !endedAt) return { error: "Enter a valid start and end time." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     await createManualTimeEntry(prisma, access, {
       membershipId,
       activityType,
@@ -101,6 +108,7 @@ export async function createManualTimeEntryAction(
       endedAt,
       note,
       needsReview: readString(formData, "needsReview") === "1",
+      timeZone,
     });
     revalidateTimeCards(jobId);
     return { message: "Time entry saved." };
@@ -137,6 +145,7 @@ export async function correctTimeEntryAction(
       if (!parsedEnd) return { error: "Enter a valid end time." };
       endedAt = parsedEnd;
     }
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     await correctTimeEntry(prisma, access, {
       timeEntryId,
       reason,
@@ -145,6 +154,7 @@ export async function correctTimeEntryAction(
       activityType,
       jobId: jobRaw === "" ? undefined : jobRaw,
       note: note === "" ? undefined : note,
+      timeZone,
     });
     revalidateTimeCards();
     return { message: "Correction saved." };
@@ -161,12 +171,59 @@ export async function requestTimeCorrectionAction(
     const access = await requireOperatingBusinessAccess();
     const timeEntryId = readString(formData, "timeEntryId");
     const reason = readString(formData, "reason");
+    const proposedStartedAt = parseDateTimeInput(
+      readString(formData, "proposedStartDate"),
+      readString(formData, "proposedStartTime"),
+    );
+    const proposedEndedAt = parseDateTimeInput(
+      readString(formData, "proposedEndDate"),
+      readString(formData, "proposedEndTime"),
+    );
     if (!timeEntryId) return { error: "That time entry could not be found." };
-    await requestTimeCorrection(prisma, access, { timeEntryId, reason });
-    revalidateTimeCards();
-    return { message: "Correction requested." };
+    if (!proposedStartedAt || !proposedEndedAt) {
+      return { error: "Enter the proposed start and end times." };
+    }
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const result = await requestTimeCorrection(prisma, access, {
+      timeEntryId,
+      reason,
+      proposedStartedAt,
+      proposedEndedAt,
+      timeZone,
+    });
+    revalidateTimeCards(result.entry.jobId);
+    return { message: "Correction requested. The original time stays until an owner decides." };
   } catch (error) {
     return { error: timeCardErrorMessage(error, "Could not request that correction.") };
+  }
+}
+
+export async function decideTimeCorrectionRequestAction(
+  _prev: TimeCardActionState,
+  formData: FormData,
+): Promise<TimeCardActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const requestId = readString(formData, "requestId");
+    const decision = readString(formData, "decision");
+    const reason = readString(formData, "reason") || null;
+    if (!requestId) return { error: "That correction request could not be found." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const result = await decideTimeCorrectionRequest(prisma, access, {
+      requestId,
+      decision,
+      reason,
+      timeZone,
+    });
+    revalidateTimeCards(result.entry.jobId);
+    return {
+      message:
+        result.decision.decision === "ACCEPTED"
+          ? "Correction accepted. The original request and decision are kept."
+          : "Correction declined. The original time was not changed.",
+    };
+  } catch (error) {
+    return { error: timeCardErrorMessage(error, "Could not decide that correction request.") };
   }
 }
 

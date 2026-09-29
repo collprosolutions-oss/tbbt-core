@@ -13,6 +13,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
 import {
+  BUSINESS_LOCATION_DIRECTORY_LIMIT,
   LOCATION_UNAVAILABLE_MESSAGE,
   parseLocationAddressInput,
   parseLocationName,
@@ -95,10 +96,35 @@ export async function listBusinessLocations(db: Db, access: BusinessAccess) {
     const rows = await db.businessLocation.findMany({
       where: { businessId: access.businessId },
       orderBy: [{ status: "asc" }, { name: "asc" }],
+      take: BUSINESS_LOCATION_DIRECTORY_LIMIT,
     });
     return rows.map(toRecordedBusinessLocation);
   } catch (error) {
     throwIfLocationSchemaMissing(error);
+  }
+}
+
+/**
+ * Cleaning follow-ups may copy Job.businessLocationId onto a new Job
+ * only when that location is still ACTIVE on the same business.
+ * Archived, missing, or cross-tenant ids become null so the new Job
+ * stays unassigned.
+ */
+export async function resolveCopyableBusinessLocationId(
+  db: Db,
+  businessId: string,
+  locationId: string | null | undefined,
+): Promise<string | null> {
+  if (!locationId) return null;
+  try {
+    const row = await db.businessLocation.findFirst({
+      where: { id: locationId, businessId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  } catch (error) {
+    if (missingBusinessLocationSchema(error)) return null;
+    throw error;
   }
 }
 

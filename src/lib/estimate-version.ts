@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { computeOptionCommercials } from "@/lib/estimate-options";
 
 /**
  * Immutable estimate version snapshots.
@@ -8,13 +9,32 @@ import type { Prisma } from "@prisma/client";
  * must never be edited or deleted by application code afterward. The only
  * field ever written after creation is EstimateVersion.approvedAt, and only
  * on the single version a customer actually approved (see
- * `approveEstimate` in `src/app/actions/public-estimate.ts`).
+ * `approveEstimate` in `src/app/actions/public-estimate.ts`). Multi-option
+ * sends also create EstimateVersionOption rows; those snapshot fields are
+ * immutable except EstimateVersionOption.approvedAt.
  *
  * Do not add helpers here that mutate snapshot fields on an existing
- * EstimateVersion/EstimateVersionLineItem row.
+ * EstimateVersion/EstimateVersionLineItem/EstimateVersionOption row.
  */
 
 type TransactionClient = Prisma.TransactionClient;
+
+function mappedFrozenOptionId(
+  sourceOptionId: string | null | undefined,
+  optionIdBySource: Map<string, string>,
+) {
+  if (!sourceOptionId) {
+    if (optionIdBySource.size > 0) {
+      throw new Error("A snapshot line could not be mapped to a frozen priced option.");
+    }
+    return null;
+  }
+  const mapped = optionIdBySource.get(sourceOptionId);
+  if (!mapped) {
+    throw new Error("A snapshot line could not be mapped to a frozen priced option.");
+  }
+  return mapped;
+}
 
 /**
  * Owner-only copy for a historical SENT estimate that predates versioning.
@@ -49,6 +69,7 @@ export async function createEstimateVersionSnapshot(
         },
       },
       lineItems: { orderBy: { createdAt: "asc" } },
+      options: { orderBy: { sortOrder: "asc" } },
     },
   });
 
@@ -56,6 +77,7 @@ export async function createEstimateVersionSnapshot(
     where: { estimateId: estimate.id, businessId: input.businessId },
   });
   const versionNumber = existingVersionCount + 1;
+  const liveOptions = estimate.options ?? [];
 
   const version = await tx.estimateVersion.create({
     data: {
@@ -73,18 +95,67 @@ export async function createEstimateVersionSnapshot(
       propertyCity: estimate.property?.city ?? null,
       propertyRegion: estimate.property?.region ?? null,
       propertyPostalCode: estimate.property?.postalCode ?? null,
-      lineItems: {
-        create: estimate.lineItems.map((item) => ({
+      ...(liveOptions.length === 0
+        ? {
+            lineItems: {
+              create: estimate.lineItems.map((item) => ({
+                businessId: input.businessId,
+                description: item.description,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                total: item.total,
+                type: item.type,
+              })),
+            },
+          }
+        : {}),
+    },
+  });
+
+  if (liveOptions.length > 0) {
+    const business = await tx.business.findUnique({
+      where: { id: input.businessId },
+      select: { laborMinimumEnabled: true, laborMinimumAmount: true },
+    });
+    const laborMin = {
+      enabled: Boolean(business?.laborMinimumEnabled),
+      amount: business?.laborMinimumAmount ?? null,
+      waived: estimate.laborMinimumWaived,
+    };
+    const optionIdBySource = new Map<string, string>();
+    for (const option of liveOptions) {
+      const commercials = computeOptionCommercials(
+        estimate.lineItems.filter((item) => item.optionId === option.id),
+        laborMin,
+      );
+      const frozen = await tx.estimateVersionOption.create({
+        data: {
           businessId: input.businessId,
+          estimateVersionId: version.id,
+          sourceOptionId: option.id,
+          name: option.name,
+          sortOrder: option.sortOrder,
+          total: commercials.total,
+          laborMinimumAdjustment: commercials.laborMinimumAdjustment,
+        },
+      });
+      optionIdBySource.set(option.id, frozen.id);
+    }
+    if (estimate.lineItems.length > 0) {
+      await tx.estimateVersionLineItem.createMany({
+        data: estimate.lineItems.map((item) => ({
+          businessId: input.businessId,
+          estimateVersionId: version.id,
+          optionId: mappedFrozenOptionId(item.optionId, optionIdBySource),
           description: item.description,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           total: item.total,
           type: item.type,
         })),
-      },
-    },
-  });
+      });
+    }
+  }
 
   return version;
 }

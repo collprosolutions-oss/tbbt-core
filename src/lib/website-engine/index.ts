@@ -1,5 +1,11 @@
 export {
   WEBSITE_SNAPSHOT_SCHEMA_VERSION,
+  WEBSITE_PUBLISH_HISTORY_LIMIT,
+  WEBSITE_PUBLISH_RESTORE_CONFIRM_REQUIRED,
+  WEBSITE_PUBLISH_RESTORE_DESCRIPTION,
+  WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED,
+  WEBSITE_PUBLISH_RESTORE_STALE,
+  websiteRestoreResultMessage,
   parseWebsiteSnapshot,
   serializeWebsiteSnapshot,
   publishedTradeTenantIntakeState,
@@ -11,7 +17,9 @@ export { validateWebsiteSnapshot } from "@/lib/website-engine/validate";
 export {
   publishWebsite,
   rollbackWebsite,
+  restoreOwnedWebsitePublish,
   listWebsitePublishes,
+  listOwnedWebsitePublishHistory,
   websiteHasUnpublishedChanges,
 } from "@/lib/website-engine/publish";
 export {
@@ -53,6 +61,7 @@ export {
 export {
   publishWebsiteFromForm,
   readWebsiteEngineIdempotencyKey,
+  restoreWebsiteFromForm,
   rollbackWebsiteFromForm,
 } from "@/lib/website-engine/form";
 export { summarizeWebsiteSnapshotChange } from "@/lib/website-engine/summary";

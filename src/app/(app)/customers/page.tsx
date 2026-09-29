@@ -412,7 +412,16 @@ export default async function CustomersPage({
        * src/app/actions/customer.ts) -- not a decorative button.
        */}
       <PageHeaderControls
-        actions={<NewCustomerForm label="New Customer" />}
+        actions={
+          <div className="flex items-center gap-2">
+            {access.workspace.role === "OWNER" ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href="/customers/import">Import customers</Link>
+              </Button>
+            ) : null}
+            <NewCustomerForm label="New Customer" />
+          </div>
+        }
         search={
           <form action="/customers" method="GET" className="flex items-center gap-2">
             <input type="hidden" name="area" value={area ?? ""} />

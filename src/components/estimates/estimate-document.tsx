@@ -84,15 +84,43 @@ export function EstimateDocument({
         ) : null}
       </section>
 
-      <CustomerEstimateLineSections
-        className="mt-8"
-        appearance="print"
-        laborLines={estimate.laborLines}
-        materialLines={estimate.materialLines}
-        otherLines={estimate.otherLines}
-      />
+      {estimate.options.length >= 2 && !estimate.approvedOptionId ? (
+        <div className="mt-8 space-y-6">
+          {estimate.options.map((option) => (
+            <section key={option.id}>
+              <h2 className="text-sm font-semibold">
+                {option.name} — {option.totalLabel}
+              </h2>
+              <CustomerEstimateLineSections
+                className="mt-3"
+                appearance="print"
+                laborLines={option.laborLines}
+                materialLines={option.materialLines}
+                otherLines={option.otherLines}
+              />
+            </section>
+          ))}
+        </div>
+      ) : (
+        <CustomerEstimateLineSections
+          className="mt-8"
+          appearance="print"
+          laborLines={estimate.laborLines}
+          materialLines={estimate.materialLines}
+          otherLines={estimate.otherLines}
+        />
+      )}
 
       <section className="mt-6 ml-auto w-full max-w-xs space-y-2 text-sm">
+        {estimate.requiresOptionChoice ? (
+          estimate.options.map((option) => (
+            <div key={option.id} className="flex justify-between gap-6">
+              <span className="text-neutral-600">{option.name}</span>
+              <span className="tabular-nums">{option.totalLabel}</span>
+            </div>
+          ))
+        ) : (
+          <>
         <div className="flex justify-between gap-6">
           <span className="text-neutral-600">Labor</span>
           <span className="tabular-nums">{estimate.laborTotalLabel}</span>
@@ -134,6 +162,8 @@ export function EstimateDocument({
             ) : null}
           </>
         ) : null}
+          </>
+        )}
       </section>
 
       {estimate.projectConditions || estimate.terms.length > 0 ? (

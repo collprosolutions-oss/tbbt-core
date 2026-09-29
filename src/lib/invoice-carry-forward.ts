@@ -112,6 +112,7 @@ const VERSION_LINE_SELECT = {
   unitPrice: true,
   total: true,
   type: true,
+  optionId: true,
 } as const;
 
 export const JOB_INVOICE_SCOPE_INCLUDE = {
@@ -123,6 +124,14 @@ export const JOB_INVOICE_SCOPE_INCLUDE = {
         orderBy: { createdAt: "asc" as const },
         select: INVOICE_LINE_SELECT,
       },
+    },
+  },
+  approvedEstimateOption: {
+    select: {
+      id: true,
+      name: true,
+      total: true,
+      laborMinimumAdjustment: true,
     },
   },
   approvedEstimateVersion: {

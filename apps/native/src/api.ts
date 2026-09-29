@@ -14,6 +14,7 @@ import type {
 
 export type NativeApiError = {
   error: string;
+  status?: number;
   totpRequired?: boolean;
   challengeToken?: string;
 };
@@ -77,7 +78,10 @@ export async function loadNativeSession(token: string): Promise<
   });
   const body = await parseJson(response);
   if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "Session expired." };
+    return {
+      error: typeof body.error === "string" ? body.error : "Session expired.",
+      status: response.status,
+    };
   }
   return body as { viewer: NativeViewer; workspace: NativeWorkspace };
 }
@@ -246,32 +250,42 @@ export async function completeNativeJob(
   return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
 }
 
-export async function recordNativeJobChecklistItem(
+export const NATIVE_CHECKLIST_OFFLINE_MESSAGE =
+  "Couldn't reach the server — your changes are still saved on this phone.";
+
+export async function syncNativeJobChecklistDraft(
   token: string,
   jobId: string,
-  input: { itemKey: string; checked: boolean },
-): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/checklist`),
-    {
-      method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
+  input: {
+    expectedFingerprint: string;
+    items: Array<{ itemKey: string; checked: boolean; baseChecked: boolean }>;
+  },
+): Promise<{ job: NativeJobDetail; alreadySynced: boolean } | NativeApiError> {
+  try {
+    const response = await fetch(
+      nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/checklist/sync`),
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
       },
-      body: JSON.stringify(input),
-    },
-  );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string"
-          ? body.error
-          : "That checklist item could not be updated.",
-    };
+    );
+    const body = await parseJson(response);
+    if (!response.ok) {
+      return {
+        error:
+          typeof body.error === "string"
+            ? body.error
+            : "Those checklist changes could not be synced.",
+      };
+    }
+    return body as unknown as { job: NativeJobDetail; alreadySynced: boolean };
+  } catch {
+    return { error: NATIVE_CHECKLIST_OFFLINE_MESSAGE };
   }
-  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
 export async function recordNativeJobPickupItem(

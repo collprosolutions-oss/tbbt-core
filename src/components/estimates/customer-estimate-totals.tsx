@@ -12,6 +12,19 @@ export function CustomerEstimateTotals({
 }: {
   document: EstimateDocumentView;
 }) {
+  if (estimate.requiresOptionChoice) {
+    return (
+      <div className="space-y-2 text-sm">
+        {estimate.options.map((option) => (
+          <div key={option.id} className="flex justify-between gap-4">
+            <span className="text-muted-foreground">{option.name}</span>
+            <span className="tabular-nums">{option.totalLabel}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2 text-sm">
       <div className="flex justify-between gap-4">

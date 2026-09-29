@@ -50,6 +50,7 @@ import {
 import { evaluateProposedSchedule, hasScheduleWarning } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { computeNextOccurrenceAt, parseRecurrenceCadence } from "@/lib/recurrence";
+import { resolveCopyableBusinessLocationId } from "@/lib/business-location-ops";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import { loadCapacityJobs, loadSchedulingPolicy } from "@/lib/workforce-data";
@@ -101,6 +102,7 @@ const SOURCE_JOB_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   scheduledDurationMinutes: true,
   pickupDurationMinutes: true,
   leadSource: true,
@@ -172,6 +174,7 @@ export type RecurringBookingOccurrence = {
   propertyId: string | null;
   estimateId: string | null;
   approvedEstimateVersionId: string | null;
+  approvedEstimateOptionId: string | null;
   recurrenceSourceJobId: string | null;
   nextBookingSourceJobId: string | null;
   correctiveCleanSourceJobId: string | null;
@@ -201,6 +204,7 @@ const OCCURRENCE_SELECT = {
   propertyId: true,
   estimateId: true,
   approvedEstimateVersionId: true,
+  approvedEstimateOptionId: true,
   recurrenceSourceJobId: true,
   nextBookingSourceJobId: true,
   correctiveCleanSourceJobId: true,
@@ -283,6 +287,7 @@ function selectedScopeBinding(job: SourceJob, businessId: string) {
   return {
     estimateId: estimate?.id ?? null,
     approvedEstimateVersionId: approvedVersion?.id ?? null,
+    approvedEstimateOptionId: approvedVersion ? job.approvedEstimateOptionId ?? null : null,
   };
 }
 
@@ -530,6 +535,7 @@ async function materializeUpcoming(
         propertyId: bindings.property.id,
         estimateId: bindings.scope.estimateId,
         approvedEstimateVersionId: bindings.scope.approvedEstimateVersionId,
+        approvedEstimateOptionId: bindings.scope.approvedEstimateOptionId,
         projectToken: randomUUID(),
         status: "SCHEDULED",
         scheduledAt,
@@ -537,7 +543,11 @@ async function materializeUpcoming(
         pickupDurationMinutes: input.source.pickupDurationMinutes,
         leadSource: input.source.leadSource,
         campaignId: input.source.campaignId,
-        businessLocationId: input.source.businessLocationId,
+        businessLocationId: await resolveCopyableBusinessLocationId(
+          tx,
+          input.access.businessId,
+          input.source.businessLocationId,
+        ),
         serviceIntent: plan.serviceIntent,
         recurrenceCadence: plan.recurrenceCadence,
         recurrenceStatus: plan.recurrenceStatus,

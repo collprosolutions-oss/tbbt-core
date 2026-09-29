@@ -49,6 +49,11 @@ export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
 export const WEBSITE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 /** Practical phone stills on the existing R2 presigned PUT path. */
 export const REQUEST_PHOTO_MAX_BYTES = 12 * 1024 * 1024;
+/** Bounded customer project-portal documents on the private R2 path. */
+export const PROJECT_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
+/** Hard cap of ready + pending documents per project token. */
+export const PROJECT_DOCUMENT_MAX_COUNT = 5;
+export const PROJECT_DOCUMENT_MAX_FILENAME_LENGTH = 200;
 
 export type StorageObjectMeta = {
   key: string;
@@ -103,6 +108,8 @@ export interface StorageProvider {
     bucket: string;
     key: string;
     expiresInSeconds: number;
+    contentType?: string;
+    contentDisposition?: string;
   }): Promise<PresignedDownload>;
 }
 

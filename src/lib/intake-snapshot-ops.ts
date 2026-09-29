@@ -5,8 +5,9 @@
  * businessId is ignored. ADMIN/MEMBER cannot publish or restore. Drafts
  * never reach public hire forms. Restore moves BusinessTrade.publishedIntakeSnapshotId
  * only. A published website uses the exact snapshot IDs captured at
- * website publish, not this live pointer. Historical ServiceRequest rows
- * keep the version they froze.
+ * website publish, not this live pointer, until OWNER restores that
+ * website version (which also moves these pointers to the captured ids).
+ * Historical ServiceRequest rows keep the version they froze.
  */
 
 import { Prisma, type PrismaClient } from "@prisma/client";

@@ -191,6 +191,9 @@ const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start/route.t
 const stopTimeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/stop-time/route.ts");
 const visitRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/visit/route.ts");
 const checklistRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/checklist/route.ts");
+const checklistSyncRouteSrc = readRepo(
+  "src/app/api/native/v1/jobs/[jobId]/checklist/sync/route.ts",
+);
 const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
 const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
 const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
@@ -208,6 +211,7 @@ check(
     stopTimeRouteSrc.includes("readBearerToken") &&
     visitRouteSrc.includes("readBearerToken") &&
     checklistRouteSrc.includes("readBearerToken") &&
+    checklistSyncRouteSrc.includes("readBearerToken") &&
     photoAuthorizeRouteSrc.includes("readBearerToken") &&
     photoFinalizeRouteSrc.includes("readBearerToken") &&
     photoAbortRouteSrc.includes("readBearerToken") &&
@@ -220,6 +224,7 @@ check(
     !stopTimeRouteSrc.includes("cookies(") &&
     !visitRouteSrc.includes("cookies(") &&
     !checklistRouteSrc.includes("cookies(") &&
+    !checklistSyncRouteSrc.includes("cookies(") &&
     !photoAuthorizeRouteSrc.includes("cookies(") &&
     !photoFinalizeRouteSrc.includes("cookies(") &&
     !photoAbortRouteSrc.includes("cookies(") &&
@@ -349,6 +354,7 @@ const nativeAppSrc = [
   readRepo("apps/native/src/screens/TodayScreen.tsx"),
   readRepo("apps/native/src/screens/JobScreen.tsx"),
   readRepo("apps/native/src/screens/JobPhotosSection.tsx"),
+  readRepo("apps/native/src/screens/JobChecklistSection.tsx"),
 ].join("\n");
 check(
   "Native app is not a WebView wrapper and does not embed credentials",
