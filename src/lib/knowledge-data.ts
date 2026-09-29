@@ -201,6 +201,7 @@ export async function loadKnowledgeSource(
         status: true,
         total: true,
         updatedAt: true,
+        approvedOption: { select: { total: true } },
         approvedVersion: { select: { total: true, approvedAt: true } },
         customer: { select: { name: true } },
         jobs: { select: { id: true, status: true }, take: 1 },
@@ -310,7 +311,7 @@ export async function loadKnowledgeSource(
     if (kind === "ESTIMATE") {
       const row = estimateById.get(id);
       if (!row) return { kind, label: "Estimate", href, detail: "Referenced estimate." };
-      const total = money(row.approvedVersion?.total ?? row.total);
+      const total = money(row.approvedOption?.total ?? row.approvedVersion?.total ?? row.total);
       const scopeLabel =
         row.serviceRequest?.serviceCatalogItem?.name ??
         row.serviceRequest?.summary ??
@@ -523,7 +524,7 @@ export async function loadKnowledgeSource(
       approvedEstimatesList: approvedEstimates.map((row) => ({
         id: row.id,
         status: row.status,
-        total: money(row.approvedVersion?.total ?? row.total),
+        total: money(row.approvedOption?.total ?? row.approvedVersion?.total ?? row.total),
         date: row.approvedVersion?.approvedAt ?? row.updatedAt,
         scope:
           row.serviceRequest?.serviceCatalogItem?.name ??

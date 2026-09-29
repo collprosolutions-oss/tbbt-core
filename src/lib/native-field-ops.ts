@@ -3,12 +3,12 @@
  *
  * Reads stay in `src/lib/native-field.ts`. Assigned-worker writes are
  * Start job, Complete job, Stop job time, TRAVEL / MATERIAL_PICKUP
- * time, assigned job photos, Cleaning visit outcomes, and Cleaning
+ * time, assigned job photos, Cleaning visit outcomes, and assigned-job
  * checklist progress on the caller's own assigned Job. Photo storage
  * lives in `src/lib/native-field-photos.ts`. Visit outcomes live in
  * `src/lib/native-field-visits.ts` and reuse `recordAssignedVisitOutcome`.
  * Checklist writes live in `src/lib/native-field-checklist.ts` and reuse
- * `setAssignedChecklistItem`. Assigned TRAVEL / MATERIAL_PICKUP writes
+ * `JobCrewVisit.checklistJson` plus `setAssignedChecklistItem`. Assigned TRAVEL / MATERIAL_PICKUP writes
  * live in `src/lib/native-field-activity.ts` and reuse the canonical
  * activity-time writes.
  *

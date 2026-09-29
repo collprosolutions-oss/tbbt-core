@@ -10,8 +10,10 @@ import {
   type TimeCardActionState,
 } from "@/app/actions/time-cards";
 import { AddTimeEntrySheet } from "@/components/time-cards/add-time-entry-sheet";
+import { TimeCorrectionRequestQueue } from "@/components/time-cards/time-correction-request-queue";
 import type {
   TimeCardAdjustment,
+  TimeCardCorrectionRequest,
   TimeCardEntry,
   TimeCardJobOption,
   TimeCardView,
@@ -47,6 +49,8 @@ export function TimeCardsWorkspace({
   jobs,
   entries,
   adjustments,
+  correctionRequests,
+  canDecideCorrections,
   selectedMembershipId,
   payrollReadyCount,
   weekWorkerCount,
@@ -59,6 +63,8 @@ export function TimeCardsWorkspace({
   jobs: TimeCardJobOption[];
   entries: TimeCardEntry[];
   adjustments: TimeCardAdjustment[];
+  correctionRequests: TimeCardCorrectionRequest[];
+  canDecideCorrections: boolean;
   selectedMembershipId: string | null;
   payrollReadyCount: number;
   weekWorkerCount: number;
@@ -191,7 +197,13 @@ export function TimeCardsWorkspace({
             />
           ) : null}
           {view === "approvals" ? (
-            <ApprovalsView workers={workers} entries={entries} onSelect={selectWorker} selectedId={selectedId} />
+            <div className="space-y-5">
+              <TimeCorrectionRequestQueue
+                requests={correctionRequests}
+                canDecide={canDecideCorrections}
+              />
+              <ApprovalsView workers={workers} entries={entries} onSelect={selectWorker} selectedId={selectedId} />
+            </div>
           ) : null}
           {view === "crew" ? (
             <CrewView workers={workers} entries={entries} onSelect={selectWorker} selectedId={selectedId} />
@@ -203,6 +215,10 @@ export function TimeCardsWorkspace({
             worker={selected}
             entries={selectedEntries}
             adjustments={selectedAdjustments}
+            correctionRequests={correctionRequests.filter(
+              (request) => request.membershipId === selectedId,
+            )}
+            canDecideCorrections={canDecideCorrections}
             jobs={jobs}
             date={date}
             weekStartedAt={weekStartedAt}
@@ -221,6 +237,10 @@ export function TimeCardsWorkspace({
               worker={selected}
               entries={selectedEntries}
               adjustments={selectedAdjustments}
+              correctionRequests={correctionRequests.filter(
+                (request) => request.membershipId === selectedId,
+              )}
+              canDecideCorrections={canDecideCorrections}
               jobs={jobs}
               date={date}
               weekStartedAt={weekStartedAt}
@@ -541,6 +561,8 @@ function WorkerDetailPanel({
   worker,
   entries,
   adjustments,
+  correctionRequests,
+  canDecideCorrections,
   jobs,
   date,
   weekStartedAt,
@@ -549,6 +571,8 @@ function WorkerDetailPanel({
   worker: TimeCardWorker | null;
   entries: TimeCardEntry[];
   adjustments: TimeCardAdjustment[];
+  correctionRequests: TimeCardCorrectionRequest[];
+  canDecideCorrections: boolean;
   jobs: TimeCardJobOption[];
   date: string;
   weekStartedAt: string;
@@ -599,6 +623,13 @@ function WorkerDetailPanel({
           <Metric label="Day cost" value={dayCost != null ? `$${dayCost.toFixed(2)}` : "—"} />
           <Metric label="Breaks" value={breaks.toFixed(1)} />
         </div>
+
+        {correctionRequests.some((request) => request.status === "PENDING") ? (
+          <TimeCorrectionRequestQueue
+            requests={correctionRequests}
+            canDecide={canDecideCorrections}
+          />
+        ) : null}
 
         <div className="space-y-2">
           <p className="text-sm font-semibold">{worker.name.split(" ")[0]}’s day</p>

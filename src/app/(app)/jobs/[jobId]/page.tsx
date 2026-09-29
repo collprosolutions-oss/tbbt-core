@@ -10,7 +10,10 @@ import {
 } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 import { AdditionalWorkRequestList } from "@/components/jobs/additional-work-request-list";
+import { ProjectDocumentReviewList } from "@/components/jobs/project-document-review-list";
+import { listProjectDocumentsForOwnerReview } from "@/lib/business-storage/project-documents";
 import { ApprovedScopeCard } from "@/components/jobs/approved-scope-card";
+import { AssignJobLocationForm } from "@/components/jobs/assign-job-location-form";
 import { AssignJobMemberForm } from "@/components/jobs/assign-job-member-form";
 import { CleaningCorrectiveCleanForm } from "@/components/jobs/cleaning-corrective-clean-form";
 import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking-form";
@@ -25,6 +28,7 @@ import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
+import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { StartJobButton } from "@/components/jobs/start-job-button";
@@ -39,7 +43,16 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
 import { requireManagementPageAccess } from "@/lib/access";
+import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { formatISODateInTimeZone, formatZonedTimeInput, resolveBusinessTimeZone } from "@/lib/business-timezone";
+import {
+  JOB_LOCATION_ADDITIVE_MESSAGE,
+  JOB_LOCATION_INVOICED_MESSAGE,
+  JOB_LOCATION_OWNER_ONLY_MESSAGE,
+  JOB_LOCATION_TERMINAL_MESSAGE,
+  JOB_LOCATION_UNASSIGNED_LABEL,
+  isTerminalJobLocationStatus,
+} from "@/lib/job-location";
 import {
   appointmentConfirmationLabel,
   confirmationSourceLabel,
@@ -77,6 +90,8 @@ import {
   expectedEnd,
   formatDurationMinutes,
 } from "@/lib/job-schedule";
+import { loadWorkOrderMilestones } from "@/lib/job-milestone-ops";
+import { canManageJobMilestones, jobMilestoneStatusLabel } from "@/lib/job-milestones";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import {
   OwnerRecordDepositSection,
@@ -113,6 +128,7 @@ const LINE_ITEM_SELECT = {
   unitPrice: true,
   total: true,
   type: true,
+  optionId: true,
 } as const;
 
 export default async function JobPage({
@@ -149,6 +165,9 @@ export default async function JobPage({
       // from -- see resolveApprovedWorkOrderScope() in
       // src/lib/job-work-order.ts for why this is preferred over the (live,
       // mutable) `estimate` relation above.
+      approvedEstimateOption: {
+        select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
+      },
       approvedEstimateVersion: {
         select: {
           versionNumber: true,
@@ -191,6 +210,7 @@ export default async function JobPage({
       assignedMembership: {
         select: { id: true, user: { select: { name: true, email: true } } },
       },
+      businessLocation: { select: { id: true, name: true, status: true } },
       problemReports: {
         orderBy: { createdAt: "desc" },
         select: {
@@ -251,6 +271,23 @@ export default async function JobPage({
         ]
       : eligibleMemberRows;
   const viewerIsAssignee = job.assignedMembershipId === actorMembership.id;
+  const locationDirectory = await loadBusinessLocationDirectory(prisma, access);
+  const jobIsTerminal = isTerminalJobLocationStatus(job.status);
+  const jobIsInvoiced = job.invoices.length > 0;
+  const canAssignLocation =
+    actorRole === "OWNER" &&
+    locationDirectory.available &&
+    !jobIsTerminal &&
+    !jobIsInvoiced;
+  const assignableLocations = locationDirectory.locations
+    .filter(
+      (location) =>
+        location.status === "ACTIVE" || location.id === job.businessLocationId,
+    )
+    .map((location) => ({
+      id: location.id,
+      name: location.status === "ARCHIVED" ? `${location.name} (archived)` : location.name,
+    }));
 
   const isScheduled = Boolean(job.scheduledAt);
   const appointmentStatus = effectiveAppointmentConfirmationStatus(job);
@@ -274,9 +311,9 @@ export default async function JobPage({
     changeOrders: job.changeOrders,
   });
   const depositLines =
-    job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+    approvedScope.source === "none" ? [] : approvedScope.lineItems;
   const depositTotal =
-    job.approvedEstimateVersion?.total ?? job.estimate?.total ?? new Prisma.Decimal(0);
+    approvedScope.source === "none" ? new Prisma.Decimal(0) : approvedScope.total;
   const requiredDeposit = resolveMaterialDeposit({
     lines: depositLines,
     total: depositTotal,
@@ -483,6 +520,14 @@ export default async function JobPage({
             {job.property ? formatAddress(job.property) : "None selected"}
           </p>
           <p>
+            Office location:{" "}
+            {job.businessLocation
+              ? `${job.businessLocation.name}${
+                  job.businessLocation.status === "ARCHIVED" ? " (archived)" : ""
+                }`
+              : JOB_LOCATION_UNASSIGNED_LABEL}
+          </p>
+          <p>
             Linked Estimate:{" "}
             {job.estimate ? (
               <Link
@@ -566,6 +611,32 @@ export default async function JobPage({
             /p/{job.projectToken}
           </Link>
           <CopyProjectLinkButton projectToken={job.projectToken} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Job milestones</CardTitle>
+          <CardDescription>
+            Owner-recorded steps for this work order. Marking one complete
+            is explicit — it is not inferred from job status, the invoice,
+            or the crew checklist, and it does not message the customer.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <JobMilestonesCard
+            jobId={job.id}
+            milestones={(await loadWorkOrderMilestones(prisma, access, job.id)).map(
+              (row) => ({
+                ...row,
+                statusLabel: jobMilestoneStatusLabel(row.status),
+                completedAtLabel: row.completedAt
+                  ? formatDateTime(row.completedAt, timeZone)
+                  : null,
+              }),
+            )}
+            canManage={canManageJobMilestones(access.workspace.role)}
+          />
         </CardContent>
       </Card>
 
@@ -789,6 +860,51 @@ export default async function JobPage({
         </CardContent>
       </Card>
 
+      {locationDirectory.available ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Office location</CardTitle>
+            <CardDescription>
+              Optional same-business office or shop for this job. Existing jobs
+              stay valid without one. {JOB_LOCATION_ADDITIVE_MESSAGE}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p>
+              Currently:{" "}
+              {job.businessLocation
+                ? `${job.businessLocation.name}${
+                    job.businessLocation.status === "ARCHIVED" ? " (archived)" : ""
+                  }`
+                : JOB_LOCATION_UNASSIGNED_LABEL}
+            </p>
+            {canAssignLocation ? (
+              assignableLocations.length === 0 && !job.businessLocation ? (
+                <p className="text-muted-foreground">
+                  No active business locations yet. Add one in Settings, then
+                  assign it here.
+                </p>
+              ) : (
+                <AssignJobLocationForm
+                  jobId={job.id}
+                  expectedUpdatedAt={job.updatedAt.toISOString()}
+                  assignedLocationId={job.businessLocation?.id ?? null}
+                  locations={assignableLocations}
+                />
+              )
+            ) : (
+              <p className="text-muted-foreground">
+                {jobIsTerminal
+                  ? JOB_LOCATION_TERMINAL_MESSAGE
+                  : jobIsInvoiced
+                    ? JOB_LOCATION_INVOICED_MESSAGE
+                    : JOB_LOCATION_OWNER_ONLY_MESSAGE}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Assigned Employee</CardTitle>
@@ -990,6 +1106,25 @@ export default async function JobPage({
         <CardContent className="space-y-4">
           <ChangeOrderList jobId={job.id} changeOrders={job.changeOrders} />
           <CreateChangeOrderForm jobId={job.id} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Customer Documents</CardTitle>
+          <CardDescription>
+            Private files the customer uploaded from their project portal.
+            OWNER and ADMIN can open them. Opening a file does not approve,
+            publish, message, invoice, or change this job.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ProjectDocumentReviewList
+            documents={await listProjectDocumentsForOwnerReview(prisma, {
+              businessId: access.businessId,
+              jobId: job.id,
+            })}
+          />
         </CardContent>
       </Card>
 

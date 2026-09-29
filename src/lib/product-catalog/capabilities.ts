@@ -94,7 +94,7 @@ export const PRODUCT_CAPABILITY_DEFINITIONS: Record<
     displayName: "Reporting & Business Insights",
     implementationStatus: CAPABILITY_IMPLEMENTATION_STATUSES.LIVE,
     enforcementBoundary: true,
-    enforcementNotes: "Reports / BSOS / Growth analytics operating mutations.",
+    enforcementNotes: "Reports / monthly goals / BSOS / Growth analytics operating mutations.",
   },
   [PRODUCT_CAPABILITIES.CLIENT_PORTAL]: {
     code: PRODUCT_CAPABILITIES.CLIENT_PORTAL,

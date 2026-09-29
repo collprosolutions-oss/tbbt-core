@@ -80,6 +80,7 @@ Focused isolation / domain scripts (all require `DATABASE_URL`):
 ```bash
 npm run test:isolation
 npm run test:authorization
+npm run test:customer-csv-import
 npm run test:bsos
 npm run test:chief-of-staff
 npm run test:business-coach
@@ -105,6 +106,7 @@ npm run test:native-field
 npm run test:native-field-photos
 npm run test:native-field-visit
 npm run test:native-field-checklist
+npm run test:native-field-checklist-offline
 npm run test:native-field-activity
 npx tsc --noEmit
 npm run build

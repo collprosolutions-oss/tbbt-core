@@ -48,12 +48,45 @@ async function convertTakeoffInner(
         businessId: true,
         status: true,
         approvedVersionId: true,
+        approvedOptionId: true,
+        options: { select: { id: true } },
         lineItems: {
-          select: { id: true, description: true, quantity: true, unitPrice: true, total: true, type: true },
+          select: {
+            id: true,
+            description: true,
+            quantity: true,
+            unitPrice: true,
+            total: true,
+            type: true,
+            optionId: true,
+          },
         },
       },
     }),
   );
+  const liveOptionIds = new Set(estimate.options.map((option) => option.id));
+  const hasPricedOptions =
+    liveOptionIds.size >= 2 || estimate.lineItems.some((line) => line.optionId);
+  if (hasPricedOptions && !estimate.approvedOptionId) {
+    throw new MaterialsError(
+      "Choose a priced option before converting takeoff materials.",
+    );
+  }
+  let takeoffLines = estimate.lineItems;
+  if (hasPricedOptions && estimate.approvedOptionId) {
+    const approved = await db.estimateVersionOption.findFirst({
+      where: { id: estimate.approvedOptionId, businessId: access.businessId },
+      select: { sourceOptionId: true },
+    });
+    if (!approved) {
+      throw new MaterialsError(
+        "Choose a priced option before converting takeoff materials.",
+      );
+    }
+    takeoffLines = estimate.lineItems.filter(
+      (line) => line.optionId === approved.sourceOptionId,
+    );
+  }
   const list = await ensurePurchaseList(db, access, { estimateId: estimate.id });
   const existing = await db.materialPurchaseListItem.findMany({
     where: { businessId: access.businessId, purchaseListId: list.id },
@@ -62,7 +95,7 @@ async function convertTakeoffInner(
   const seenKeys = new Set(existing.map((row) => row.sourceKey).filter(Boolean));
 
   let created = 0;
-  for (const line of estimate.lineItems) {
+  for (const line of takeoffLines) {
     const snapshot = lineMaterialTakeoff(line.description);
     if (snapshot) {
       const markupPercent = ownerEnteredMarkupPercent(snapshot.markupPercent);

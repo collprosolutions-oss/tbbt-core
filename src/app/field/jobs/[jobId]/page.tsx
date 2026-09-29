@@ -45,6 +45,7 @@ const LINE_ITEM_SELECT = {
   unitPrice: true,
   total: true,
   type: true,
+  optionId: true,
 } as const;
 
 /**
@@ -111,6 +112,10 @@ export default async function FieldJobPage({
           total: true,
           lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT },
         },
+      },
+      approvedEstimateOptionId: true,
+      approvedEstimateOption: {
+        select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
       },
       approvedEstimateVersion: {
         select: {

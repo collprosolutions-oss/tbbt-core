@@ -104,8 +104,8 @@ export async function uploadJobPhoto({
 }
 
 /**
- * Same Vercel Blob path as job photos -- no second storage system.
- * Expense receipts reuse the existing image MIME allow-list and size cap.
+ * Legacy Vercel Blob receipt helper. Expense receipts now use private
+ * managed storage (`expense-receipts.ts`) and must not call this.
  */
 export async function uploadExpenseReceipt({
   businessId,

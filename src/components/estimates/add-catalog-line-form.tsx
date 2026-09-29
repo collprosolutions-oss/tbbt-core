@@ -25,9 +25,11 @@ type CatalogOption = {
 export function AddCatalogLineForm({
   estimateId,
   items,
+  options,
 }: {
   estimateId: string;
   items: CatalogOption[];
+  options?: Array<{ id: string; name: string }>;
 }) {
   const [state, action, pending] = useActionState(addCatalogLineItem, initialState);
   const [selectedId, setSelectedId] = useState(items[0]?.id ?? "");
@@ -54,6 +56,23 @@ export function AddCatalogLineForm({
         </Alert>
       ) : null}
       <input type="hidden" name="estimateId" value={estimateId} />
+      {options && options.length > 0 ? (
+        <div className="space-y-2">
+          <Label htmlFor="catalog-optionId">Priced option</Label>
+          <select
+            id="catalog-optionId"
+            name="optionId"
+            required
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          >
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor="catalogItemId">Service</Label>
         <select

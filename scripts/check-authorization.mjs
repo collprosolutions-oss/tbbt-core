@@ -265,8 +265,10 @@ try {
   );
   const ownerOnly = [
     CAPABILITIES.AUTHORIZE_PAYROLL,
+    CAPABILITIES.DECIDE_TIME_CORRECTIONS,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
+    CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
   ];
   check(
     "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
@@ -570,6 +572,9 @@ try {
   check("OWNER has AUTHORIZE_PAYROLL", roleHasCapability("OWNER", CAPABILITIES.AUTHORIZE_PAYROLL));
   check("ADMIN does not have AUTHORIZE_PAYROLL", !roleHasCapability("ADMIN", CAPABILITIES.AUTHORIZE_PAYROLL));
   check("MEMBER does not have AUTHORIZE_PAYROLL", !roleHasCapability("MEMBER", CAPABILITIES.AUTHORIZE_PAYROLL));
+  check("OWNER has DECIDE_TIME_CORRECTIONS", roleHasCapability("OWNER", CAPABILITIES.DECIDE_TIME_CORRECTIONS));
+  check("ADMIN does not have DECIDE_TIME_CORRECTIONS", !roleHasCapability("ADMIN", CAPABILITIES.DECIDE_TIME_CORRECTIONS));
+  check("MEMBER does not have DECIDE_TIME_CORRECTIONS", !roleHasCapability("MEMBER", CAPABILITIES.DECIDE_TIME_CORRECTIONS));
   await expectForbidden("MEMBER cannot pass the Payroll management capability gate", () => {
     requireBusinessCapability(memberA, CAPABILITIES.MANAGE_PAYROLL);
   });
@@ -582,6 +587,12 @@ try {
   await expectAllowed("OWNER can pass the Payroll authorization capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.AUTHORIZE_PAYROLL);
   });
+  await expectForbidden("ADMIN cannot pass the time-correction decision capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.DECIDE_TIME_CORRECTIONS);
+  });
+  await expectAllowed("OWNER can pass the time-correction decision capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.DECIDE_TIME_CORRECTIONS);
+  });
 
   console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");
   check("OWNER has MANAGE_EXPENSES", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSES));
@@ -592,6 +603,15 @@ try {
   });
   await expectAllowed("ADMIN can pass the Expenses management capability gate", () => {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSES);
+  });
+  check("OWNER has MANAGE_EXPENSE_RECEIPTS", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("ADMIN does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  check("MEMBER does not have MANAGE_EXPENSE_RECEIPTS", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EXPENSE_RECEIPTS));
+  await expectForbidden("ADMIN cannot pass the expense receipt mutation capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
+  });
+  await expectAllowed("OWNER can pass the expense receipt mutation capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
   });
 
   console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");
@@ -658,6 +678,17 @@ try {
   });
   await expectAllowed("ADMIN can pass the Business Protection capability gate", () => {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_BUSINESS_PROTECTION);
+  });
+
+  console.log("\nTEST 16c — Equipment register is OWNER/ADMIN-read; MEMBER denied");
+  check("OWNER has MANAGE_EQUIPMENT", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EQUIPMENT));
+  check("ADMIN has MANAGE_EQUIPMENT", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EQUIPMENT));
+  check("MEMBER does not have MANAGE_EQUIPMENT", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EQUIPMENT));
+  await expectForbidden("MEMBER cannot pass the Equipment capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_EQUIPMENT);
+  });
+  await expectAllowed("ADMIN can pass the Equipment capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EQUIPMENT);
   });
 
   console.log("\nTEST 17 — Generic AI writing assist is OWNER/ADMIN-only");
