@@ -79,10 +79,32 @@ check(
 
 console.log("\nSTATIC — audited verifiers import the shared harness");
 const harnessSrc = read("scripts/disposable-test-database.mjs");
+const defaultOpsSrc = harnessSrc.slice(
+  harnessSrc.indexOf("function defaultOperations()"),
+  harnessSrc.indexOf("async function cleanupDisposableDatabase"),
+);
+const createOpSrc = defaultOpsSrc.slice(
+  defaultOpsSrc.indexOf("async createDatabase"),
+  defaultOpsSrc.indexOf("async pushSchema"),
+);
+const pushOpSrc = defaultOpsSrc.slice(
+  defaultOpsSrc.indexOf("async pushSchema"),
+  defaultOpsSrc.indexOf("createClient("),
+);
+const clientOpSrc = defaultOpsSrc.slice(
+  defaultOpsSrc.indexOf("createClient("),
+  defaultOpsSrc.indexOf("async terminateBackends"),
+);
+const dropOpSrc = defaultOpsSrc.slice(defaultOpsSrc.indexOf("async dropDatabase"));
 check(
   "Harness refuses remote hosts before default Prisma / push / DROP operations",
-  harnessSrc.indexOf("assertLocalDatabaseUrl(adminUrl") <
-    harnessSrc.indexOf("async createDatabase({ adminUrl, testDbName })") &&
+  harnessSrc.indexOf('assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE / prisma db push / DROP DATABASE")') <
+    harnessSrc.indexOf("await ops.createDatabase") &&
+    createOpSrc.indexOf("assertLocalDatabaseUrl") < createOpSrc.indexOf("PrismaClient") &&
+    createOpSrc.indexOf("assertLocalDatabaseUrl") < createOpSrc.indexOf("CREATE DATABASE") &&
+    pushOpSrc.indexOf("assertLocalDatabaseUrl") < pushOpSrc.indexOf("db\", \"push\"") &&
+    clientOpSrc.indexOf("assertLocalDatabaseUrl") < clientOpSrc.indexOf("new PrismaClient") &&
+    dropOpSrc.indexOf("assertLocalDatabaseUrl") < dropOpSrc.indexOf("DROP DATABASE") &&
     harnessSrc.includes('assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE")') &&
     harnessSrc.includes('assertLocalDatabaseUrl(testUrl, "prisma db push")') &&
     harnessSrc.includes('assertLocalDatabaseUrl(testUrl, "PrismaClient")') &&
