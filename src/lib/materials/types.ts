@@ -152,6 +152,30 @@ export function normalizeMaterialName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+export const PICKUP_EXCEPTIONS = [
+  "UNAVAILABLE",
+  "SHORT",
+  "DAMAGED",
+  "CLOSED",
+  "OTHER",
+] as const;
+export type PickupException = (typeof PICKUP_EXCEPTIONS)[number];
+
+export const PICKUP_EXCEPTION_LABELS: Record<PickupException, string> = {
+  UNAVAILABLE: "Unavailable",
+  SHORT: "Short quantity",
+  DAMAGED: "Damaged",
+  CLOSED: "Supplier closed",
+  OTHER: "Other",
+};
+
+export function isPickupException(value: unknown): value is PickupException {
+  return (
+    typeof value === "string" &&
+    (PICKUP_EXCEPTIONS as readonly string[]).includes(value)
+  );
+}
+
 export type FieldJobPickupView = {
   id: string;
   name: string;
@@ -163,6 +187,11 @@ export type FieldJobPickupView = {
   pickupDurationMinutes: number | null;
   pickupReady: boolean;
   status: PurchaseItemStatus;
+  quantityPickedUp: string | null;
+  pickupException: PickupException | null;
+  pickupExceptionLabel: string | null;
+  pickupExceptionNote: string | null;
+  pickupRecorded: boolean;
 };
 
 export type JobMaterialPickupRequirement = {
@@ -176,6 +205,10 @@ export type JobMaterialPickupRequirement = {
   durationMinutes: number | null;
   ready: boolean;
   status: PurchaseItemStatus;
+  quantityPickedUp: number | null;
+  pickupException: PickupException | null;
+  pickupExceptionNote: string | null;
+  pickupRecordedAt: string | null;
 };
 
 export type MaterialActualCostLink = {

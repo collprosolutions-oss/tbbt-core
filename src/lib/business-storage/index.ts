@@ -36,6 +36,7 @@ export {
   discardReadyManagedUpload,
   authorizeBusinessUpload,
   authorizeManagedUpload,
+  bestEffortCleanupOwnedObject,
   createPrivateDownloadUrl,
   deleteStoredAsset,
   ensureBusinessStorageAccount,
@@ -57,6 +58,9 @@ export {
   StorageAccessError,
   StorageError,
   StorageQuotaError,
+  PROJECT_DOCUMENT_MAX_BYTES,
+  PROJECT_DOCUMENT_MAX_COUNT,
+  PROJECT_DOCUMENT_MAX_FILENAME_LENGTH,
   REQUEST_PHOTO_MAX_BYTES,
   WEBSITE_PHOTO_MAX_BYTES,
 } from "@/lib/business-storage/types";
@@ -69,6 +73,23 @@ export type {
   StoredAssetCategory,
   StoredAssetVisibility,
 } from "@/lib/business-storage/types";
+export {
+  EXPENSE_RECEIPT_CATEGORY,
+  EXPENSE_RECEIPT_MAX_BYTES,
+  EXPENSE_RECEIPT_PURPOSE,
+  abortExpenseReceiptUpload,
+  authorizeExpenseReceiptUpload,
+  detectExpenseReceiptMimeType,
+  expenseReceiptHref,
+  expenseReceiptMaxBytesLabel,
+  finalizeAndAttachExpenseReceipt,
+  inspectExpenseReceiptUpload,
+  isExpenseReceiptMimeType,
+  putExpenseReceiptFromBytes,
+  releaseUnreferencedExpenseReceiptAsset,
+  removeExpenseReceiptAttachment,
+  resolveExpenseReceiptMimeType,
+} from "@/lib/business-storage/expense-receipts";
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
   FIELD_JOB_PHOTO_PURPOSE,
@@ -84,3 +105,27 @@ export {
   putAssignedFieldJobPhotoFromBytes,
   putManagementJobPhotoFromBytes,
 } from "@/lib/business-storage/field-job-photos";
+export {
+  PROJECT_DOCUMENT_PURPOSE,
+  PROJECT_DOCUMENT_RECEIVED_COPY,
+  PROJECT_DOCUMENT_TYPE_MISMATCH,
+  abortProjectTokenDocument,
+  authorizeProjectTokenDocument,
+  countActiveProjectDocuments,
+  finalizeProjectTokenDocument,
+  inspectProjectDocumentUpload,
+  isProjectDocumentMimeType,
+  isProjectDocumentUploadOpen,
+  listProjectDocumentsForOwnerReview,
+  listProjectDocumentsForPortal,
+  projectDocumentBytesMatchMime,
+  projectDocumentMaxBytesLabel,
+  projectDocumentTestHooks,
+  putProjectTokenDocumentFromBytes,
+  remainingProjectDocumentSlots,
+  sanitizeProjectDocumentFilename,
+} from "@/lib/business-storage/project-documents";
+export type {
+  ProjectDocumentReceiptItem,
+  ProjectDocumentReviewItem,
+} from "@/lib/business-storage/project-documents";

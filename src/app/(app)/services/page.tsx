@@ -195,6 +195,7 @@ export default async function ServicesPage({
           starterPlans={starterPlans}
           activeTrades={activeCatalogTrades}
           initialServiceId={params.service}
+          canImportCatalog={access.workspace.role === "OWNER"}
         />
       </FounderDesignRoot>
     </PageContainer>

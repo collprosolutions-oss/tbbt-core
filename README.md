@@ -80,6 +80,7 @@ Focused isolation / domain scripts (all require `DATABASE_URL`):
 ```bash
 npm run test:isolation
 npm run test:authorization
+npm run test:customer-csv-import
 npm run test:bsos
 npm run test:chief-of-staff
 npm run test:business-coach
@@ -105,7 +106,10 @@ npm run test:native-field
 npm run test:native-field-photos
 npm run test:native-field-visit
 npm run test:native-field-checklist
+npm run test:native-field-checklist-offline
 npm run test:native-field-activity
+npm run test:native-field-pickup
+npm run test:collections-worklist
 npx tsc --noEmit
 npm run build
 ```
@@ -124,6 +128,7 @@ npm run test:public-website
 npm run test:live-public-website
 npm run test:workforce-capacity
 npm run test:business-protection
+npm run test:job-callback
 ```
 
 Business Protection (`/business-protection`) is a private vault and agreement-organization workspace. It is not a separately advertised purchasable plan feature, not a licensing authority, and not a live e-sign provider.

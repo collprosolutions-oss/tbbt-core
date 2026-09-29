@@ -95,7 +95,6 @@ const ownerPage = readRepo("src/app/(app)/estimates/[estimateId]/page.tsx");
 const customerPage = readRepo("src/app/e/[token]/page.tsx");
 const printPage = readRepo("src/app/(invoice-document)/e/[token]/print/page.tsx");
 const documentView = readRepo("src/components/estimates/estimate-document.tsx");
-const jobPhoto = readRepo("src/app/actions/job-photo.ts");
 const expenseAction = readRepo("src/app/actions/expenses.ts");
 const storageBlob = readRepo("src/lib/storage.ts");
 
@@ -126,9 +125,9 @@ check(
     !documentView.includes("/api/storage/private/"),
 );
 check(
-  "Job photos and expense receipts still use the Blob helper",
-  jobPhoto.includes("@/lib/storage") &&
-    expenseAction.includes("uploadExpenseReceipt") &&
+  "Expense receipts use private managed storage instead of the Blob helper",
+  expenseAction.includes("putExpenseReceiptFromBytes") &&
+    !expenseAction.includes("uploadExpenseReceipt") &&
     storageBlob.includes("MAX_JOB_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024"),
 );
 check(

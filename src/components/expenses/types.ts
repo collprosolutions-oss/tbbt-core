@@ -37,7 +37,9 @@ export type ExpenseListItem = {
   customerId: string | null;
   customerName: string | null;
   hasReceipt: boolean;
-  receiptUrl: string | null;
+  hasPrivateReceipt: boolean;
+  receiptHref: string | null;
+  legacyReceiptHref: string | null;
   reimbursable: boolean;
   customerBillable: boolean;
   reimbursementStatus: string;
@@ -98,6 +100,7 @@ export type ExpenseWorkspaceData = {
   financial: ExpenseFinancialOverview;
   filters: ExpenseFilterChip[];
   storageConfigured: boolean;
+  canChangeReceipts: boolean;
   defaultDate: string;
   page: number;
   totalPages: number;

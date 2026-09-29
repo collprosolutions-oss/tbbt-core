@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { estimateListTotalLabel } from "@/lib/estimate-options";
 import { formatAddress, formatDate, formatMoney } from "@/lib/format";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
@@ -66,7 +67,20 @@ export default async function RequestRecordPage({
         },
       },
       estimates: {
-        select: { id: true, status: true, total: true },
+        select: {
+          id: true,
+          status: true,
+          total: true,
+          approvedOption: { select: { total: true } },
+          options: { select: { id: true } },
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+            select: {
+              options: { select: { total: true }, orderBy: { sortOrder: "asc" } },
+            },
+          },
+        },
         orderBy: { createdAt: "asc" },
       },
       repeatVisitSourceJob: { select: { id: true } },
@@ -152,7 +166,7 @@ export default async function RequestRecordPage({
               {request.estimates.map((estimate) => (
                 <p key={estimate.id} className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={estimate.status} />
-                  <span>{formatMoney(estimate.total)}</span>
+                  <span>{estimateListTotalLabel(estimate, formatMoney)}</span>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/estimates/${estimate.id}`}>Open estimate</Link>
                   </Button>
