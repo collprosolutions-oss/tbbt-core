@@ -303,6 +303,26 @@ try {
       CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "customerCommunication"),
   );
   check(
+    "Merge remaps JobCallback, InvoiceCollectionWorkItem, and both CustomerCsvImportRow customer ids",
+    CUSTOMER_REASSIGN_SPECS.some(
+      (spec) => spec.kind === "updateMany" && spec.model === "JobCallback" && spec.field === "customerId",
+    ) &&
+      CUSTOMER_REASSIGN_SPECS.some(
+        (spec) =>
+          spec.kind === "updateMany" && spec.model === "InvoiceCollectionWorkItem" && spec.field === "customerId",
+      ) &&
+      CUSTOMER_REASSIGN_SPECS.some(
+        (spec) =>
+          spec.kind === "updateMany" && spec.model === "CustomerCsvImportRow" && spec.field === "createdCustomerId",
+      ) &&
+      CUSTOMER_REASSIGN_SPECS.some(
+        (spec) =>
+          spec.kind === "updateMany" &&
+          spec.model === "CustomerCsvImportRow" &&
+          spec.field === "possibleDuplicateCustomerId",
+      ),
+  );
+  check(
     "Feature does not send email or SMS",
     !/sendEmail|sendMail|sendSms|resend|attemptCustomerSms/i.test(featureSource),
   );
@@ -420,7 +440,11 @@ try {
     missingRefs.length === 0 &&
       requiredRefs.some((ref) => ref.model === "StoredAsset" && ref.field === "customerId") &&
       requiredRefs.some((ref) => ref.model === "ExternalLeadImportRow" && ref.field === "possibleDuplicateCustomerId") &&
-      requiredRefs.some((ref) => ref.model === "Job" && ref.field === "customerId"),
+      requiredRefs.some((ref) => ref.model === "Job" && ref.field === "customerId") &&
+      requiredRefs.some((ref) => ref.model === "JobCallback" && ref.field === "customerId") &&
+      requiredRefs.some((ref) => ref.model === "InvoiceCollectionWorkItem" && ref.field === "customerId") &&
+      requiredRefs.some((ref) => ref.model === "CustomerCsvImportRow" && ref.field === "createdCustomerId") &&
+      requiredRefs.some((ref) => ref.model === "CustomerCsvImportRow" && ref.field === "possibleDuplicateCustomerId"),
   );
   if (missingRefs.length > 0) {
     console.error(
@@ -814,6 +838,63 @@ try {
             idempotencyKey: `evt-${suffix}-${randomUUID()}`,
           },
         });
+    const jobCallback = await prisma.jobCallback.create({
+      data: {
+        businessId,
+        jobId: job.id,
+        customerId,
+        description: `${suffix} callback`,
+        reportedVia: "PHONE",
+        recordedByMembershipId: ownerMem.id,
+      },
+    });
+    const collectionWorkItem = await prisma.invoiceCollectionWorkItem.create({
+      data: {
+        businessId,
+        invoiceId: invoice.id,
+        customerId,
+        status: "OPEN",
+        nextStep: "CALL",
+        note: `${suffix} collect`,
+      },
+    });
+    const csvImport = await prisma.customerCsvImport.create({
+      data: {
+        businessId,
+        sourceKind: "CSV_UPLOAD",
+        sourceLabel: `${suffix}-customers.csv`,
+        contentSha256: randomUUID().replaceAll("-", ""),
+        capturedAt: new Date(),
+        status: "CONFIRMED",
+        rowCount: 2,
+        validCount: 1,
+        invalidCount: 0,
+        possibleDuplicateCount: 1,
+        createdByMembershipId: ownerMem.id,
+      },
+    });
+    const csvCreatedRow = await prisma.customerCsvImportRow.create({
+      data: {
+        businessId,
+        importId: csvImport.id,
+        rowNumber: 1,
+        previewStatus: "VALID",
+        rowFingerprint: randomUUID(),
+        name: `${suffix} created`,
+        createdCustomerId: customerId,
+      },
+    });
+    const csvDuplicateRow = await prisma.customerCsvImportRow.create({
+      data: {
+        businessId,
+        importId: csvImport.id,
+        rowNumber: 2,
+        previewStatus: "POSSIBLE_DUPLICATE",
+        rowFingerprint: randomUUID(),
+        name: `${suffix} duplicate`,
+        possibleDuplicateCustomerId: customerId,
+      },
+    });
     return {
       campaign,
       property,
@@ -839,6 +920,10 @@ try {
       correction,
       event,
       otherCustomer,
+      jobCallback,
+      collectionWorkItem,
+      csvCreatedRow,
+      csvDuplicateRow,
     };
   }
 
@@ -851,6 +936,8 @@ try {
     const extras = await Promise.all([
       prisma.storedAsset.count({ where: { customerId: deletedId } }),
       prisma.externalLeadImportRow.count({ where: { possibleDuplicateCustomerId: deletedId } }),
+      prisma.customerCsvImportRow.count({ where: { createdCustomerId: deletedId } }),
+      prisma.customerCsvImportRow.count({ where: { possibleDuplicateCustomerId: deletedId } }),
       prisma.leadAttributionCorrection.count({ where: { recordType: "CUSTOMER", recordId: deletedId } }),
       prisma.businessEvent.count({
         where: {
@@ -913,7 +1000,7 @@ try {
     sourceCustomerId: keep.id,
     referredCustomerId: keep.id,
   });
-  await createLinkedRecords(beta, betaTwin.id, "beta");
+  const betaLinks = await createLinkedRecords(beta, betaTwin.id, "beta");
 
   console.log("\nAUTH — OWNER review only");
   try {
@@ -1104,6 +1191,49 @@ try {
   check(
     "ExternalLeadImportRow.possibleDuplicateCustomerId remaps",
     importRow?.possibleDuplicateCustomerId === keep.id,
+  );
+  const remappedCallback = await prisma.jobCallback.findUnique({ where: { id: absorbLinks.jobCallback.id } });
+  check(
+    "JobCallback.customerId remaps onto the survivor and is not nulled",
+    remappedCallback?.customerId === keep.id,
+  );
+  const remappedCollection = await prisma.invoiceCollectionWorkItem.findUnique({
+    where: { id: absorbLinks.collectionWorkItem.id },
+  });
+  check(
+    "InvoiceCollectionWorkItem.customerId remaps onto the survivor and is not nulled",
+    remappedCollection?.customerId === keep.id,
+  );
+  const remappedCsvCreated = await prisma.customerCsvImportRow.findUnique({
+    where: { id: absorbLinks.csvCreatedRow.id },
+  });
+  check(
+    "CustomerCsvImportRow.createdCustomerId remaps onto the survivor and is not dangling",
+    remappedCsvCreated?.createdCustomerId === keep.id,
+  );
+  const remappedCsvDuplicate = await prisma.customerCsvImportRow.findUnique({
+    where: { id: absorbLinks.csvDuplicateRow.id },
+  });
+  check(
+    "CustomerCsvImportRow.possibleDuplicateCustomerId remaps onto the survivor and is not dangling",
+    remappedCsvDuplicate?.possibleDuplicateCustomerId === keep.id,
+  );
+  const betaCallback = await prisma.jobCallback.findUnique({ where: { id: betaLinks.jobCallback.id } });
+  const betaCollection = await prisma.invoiceCollectionWorkItem.findUnique({
+    where: { id: betaLinks.collectionWorkItem.id },
+  });
+  const betaCsvCreated = await prisma.customerCsvImportRow.findUnique({
+    where: { id: betaLinks.csvCreatedRow.id },
+  });
+  const betaCsvDuplicate = await prisma.customerCsvImportRow.findUnique({
+    where: { id: betaLinks.csvDuplicateRow.id },
+  });
+  check(
+    "Another business's JobCallback, collection work item, and CSV import rows stay on that tenant's customer",
+    betaCallback?.customerId === betaTwin.id &&
+      betaCollection?.customerId === betaTwin.id &&
+      betaCsvCreated?.createdCustomerId === betaTwin.id &&
+      betaCsvDuplicate?.possibleDuplicateCustomerId === betaTwin.id,
   );
   const correction = await prisma.leadAttributionCorrection.findUnique({ where: { id: absorbLinks.correction.id } });
   check("LeadAttributionCorrection CUSTOMER recordId remaps", correction?.recordId === keep.id);

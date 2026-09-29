@@ -109,11 +109,11 @@ export type DuplicateReview = {
  * - LeadAttributionCorrection.recordId when recordType is CUSTOMER
  * - pending BusinessEvent payload.customerId / CUSTOMER subjectId
  *
- * After #213/#214/#215 land, add:
- * - JobCallback.customerId
- * - InvoiceCollectionWorkItem.customerId
- * - CustomerCsvImportRow.createdCustomerId
- * - CustomerCsvImportRow.possibleDuplicateCustomerId
+ * JobCallback.customerId is a denormalized copy of Job.customerId set at
+ * record time (onDelete SetNull) and must follow the job's customer.
+ * InvoiceCollectionWorkItem.customerId is the same SetNull FK shape.
+ * CustomerCsvImportRow.createdCustomerId and
+ * possibleDuplicateCustomerId are plain strings with no database FK.
  */
 export type CustomerReassignSpec =
   | {
@@ -155,8 +155,12 @@ export const CUSTOMER_REASSIGN_SPECS: readonly CustomerReassignSpec[] = [
   { kind: "updateMany", model: "Referral", delegate: "referral", field: "sourceCustomerId", relation: "referralsGiven" },
   { kind: "updateMany", model: "Referral", delegate: "referral", field: "referredCustomerId", relation: "referralsReceived" },
   { kind: "updateMany", model: "GrowthActionRequest", delegate: "growthActionRequest", field: "customerId", relation: "growthActionRequests" },
+  { kind: "updateMany", model: "JobCallback", delegate: "jobCallback", field: "customerId", relation: "jobCallbacks" },
+  { kind: "updateMany", model: "InvoiceCollectionWorkItem", delegate: "invoiceCollectionWorkItem", field: "customerId", relation: "invoiceCollectionWorkItems" },
   { kind: "updateMany", model: "StoredAsset", delegate: "storedAsset", field: "customerId" },
   { kind: "updateMany", model: "ExternalLeadImportRow", delegate: "externalLeadImportRow", field: "possibleDuplicateCustomerId" },
+  { kind: "updateMany", model: "CustomerCsvImportRow", delegate: "customerCsvImportRow", field: "createdCustomerId" },
+  { kind: "updateMany", model: "CustomerCsvImportRow", delegate: "customerCsvImportRow", field: "possibleDuplicateCustomerId" },
   {
     kind: "updateMany",
     model: "LeadAttributionCorrection",
