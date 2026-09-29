@@ -423,6 +423,10 @@ model Business {
   /// snapshots only — never public catalog prices or approved estimates.
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
+  /// OWNER-recorded Job milestones. Separate table so Job columns stay
+  /// untouched. Completion is explicit — never inferred from Job.status.
+  jobMilestones             JobMilestone[]
+  jobMilestoneEvents        JobMilestoneEvent[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -641,6 +645,9 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
+  completedJobMilestones JobMilestone[] @relation("JobMilestoneCompleter")
+  jobMilestoneEvents JobMilestoneEvent[] @relation("JobMilestoneEventActor")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1490,6 +1497,10 @@ model Job {
   materialPurchaseOrders  MaterialPurchaseOrder[]
   crewVisit               JobCrewVisit?
   repeatVisitRequest      ServiceRequest? @relation("ServiceRequestRepeatVisitSource")
+  /// OWNER-recorded milestones. Relation only — Job itself stores no
+  /// milestone columns, so concurrent Job-column migrations do not collide.
+  milestones              JobMilestone[]
+  milestoneEvents         JobMilestoneEvent[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -1529,6 +1540,68 @@ model JobAppointmentEvent {
   @@index([businessId])
   @@index([jobId])
   @@index([businessId, createdAt])
+}
+
+/// OWNER-recorded, ordered Job milestones.
+/// Completion is an explicit OWNER mark only — never inferred from
+/// Job.status, Invoice, or JobCrewVisit.checklistJson.
+/// Customer Project Portal shows a row only when customerVisible is true
+/// for that token-scoped Job. Application code must never send email or
+/// SMS from these rows.
+model JobMilestone {
+  id                      String    @id @default(cuid())
+  businessId              String
+  jobId                   String
+  title                   String
+  /// Lowercased trimmed title for per-job duplicate detection.
+  titleKey                String
+  sortOrder               Int
+  /// OWNER-chosen portal exposure. Default hidden from the customer token.
+  customerVisible         Boolean   @default(false)
+  /// OPEN | COMPLETED. Explicit OWNER mark only.
+  status                  String    @default("OPEN")
+  completedAt             DateTime?
+  completedByMembershipId String?
+  createdByMembershipId   String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job         Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdBy   Membership?  @relation("JobMilestoneRecorder", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  completedBy Membership?  @relation("JobMilestoneCompleter", fields: [completedByMembershipId], references: [id], onDelete: SetNull)
+  events      JobMilestoneEvent[]
+
+  @@unique([jobId, sortOrder])
+  @@unique([jobId, titleKey])
+  @@index([businessId])
+  @@index([jobId, sortOrder])
+  @@index([businessId, jobId])
+}
+
+/// Append-only milestone history. Application code must never update or
+/// delete an existing row. Status on the event is a snapshot of the
+/// milestone at write time, not a live Job/Invoice derivation.
+model JobMilestoneEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  jobId             String
+  milestoneId       String
+  /// RECORDED | COMPLETED | CUSTOMER_EXPOSED | CUSTOMER_HIDDEN
+  eventType         String
+  status            String
+  actorMembershipId String?
+  payload           String?
+  createdAt         DateTime @default(now())
+
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  milestone JobMilestone  @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  actor     Membership?   @relation("JobMilestoneEventActor", fields: [actorMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([milestoneId, createdAt])
 }
 
 /// Private, owner-facing job documentation by default. Stores only a

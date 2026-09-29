@@ -8,6 +8,7 @@ import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
 import { ProjectHomeSummary } from "@/components/portal/project-home-summary";
 import { PortalAdditionalWorkHistory } from "@/components/portal/portal-additional-work-history";
 import { PortalCommunicationsCard } from "@/components/portal/portal-communications-card";
+import { ProjectMilestonesList } from "@/components/portal/project-milestones-list";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
@@ -33,6 +34,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import { loadCustomerVisibleMilestonesForProjectToken } from "@/lib/job-milestone-ops";
 import {
   customerFacingJobStatusLabel,
   resolveProjectProgressStep,
@@ -241,6 +243,11 @@ export default async function CustomerProjectPortalPage({
       </main>
     );
   }
+
+  const customerMilestones = await loadCustomerVisibleMilestonesForProjectToken(
+    prisma,
+    token,
+  );
 
   if (query.checkout === "return") {
     await reconcileEstimateDepositCheckout(prisma, token, query.session_id);
@@ -481,6 +488,15 @@ export default async function CustomerProjectPortalPage({
             </CardHeader>
             <CardContent className="space-y-3">
               <ProjectProgressBar currentStep={progressStep} />
+              {customerMilestones &&
+              customerMilestones.jobId === job.id &&
+              customerMilestones.businessId === job.business.id &&
+              customerMilestones.milestones.length > 0 ? (
+                <div className="space-y-2 pt-2">
+                  <p className="text-sm font-medium">Owner-shared milestones</p>
+                  <ProjectMilestonesList milestones={customerMilestones.milestones} />
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
