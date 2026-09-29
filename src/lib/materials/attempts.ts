@@ -88,17 +88,20 @@ export async function withMaterialAttempt<T>(
     return { status: "replay", attempt: existing };
   }
   try {
-    const result = await db.$transaction(async (tx) => {
-      await tx.materialOperationAttempt.create({
-        data: {
-          businessId: access.businessId,
-          attemptKey: input.attemptKey,
-          kind: input.kind,
-          payloadFingerprint: input.payloadFingerprint,
-        },
-      });
-      return work(tx);
-    });
+    const result = await db.$transaction(
+      async (tx) => {
+        await tx.materialOperationAttempt.create({
+          data: {
+            businessId: access.businessId,
+            attemptKey: input.attemptKey,
+            kind: input.kind,
+            payloadFingerprint: input.payloadFingerprint,
+          },
+        });
+        return work(tx);
+      },
+      { maxWait: 15000, timeout: 20000 },
+    );
     return { status: "claimed", result };
   } catch (error) {
     if (!isPrismaUniqueViolation(error)) throw error;

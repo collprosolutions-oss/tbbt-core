@@ -89,35 +89,6 @@ export function canRecordPurchaseOrderReceipt(status: string) {
   return (PURCHASE_ORDER_RECEIPT_STATUSES as readonly string[]).includes(status);
 }
 
-export type PurchaseOrderReceiptQuantities = {
-  quantityOrdered: number;
-  quantityReceived: number;
-  quantityRemaining: number;
-  fullyReceived: boolean;
-};
-
-/**
- * Ordered-versus-received math for one PO line. `quantityReceived` is the
- * OWNER-recorded PO receipt total — not purchase-list quantityPurchased
- * and not worker pickup quantities from the native pickup PR.
- */
-export function purchaseOrderReceiptQuantities(input: {
-  quantityOrdered: string | number;
-  quantityReceived?: string | number | null;
-}): PurchaseOrderReceiptQuantities {
-  const quantityOrdered = Number(input.quantityOrdered);
-  const quantityReceived = Number(input.quantityReceived ?? 0);
-  const ordered = Number.isFinite(quantityOrdered) ? quantityOrdered : 0;
-  const received = Number.isFinite(quantityReceived) ? quantityReceived : 0;
-  const quantityRemaining = Math.max(0, ordered - received);
-  return {
-    quantityOrdered: ordered,
-    quantityReceived: received,
-    quantityRemaining,
-    fullyReceived: ordered > 0 && received >= ordered,
-  };
-}
-
 export const PURCHASE_ORDER_RECEIPT_QUANTITY_PATTERN = /^\d+(\.\d{1,4})?$/;
 
 export type ParsedReceiptQuantity =
@@ -154,18 +125,6 @@ export function purchaseOrderReceiptFingerprint(
     .map((item) => `${item.id}:${item.quantity}`)
     .join("|");
   return `${purchaseOrderId.trim()}|${lines}`;
-}
-
-export function purchaseOrderStatusFromReceipts(
-  lines: ReadonlyArray<PurchaseOrderReceiptQuantities>,
-): PurchaseOrderStatus {
-  if (lines.length > 0 && lines.every((line) => line.fullyReceived)) {
-    return "RECEIVED";
-  }
-  if (lines.some((line) => line.quantityReceived > 0)) {
-    return "PARTIALLY_RECEIVED";
-  }
-  return "ORDERED_EXTERNALLY";
 }
 
 export function isMaterialPriceSource(value: unknown): value is MaterialPriceSource {

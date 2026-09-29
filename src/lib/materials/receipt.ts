@@ -25,15 +25,20 @@ import {
 } from "@/lib/materials/attempts";
 import { MaterialsError } from "@/lib/materials/errors";
 import { decimalQuantity } from "@/lib/materials/money";
-import { lockTenantOwnedPurchaseOrder } from "@/lib/materials/po-lock";
+import {
+  lockPurchaseListItemsForUpdate,
+  lockTenantOwnedPurchaseOrder,
+  lockTenantOwnedPurchaseOrderItems,
+} from "@/lib/materials/po-lock";
+import {
+  purchaseOrderReceiptQuantities,
+  purchaseOrderStatusFromReceipts,
+} from "@/lib/materials/receipt-quantities";
 import {
   canRecordPurchaseOrderReceipt,
   parseReceiptDeliveryQuantity,
   purchaseOrderReceiptFingerprint,
-  purchaseOrderReceiptQuantities,
-  purchaseOrderStatusFromReceipts,
   type PurchaseItemStatus,
-  type PurchaseOrderStatus,
 } from "@/lib/materials/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -156,13 +161,7 @@ export async function recordPurchaseOrderReceipt(
       if (!locked || locked.businessId !== access.businessId) {
         throw new MaterialsError("That purchase order was not found in this business.");
       }
-      await tx.$queryRaw`
-        SELECT id
-        FROM "MaterialPurchaseOrderItem"
-        WHERE "purchaseOrderId" = ${locked.id}
-          AND "businessId" = ${access.businessId}
-        FOR UPDATE
-      `;
+      await lockTenantOwnedPurchaseOrderItems(tx, access.businessId, locked.id);
       const existing = await tx.materialPurchaseOrder.findFirst({
         where: { id: locked.id, businessId: access.businessId },
         include: {
@@ -213,16 +212,7 @@ export async function recordPurchaseOrderReceipt(
           ),
         ),
       ].sort((left, right) => left.localeCompare(right));
-      if (submittedListItemIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "MaterialPurchaseListItem"
-          WHERE "businessId" = ${access.businessId}
-            AND id IN (${Prisma.join(submittedListItemIds)})
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
+      await lockPurchaseListItemsForUpdate(tx, access.businessId, submittedListItemIds);
 
       for (const [itemId, quantityReceived] of nextReceived) {
         await tx.materialPurchaseOrderItem.update({
@@ -249,11 +239,11 @@ export async function recordPurchaseOrderReceipt(
 
       const receiptLines = existing.items.map((item) =>
         purchaseOrderReceiptQuantities({
-          quantityOrdered: item.quantity.toString(),
-          quantityReceived: (nextReceived.get(item.id) ?? item.quantityReceived ?? 0).toString(),
+          quantityOrdered: item.quantity,
+          quantityReceived: nextReceived.get(item.id) ?? item.quantityReceived ?? 0,
         }),
       );
-      const status = purchaseOrderStatusFromReceipts(receiptLines) as PurchaseOrderStatus;
+      const status = purchaseOrderStatusFromReceipts(receiptLines);
       const updated = await tx.materialPurchaseOrder.update({
         where: { id: existing.id },
         data: {
@@ -283,7 +273,6 @@ export async function recordPurchaseOrderReceipt(
       for (const item of updated.items) {
         if (!increments.has(item.id)) continue;
         const currentStatus = item.purchaseListItem.status;
-        if (currentStatus === "CANCELLED") continue;
         const related = siblingLines.filter(
           (line) => line.purchaseListItemId === item.purchaseListItemId,
         );
@@ -294,16 +283,13 @@ export async function recordPurchaseOrderReceipt(
             return received.gte(line.quantity);
           });
         const thisLine = purchaseOrderReceiptQuantities({
-          quantityOrdered: item.quantity.toString(),
-          quantityReceived: item.quantityReceived.toString(),
+          quantityOrdered: item.quantity,
+          quantityReceived: item.quantityReceived,
         });
         let nextStatus: PurchaseItemStatus | null = null;
         if (listItemFullyReceived) {
           nextStatus = "RECEIVED";
-        } else if (
-          thisLine.quantityReceived > 0 &&
-          (currentStatus === "NEEDED" || currentStatus === "PLANNED" || currentStatus === "ORDERED")
-        ) {
+        } else if (thisLine.quantityReceived.gt(0) && currentStatus !== "PURCHASED") {
           nextStatus = "ORDERED";
         }
         if (!nextStatus || currentStatus === nextStatus) continue;

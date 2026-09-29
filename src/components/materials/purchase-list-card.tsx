@@ -91,6 +91,13 @@ function FormStatus({ state }: { state: MaterialsActionState }) {
       </Alert>
     );
   }
+  if (state.alreadyRecorded) {
+    return (
+      <Alert>
+        <AlertDescription>Already recorded.</AlertDescription>
+      </Alert>
+    );
+  }
   if (state.message) {
     return (
       <Alert>

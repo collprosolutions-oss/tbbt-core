@@ -27,7 +27,16 @@ export {
 export { listAssignedJobPickupView, listJobMaterialPickupRequirements } from "@/lib/materials/pickup";
 export { recordPurchaseOrderReceipt } from "@/lib/materials/receipt";
 export type { PurchaseOrderReceiptResult } from "@/lib/materials/receipt";
-export { lockTenantOwnedPurchaseOrder } from "@/lib/materials/po-lock";
+export {
+  lockPurchaseListItemsForUpdate,
+  lockTenantOwnedPurchaseOrder,
+  lockTenantOwnedPurchaseOrderItems,
+} from "@/lib/materials/po-lock";
+export {
+  purchaseOrderReceiptQuantities,
+  purchaseOrderStatusFromReceipts,
+} from "@/lib/materials/receipt-quantities";
+export type { PurchaseOrderReceiptQuantities } from "@/lib/materials/receipt-quantities";
 export { appendMaterialPriceHistory, listMaterialPriceHistory } from "@/lib/materials/price-history";
 export {
   addPurchaseListItem,
@@ -60,8 +69,6 @@ export {
   normalizeMaterialName,
   parseReceiptDeliveryQuantity,
   purchaseOrderReceiptFingerprint,
-  purchaseOrderReceiptQuantities,
-  purchaseOrderStatusFromReceipts,
   PURCHASE_ORDER_RECEIPT_QUANTITY_PATTERN,
   PURCHASE_ORDER_RECEIPT_STATUSES,
   PURCHASE_ORDER_TRANSITIONS,
@@ -73,7 +80,6 @@ export type {
   MaterialPriceSource,
   MaterialVarianceRow,
   PurchaseItemStatus,
-  PurchaseOrderReceiptQuantities,
   PurchaseOrderStatus,
   SupplierAdapterState,
 } from "@/lib/materials/types";

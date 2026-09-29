@@ -25,7 +25,11 @@ import {
   type PurchaseItemStatus,
   type PurchaseOrderStatus,
 } from "@/lib/materials/types";
-import { lockTenantOwnedPurchaseOrder } from "@/lib/materials/po-lock";
+import {
+  lockPurchaseListItemsForUpdate,
+  lockTenantOwnedPurchaseOrder,
+  lockTenantOwnedPurchaseOrderItems,
+} from "@/lib/materials/po-lock";
 import { isPrismaUniqueViolation } from "@/lib/materials/unique";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -709,12 +713,13 @@ async function applyPurchaseOrderStatus(
   if (!locked || locked.businessId !== access.businessId) {
     throw new MaterialsError("That purchase order was not found in this business.");
   }
+  await lockTenantOwnedPurchaseOrderItems(db, access.businessId, locked.id);
   const existing = access.assertOwned(
     await db.materialPurchaseOrder.findFirst({
       where: { id: locked.id, businessId: access.businessId },
       include: {
         purchaseList: true,
-        items: { include: { purchaseListItem: { select: { id: true, status: true } } } },
+        items: { select: { id: true, purchaseListItemId: true } },
       },
     }),
   );
@@ -726,6 +731,17 @@ async function applyPurchaseOrderStatus(
       `That purchase order cannot move from ${current} to ${status}.`,
     );
   }
+  const listItemIds = [
+    ...new Set(existing.items.map((item) => item.purchaseListItemId).filter(Boolean)),
+  ].sort((left, right) => left.localeCompare(right));
+  await lockPurchaseListItemsForUpdate(db, access.businessId, listItemIds);
+  const listItems = listItemIds.length
+    ? await db.materialPurchaseListItem.findMany({
+        where: { businessId: access.businessId, id: { in: listItemIds } },
+        select: { id: true, status: true },
+      })
+    : [];
+  const listStatusById = new Map(listItems.map((item) => [item.id, item.status]));
   const updated = await db.materialPurchaseOrder.update({
     where: { id: existing.id },
     data: {
@@ -736,25 +752,38 @@ async function applyPurchaseOrderStatus(
     },
   });
   if (status === "ORDERED_EXTERNALLY") {
-    await db.materialPurchaseListItem.updateMany({
+    if (listItemIds.length > 0) {
+      await db.materialPurchaseListItem.updateMany({
+        where: {
+          businessId: access.businessId,
+          purchaseListId: existing.purchaseListId,
+          id: { in: listItemIds },
+          NOT: { status: "RECEIVED" },
+        },
+        data: { status: "ORDERED" },
+      });
+    }
+  } else if (status === "CANCELLED" && listItemIds.length > 0) {
+    const openSiblings = await db.materialPurchaseOrderItem.findMany({
       where: {
         businessId: access.businessId,
-        purchaseListId: existing.purchaseListId,
-        id: { in: existing.items.map((item) => item.purchaseListItemId) },
-        NOT: { status: "RECEIVED" },
+        purchaseListItemId: { in: listItemIds },
+        purchaseOrderId: { not: existing.id },
+        purchaseOrder: { status: { not: "CANCELLED" } },
       },
-      data: { status: "ORDERED" },
+      select: { purchaseListItemId: true },
     });
-  } else if (status === "CANCELLED") {
-    const cancellableIds = existing.items
-      .filter((item) => item.purchaseListItem.status !== "RECEIVED")
-      .map((item) => item.purchaseListItemId);
+    const openSiblingIds = new Set(openSiblings.map((row) => row.purchaseListItemId));
+    const cancellableIds = listItemIds.filter(
+      (id) => listStatusById.get(id) !== "RECEIVED" && !openSiblingIds.has(id),
+    );
     if (cancellableIds.length > 0) {
       await db.materialPurchaseListItem.updateMany({
         where: {
           businessId: access.businessId,
           purchaseListId: existing.purchaseListId,
           id: { in: cancellableIds },
+          NOT: { status: "RECEIVED" },
         },
         data: { status: "CANCELLED" },
       });
@@ -774,7 +803,10 @@ export async function updatePurchaseOrderStatus(
   const status = input.status as PurchaseOrderStatus;
   const run = (tx: Db) => applyPurchaseOrderStatus(tx, access, { ...input, status });
   if ("$transaction" in db && typeof db.$transaction === "function") {
-    return (db as PrismaClient).$transaction((tx) => run(tx));
+    return (db as PrismaClient).$transaction((tx) => run(tx), {
+      maxWait: 15000,
+      timeout: 20000,
+    });
   }
   return run(db);
 }

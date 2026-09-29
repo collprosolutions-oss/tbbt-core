@@ -8,7 +8,7 @@ import { listMaterialPriceHistory } from "@/lib/materials/price-history";
 import { ensurePurchaseList, loadPurchaseListBoard } from "@/lib/materials/purchase";
 import { materialEstimateVsActual } from "@/lib/materials/variance";
 import type { MaterialsCatalogRow, MaterialsSupplierRow } from "@/components/materials/materials-workspace";
-import { purchaseOrderReceiptQuantities } from "@/lib/materials/types";
+import { purchaseOrderReceiptQuantities } from "@/lib/materials/receipt-quantities";
 import type {
   MaterialVarianceView,
   PurchaseListItemView,
@@ -108,16 +108,16 @@ export async function loadPurchaseWorkspace(
     supplierName: order.supplier?.name ?? null,
     items: order.items.map((item) => {
       const receipt = purchaseOrderReceiptQuantities({
-        quantityOrdered: item.quantity.toString(),
-        quantityReceived: item.quantityReceived.toString(),
+        quantityOrdered: item.quantity,
+        quantityReceived: item.quantityReceived,
       });
       return {
         id: item.id,
         name: item.purchaseListItem.name,
         unit: item.purchaseListItem.unit,
-        quantityOrdered: item.quantity.toString(),
-        quantityReceived: item.quantityReceived.toString(),
-        quantityRemaining: String(receipt.quantityRemaining),
+        quantityOrdered: receipt.quantityOrdered.toString(),
+        quantityReceived: receipt.quantityReceived.toString(),
+        quantityRemaining: receipt.quantityRemaining.toString(),
         fullyReceived: receipt.fullyReceived,
       };
     }),
