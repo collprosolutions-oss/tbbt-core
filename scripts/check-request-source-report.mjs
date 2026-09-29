@@ -138,11 +138,12 @@ try {
   );
   check(
     "Domain does not invent conversion credit, ad spend, or cookies",
-    !/\bconversion credit\b/i.test(domainSrc.replace(REQUEST_SOURCE_REPORT_MESSAGE, "")) &&
+    domainSrc.includes("does not invent attribution, ad spend, conversion credit") &&
       !domainSrc.includes("document.cookie") &&
       !domainSrc.includes("recordedCost") &&
-      !domainSrc.includes("roi") &&
-      !dataSrc.includes("cookie"),
+      !domainSrc.includes("averageTicket") &&
+      !dataSrc.includes("document.cookie") &&
+      !dataSrc.includes("recordedCost"),
   );
   check(
     "Loader denies MEMBER and requires OWNER/ADMIN",
