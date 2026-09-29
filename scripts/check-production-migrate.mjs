@@ -1561,6 +1561,33 @@ check(
       localNames.indexOf("20260929010600_job_milestones"),
 );
 
+const ownerEquipmentRegisterMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929010800_owner_equipment_register/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "OWNER equipment register migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"Expense"|UPDATE\s+"MaterialCatalogItem"/i.test(
+    ownerEquipmentRegisterMigration,
+  ) &&
+    ownerEquipmentRegisterMigration.includes('CREATE TABLE IF NOT EXISTS "EquipmentItem"') &&
+    ownerEquipmentRegisterMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "EquipmentMaintenanceEntry"',
+    ) &&
+    ownerEquipmentRegisterMigration.includes("purchaseExpenseId") &&
+    ownerEquipmentRegisterMigration.includes("attemptKey") &&
+    ownerEquipmentRegisterMigration.includes("20260928200000_estimate_line_template_archive") &&
+    !/ALTER TABLE "Expense"/.test(ownerEquipmentRegisterMigration) &&
+    !/ALTER TABLE "MaterialCatalogItem"/.test(ownerEquipmentRegisterMigration) &&
+    localNames.includes("20260929010800_owner_equipment_register") &&
+    !localNames.includes("20260928210000_owner_equipment_register") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010800_owner_equipment_register"),
+);
+
 console.log(
   failed === 0
     ? `\nAll production-migrate checks passed (${passed}).`

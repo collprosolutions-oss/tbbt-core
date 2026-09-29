@@ -318,6 +318,9 @@ model Business {
   payrollRunItems          PayrollRunItem[]
   payrollRunEvents         PayrollRunEvent[]
   expenses                 Expense[]
+  /// Owner-recorded tools and vehicles. Not inventory stock.
+  equipmentItems           EquipmentItem[]
+  equipmentMaintenanceEntries EquipmentMaintenanceEntry[]
   marketingContents        MarketingContent[]
   marketingContentPhotos   MarketingContentPhoto[]
   marketingStudioWeeklyReminders MarketingStudioWeeklyReminder[]
@@ -694,6 +697,8 @@ model Membership {
   publishedIntakeSnapshots        TenantIntakeSnapshot[] @relation("TenantIntakeSnapshotAuthor")
   createdOwnerScenarioAssumptionSets OwnerScenarioAssumptionSet[] @relation("OwnerScenarioAssumptionSetCreator")
   createdEstimateLineTemplates EstimateLineTemplate[] @relation("EstimateLineTemplateCreator")
+  createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
+  createdEquipmentMaintenanceEntries EquipmentMaintenanceEntry[] @relation("EquipmentMaintenanceCreator")
   recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
   completedJobMilestones JobMilestone[] @relation("JobMilestoneCompleter")
   jobMilestoneEvents JobMilestoneEvent[] @relation("JobMilestoneEventActor")
@@ -2559,6 +2564,9 @@ model Expense {
   splits     Expense[]   @relation("ExpenseSplit")
   materialPurchaseItem MaterialPurchaseListItem?
   materialPriceHistory MaterialPriceHistory[]
+  /// Optional durable-equipment purchase reference. One expense can
+  /// back at most one register item. Not inventory or tax treatment.
+  equipmentItem        EquipmentItem?
 
   @@index([businessId])
   @@index([businessId, occurredOn])
@@ -4983,6 +4991,64 @@ model JobCrewVisit {
   @@index([businessId, outcomeStatus])
   @@index([procedureId])
   @@index([outcomeRecordedByMembershipId])
+}
+
+/// Owner-recorded tool or vehicle. Trade-neutral register — not inventory
+/// stock, telemetry, depreciation, tax treatment, or automated reminders.
+/// Due status uses the owner-entered serviceOn date only.
+model EquipmentItem {
+  id                    String    @id @default(cuid())
+  businessId            String
+  /// TOOL | VEHICLE
+  kind                  String
+  name                  String
+  notes                 String    @default("")
+  /// Optional same-business Expense purchase reference. Null means none.
+  /// Never invents cost, depreciation, or tax treatment from this link.
+  purchaseExpenseId     String?   @unique
+  /// Owner-entered service calendar date. Null means none recorded.
+  /// The due list includes this item only when this date is on or before
+  /// today in the business timezone. TBBT never invents the next date.
+  serviceOn             DateTime?
+  createdByMembershipId String?
+  /// Browser/form retry identity. Unique per business. Never authorizes.
+  attemptKey            String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business           Business                      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseExpense    Expense?                      @relation(fields: [purchaseExpenseId], references: [id], onDelete: SetNull)
+  createdBy          Membership?                   @relation("EquipmentItemCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  maintenanceEntries EquipmentMaintenanceEntry[]
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([businessId, serviceOn])
+  @@index([businessId, kind])
+  @@index([createdByMembershipId])
+}
+
+/// Manual owner maintenance log for one EquipmentItem. Historical dates
+/// only — never a reminder engine and never used to invent the next service.
+model EquipmentMaintenanceEntry {
+  id                    String   @id @default(cuid())
+  businessId            String
+  equipmentId           String
+  /// Owner-entered maintenance calendar date.
+  occurredOn            DateTime
+  notes                 String
+  createdByMembershipId String?
+  attemptKey            String
+  createdAt             DateTime @default(now())
+
+  business  Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  equipment EquipmentItem @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  createdBy Membership?   @relation("EquipmentMaintenanceCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, attemptKey])
+  @@index([businessId])
+  @@index([equipmentId, occurredOn])
+  @@index([createdByMembershipId])
 }
 
 /// Tenant-scoped official-source regulatory note. Read-only application

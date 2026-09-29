@@ -680,6 +680,17 @@ try {
     requireBusinessCapability(adminA, CAPABILITIES.MANAGE_BUSINESS_PROTECTION);
   });
 
+  console.log("\nTEST 16c — Equipment register is OWNER/ADMIN-read; MEMBER denied");
+  check("OWNER has MANAGE_EQUIPMENT", roleHasCapability("OWNER", CAPABILITIES.MANAGE_EQUIPMENT));
+  check("ADMIN has MANAGE_EQUIPMENT", roleHasCapability("ADMIN", CAPABILITIES.MANAGE_EQUIPMENT));
+  check("MEMBER does not have MANAGE_EQUIPMENT", !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_EQUIPMENT));
+  await expectForbidden("MEMBER cannot pass the Equipment capability gate", () => {
+    requireBusinessCapability(memberA, CAPABILITIES.MANAGE_EQUIPMENT);
+  });
+  await expectAllowed("ADMIN can pass the Equipment capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.MANAGE_EQUIPMENT);
+  });
+
   console.log("\nTEST 17 — Generic AI writing assist is OWNER/ADMIN-only");
   check("OWNER has USE_AI_ASSIST", roleHasCapability("OWNER", CAPABILITIES.USE_AI_ASSIST));
   check("ADMIN has USE_AI_ASSIST", roleHasCapability("ADMIN", CAPABILITIES.USE_AI_ASSIST));
