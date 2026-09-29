@@ -43,6 +43,7 @@ const {
   WebsitePublishError,
   WEBSITE_PUBLISH_HISTORY_LIMIT,
   WEBSITE_PUBLISH_RESTORE_CONFIRM_REQUIRED,
+  WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED,
   WEBSITE_PUBLISH_RESTORE_STALE,
   listOwnedWebsitePublishHistory,
   listWebsitePublishes,
@@ -52,6 +53,8 @@ const {
   publishWebsite,
   restoreOwnedWebsitePublish,
   restoreWebsiteFromForm,
+  rollbackWebsite,
+  websiteRestoreResultMessage,
 } = await import("@/lib/website-engine");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -62,6 +65,14 @@ if (!baseUrl) {
 
 const testDbName = "tbbt_website_publish_restore_test";
 const parsedUrl = new URL(baseUrl);
+const host = parsedUrl.hostname;
+const allowRemoteTestDb = process.env.TBBT_ALLOW_REMOTE_TEST_DB === "1";
+if (!allowRemoteTestDb && host !== "localhost" && host !== "127.0.0.1") {
+  console.error(
+    `Refusing prisma db push --accept-data-loss against host ${host}. Use localhost/127.0.0.1 or set TBBT_ALLOW_REMOTE_TEST_DB=1.`,
+  );
+  process.exit(1);
+}
 parsedUrl.pathname = `/${testDbName}`;
 const testUrl = parsedUrl.toString();
 process.env.DATABASE_URL = testUrl;
@@ -107,6 +118,43 @@ function makeAccess(businessId, role, membershipId) {
       return assertBusinessRecord(record, businessId);
     },
   };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function runOrderedPointerWrites(first, second) {
+  const firstAtHold = deferred();
+  const secondAtHold = deferred();
+  const releaseFirst = deferred();
+  const releaseSecond = deferred();
+  const firstRun = first(async () => {
+    firstAtHold.resolve();
+    await releaseFirst.promise;
+  });
+  const secondRun = second(async () => {
+    secondAtHold.resolve();
+    await releaseSecond.promise;
+  });
+  await Promise.all([firstAtHold.promise, secondAtHold.promise]);
+  releaseFirst.resolve();
+  const firstResult = await firstRun.then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+  releaseSecond.resolve();
+  const secondResult = await secondRun.then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+  return { firstResult, secondResult };
 }
 
 const DANGEROUS = /\beval\s*\(|new\s+Function\b|Function\s*\(|\$executeRawUnsafe|\$executeRaw\b/;
@@ -221,13 +269,26 @@ const restoreExport = publishSrc.slice(
 );
 
 check(
-  "History list is OWNER-gated and bounded",
+  "OWNER-only restore; ADMIN sees the same bounded read-only history",
   WEBSITE_PUBLISH_HISTORY_LIMIT === 20 &&
     publishSrc.includes("take: WEBSITE_PUBLISH_HISTORY_LIMIT") &&
     publishSrc.includes("listOwnedWebsitePublishHistory") &&
-    publishSrc.includes('requireBusinessRole(access, "OWNER")') &&
+    publishSrc.includes("Bounded read-only history for OWNER and ADMIN") &&
     editorSrc.includes("listOwnedWebsitePublishHistory") &&
-    actionSrc.includes("listOwnedWebsitePublishHistory"),
+    editorSrc.includes("listWebsitePublishes") &&
+    editorSrc.includes("cannot restore") &&
+    actionSrc.includes("listOwnedWebsitePublishHistory") &&
+    panelSrc.includes("Only the owner can restore"),
+);
+check(
+  "Rollback and restore both require OWNER",
+  publishSrc.includes("export async function rollbackWebsite") &&
+    publishSrc.slice(
+      publishSrc.indexOf("export async function rollbackWebsite"),
+      publishSrc.indexOf("export async function websiteHasUnpublishedChanges"),
+    ).includes("requireOwner(access)") &&
+    actionSrc.includes('requireBusinessRole(operating.access, "OWNER")') &&
+    !actionSrc.includes("Captured intake snapshots were restored."),
 );
 check(
   "Restore moves website and captured intake pointers only",
@@ -252,7 +313,10 @@ check(
     !actionSrc.includes('readString(formData, "businessId")') &&
     panelSrc.includes("Restore this version as current") &&
     panelSrc.includes('name="expectedCurrentId"') &&
-    panelSrc.includes('name="confirmed"'),
+    panelSrc.includes('name="confirmed"') &&
+    panelSrc.includes("Showing the newest {versions.length}") &&
+    actionSrc.includes("websiteRestoreResultMessage") &&
+    actionSrc.includes("result.restoredIntakeCount"),
 );
 check(
   "Public intake still submits the displayed snapshot after a website restore",
@@ -269,6 +333,19 @@ check(
 check(
   "No eval, Function, or raw SQL in the dedicated files",
   featureFiles.every((file) => !DANGEROUS.test(read(file))),
+);
+check(
+  "Dedicated test DB push is host-guarded",
+  read("scripts/check-website-publish-restore.mjs").includes("TBBT_ALLOW_REMOTE_TEST_DB") &&
+    read("scripts/check-website-publish-restore.mjs").includes('host !== "127.0.0.1"') &&
+    read("scripts/check-website-publish-restore.mjs").includes("--accept-data-loss"),
+);
+check(
+  "Restore copy distinguishes captured intake from legacy publishes",
+  read("src/lib/website-engine/snapshot.ts").includes("WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED") &&
+    read("src/lib/website-engine/snapshot.ts").includes("predates captured intake") &&
+    read("src/lib/website-engine/snapshot.ts").includes("websiteRestoreResultMessage") &&
+    read("src/lib/website-engine/snapshot.ts").includes("leaves intake pointers unchanged"),
 );
 
 try {
@@ -454,7 +531,14 @@ try {
     (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
   );
   const historyB = await listOwnedWebsitePublishHistory(prisma, ownerB);
+  const adminHistory = await listWebsitePublishes(prisma, adminA);
   check("OWNER B history does not include OWNER A publishes", historyB.versions.length === 0);
+  check(
+    "ADMIN can read the same bounded history but cannot restore",
+    adminHistory.historyLimit === WEBSITE_PUBLISH_HISTORY_LIMIT &&
+      adminHistory.currentId === websiteV2.id &&
+      adminHistory.versions.map((row) => row.id).join(",") === `${websiteV2.id},${websiteV1.id}`,
+  );
 
   await expectRejects(
     "ADMIN cannot restore a website publish",
@@ -463,6 +547,15 @@ try {
         publishId: websiteV1.id,
         confirmed: true,
         expectedCurrentId: websiteV2.id,
+      }),
+    (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
+  );
+  await expectRejects(
+    "ADMIN cannot roll back or copy a prior website version",
+    () =>
+      rollbackWebsite(prisma, adminA, {
+        publishId: websiteV1.id,
+        idempotencyKey: "admin-rollback",
       }),
     (error) => error instanceof ForbiddenError || error.name === "ForbiddenError",
   );
@@ -547,24 +640,48 @@ try {
   });
   check("Opened V2 form can be prepared before restore", openedV2.ok === true);
 
-  const [concurrentOne, concurrentTwo] = await Promise.allSettled([
-    restoreOwnedWebsitePublish(prisma, ownerA, {
+  async function restoreV1Held(beforePointerWrite) {
+    return restoreOwnedWebsitePublish(prisma, ownerA, {
       publishId: websiteV1.id,
       confirmed: true,
       expectedCurrentId: websiteV2.id,
-    }),
-    restoreOwnedWebsitePublish(prisma, ownerA, {
-      publishId: websiteV1.id,
-      confirmed: true,
-      expectedCurrentId: websiteV2.id,
-    }),
-  ]);
-  const concurrentOk = [concurrentOne, concurrentTwo].filter((row) => row.status === "fulfilled");
-  const concurrentStale = [concurrentOne, concurrentTwo].filter(
-    (row) =>
-      row.status === "rejected" &&
-      row.reason instanceof WebsitePublishError &&
-      row.reason.message === WEBSITE_PUBLISH_RESTORE_STALE,
+      beforePointerWrite,
+    });
+  }
+  const firstOrder = await runOrderedPointerWrites(restoreV1Held, restoreV1Held);
+  check(
+    "Restore-vs-restore order A-then-B: first wins and second is stale",
+    firstOrder.firstResult.status === "fulfilled" &&
+      firstOrder.firstResult.value.restoredIntakeCount === 1 &&
+      firstOrder.secondResult.status === "rejected" &&
+      firstOrder.secondResult.reason instanceof WebsitePublishError &&
+      firstOrder.secondResult.reason.message === WEBSITE_PUBLISH_RESTORE_STALE,
+  );
+  const afterFirstOrder = await prisma.business.findFirst({
+    where: { id: cleanA.id },
+    select: { publishedWebsiteId: true },
+  });
+  check("First ordering leaves the website on v1", afterFirstOrder?.publishedWebsiteId === websiteV1.id);
+
+  const resetToV2 = await restoreOwnedWebsitePublish(prisma, ownerA, {
+    publishId: websiteV2.id,
+    confirmed: true,
+    expectedCurrentId: websiteV1.id,
+  });
+  check(
+    "Reset to v2 restores captured intake v2",
+    resetToV2.restoredIntakeCount === 1 &&
+      websiteRestoreResultMessage(resetToV2.versionNumber, resetToV2.restoredIntakeCount).includes(
+        "Restored captured intake for 1 trade",
+      ),
+  );
+  const secondOrder = await runOrderedPointerWrites(restoreV1Held, restoreV1Held);
+  check(
+    "Restore-vs-restore order B-then-A: first wins and second is stale",
+    secondOrder.firstResult.status === "fulfilled" &&
+      secondOrder.secondResult.status === "rejected" &&
+      secondOrder.secondResult.reason instanceof WebsitePublishError &&
+      secondOrder.secondResult.reason.message === WEBSITE_PUBLISH_RESTORE_STALE,
   );
   const afterConcurrent = await prisma.business.findFirst({
     where: { id: cleanA.id },
@@ -578,12 +695,11 @@ try {
     where: { businessId: cleanA.id },
   });
   check(
-    "Exactly one concurrent restore succeeds; the other is stale",
-    concurrentOk.length === 1 &&
-      concurrentStale.length === 1 &&
-      afterConcurrent?.publishedWebsiteId === websiteV1.id &&
+    "Both restore orderings leave website v1, captured intake v1, and no copied row",
+    afterConcurrent?.publishedWebsiteId === websiteV1.id &&
       intakeAfterConcurrent?.publishedIntakeSnapshotId === intakeV1.id &&
-      publishCountAfterConcurrent === 2,
+      publishCountAfterConcurrent === 2 &&
+      websiteRestoreResultMessage(websiteV1.versionNumber, 1).includes("Restored captured intake"),
   );
 
   const rereadWebsiteV1 = await prisma.websitePublish.findUnique({ where: { id: websiteV1.id } });
@@ -671,6 +787,96 @@ try {
       !newV1Schema.fields.some((field) => field.key === "oven_notes") &&
       parseIntakeAnswers(newV1AfterRow?.intakeAnswersJson).fridge_notes === "Restored captured V1" &&
       parseIntakeAnswers(newV1AfterRow?.intakeAnswersJson).oven_notes == null,
+  );
+
+  const resetBeforePublishRace = await restoreOwnedWebsitePublish(prisma, ownerA, {
+    publishId: websiteV2.id,
+    confirmed: true,
+    expectedCurrentId: websiteV1.id,
+  });
+  const intakeBeforePublishRace = await prisma.businessTrade.findFirst({
+    where: { businessId: cleanA.id, tradeCode: "CLEANING" },
+    select: { publishedIntakeSnapshotId: true },
+  });
+  const publishRace = await runOrderedPointerWrites(
+    (beforePointerWrite) =>
+      publishWebsite(prisma, ownerA, {
+        idempotencyKey: `race-pub-${randomUUID().slice(0, 8)}`,
+        beforePointerWrite,
+      }),
+    (beforePointerWrite) =>
+      restoreOwnedWebsitePublish(prisma, ownerA, {
+        publishId: websiteV1.id,
+        confirmed: true,
+        expectedCurrentId: websiteV2.id,
+        beforePointerWrite,
+      }),
+  );
+  const afterPublishRace = await prisma.business.findFirst({
+    where: { id: cleanA.id },
+    select: { publishedWebsiteId: true },
+  });
+  const intakeAfterPublishRace = await prisma.businessTrade.findFirst({
+    where: { businessId: cleanA.id, tradeCode: "CLEANING" },
+    select: { publishedIntakeSnapshotId: true },
+  });
+  check(
+    "Publish-first race makes restore stale and leaves intake pointers unchanged",
+    resetBeforePublishRace.restoredIntakeCount === 1 &&
+      intakeBeforePublishRace?.publishedIntakeSnapshotId === intakeV2.id &&
+      publishRace.firstResult.status === "fulfilled" &&
+      publishRace.firstResult.value.versionNumber === 3 &&
+      publishRace.secondResult.status === "rejected" &&
+      publishRace.secondResult.reason instanceof WebsitePublishError &&
+      publishRace.secondResult.reason.message === WEBSITE_PUBLISH_RESTORE_STALE &&
+      afterPublishRace?.publishedWebsiteId === publishRace.firstResult.value.id &&
+      afterPublishRace?.publishedWebsiteId !== websiteV2.id &&
+      intakeAfterPublishRace?.publishedIntakeSnapshotId === intakeV2.id,
+  );
+
+  const parsedLegacySource = parseWebsiteSnapshot(websiteV1Json);
+  const legacySnapshot = {
+    ...parsedLegacySource,
+    trades: parsedLegacySource.trades.map((trade) => {
+      const { tenantIntake: _tenantIntake, tenantIntakeCaptured: _captured, ...rest } = trade;
+      return rest;
+    }),
+  };
+  const legacy = await prisma.websitePublish.create({
+    data: {
+      businessId: cleanA.id,
+      versionNumber: 80,
+      schemaVersion: 1,
+      snapshotJson: JSON.stringify(legacySnapshot),
+      summary: "legacy uncaptured",
+    },
+  });
+  const parsedLegacy = parseWebsiteSnapshot(legacy.snapshotJson);
+  const legacyRestore = await restoreOwnedWebsitePublish(prisma, ownerA, {
+    publishId: legacy.id,
+    confirmed: true,
+    expectedCurrentId: afterPublishRace.publishedWebsiteId,
+  });
+  const intakeAfterLegacy = await prisma.businessTrade.findFirst({
+    where: { businessId: cleanA.id, tradeCode: "CLEANING" },
+    select: { publishedIntakeSnapshotId: true },
+  });
+  const websiteAfterLegacy = await prisma.business.findFirst({
+    where: { id: cleanA.id },
+    select: { publishedWebsiteId: true },
+  });
+  const legacyMessage = websiteRestoreResultMessage(
+    legacyRestore.versionNumber,
+    legacyRestore.restoredIntakeCount,
+  );
+  check(
+    "Legacy uncaptured restore reports unchanged intake and leaves the pointer",
+    parsedLegacy.trades.every((trade) => trade.tenantIntakeCaptured !== true) &&
+      legacyRestore.restoredIntakeCount === 0 &&
+      legacyMessage.includes(WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED) &&
+      !legacyMessage.includes("Captured intake snapshots were restored.") &&
+      intakeAfterLegacy?.publishedIntakeSnapshotId === intakeV2.id &&
+      websiteAfterLegacy?.publishedWebsiteId === legacy.id,
   );
 
   const missingForm = new FormData();

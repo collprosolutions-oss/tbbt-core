@@ -4,8 +4,8 @@
  * Publish inserts an immutable WebsitePublish row, then moves
  * Business.publishedWebsiteId in the same transaction. Rollback copies
  * a prior payload into a new row. OWNER restore moves the current
- * pointer back to an existing row and restores the exact captured
- * TenantIntakeSnapshot ids. WebsitePublish, TenantIntakeSnapshot, and
+ * pointer back to an existing row and restores captured
+ * TenantIntakeSnapshot ids when that publish recorded them. WebsitePublish, TenantIntakeSnapshot, and
  * ServiceRequest rows are never rewritten. Already-open hire forms still
  * submit the snapshot id they displayed.
  */
@@ -50,11 +50,16 @@ function readOwnedPublishId(value: unknown, message: string) {
   return id;
 }
 
+async function waitForPointerWriteHold(hold?: () => Promise<void>) {
+  if (hold) await hold();
+}
+
 async function restoreCapturedIntakePointers(
   tx: Prisma.TransactionClient,
   access: BusinessAccess,
   snapshot: PublishedWebsiteSnapshot,
 ) {
+  let restoredIntakeCount = 0;
   for (const trade of snapshot.trades) {
     if (trade.tenantIntakeCaptured !== true) continue;
     if (!isConfiguredTrade(trade.code)) {
@@ -72,6 +77,7 @@ async function restoreCapturedIntakePointers(
           `Could not restore the captured intake snapshot for ${trade.label || trade.code}.`,
         );
       }
+      restoredIntakeCount += 1;
       continue;
     }
     if (!trade.tenantIntake.snapshotId || trade.tenantIntake.versionNumber < 1) {
@@ -110,7 +116,9 @@ async function restoreCapturedIntakePointers(
         `Could not restore the captured intake snapshot for ${trade.label || trade.code}.`,
       );
     }
+    restoredIntakeCount += 1;
   }
+  return restoredIntakeCount;
 }
 
 async function loadWebsitePublishHistoryRows(db: Db, access: BusinessAccess) {
@@ -147,7 +155,7 @@ async function loadWebsitePublishHistoryRows(db: Db, access: BusinessAccess) {
 export async function publishWebsite(
   db: Db,
   access: BusinessAccess,
-  input: { idempotencyKey?: string | null } = {},
+  input: { idempotencyKey?: string | null; beforePointerWrite?: () => Promise<void> } = {},
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
@@ -205,6 +213,7 @@ export async function publishWebsite(
           idempotencyKey: key,
         },
       });
+      await waitForPointerWriteHold(input.beforePointerWrite);
       const updated = await tx.business.updateMany({
         where: { id: access.businessId },
         data: { publishedWebsiteId: created.id },
@@ -213,7 +222,7 @@ export async function publishWebsite(
         throw new WebsitePublishError("Could not update the current published website.");
       }
       return created;
-    });
+    }, { timeout: 15000 });
 
   try {
     return await write();
@@ -236,7 +245,7 @@ export async function rollbackWebsite(
   access: BusinessAccess,
   input: { publishId: string; idempotencyKey?: string | null },
 ) {
-  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  requireOwner(access);
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
 
   const source = access.assertOwned(
@@ -315,14 +324,15 @@ export async function websiteHasUnpublishedChanges(db: Db, access: BusinessAcces
     serializeWebsiteSnapshot(draft);
 }
 
+/** Bounded read-only history for OWNER and ADMIN. Restore stays OWNER-only. */
 export async function listWebsitePublishes(db: Db, access: BusinessAccess) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   return loadWebsitePublishHistoryRows(db, access);
 }
 
 /**
- * OWNER-only newest-first website publish history. Bounded so Settings
- * never dumps the full table. Older rows remain restorable by id.
+ * OWNER restore history. ADMIN with MANAGE_SETTINGS can still read the
+ * same bounded list through listWebsitePublishes. Restore stays OWNER-only.
  */
 export async function listOwnedWebsitePublishHistory(db: Db, access: BusinessAccess) {
   requireOwner(access);
@@ -331,7 +341,8 @@ export async function listOwnedWebsitePublishHistory(db: Db, access: BusinessAcc
 
 /**
  * Move Business.publishedWebsiteId to an older owned WebsitePublish row
- * and restore each trade’s captured TenantIntakeSnapshot pointer.
+ * and restore each captured TenantIntakeSnapshot pointer. Trades that
+ * were not captured at publish are skipped.
  * Never updates WebsitePublish, TenantIntakeSnapshot, or ServiceRequest
  * rows. expectedCurrentId is the optimistic lock: a later publish or
  * restore makes this attempt stale.
@@ -339,7 +350,12 @@ export async function listOwnedWebsitePublishHistory(db: Db, access: BusinessAcc
 export async function restoreOwnedWebsitePublish(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { publishId: string; confirmed: boolean; expectedCurrentId: string },
+  input: {
+    publishId: string;
+    confirmed: boolean;
+    expectedCurrentId: string;
+    beforePointerWrite?: () => Promise<void>;
+  },
 ) {
   requireOwner(access);
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.WEBSITE_BUILDER);
@@ -363,7 +379,12 @@ export async function restoreOwnedWebsitePublish(
     if (!validated.ok) {
       throw new WebsitePublishError(validated.errors[0] ?? "That published website cannot be restored.");
     }
-    await restoreCapturedIntakePointers(tx, access, validated.snapshot);
+    await waitForPointerWriteHold(input.beforePointerWrite);
+    const restoredIntakeCount = await restoreCapturedIntakePointers(
+      tx,
+      access,
+      validated.snapshot,
+    );
     const updated = await tx.business.updateMany({
       where: { id: access.businessId, publishedWebsiteId: expectedCurrentId },
       data: { publishedWebsiteId: source.id },
@@ -371,6 +392,6 @@ export async function restoreOwnedWebsitePublish(
     if (updated.count !== 1) {
       throw new WebsitePublishError(WEBSITE_PUBLISH_RESTORE_STALE);
     }
-    return source;
-  });
+    return { ...source, restoredIntakeCount };
+  }, { timeout: 15000 });
 }

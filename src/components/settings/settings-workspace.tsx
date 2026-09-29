@@ -273,7 +273,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard
         title="Website Publish"
-        description="Draft website copy and selections stay private until you publish. Publishing freezes a snapshot and the intake versions captured at that moment. The public site does not update from later edits until you publish again. OWNER can restore a prior published website, including those captured intake versions."
+        description="Draft website copy and selections stay private until you publish. Publishing freezes a snapshot and any intake versions captured at that moment. The public site does not update from later edits until you publish again. OWNER can restore a prior published website. Captured intake versions are restored only when that publish recorded them. ADMIN can read history but cannot restore."
       >
         {websitePublish ? (
           <WebsitePublishPanel

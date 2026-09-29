@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccessForForm } from "@/lib/saas-billing/enforce";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { prisma } from "@/lib/prisma";
 import {
   addWebsiteGalleryItem,
@@ -11,6 +11,7 @@ import {
   saveWebsiteLocalPageDraft,
   saveWebsiteSeoDraft,
   setReviewWebsiteSelected,
+  websiteRestoreResultMessage,
   WebsitePublishError,
 } from "@/lib/website-engine";
 import {
@@ -59,7 +60,7 @@ export async function rollbackWebsiteAction(
 ): Promise<WebsiteEngineActionState> {
   const operating = await requireOperatingBusinessAccessForForm();
   if (!operating.ok) return { error: operating.error };
-  requireBusinessCapability(operating.access, CAPABILITIES.MANAGE_SETTINGS);
+  requireBusinessRole(operating.access, "OWNER");
   try {
     const result = await rollbackWebsiteFromForm(prisma, operating.access, formData);
     revalidatePath("/settings");
@@ -81,7 +82,7 @@ export async function restoreWebsiteAction(
     revalidatePath("/settings");
     revalidatePath(`/hire/${operating.access.workspace.business.slug}`);
     return {
-      message: `Restored website version ${result.versionNumber} as the current public site. Captured intake snapshots were restored. Historical requests stay unchanged.`,
+      message: websiteRestoreResultMessage(result.versionNumber, result.restoredIntakeCount),
     };
   } catch (error) {
     return { error: publishError(error, "Could not restore that website version.") };

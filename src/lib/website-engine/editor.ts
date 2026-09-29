@@ -19,7 +19,7 @@ export async function loadWebsitePublishPanelData(db: Db, access: BusinessAccess
     await Promise.all([
       access.workspace.role === "OWNER"
         ? listOwnedWebsitePublishHistory(db, access)
-        : listWebsitePublishes(db, access),
+        : listWebsitePublishes(db, access), // ADMIN reads the same bounded history; cannot restore
       websiteHasUnpublishedChanges(db, access),
       db.review.findMany({
         where: { businessId: access.businessId },

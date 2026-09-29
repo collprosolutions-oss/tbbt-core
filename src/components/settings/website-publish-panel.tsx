@@ -334,8 +334,10 @@ export function WebsitePublishPanel({
         </ul>
         {versions.length > 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            Showing the newest {historyLimit} published website versions. Restore moves the current
-            public site and the exact captured intake versions. Historical requests stay unchanged.
+            Showing the newest {versions.length} published website versions
+            {versions.length === historyLimit ? ` (capped at ${historyLimit})` : ""}. Restore moves
+            the current public site. Captured intake versions are restored only when that publish
+            recorded them. Historical requests stay unchanged.
           </p>
         ) : null}
         {canEdit && !canRestore ? (

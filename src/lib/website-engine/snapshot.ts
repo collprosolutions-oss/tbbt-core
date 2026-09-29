@@ -17,7 +17,20 @@ export const WEBSITE_PUBLISH_RESTORE_STALE =
   "The current published website changed. Reload history and restore again.";
 
 export const WEBSITE_PUBLISH_RESTORE_DESCRIPTION =
-  "Published website versions are immutable. Restoring an older version moves this business’s current public website pointer and restores each trade’s exact captured intake snapshot. Website snapshot rows, intake snapshot rows, and historical requests stay unchanged. An already-open hire form still submits the version it displayed.";
+  "Published website versions are immutable. Restoring an older version moves this business’s current public website pointer. Trades that captured an intake snapshot at publish have those exact versions restored. A version that predates captured intake leaves intake pointers unchanged. Website snapshot rows, intake snapshot rows, and historical requests stay unchanged. An already-open hire form still submits the version it displayed.";
+
+export const WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED =
+  "This version predates captured intake; intake versions were not changed.";
+
+export function websiteRestoreResultMessage(versionNumber: number, restoredIntakeCount: number) {
+  const intake =
+    restoredIntakeCount > 0
+      ? ` Restored captured intake for ${restoredIntakeCount} trade${
+          restoredIntakeCount === 1 ? "" : "s"
+        }.`
+      : ` ${WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED}`;
+  return `Restored website version ${versionNumber} as the current public site.${intake} Historical requests stay unchanged.`;
+}
 
 export const WEBSITE_SNAPSHOT_SECRET_KEYS = [
   "password",
