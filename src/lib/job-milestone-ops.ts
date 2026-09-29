@@ -112,7 +112,8 @@ export function jobMilestoneErrorMessage(error: unknown, fallback: string) {
   }
   if (
     error instanceof Error &&
-    /milestone|work order is not in this workspace/i.test(error.message)
+    (error.message === MILESTONE_NOT_FOUND_MESSAGE ||
+      error.message === JOB_NOT_FOUND_MESSAGE)
   ) {
     return error.message;
   }
