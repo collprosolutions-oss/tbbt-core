@@ -39,6 +39,7 @@ const {
   ENTRY_CHANGED_SINCE_REQUEST_ERROR,
   requestTimeCorrection,
   TimeCardError,
+  workerTimesheetWeekLockKey,
 } = await import("@/lib/time-card-ops");
 const {
   authorizePayrollRun,
@@ -137,30 +138,52 @@ function rawSqlText(args) {
   return String(args);
 }
 
-function holdOnAdvisoryLock(client, { hold, onReached }) {
+const NY = "America/New_York";
+
+function requestCorrection(db, access, input) {
+  return requestTimeCorrection(db, access, { ...input, timeZone: NY });
+}
+
+function decideCorrection(db, access, input) {
+  return decideTimeCorrectionRequest(db, access, { ...input, timeZone: NY });
+}
+
+function approveWeek(db, access, input) {
+  return approveTimesheetWeek(db, access, { ...input, timeZone: NY });
+}
+
+function holdAfterAdvisoryLock(client, { hold, onLocked }) {
   const intercept = async ({ args, query }) => {
+    const result = await query(args);
     if (/pg_advisory_xact_lock/i.test(rawSqlText(args))) {
-      onReached();
+      onLocked();
       await hold;
     }
-    return query(args);
+    return result;
   };
   return client.$extends({
     query: {
       $executeRaw: intercept,
       $executeRawUnsafe: intercept,
-      async $allOperations({ operation, args, query }) {
-        if (
-          /executeRaw/i.test(String(operation)) &&
-          /pg_advisory_xact_lock/i.test(rawSqlText(args))
-        ) {
-          onReached();
-          await hold;
-        }
-        return query(args);
-      },
+      $allOperations: intercept,
     },
   });
+}
+
+async function waitUntilAdvisoryLockWaiter(client, { timeoutMs = 4000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await client.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND wait_event = 'advisory'
+    `;
+    if (rows.length > 0) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("second transaction never waited on the advisory lock");
 }
 
 try {
@@ -193,6 +216,18 @@ try {
 
   const opsSrc = readFileSync(new URL("../src/lib/time-card-ops.ts", import.meta.url), "utf8");
   const actionSrc = readFileSync(new URL("../src/app/actions/time-cards.ts", import.meta.url), "utf8");
+  const requestActionSrc = actionSrc.slice(
+    actionSrc.indexOf("export async function requestTimeCorrectionAction"),
+    actionSrc.indexOf("export async function decideTimeCorrectionRequestAction"),
+  );
+  const decideActionSrc = actionSrc.slice(
+    actionSrc.indexOf("export async function decideTimeCorrectionRequestAction"),
+    actionSrc.indexOf("export async function updateMembershipWageAction"),
+  );
+  const approveActionSrc = actionSrc.slice(
+    actionSrc.indexOf("export async function approveTimesheetWeekAction"),
+    actionSrc.indexOf("export async function reopenTimesheetWeekAction"),
+  );
   const fieldSrc = readFileSync(
     new URL("../src/components/field/field-time-correction-requests.tsx", import.meta.url),
     "utf8",
@@ -264,8 +299,23 @@ try {
       opsSrc.includes("pg_advisory_xact_lock") &&
       opsSrc.includes("ENTRY_CHANGED_SINCE_REQUEST_ERROR") &&
       opsSrc.includes("entryTimesMatchRequest") &&
-      /export async function decideTimeCorrectionRequest[\s\S]*lockWorkerTimesheetWeeks/.test(opsSrc) &&
-      /export async function approveTimesheetWeek[\s\S]*lockWorkerTimesheetWeek/.test(opsSrc),
+      /async function lockWorkerTimesheetWeeks[\s\S]*weekRange\(value, timeZone\)/.test(opsSrc) &&
+      /async function loadOpenWeek[\s\S]*weekRange\(at, timeZone\)/.test(opsSrc) &&
+      /export async function decideTimeCorrectionRequest[\s\S]*lockWorkerTimesheetWeeks[\s\S]*originalEndedAt[\s\S]*proposedEndedAt/.test(
+        opsSrc,
+      ) &&
+      /export async function approveTimesheetWeek[\s\S]*weekRange\(input\.weekStartedAt, input\.timeZone\)/.test(
+        opsSrc,
+      ),
+  );
+  check(
+    "Request and decide actions pass the business time zone",
+    requestActionSrc.includes("resolveBusinessTimeZone") &&
+      requestActionSrc.includes("timeZone") &&
+      decideActionSrc.includes("resolveBusinessTimeZone") &&
+      decideActionSrc.includes("timeZone") &&
+      approveActionSrc.includes("resolveBusinessTimeZone") &&
+      approveActionSrc.includes("timeZone"),
   );
   check(
     "Migration is additive, uniquely pending, and uses 20260929010100",
@@ -385,7 +435,7 @@ try {
   console.log("\nTEST — Worker scoping: own recorded time only");
   const proposedStart = hoursAgo(8.5);
   const proposedEnd = hoursAgo(6.5);
-  const requested = await requestTimeCorrection(prisma, memberA, {
+  const requested = await requestCorrection(prisma, memberA, {
     timeEntryId: memberEntry.id,
     reason: "Forgot I started earlier",
     proposedStartedAt: proposedStart,
@@ -410,7 +460,7 @@ try {
   );
   await expectError(
     "Worker cannot request a correction on another worker's entry",
-    () => requestTimeCorrection(prisma, memberA, {
+    () => requestCorrection(prisma, memberA, {
       timeEntryId: helperEntry.id,
       reason: "not mine",
       proposedStartedAt: hoursAgo(5.5),
@@ -422,7 +472,7 @@ try {
   console.log("\nTEST — Duplicate pending request is refused");
   await expectError(
     "Second pending request on the same entry is refused",
-    () => requestTimeCorrection(prisma, memberA, {
+    () => requestCorrection(prisma, memberA, {
       timeEntryId: memberEntry.id,
       reason: "duplicate",
       proposedStartedAt: hoursAgo(9),
@@ -440,7 +490,7 @@ try {
   }
   await expectError(
     "ADMIN cannot accept a worker correction",
-    () => decideTimeCorrectionRequest(prisma, adminA, {
+    () => decideCorrection(prisma, adminA, {
       requestId: requested.request.id,
       decision: "ACCEPTED",
     }),
@@ -448,7 +498,7 @@ try {
   );
   await expectError(
     "MEMBER cannot decide their own request",
-    () => decideTimeCorrectionRequest(prisma, memberA, {
+    () => decideCorrection(prisma, memberA, {
       requestId: requested.request.id,
       decision: "DECLINED",
     }),
@@ -475,7 +525,7 @@ try {
   check("Tenant B cannot load tenant A's request by id + businessId", visibleToB == null);
   await expectError(
     "Tenant B worker cannot request on tenant A's entry",
-    () => requestTimeCorrection(prisma, memberB, {
+    () => requestCorrection(prisma, memberB, {
       timeEntryId: memberEntry.id,
       reason: "cross tenant",
       proposedStartedAt: hoursAgo(9),
@@ -485,7 +535,7 @@ try {
   );
   await expectError(
     "Tenant B owner cannot decide tenant A's request",
-    () => decideTimeCorrectionRequest(prisma, ownerB, {
+    () => decideCorrection(prisma, ownerB, {
       requestId: requested.request.id,
       decision: "ACCEPTED",
     }),
@@ -493,7 +543,7 @@ try {
   );
 
   console.log("\nTEST — OWNER accept applies proposed times and keeps history");
-  const accepted = await decideTimeCorrectionRequest(prisma, ownerA, {
+  const accepted = await decideCorrection(prisma, ownerA, {
     requestId: requested.request.id,
     decision: "ACCEPTED",
     reason: "Drive started earlier, approved",
@@ -530,7 +580,7 @@ try {
   console.log("\nTEST — Duplicate decisions are refused");
   await expectError(
     "Second accept is refused",
-    () => decideTimeCorrectionRequest(prisma, ownerA, {
+    () => decideCorrection(prisma, ownerA, {
       requestId: requested.request.id,
       decision: "ACCEPTED",
     }),
@@ -538,7 +588,7 @@ try {
   );
   await expectError(
     "Decline after accept is refused",
-    () => decideTimeCorrectionRequest(prisma, ownerA, {
+    () => decideCorrection(prisma, ownerA, {
       requestId: requested.request.id,
       decision: "DECLINED",
     }),
@@ -557,13 +607,13 @@ try {
     endedAt: hoursAgo(3),
     note: "Keep this clock",
   });
-  const declineRequest = await requestTimeCorrection(prisma, helperA, {
+  const declineRequest = await requestCorrection(prisma, helperA, {
     timeEntryId: declineSource.id,
     reason: "I think this was longer",
     proposedStartedAt: hoursAgo(3.75),
     proposedEndedAt: hoursAgo(2.75),
   });
-  const declined = await decideTimeCorrectionRequest(prisma, ownerA, {
+  const declined = await decideCorrection(prisma, ownerA, {
     requestId: declineRequest.request.id,
     decision: "DECLINED",
     reason: "Travel already looks right",
@@ -592,7 +642,7 @@ try {
     endedAt: hoursAgo(15),
     note: "About to be edited",
   });
-  const staleRequest = await requestTimeCorrection(prisma, memberA, {
+  const staleRequest = await requestCorrection(prisma, memberA, {
     timeEntryId: staleEntry.id,
     reason: "Need a later stop",
     proposedStartedAt: hoursAgo(16),
@@ -606,7 +656,7 @@ try {
   });
   await expectError(
     "Accept refuses after correctTimeEntry changed the original times",
-    () => decideTimeCorrectionRequest(prisma, ownerA, {
+    () => decideCorrection(prisma, ownerA, {
       requestId: staleRequest.request.id,
       decision: "ACCEPTED",
     }),
@@ -635,13 +685,13 @@ try {
     note: "One pending only",
   });
   const [dupLeft, dupRight] = await Promise.allSettled([
-    requestTimeCorrection(prisma, memberA, {
+    requestCorrection(prisma, memberA, {
       timeEntryId: duplicateEntry.id,
       reason: "First concurrent request",
       proposedStartedAt: hoursAgo(18.25),
       proposedEndedAt: hoursAgo(16.75),
     }),
-    requestTimeCorrection(prisma, memberA, {
+    requestCorrection(prisma, memberA, {
       timeEntryId: duplicateEntry.id,
       reason: "Second concurrent request",
       proposedStartedAt: hoursAgo(18.5),
@@ -661,6 +711,81 @@ try {
   check(
     "Exactly one concurrent pending request is created",
     dupOk.length === 1 && dupRefused.length === 1 && pendingDupCount === 1,
+  );
+
+  console.log("\nTEST — Accept and approve share the America/New_York week lock");
+  const nyUser = await prisma.user.create({
+    data: { name: "Nina York", email: "nina-york-time-corr@example.com", passwordHash: "x" },
+  });
+  const nyMem = await prisma.membership.create({
+    data: {
+      userId: nyUser.id,
+      businessId: businessA.id,
+      role: "MEMBER",
+      hourlyWage: new Prisma.Decimal(23),
+    },
+  });
+  const nyAccess = makeAccess(businessA.id, "MEMBER", nyMem.id);
+  const nyEntry = await createManualTimeEntry(prisma, ownerA, {
+    membershipId: nyMem.id,
+    activityType: "OTHER",
+    startedAt: hoursAgo(24),
+    endedAt: hoursAgo(23),
+    note: "NY week boundary",
+  });
+  const nyProposedStart = hoursAgo(24.25);
+  const nyProposedEnd = hoursAgo(22.75);
+  const nyRequest = await requestCorrection(prisma, nyAccess, {
+    timeEntryId: nyEntry.id,
+    reason: "Move a little later",
+    proposedStartedAt: nyProposedStart,
+    proposedEndedAt: nyProposedEnd,
+  });
+  const approveWeekStart = weekRange(nyEntry.startedAt, NY).start;
+  const acceptOriginalStart = weekRange(nyEntry.startedAt, NY).start;
+  const acceptOriginalEnd = weekRange(nyEntry.endedAt, NY).start;
+  const acceptProposedStart = weekRange(nyProposedStart, NY).start;
+  const acceptProposedEnd = weekRange(nyProposedEnd, NY).start;
+  const approveLockKey = workerTimesheetWeekLockKey(businessA.id, nyMem.id, approveWeekStart);
+  const acceptLockKey = workerTimesheetWeekLockKey(businessA.id, nyMem.id, acceptOriginalStart);
+  check(
+    "Accept and approve compute the same lock key for the New York week",
+    approveLockKey === acceptLockKey &&
+      acceptLockKey === workerTimesheetWeekLockKey(businessA.id, nyMem.id, acceptOriginalEnd) &&
+      acceptLockKey === workerTimesheetWeekLockKey(businessA.id, nyMem.id, acceptProposedStart) &&
+      acceptLockKey === workerTimesheetWeekLockKey(businessA.id, nyMem.id, acceptProposedEnd) &&
+      approveWeekStart.getTime() !== weekRange(nyEntry.startedAt).start.getTime(),
+  );
+  await approveWeek(prisma, ownerA, {
+    membershipId: nyMem.id,
+    weekStartedAt: nyEntry.startedAt,
+  });
+  await expectError(
+    "Accept into a New York approved week is refused",
+    () => decideCorrection(prisma, ownerA, {
+      requestId: nyRequest.request.id,
+      decision: "ACCEPTED",
+    }),
+    (error) => error instanceof TimeCardError && /approved/i.test(error.message),
+  );
+  const nyEntryAfter = await prisma.timeEntry.findUnique({ where: { id: nyEntry.id } });
+  const nyWeekAfter = await prisma.timesheetWeek.findUnique({
+    where: {
+      businessId_membershipId_weekStartedAt: {
+        businessId: businessA.id,
+        membershipId: nyMem.id,
+        weekStartedAt: approveWeekStart,
+      },
+    },
+  });
+  check(
+    "Refused New York accept leaves approved hours matching the original clock",
+    nyEntryAfter.status === "APPROVED" &&
+      nyWeekAfter.status === "APPROVED" &&
+      nyEntryAfter.startedAt.getTime() === nyEntry.startedAt.getTime() &&
+      nyEntryAfter.endedAt.getTime() === nyEntry.endedAt.getTime() &&
+      Number(nyEntryAfter.approvedHours) === hoursBetween(nyEntry.startedAt, nyEntry.endedAt) &&
+      Number(nyWeekAfter.approvedHours) === Number(nyEntryAfter.approvedHours),
   );
 
   console.log("\nTEST — Concurrent accept versus week approval");
@@ -694,6 +819,7 @@ try {
     const originalEndedAt = hoursAgo(holdAccept ? 19 : 21);
     const proposedStartedAt = hoursAgo(holdAccept ? 20.5 : 22.5);
     const proposedEndedAt = hoursAgo(holdAccept ? 18.5 : 20.5);
+    const localWeekStart = weekRange(originalStartedAt, NY).start;
     const entry = await createManualTimeEntry(prisma, ownerA, {
       membershipId,
       activityType: "OTHER",
@@ -701,7 +827,7 @@ try {
       endedAt: originalEndedAt,
       note: holdAccept ? "Approve first" : "Accept first",
     });
-    const requestedRace = await requestTimeCorrection(prisma, workerAccess, {
+    const requestedRace = await requestCorrection(prisma, workerAccess, {
       timeEntryId: entry.id,
       reason: "Race the week approval",
       proposedStartedAt,
@@ -711,46 +837,59 @@ try {
     const hold = new Promise((resolve) => {
       releaseHold = resolve;
     });
-    let notifyReached;
-    const reached = new Promise((resolve) => {
-      notifyReached = resolve;
+    let notifyLocked;
+    const locked = new Promise((resolve) => {
+      notifyLocked = resolve;
     });
-    const delayedDb = holdOnAdvisoryLock(prisma, {
+    const delayedDb = holdAfterAdvisoryLock(prisma, {
       hold,
-      onReached: notifyReached,
+      onLocked: notifyLocked,
     });
     const delayedPromise = holdAccept
-      ? decideTimeCorrectionRequest(delayedDb, ownerA, {
+      ? decideCorrection(delayedDb, ownerA, {
           requestId: requestedRace.request.id,
           decision: "ACCEPTED",
         })
-      : approveTimesheetWeek(delayedDb, ownerA, {
+      : approveWeek(delayedDb, ownerA, {
           membershipId,
-          weekStartedAt: weekRange(originalStartedAt).start,
-        });
-    const firstPromise = holdAccept
-      ? approveTimesheetWeek(prisma, ownerA, {
-          membershipId,
-          weekStartedAt: weekRange(originalStartedAt).start,
-        })
-      : decideTimeCorrectionRequest(prisma, ownerA, {
-          requestId: requestedRace.request.id,
-          decision: "ACCEPTED",
+          weekStartedAt: originalStartedAt,
         });
     await Promise.race([
-      reached,
+      locked,
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("advisory lock barrier was never reached")), 4000);
+        setTimeout(() => reject(new Error("first transaction never took the advisory lock")), 4000);
       }),
     ]);
-    const first = await firstPromise;
-    releaseHold();
-    let delayedError = null;
-    let delayed = null;
+    const firstPromise = holdAccept
+      ? approveWeek(prisma, ownerA, {
+          membershipId,
+          weekStartedAt: originalStartedAt,
+        })
+      : decideCorrection(prisma, ownerA, {
+          requestId: requestedRace.request.id,
+          decision: "ACCEPTED",
+        });
+    let waiterRows;
     try {
-      delayed = await delayedPromise;
+      waiterRows = await waitUntilAdvisoryLockWaiter(prisma);
     } catch (error) {
-      delayedError = error;
+      releaseHold();
+      throw error;
+    }
+    releaseHold();
+    let holderError = null;
+    let holder = null;
+    try {
+      holder = await delayedPromise;
+    } catch (error) {
+      holderError = error;
+    }
+    let waiterError = null;
+    let waiter = null;
+    try {
+      waiter = await firstPromise;
+    } catch (error) {
+      waiterError = error;
     }
     const nextEntry = await prisma.timeEntry.findUnique({ where: { id: entry.id } });
     const nextWeek = await prisma.timesheetWeek.findUnique({
@@ -758,7 +897,7 @@ try {
         businessId_membershipId_weekStartedAt: {
           businessId: businessA.id,
           membershipId,
-          weekStartedAt: weekRange(originalStartedAt).start,
+          weekStartedAt: localWeekStart,
         },
       },
     });
@@ -767,9 +906,11 @@ try {
     });
     const expectedHours = hoursBetween(nextEntry.startedAt, nextEntry.endedAt);
     return {
-      first,
-      delayed,
-      delayedError,
+      holder,
+      holderError,
+      waiter,
+      waiterError,
+      waiterRows,
       entry: nextEntry,
       week: nextWeek,
       request: nextRequest,
@@ -782,15 +923,17 @@ try {
   }
 
   const approveFirst = await raceAcceptAgainstApprove({
-    holdAccept: true,
+    holdAccept: false,
     membershipId: racerOneMem.id,
     workerAccess: racerOneA,
   });
   check(
-    "Approval that commits first freezes original times and refuses accept",
-    approveFirst.first.status === "APPROVED" &&
-      approveFirst.delayedError instanceof TimeCardError &&
-      /approved/i.test(approveFirst.delayedError.message) &&
+    "Approval that holds the advisory lock first freezes original times and refuses accept",
+    approveFirst.waiterRows.length > 0 &&
+      approveFirst.holder?.status === "APPROVED" &&
+      approveFirst.holderError == null &&
+      approveFirst.waiterError instanceof TimeCardError &&
+      /approved/i.test(approveFirst.waiterError.message) &&
       approveFirst.entry.status === "APPROVED" &&
       approveFirst.entry.startedAt.getTime() === approveFirst.originalStartedAt.getTime() &&
       approveFirst.entry.endedAt.getTime() === approveFirst.originalEndedAt.getTime() &&
@@ -801,15 +944,17 @@ try {
   );
 
   const acceptFirst = await raceAcceptAgainstApprove({
-    holdAccept: false,
+    holdAccept: true,
     membershipId: racerTwoMem.id,
     workerAccess: racerTwoA,
   });
   check(
-    "Accept that commits first is included in the approval snapshot",
-    acceptFirst.first.request.status === "ACCEPTED" &&
-      acceptFirst.delayed?.status === "APPROVED" &&
-      acceptFirst.delayedError == null &&
+    "Accept that holds the advisory lock first is included in the approval snapshot",
+    acceptFirst.waiterRows.length > 0 &&
+      acceptFirst.holder?.request.status === "ACCEPTED" &&
+      acceptFirst.holderError == null &&
+      acceptFirst.waiter?.status === "APPROVED" &&
+      acceptFirst.waiterError == null &&
       acceptFirst.entry.status === "APPROVED" &&
       acceptFirst.entry.startedAt.getTime() === acceptFirst.proposedStartedAt.getTime() &&
       acceptFirst.entry.endedAt.getTime() === acceptFirst.proposedEndedAt.getTime() &&
@@ -828,8 +973,8 @@ try {
     endedAt: hoursAgo(1.5),
     note: "Payroll week job",
   });
-  const weekStart = weekRange(payrollEntry.startedAt).start;
-  const approvedWeek = await approveTimesheetWeek(prisma, ownerA, {
+  const weekStart = weekRange(payrollEntry.startedAt, NY).start;
+  const approvedWeek = await approveWeek(prisma, ownerA, {
     membershipId: helperMem.id,
     weekStartedAt: weekStart,
   });
@@ -856,7 +1001,7 @@ try {
 
   await expectError(
     "Worker cannot request a correction on an approved week",
-    () => requestTimeCorrection(prisma, helperA, {
+    () => requestCorrection(prisma, helperA, {
       timeEntryId: payrollEntry.id,
       reason: "too late",
       proposedStartedAt: hoursAgo(3),
@@ -880,22 +1025,22 @@ try {
     endedAt: hoursAgo(0.4),
     note: "Open then approve",
   });
-  const pendingRequest = await requestTimeCorrection(prisma, memberA, {
+  const pendingRequest = await requestCorrection(prisma, memberA, {
     timeEntryId: pendingThenApprove.id,
     reason: "Need 15 more minutes",
     proposedStartedAt: hoursAgo(1),
     proposedEndedAt: hoursAgo(0.25),
   });
-  await approveTimesheetWeek(prisma, ownerA, {
+  await approveWeek(prisma, ownerA, {
     membershipId: memberMem.id,
-    weekStartedAt: weekRange(pendingThenApprove.startedAt).start,
+    weekStartedAt: pendingThenApprove.startedAt,
   });
   const beforeAcceptRefuse = await prisma.timeEntry.findUnique({
     where: { id: pendingThenApprove.id },
   });
   await expectError(
     "OWNER accept is refused after the week is approved",
-    () => decideTimeCorrectionRequest(prisma, ownerA, {
+    () => decideCorrection(prisma, ownerA, {
       requestId: pendingRequest.request.id,
       decision: "ACCEPTED",
     }),

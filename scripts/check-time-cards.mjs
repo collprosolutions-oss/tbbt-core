@@ -614,6 +614,7 @@ try {
     reason: "I took a longer drive",
     proposedStartedAt: hoursAgo(6.25),
     proposedEndedAt: hoursAgo(5.25),
+    timeZone: "America/New_York",
   });
   const flagged = await prisma.timeEntry.findUnique({ where: { id: adminManual.id } });
   check(
@@ -634,6 +635,7 @@ try {
       reason: "nope",
       proposedStartedAt: hoursAgo(4),
       proposedEndedAt: hoursAgo(3),
+      timeZone: "America/New_York",
     }),
     (error) => error instanceof ForbiddenError,
   );

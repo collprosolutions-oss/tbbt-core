@@ -177,11 +177,13 @@ export async function requestTimeCorrectionAction(
     if (!proposedStartedAt || !proposedEndedAt) {
       return { error: "Enter the proposed start and end times." };
     }
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     const result = await requestTimeCorrection(prisma, access, {
       timeEntryId,
       reason,
       proposedStartedAt,
       proposedEndedAt,
+      timeZone,
     });
     revalidateTimeCards(result.entry.jobId);
     return { message: "Correction requested. The original time stays until an owner decides." };
@@ -200,10 +202,12 @@ export async function decideTimeCorrectionRequestAction(
     const decision = readString(formData, "decision");
     const reason = readString(formData, "reason") || null;
     if (!requestId) return { error: "That correction request could not be found." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     const result = await decideTimeCorrectionRequest(prisma, access, {
       requestId,
       decision,
       reason,
+      timeZone,
     });
     revalidateTimeCards(result.entry.jobId);
     return {

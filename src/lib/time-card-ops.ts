@@ -9,6 +9,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/authorization";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
@@ -203,11 +204,12 @@ async function lockWorkerTimesheetWeeks(
   businessId: string,
   membershipId: string,
   at: readonly Date[],
+  timeZone: string,
 ) {
   const starts = [
     ...new Map(
       at.map((value) => {
-        const start = weekRange(value).start;
+        const start = weekRange(value, timeZone).start;
         return [start.toISOString(), start] as const;
       }),
     ).values(),
@@ -315,8 +317,9 @@ async function loadOpenWeek(
   businessId: string,
   membershipId: string,
   at: Date,
+  timeZone?: string,
 ) {
-  const { start } = weekRange(at);
+  const { start } = weekRange(at, timeZone);
   return db.timesheetWeek.findUnique({
     where: {
       businessId_membershipId_weekStartedAt: {
@@ -333,10 +336,35 @@ async function assertWeekEditable(
   businessId: string,
   membershipId: string,
   at: Date,
+  timeZone?: string,
 ) {
-  const week = await loadOpenWeek(db, businessId, membershipId, at);
+  const week = await loadOpenWeek(db, businessId, membershipId, at, timeZone);
   if (week?.status === "APPROVED") {
     throw new TimeCardError("That week is approved. Reopen it before changing time.");
+  }
+}
+
+function correctionWeekInstants(at: ReadonlyArray<Date | null | undefined>) {
+  return at.filter((value): value is Date => value instanceof Date);
+}
+
+async function assertCorrectionWeeksEditable(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+  at: ReadonlyArray<Date | null | undefined>,
+  timeZone: string,
+) {
+  const starts = [
+    ...new Map(
+      correctionWeekInstants(at).map((value) => {
+        const start = weekRange(value, timeZone).start;
+        return [start.toISOString(), start] as const;
+      }),
+    ).values(),
+  ];
+  for (const start of starts) {
+    await assertWeekEditable(db, businessId, membershipId, start, timeZone);
   }
 }
 
@@ -777,6 +805,7 @@ export type RequestTimeCorrectionInput = {
   reason: string;
   proposedStartedAt: Date;
   proposedEndedAt: Date;
+  timeZone: string;
 };
 
 /**
@@ -797,6 +826,7 @@ export async function requestTimeCorrection(
   if (input.proposedEndedAt <= input.proposedStartedAt) {
     throw new TimeCardError("Proposed end time must be after the proposed start time.");
   }
+  const timeZone = input.timeZone || resolveBusinessTimeZone(access.workspace.business);
   const actorMembershipId = access.workspace.membership.id;
 
   return db.$transaction(async (tx) => {
@@ -825,8 +855,13 @@ export async function requestTimeCorrection(
       throw new TimeCardError("Stop the clock before requesting a correction.");
     }
     try {
-      await assertWeekEditable(tx, access.businessId, entry.membershipId, entry.startedAt);
-      await assertWeekEditable(tx, access.businessId, entry.membershipId, input.proposedStartedAt);
+      await assertCorrectionWeeksEditable(
+        tx,
+        access.businessId,
+        entry.membershipId,
+        [entry.startedAt, entry.endedAt, input.proposedStartedAt, input.proposedEndedAt],
+        timeZone,
+      );
     } catch (error) {
       if (isTimeCardError(error)) {
         throw new TimeCardError(APPROVED_WEEK_CORRECTION_REQUEST_ERROR);
@@ -922,6 +957,7 @@ export type DecideTimeCorrectionRequestInput = {
   requestId: string;
   decision: string;
   reason?: string | null;
+  timeZone: string;
 };
 
 /**
@@ -942,6 +978,7 @@ export async function decideTimeCorrectionRequest(
   }
   const decision = input.decision as TimeCorrectionDecisionValue;
   const decisionReason = input.reason?.trim() || null;
+  const timeZone = input.timeZone || resolveBusinessTimeZone(access.workspace.business);
   const actorMembershipId = access.workspace.membership.id;
 
   return db.$transaction(async (tx) => {
@@ -970,11 +1007,20 @@ export async function decideTimeCorrectionRequest(
     access.assertOwned(entry);
 
     if (decision === "ACCEPTED") {
-      await lockWorkerTimesheetWeeks(tx, access.businessId, entry.membershipId, [
-        request.originalStartedAt,
-        request.proposedStartedAt,
-        entry.startedAt,
-      ]);
+      await lockWorkerTimesheetWeeks(
+        tx,
+        access.businessId,
+        entry.membershipId,
+        [
+          request.originalStartedAt,
+          request.originalEndedAt,
+          request.proposedStartedAt,
+          request.proposedEndedAt,
+          entry.startedAt,
+          entry.endedAt,
+        ].filter((value): value is Date => value instanceof Date),
+        timeZone,
+      );
       const lockedEntry = await lockTenantOwnedTimeEntry(tx, access.businessId, entry.id);
       if (!lockedEntry) {
         throw new TimeCardError("That time entry could not be found.");
@@ -996,8 +1042,20 @@ export async function decideTimeCorrectionRequest(
         throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
       }
       try {
-        await assertWeekEditable(tx, access.businessId, current.membershipId, current.startedAt);
-        await assertWeekEditable(tx, access.businessId, current.membershipId, request.proposedStartedAt);
+        await assertCorrectionWeeksEditable(
+          tx,
+          access.businessId,
+          current.membershipId,
+          [
+            current.startedAt,
+            current.endedAt,
+            request.originalStartedAt,
+            request.originalEndedAt,
+            request.proposedStartedAt,
+            request.proposedEndedAt,
+          ],
+          timeZone,
+        );
       } catch (error) {
         if (isTimeCardError(error)) {
           throw new TimeCardError(APPROVED_WEEK_CORRECTION_DECIDE_ERROR);
