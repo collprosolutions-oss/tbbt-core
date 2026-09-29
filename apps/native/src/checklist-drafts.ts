@@ -10,14 +10,15 @@ export type ChecklistDraftScope = {
   jobId: string;
 };
 
-export type ChecklistExpectedItem = {
-  key: string;
-  checked: boolean;
+export type ChecklistDraftAccount = {
+  businessId: string;
+  membershipId: string;
 };
 
 export type ChecklistDraftChange = {
   itemKey: string;
   checked: boolean;
+  baseChecked: boolean;
 };
 
 export type ChecklistDraft = {
@@ -25,7 +26,6 @@ export type ChecklistDraft = {
   membershipId: string;
   jobId: string;
   expectedFingerprint: string;
-  expectedChecklist: ChecklistExpectedItem[];
   items: ChecklistDraftChange[];
   savedAt: string;
 };
@@ -41,8 +41,14 @@ export type ChecklistDisplayItem = {
 export const SECURE_STORE_KEY_PATTERN = /^[\w.-]+$/;
 export const SECURE_STORE_VALUE_MAX_BYTES = 2048;
 export const CHECKLIST_DRAFT_INDEX_KEY = "tbbt.native.checklist.drafts";
+export const CHECKLIST_DRAFT_ACCOUNT_KEY = "tbbt.native.checklist.account";
+/** ~108 bytes per cuid-scoped key; 16 keys stay under 2048. */
+export const CHECKLIST_DRAFT_INDEX_MAX_KEYS = 16;
 export const CHECKLIST_DRAFT_STORAGE_ERROR =
   "Checklist changes could not be saved on this phone.";
+export const CHECKLIST_DRAFT_SYNC_BEFORE_MORE_CHANGES = "Sync before more changes";
+export const CHECKLIST_DRAFT_INDEX_FULL_MESSAGE =
+  "Sync or discard another job's checklist before saving more changes.";
 
 const DRAFT_KEY_PREFIX = "tbbt.native.checklist.draft";
 
@@ -74,6 +80,7 @@ export function isSecureStoreKey(key: string) {
   return SECURE_STORE_KEY_PATTERN.test(key);
 }
 
+/** FNV-1a of `key:0|key:1` rows. Must stay identical to the server copy. */
 export function checklistStateFingerprint(
   items: Array<{ key: string; checked: boolean }>,
 ): string {
@@ -106,12 +113,6 @@ export function createMemoryChecklistDraftStorage(
   };
 }
 
-export function expectedChecklistFromItems(
-  items: Array<{ key: string; checked: boolean }>,
-): ChecklistExpectedItem[] {
-  return items.map((item) => ({ key: item.key, checked: item.checked }));
-}
-
 export function overlayChecklistDraft<T extends { key: string; checked: boolean }>(
   items: T[],
   draft: ChecklistDraft | null,
@@ -123,7 +124,7 @@ export function overlayChecklistDraft<T extends { key: string; checked: boolean 
   );
 }
 
-function storedByteLength(value: string) {
+export function storedByteLength(value: string) {
   let bytes = 0;
   for (let i = 0; i < value.length; i += 1) {
     const code = value.charCodeAt(i);
@@ -137,6 +138,16 @@ function storedByteLength(value: string) {
   return bytes;
 }
 
+function baseCheckedFor(
+  itemKey: string,
+  serverItems: Array<{ key: string; checked: boolean }>,
+  draft: ChecklistDraft | null,
+) {
+  const existing = draft?.items.find((item) => item.itemKey === itemKey);
+  if (existing) return existing.baseChecked;
+  return serverItems.find((item) => item.key === itemKey)?.checked === true;
+}
+
 export function recordLocalChecklistChange(input: {
   scope: ChecklistDraftScope;
   serverItems: Array<{ key: string; checked: boolean }>;
@@ -148,31 +159,24 @@ export function recordLocalChecklistChange(input: {
   if (!input.serverItems.some((item) => item.key === input.itemKey)) {
     return input.draft;
   }
-  const serverFingerprint = checklistStateFingerprint(input.serverItems);
-  const expectedChecklist =
-    input.draft &&
-    input.draft.expectedChecklist.length > 0 &&
-    input.draft.expectedFingerprint === serverFingerprint
-      ? input.draft.expectedChecklist
-      : input.draft && input.draft.expectedChecklist.length > 0
-        ? input.draft.expectedChecklist
-        : expectedChecklistFromItems(input.serverItems);
+  const expectedFingerprint = input.draft?.expectedFingerprint
+    ?? checklistStateFingerprint(input.serverItems);
   const overlay = overlayChecklistDraft(input.serverItems, input.draft).map((item) =>
     item.key === input.itemKey ? { ...item, checked: input.checked } : item,
   );
   const items = overlay
-    .filter((item) => {
-      const expected = expectedChecklist.find((row) => row.key === item.key);
-      return expected ? expected.checked !== item.checked : false;
-    })
-    .map((item) => ({ itemKey: item.key, checked: item.checked }));
+    .filter((item) => baseCheckedFor(item.key, input.serverItems, input.draft) !== item.checked)
+    .map((item) => ({
+      itemKey: item.key,
+      checked: item.checked,
+      baseChecked: baseCheckedFor(item.key, input.serverItems, input.draft),
+    }));
   if (items.length === 0) return null;
   return {
     businessId: input.scope.businessId,
     membershipId: input.scope.membershipId,
     jobId: input.scope.jobId,
-    expectedFingerprint: checklistStateFingerprint(expectedChecklist),
-    expectedChecklist,
+    expectedFingerprint,
     items,
     savedAt: (input.now ?? new Date()).toISOString(),
   };
@@ -183,53 +187,50 @@ type StoredChecklistDraft = {
   membershipId: string;
   jobId: string;
   expectedFingerprint: string;
-  expectedChecked: Record<string, boolean>;
   items: ChecklistDraftChange[];
   savedAt: string;
 };
 
 function toStoredDraft(draft: ChecklistDraft): StoredChecklistDraft {
-  const expectedChecked: Record<string, boolean> = {};
-  for (const item of draft.expectedChecklist) {
-    expectedChecked[item.key] = item.checked;
-  }
   return {
     businessId: draft.businessId,
     membershipId: draft.membershipId,
     jobId: draft.jobId,
     expectedFingerprint: draft.expectedFingerprint,
-    expectedChecked,
     items: draft.items,
     savedAt: draft.savedAt,
   };
+}
+
+function parseDraftChange(row: unknown): ChecklistDraftChange | null {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const payload = row as Partial<ChecklistDraftChange> & {
+    expectedChecked?: unknown;
+  };
+  if (typeof payload.itemKey !== "string" || typeof payload.checked !== "boolean") {
+    return null;
+  }
+  const itemKey = payload.itemKey.trim();
+  if (!itemKey) return null;
+  const baseChecked =
+    typeof payload.baseChecked === "boolean" ? payload.baseChecked : null;
+  if (baseChecked === null) return null;
+  return { itemKey, checked: payload.checked, baseChecked };
 }
 
 function fromStoredDraft(
   stored: StoredChecklistDraft,
   scope: ChecklistDraftScope,
 ): ChecklistDraft | null {
-  const expectedChecklist = Object.entries(stored.expectedChecked)
-    .map(([key, checked]) => {
-      const trimmed = key.trim();
-      return trimmed && typeof checked === "boolean" ? { key: trimmed, checked } : null;
-    })
-    .filter((row): row is ChecklistExpectedItem => row !== null);
   const items = stored.items
-    .map((row) => {
-      if (!row || typeof row.itemKey !== "string" || typeof row.checked !== "boolean") {
-        return null;
-      }
-      const itemKey = row.itemKey.trim();
-      return itemKey ? { itemKey, checked: row.checked } : null;
-    })
+    .map(parseDraftChange)
     .filter((row): row is ChecklistDraftChange => row !== null);
-  if (expectedChecklist.length === 0 || items.length === 0) return null;
+  if (items.length === 0) return null;
   return {
     businessId: scope.businessId,
     membershipId: scope.membershipId,
     jobId: scope.jobId,
     expectedFingerprint: stored.expectedFingerprint,
-    expectedChecklist,
     items,
     savedAt: stored.savedAt,
   };
@@ -238,28 +239,49 @@ function fromStoredDraft(
 function parseDraft(raw: string | null, scope: ChecklistDraftScope): ChecklistDraft | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<StoredChecklistDraft>;
+    const parsed = JSON.parse(raw) as Partial<StoredChecklistDraft> & {
+      expectedChecked?: Record<string, boolean>;
+    };
     if (
       !parsed ||
       parsed.businessId !== scope.businessId ||
       parsed.membershipId !== scope.membershipId ||
       parsed.jobId !== scope.jobId ||
       typeof parsed.expectedFingerprint !== "string" ||
-      !parsed.expectedChecked ||
-      typeof parsed.expectedChecked !== "object" ||
       !Array.isArray(parsed.items) ||
       typeof parsed.savedAt !== "string"
     ) {
       return null;
     }
+    const items = parsed.items.map((row) => {
+      const parsedChange = parseDraftChange(row);
+      if (parsedChange) return parsedChange;
+      if (
+        !row ||
+        typeof row !== "object" ||
+        typeof (row as ChecklistDraftChange).itemKey !== "string" ||
+        typeof (row as ChecklistDraftChange).checked !== "boolean"
+      ) {
+        return null;
+      }
+      const itemKey = (row as ChecklistDraftChange).itemKey.trim();
+      const legacyBase = parsed.expectedChecked?.[itemKey];
+      return itemKey && typeof legacyBase === "boolean"
+        ? {
+            itemKey,
+            checked: (row as ChecklistDraftChange).checked,
+            baseChecked: legacyBase,
+          }
+        : null;
+    }).filter((row): row is ChecklistDraftChange => row !== null);
+    if (items.length === 0) return null;
     return fromStoredDraft(
       {
         businessId: parsed.businessId,
         membershipId: parsed.membershipId,
         jobId: parsed.jobId,
         expectedFingerprint: parsed.expectedFingerprint,
-        expectedChecked: parsed.expectedChecked,
-        items: parsed.items,
+        items,
         savedAt: parsed.savedAt,
       },
       scope,
@@ -287,15 +309,20 @@ async function writeDraftIndex(storage: ChecklistDraftStorage, keys: string[]) {
     await storage.remove(CHECKLIST_DRAFT_INDEX_KEY);
     return;
   }
-  await storage.write(CHECKLIST_DRAFT_INDEX_KEY, JSON.stringify(unique));
+  const encoded = JSON.stringify(unique);
+  if (storedByteLength(encoded) > SECURE_STORE_VALUE_MAX_BYTES) {
+    throw new ChecklistDraftStorageError(CHECKLIST_DRAFT_INDEX_FULL_MESSAGE);
+  }
+  await storage.write(CHECKLIST_DRAFT_INDEX_KEY, encoded);
 }
 
 async function rememberDraftKey(storage: ChecklistDraftStorage, key: string) {
   const keys = await readDraftIndex(storage);
-  if (!keys.includes(key)) {
-    keys.push(key);
-    await writeDraftIndex(storage, keys);
+  if (keys.includes(key)) return;
+  if (keys.length >= CHECKLIST_DRAFT_INDEX_MAX_KEYS) {
+    throw new ChecklistDraftStorageError(CHECKLIST_DRAFT_INDEX_FULL_MESSAGE);
   }
+  await writeDraftIndex(storage, [...keys, key]);
 }
 
 async function forgetDraftKey(storage: ChecklistDraftStorage, key: string) {
@@ -333,11 +360,11 @@ export async function saveChecklistDraft(
   const key = checklistDraftStorageKey(scope);
   const payload = JSON.stringify(toStoredDraft(draft));
   if (storedByteLength(payload) > SECURE_STORE_VALUE_MAX_BYTES) {
-    throw new ChecklistDraftStorageError();
+    throw new ChecklistDraftStorageError(CHECKLIST_DRAFT_SYNC_BEFORE_MORE_CHANGES);
   }
   try {
-    await storage.write(key, payload);
     await rememberDraftKey(storage, key);
+    await storage.write(key, payload);
   } catch (error) {
     throw error instanceof ChecklistDraftStorageError
       ? error
@@ -361,15 +388,79 @@ export async function clearChecklistDraft(
 }
 
 export async function clearAllChecklistDrafts(storage: ChecklistDraftStorage): Promise<void> {
-  const keys = await readDraftIndex(storage);
-  for (const key of keys) {
-    try {
-      await storage.remove(key);
-    } catch {
-      // Keep clearing the rest of the index.
+  try {
+    const keys = await readDraftIndex(storage);
+    for (const key of keys) {
+      try {
+        await storage.remove(key);
+      } catch {
+        // Keep clearing the rest of the index.
+      }
     }
+    try {
+      await storage.remove(CHECKLIST_DRAFT_INDEX_KEY);
+    } catch {
+      // Index removal is best-effort so sign-out always finishes.
+    }
+  } catch {
+    // Sign-out and account-switch must always finish.
   }
-  await writeDraftIndex(storage, []);
+}
+
+export async function readChecklistDraftAccount(
+  storage: ChecklistDraftStorage,
+): Promise<ChecklistDraftAccount | null> {
+  try {
+    const raw = await storage.read(CHECKLIST_DRAFT_ACCOUNT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ChecklistDraftAccount>;
+    if (
+      !parsed ||
+      typeof parsed.businessId !== "string" ||
+      typeof parsed.membershipId !== "string" ||
+      !parsed.businessId.trim() ||
+      !parsed.membershipId.trim()
+    ) {
+      return null;
+    }
+    return {
+      businessId: parsed.businessId,
+      membershipId: parsed.membershipId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function rememberChecklistDraftAccount(
+  storage: ChecklistDraftStorage,
+  account: ChecklistDraftAccount,
+): Promise<void> {
+  const payload = JSON.stringify({
+    businessId: account.businessId,
+    membershipId: account.membershipId,
+  });
+  if (storedByteLength(payload) > SECURE_STORE_VALUE_MAX_BYTES) return;
+  await storage.write(CHECKLIST_DRAFT_ACCOUNT_KEY, payload);
+}
+
+export async function applyChecklistDraftAccount(
+  storage: ChecklistDraftStorage,
+  account: ChecklistDraftAccount,
+): Promise<void> {
+  try {
+    const previous = await readChecklistDraftAccount(storage);
+    if (
+      previous &&
+      (previous.businessId !== account.businessId ||
+        previous.membershipId !== account.membershipId)
+    ) {
+      await clearAllChecklistDrafts(storage);
+    }
+    await rememberChecklistDraftAccount(storage, account);
+  } catch {
+    // Sign-in must always finish.
+  }
 }
 
 export async function persistLocalChecklistChange(

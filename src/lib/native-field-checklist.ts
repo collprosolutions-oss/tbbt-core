@@ -37,6 +37,10 @@ import {
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export const NATIVE_CHECKLIST_JSON_MAX_BYTES = 4096;
+/**
+ * Compact sync body: fingerprint + changed items (with base values).
+ * 4096 bytes holds a large cuid-keyed change set; the phone draft is 2048.
+ */
 export const NATIVE_CHECKLIST_SYNC_JSON_MAX_BYTES = 4096;
 export const NATIVE_CHECKLIST_CHOOSE_ITEM =
   "That checklist item could not be updated.";
@@ -46,9 +50,10 @@ export const NATIVE_CHECKLIST_NO_ITEMS_MESSAGE =
   "This job has no checklist items.";
 export const NATIVE_CHECKLIST_CLOSED_MESSAGE =
   "This job's checklist can no longer be updated.";
-/** Worst-case 12 × 128-char keys for expected + items stays under 4096 bytes. */
 export const NATIVE_CHECKLIST_ITEM_KEY_MAX_CHARS = 128;
-export const NATIVE_CHECKLIST_MAX_ITEMS = 12;
+/** Parse guard. The 4096-byte body cap is the real size limit. */
+export const NATIVE_CHECKLIST_MAX_CHANGED_ITEMS = 64;
+export const NATIVE_CHECKLIST_FINGERPRINT_PATTERN = /^[0-9a-f]{8}$/;
 
 export type NativeRecordAssignedChecklistResult =
   | {
@@ -58,8 +63,28 @@ export type NativeRecordAssignedChecklistResult =
     }
   | { ok: false; status: number; error: string };
 
-export type NativeChecklistDraftItem = { itemKey: string; checked: boolean };
+export type NativeChecklistDraftItem = {
+  itemKey: string;
+  checked: boolean;
+  baseChecked: boolean;
+};
 export type NativeChecklistExpectedItem = { key: string; checked: boolean };
+
+/** FNV-1a of `key:0|key:1` rows. Must stay identical to the native draft copy. */
+export function checklistStateFingerprint(
+  items: Array<{ key: string; checked: boolean }>,
+): string {
+  const canonical = items
+    .map((item) => `${item.key.trim()}:${item.checked ? "1" : "0"}`)
+    .sort()
+    .join("|");
+  let hash = 2166136261;
+  for (let i = 0; i < canonical.length; i += 1) {
+    hash ^= canonical.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
 
 export type NativeSyncAssignedChecklistResult =
   | {
@@ -184,32 +209,17 @@ function readChecklistItemKey(value: unknown): string | null | "too-large" {
   return key || null;
 }
 
-function parseExpectedChecklist(
+function parseExpectedFingerprint(
   value: unknown,
-):
-  | { ok: true; expectedChecklist: NativeChecklistExpectedItem[] }
-  | { ok: false; status: 400 | 413; error: string } {
-  if (!Array.isArray(value) || value.length === 0 || value.length > NATIVE_CHECKLIST_MAX_ITEMS) {
+): { ok: true; expectedFingerprint: string } | { ok: false; status: 400; error: string } {
+  if (typeof value !== "string") {
     return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
-  const expectedChecklist: NativeChecklistExpectedItem[] = [];
-  const seen = new Set<string>();
-  for (const row of value) {
-    if (!row || typeof row !== "object" || Array.isArray(row)) {
-      return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
-    }
-    const payload = row as Record<string, unknown>;
-    const key = readChecklistItemKey(payload.key);
-    if (key === "too-large") {
-      return { ok: false, status: 413, error: NATIVE_SESSION_TOO_LARGE };
-    }
-    if (!key || typeof payload.checked !== "boolean" || seen.has(key)) {
-      return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
-    }
-    seen.add(key);
-    expectedChecklist.push({ key, checked: payload.checked });
+  const expectedFingerprint = value.trim().toLowerCase();
+  if (!NATIVE_CHECKLIST_FINGERPRINT_PATTERN.test(expectedFingerprint)) {
+    return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
-  return { ok: true, expectedChecklist };
+  return { ok: true, expectedFingerprint };
 }
 
 function parseDraftItems(
@@ -217,7 +227,11 @@ function parseDraftItems(
 ):
   | { ok: true; items: NativeChecklistDraftItem[] }
   | { ok: false; status: 400 | 413; error: string } {
-  if (!Array.isArray(value) || value.length === 0 || value.length > NATIVE_CHECKLIST_MAX_ITEMS) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > NATIVE_CHECKLIST_MAX_CHANGED_ITEMS
+  ) {
     return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
   const items: NativeChecklistDraftItem[] = [];
@@ -231,11 +245,20 @@ function parseDraftItems(
     if (itemKey === "too-large") {
       return { ok: false, status: 413, error: NATIVE_SESSION_TOO_LARGE };
     }
-    if (!itemKey || typeof payload.checked !== "boolean" || seen.has(itemKey)) {
+    if (
+      !itemKey ||
+      typeof payload.checked !== "boolean" ||
+      typeof payload.baseChecked !== "boolean" ||
+      seen.has(itemKey)
+    ) {
       return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
     }
     seen.add(itemKey);
-    items.push({ itemKey, checked: payload.checked });
+    items.push({
+      itemKey,
+      checked: payload.checked,
+      baseChecked: payload.baseChecked,
+    });
   }
   return { ok: true, items };
 }
@@ -243,7 +266,7 @@ function parseDraftItems(
 export function parseNativeChecklistSyncJson(text: string):
   | {
       ok: true;
-      expectedChecklist: NativeChecklistExpectedItem[];
+      expectedFingerprint: string;
       items: NativeChecklistDraftItem[];
     }
   | { ok: false; status: 400 | 413; error: string } {
@@ -260,13 +283,13 @@ export function parseNativeChecklistSyncJson(text: string):
     return { ok: false, status: 400, error: NATIVE_CHECKLIST_CHOOSE_ITEM };
   }
   const payload = parsed as Record<string, unknown>;
-  const expected = parseExpectedChecklist(payload.expectedChecklist);
-  if (!expected.ok) return expected;
+  const fingerprint = parseExpectedFingerprint(payload.expectedFingerprint);
+  if (!fingerprint.ok) return fingerprint;
   const items = parseDraftItems(payload.items);
   if (!items.ok) return items;
   return {
     ok: true,
-    expectedChecklist: expected.expectedChecklist,
+    expectedFingerprint: fingerprint.expectedFingerprint,
     items: items.items,
   };
 }
@@ -295,11 +318,23 @@ export function jobChecklistIsClosed(
   );
 }
 
-export function applyChecklistDraftState(
-  expected: NativeChecklistExpectedItem[],
+export function reconstructExpectedChecklist(
+  current: Array<{ key: string; checked: boolean }>,
   items: NativeChecklistDraftItem[],
 ): NativeChecklistExpectedItem[] {
-  let next = expected.map((item) => ({ ...item }));
+  const bases = new Map(items.map((item) => [item.itemKey, item.baseChecked]));
+  return current.map((item) =>
+    bases.has(item.key)
+      ? { key: item.key, checked: bases.get(item.key) === true }
+      : { key: item.key, checked: item.checked },
+  );
+}
+
+export function applyChecklistDraftChanges(
+  current: Array<{ key: string; checked: boolean }>,
+  items: NativeChecklistDraftItem[],
+): NativeChecklistExpectedItem[] {
+  let next = current.map((item) => ({ key: item.key, checked: item.checked }));
   for (const change of items) {
     if (!next.some((item) => item.key === change.itemKey)) {
       throw new CleaningVisitError("That checklist item is not on this visit.");
@@ -316,7 +351,7 @@ export async function syncNativeAssignedChecklistDraft(
   access: NativeFieldAccess,
   jobId: string,
   input: {
-    expectedChecklist: NativeChecklistExpectedItem[];
+    expectedFingerprint: string;
     items: NativeChecklistDraftItem[];
   },
   options?: {
@@ -377,11 +412,34 @@ export async function syncNativeAssignedChecklistDraft(
         throw new CleaningVisitError(NATIVE_CHECKLIST_CLOSED_MESSAGE);
       }
 
-      const desired = applyChecklistDraftState(input.expectedChecklist, input.items);
-      if (checklistDraftMatchesCurrent(lockedItems, desired)) {
+      const currentFingerprint = checklistStateFingerprint(lockedItems);
+      const reconstructedExpected = reconstructExpectedChecklist(lockedItems, input.items);
+      const reconstructedFingerprint = checklistStateFingerprint(reconstructedExpected);
+      const desiredKeysPresent = input.items.every((change) =>
+        lockedItems.some((item) => item.key === change.itemKey),
+      );
+      const desired = desiredKeysPresent
+        ? applyChecklistDraftChanges(lockedItems, input.items)
+        : null;
+
+      if (currentFingerprint === input.expectedFingerprint) {
+        const baseMatches = input.items.every((change) => {
+          const current = lockedItems.find((item) => item.key === change.itemKey);
+          return current?.checked === change.baseChecked;
+        });
+        if (!baseMatches || !desired) {
+          throw new CleaningVisitError(NATIVE_CHECKLIST_STALE_MESSAGE);
+        }
+        if (checklistDraftMatchesCurrent(lockedItems, desired)) {
+          return true;
+        }
+      } else if (
+        desired &&
+        reconstructedFingerprint === input.expectedFingerprint &&
+        checklistDraftMatchesCurrent(lockedItems, desired)
+      ) {
         return true;
-      }
-      if (!checklistDraftMatchesCurrent(lockedItems, input.expectedChecklist)) {
+      } else {
         throw new CleaningVisitError(NATIVE_CHECKLIST_STALE_MESSAGE);
       }
 

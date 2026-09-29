@@ -255,7 +255,12 @@ export async function setCleaningVisitCadence(
 export async function attachCleaningCrewChecklist(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { jobId: string; procedureId: string },
+  input: {
+    jobId: string;
+    procedureId: string;
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   if (access.workspace.role !== "OWNER") {
     throw new ForbiddenError(OWNER_SETS_CADENCE_MESSAGE);
@@ -267,6 +272,9 @@ export async function attachCleaningCrewChecklist(
     access.businessId,
     input.procedureId,
   );
+  if (input.afterInitialRead) {
+    await input.afterInitialRead();
+  }
   return db.$transaction(async (tx) => {
     const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
     if (!locked) {

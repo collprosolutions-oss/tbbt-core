@@ -43,7 +43,7 @@ export async function POST(
     resolved.access,
     jobId,
     {
-      expectedChecklist: parsed.expectedChecklist,
+      expectedFingerprint: parsed.expectedFingerprint,
       items: parsed.items,
     },
   );

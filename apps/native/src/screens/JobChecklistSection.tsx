@@ -138,7 +138,7 @@ export function JobChecklistSection({
     setError(null);
     try {
       const result = await syncNativeJobChecklistDraft(token, job.id, {
-        expectedChecklist: draft.expectedChecklist,
+        expectedFingerprint: draft.expectedFingerprint,
         items: draft.items,
       });
       if (isApiError(result)) {
@@ -196,10 +196,14 @@ export function JobChecklistSection({
             >
               <Text style={styles.actionLabel}>
                 {pendingItemKey === item.key
-                  ? "Saved on this phone"
-                  : item.checked
+                  ? item.checked
                     ? "Done"
-                    : "Mark done"}
+                    : "Mark done"
+                  : itemUnsynced
+                    ? "Saved on this phone"
+                    : item.checked
+                      ? "Done"
+                      : "Mark done"}
               </Text>
             </Pressable>
             <Text style={styles.body}>{item.title}</Text>

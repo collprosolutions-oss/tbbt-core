@@ -13,6 +13,7 @@ import type {
 
 export type NativeApiError = {
   error: string;
+  status?: number;
   totpRequired?: boolean;
   challengeToken?: string;
 };
@@ -76,7 +77,10 @@ export async function loadNativeSession(token: string): Promise<
   });
   const body = await parseJson(response);
   if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "Session expired." };
+    return {
+      error: typeof body.error === "string" ? body.error : "Session expired.",
+      status: response.status,
+    };
   }
   return body as { viewer: NativeViewer; workspace: NativeWorkspace };
 }
@@ -280,8 +284,8 @@ export async function syncNativeJobChecklistDraft(
   token: string,
   jobId: string,
   input: {
-    expectedChecklist: Array<{ key: string; checked: boolean }>;
-    items: Array<{ itemKey: string; checked: boolean }>;
+    expectedFingerprint: string;
+    items: Array<{ itemKey: string; checked: boolean; baseChecked: boolean }>;
   },
 ): Promise<{ job: NativeJobDetail; alreadySynced: boolean } | NativeApiError> {
   try {

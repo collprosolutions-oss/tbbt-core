@@ -17,7 +17,11 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { hashPassword } = await import("@/lib/auth-crypto");
 const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
-const { setCleaningVisitCadence } = await import("@/lib/cleaning-visit-ops");
+const {
+  attachCleaningCrewChecklist,
+  recordAssignedVisitOutcome,
+  setCleaningVisitCadence,
+} = await import("@/lib/cleaning-visit-ops");
 const {
   packCrewChecklist,
   serializeChecklist,
@@ -28,13 +32,17 @@ const { loadNativeAssignedJob } = await import("@/lib/native-field");
 const {
   NATIVE_CHECKLIST_CHOOSE_ITEM,
   NATIVE_CHECKLIST_CLOSED_MESSAGE,
-  NATIVE_CHECKLIST_MAX_ITEMS,
+  NATIVE_CHECKLIST_MAX_CHANGED_ITEMS,
   NATIVE_CHECKLIST_NO_ITEMS_MESSAGE,
   NATIVE_CHECKLIST_STALE_MESSAGE,
   NATIVE_CHECKLIST_SYNC_JSON_MAX_BYTES,
+  checklistStateFingerprint,
   parseNativeChecklistSyncJson,
   syncNativeAssignedChecklistDraft,
 } = await import("@/lib/native-field-checklist");
+const { createOperatingProcedure, setOperatingProcedureApproval } = await import(
+  "@/lib/operating-procedures-ops"
+);
 const { resolveNativeFieldAccess, signInNativeField } = await import(
   "@/lib/native-session"
 );
@@ -42,10 +50,17 @@ const { readCappedRequestText } = await import("@/lib/native-session-limits");
 const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
   "@/lib/saas-billing/messages"
 );
+const { completeJobWithRunningTimeSafety } = await import("@/lib/time-card-ops");
 const {
   CHECKLIST_DRAFT_INDEX_KEY,
+  CHECKLIST_DRAFT_INDEX_MAX_KEYS,
+  CHECKLIST_DRAFT_SYNC_BEFORE_MORE_CHANGES,
+  CHECKLIST_DRAFT_INDEX_FULL_MESSAGE,
   SECURE_STORE_KEY_PATTERN,
+  SECURE_STORE_VALUE_MAX_BYTES,
+  applyChecklistDraftAccount,
   checklistDraftStorageKey,
+  checklistStateFingerprint: nativeDraftFingerprint,
   clearAllChecklistDrafts,
   createMemoryChecklistDraftStorage,
   isSecureStoreKey,
@@ -53,6 +68,7 @@ const {
   overlayChecklistDraft,
   persistLocalChecklistChange,
   recordLocalChecklistChange,
+  storedByteLength,
 } = await import(new URL("../apps/native/src/checklist-drafts.ts", import.meta.url));
 
 const baseUrl = process.env.DATABASE_URL;
@@ -85,11 +101,26 @@ const testUrl = parsed.toString();
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
+
+function dropTestDatabase() {
+  return spawnSync(
+    "psql",
+    [adminUrl.toString(), "-c", `DROP DATABASE IF EXISTS "${testDbName}"`],
+    { encoding: "utf8" },
+  );
+}
+
+const dropped = dropTestDatabase();
+if (dropped.status !== 0) {
+  console.warn(dropped.stderr || dropped.stdout);
+}
+
 const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
   encoding: "utf8",
 });
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
+if (createDb.status !== 0) {
+  console.error(createDb.stderr || createDb.stdout);
+  process.exit(createDb.status ?? 1);
 }
 
 const push = spawnSync(
@@ -99,6 +130,7 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for native-field checklist offline test database.");
+  dropTestDatabase();
   process.exit(push.status ?? 1);
 }
 
@@ -141,6 +173,8 @@ function makeOwnerAccess(businessId, membershipId, userId) {
 
 const checklistOpsSrc = readRepo("src/lib/native-field-checklist.ts");
 const visitOpsSrc = readRepo("src/lib/cleaning-visit-ops.ts");
+const timeCardSrc = readRepo("src/lib/time-card-ops.ts");
+const offlineCheckSrc = readRepo("scripts/check-native-field-checklist-offline.mjs");
 const appSrc = readRepo("apps/native/App.tsx");
 const signInSrc = readRepo("apps/native/src/screens/SignInScreen.tsx");
 const checklistSyncRouteSrc = readRepo(
@@ -211,7 +245,15 @@ check(
     draftSrc.includes("createMemoryChecklistDraftStorage") &&
     draftSrc.includes("SECURE_STORE_KEY_PATTERN") &&
     draftSrc.includes("clearAllChecklistDrafts") &&
-    NATIVE_CHECKLIST_MAX_ITEMS === 12,
+    draftSrc.includes("CHECKLIST_DRAFT_SYNC_BEFORE_MORE_CHANGES") &&
+    draftSrc.includes("rememberDraftKey(storage, key)") &&
+    draftSrc.indexOf("await rememberDraftKey(storage, key)") <
+      draftSrc.indexOf("await storage.write(key, payload)") &&
+    NATIVE_CHECKLIST_MAX_CHANGED_ITEMS >= 30 &&
+    !checklistOpsSrc.includes("NATIVE_CHECKLIST_MAX_ITEMS = 12") &&
+    checklistOpsSrc.includes("expectedFingerprint") &&
+    checklistOpsSrc.includes("baseChecked") &&
+    checklistOpsSrc.includes("checklistStateFingerprint"),
 );
 check(
   "Docs describe explicit sync, stale refusal, and the dedicated check",
@@ -223,34 +265,67 @@ check(
     docsSrc.includes("test:native-field-checklist-offline"),
 );
 check(
+  "Test database is dropped before create and after a failed db push",
+  offlineCheckSrc.includes('DROP DATABASE IF EXISTS "${testDbName}"') &&
+    offlineCheckSrc.indexOf("dropTestDatabase()") <
+      offlineCheckSrc.indexOf('CREATE DATABASE "${testDbName}"') &&
+    offlineCheckSrc.includes("dropTestDatabase();") &&
+    /if \(push\.status !== 0\) \{[\s\S]*dropTestDatabase\(\);[\s\S]*process\.exit/.test(
+      offlineCheckSrc,
+    ),
+);
+check(
   "OWNER attach and cadence writes lock the Job before replacing checklistJson",
   visitOpsSrc.includes("export async function attachCleaningCrewChecklist") &&
     visitOpsSrc.indexOf("lockTenantOwnedJob") <
       visitOpsSrc.indexOf("return upsertVisitRecord") &&
     visitOpsSrc.includes('await db.$transaction(async (tx) => {') &&
+    visitOpsSrc.includes("if (input.afterInitialRead)") &&
+    timeCardSrc.includes("completeJobWithRunningTimeSafety") &&
+    timeCardSrc.includes("afterInitialRead") &&
     appSrc.includes("clearAllChecklistDrafts") &&
-    signInSrc.includes("clearAllChecklistDrafts"),
+    appSrc.includes("restored.status === 401") &&
+    appSrc.includes("restored.status === 403") &&
+    signInSrc.includes("applyChecklistDraftAccount") &&
+    !signInSrc.includes("clearAllChecklistDrafts(") &&
+    checklistSectionSrc.includes("itemUnsynced") &&
+    checklistSectionSrc.indexOf('? "Saved on this phone"') >
+      checklistSectionSrc.indexOf("itemUnsynced"),
 );
+
+function expectedFromItems(items) {
+  return items.map((item) => ({ key: item.key, checked: item.checked }));
+}
+
+function syncPayload(expectedItems, items) {
+  return {
+    expectedFingerprint: checklistStateFingerprint(expectedFromItems(expectedItems)),
+    items,
+  };
+}
 
 const emptySync = parseNativeChecklistSyncJson("{}");
 const kitchenExpected = packCrewChecklist().map((item) => ({
   key: item.key,
   checked: item.checked,
 }));
+const kitchenFingerprint = checklistStateFingerprint(kitchenExpected);
 const validSync = parseNativeChecklistSyncJson(
   JSON.stringify({
-    expectedChecklist: kitchenExpected,
-    items: [{ itemKey: "kitchen", checked: true }],
+    expectedFingerprint: kitchenFingerprint,
+    items: [{ itemKey: "kitchen", checked: true, baseChecked: false }],
   }),
 );
 check(
-  "Sync JSON requires expectedChecklist plus at least one item change",
+  "Sync JSON requires a full-state fingerprint plus at least one changed item",
   emptySync.ok === false &&
     emptySync.error === NATIVE_CHECKLIST_CHOOSE_ITEM &&
     validSync.ok === true &&
     validSync.items[0].itemKey === "kitchen" &&
     validSync.items[0].checked === true &&
-    validSync.expectedChecklist.length === kitchenExpected.length,
+    validSync.items[0].baseChecked === false &&
+    validSync.expectedFingerprint === kitchenFingerprint &&
+    nativeDraftFingerprint(kitchenExpected) === kitchenFingerprint,
 );
 
 const oversizedBody = await readCappedRequestText(
@@ -302,7 +377,8 @@ check(
   first?.items.length === 1 &&
     first.items[0].itemKey === "kitchen" &&
     first.items[0].checked === true &&
-    first.expectedChecklist.find((item) => item.key === "kitchen")?.checked === false,
+    first.items[0].baseChecked === false &&
+    first.expectedFingerprint === checklistStateFingerprint(serverItems),
 );
 check(
   "Reloading the same scoped store keeps the unsynced draft",
@@ -375,7 +451,176 @@ check(
   "Persisted drafts store a base fingerprint plus only changed items",
   Boolean(compact?.expectedFingerprint) &&
     compact.items.length === 1 &&
-    compact.items[0].itemKey === "walkthrough",
+    compact.items[0].itemKey === "walkthrough" &&
+    compact.items[0].baseChecked === false &&
+    !JSON.stringify(compact).includes("expectedChecked") &&
+    !JSON.stringify(compact).includes("expectedChecklist"),
+);
+
+const thirtyItems = Array.from({ length: 30 }, (_, index) => ({
+  key: `c${String(index + 1).padStart(24, "0")}`,
+  title: `Step ${index + 1}`,
+  required: true,
+  checked: false,
+}));
+const thirtyScope = {
+  businessId: "clthirty0123456789abcdef1",
+  membershipId: "clthirty0123456789abcdef2",
+  jobId: "clthirty0123456789abcdef3",
+};
+const thirtyStorage = createMemoryChecklistDraftStorage();
+const thirtyDraft = await persistLocalChecklistChange(thirtyStorage, {
+  scope: thirtyScope,
+  serverItems: thirtyItems,
+  itemKey: thirtyItems[0].key,
+  checked: true,
+});
+const thirtyReloaded = await loadChecklistDraft(thirtyStorage, thirtyScope);
+const thirtyRaw = await thirtyStorage.read(checklistDraftStorageKey(thirtyScope));
+check(
+  "A 30-item cuid checklist stores only the tapped change under 2048 bytes",
+  thirtyDraft?.items.length === 1 &&
+    thirtyDraft.items[0].itemKey === thirtyItems[0].key &&
+    thirtyDraft.items[0].checked === true &&
+    thirtyDraft.items[0].baseChecked === false &&
+    thirtyReloaded?.expectedFingerprint === checklistStateFingerprint(thirtyItems) &&
+    storedByteLength(thirtyRaw ?? "") <= SECURE_STORE_VALUE_MAX_BYTES,
+);
+
+const overflowItems = Array.from({ length: 40 }, (_, index) => ({
+  key: `k${String(index).padStart(80, "x")}`,
+  title: `Overflow ${index}`,
+  required: true,
+  checked: false,
+}));
+const overflowScope = { ...scope, jobId: "job-overflow" };
+const overflowStorage = createMemoryChecklistDraftStorage();
+let overflowDraft = await persistLocalChecklistChange(overflowStorage, {
+  scope: overflowScope,
+  serverItems: overflowItems,
+  itemKey: overflowItems[0].key,
+  checked: true,
+});
+let overflowError = null;
+for (const item of overflowItems.slice(1)) {
+  try {
+    overflowDraft = await persistLocalChecklistChange(overflowStorage, {
+      scope: overflowScope,
+      serverItems: overflowItems,
+      itemKey: item.key,
+      checked: true,
+    });
+  } catch (error) {
+    overflowError = error;
+    break;
+  }
+}
+const overflowKept = await loadChecklistDraft(overflowStorage, overflowScope);
+check(
+  "A draft that cannot fit more changes says sync before more changes and keeps prior taps",
+  overflowError instanceof Error &&
+    overflowError.message === CHECKLIST_DRAFT_SYNC_BEFORE_MORE_CHANGES &&
+    overflowKept?.items.length === overflowDraft?.items.length &&
+    overflowKept?.items.length >= 1,
+);
+
+const indexOrder = [];
+const indexOrderData = new Map();
+const indexFirstStorage = {
+  async read(key) {
+    return indexOrderData.has(key) ? (indexOrderData.get(key) ?? null) : null;
+  },
+  async write(key, value) {
+    indexOrder.push(key);
+    indexOrderData.set(key, value);
+  },
+  async remove(key) {
+    indexOrderData.delete(key);
+  },
+};
+await persistLocalChecklistChange(indexFirstStorage, {
+  scope,
+  serverItems,
+  itemKey: "kitchen",
+  checked: true,
+});
+check(
+  "Draft index is written before the draft payload",
+  indexOrder[0] === CHECKLIST_DRAFT_INDEX_KEY &&
+    indexOrder[1] === checklistDraftStorageKey(scope),
+);
+
+const capStorage = createMemoryChecklistDraftStorage();
+let capError = null;
+for (let index = 0; index < CHECKLIST_DRAFT_INDEX_MAX_KEYS + 1; index += 1) {
+  try {
+    await persistLocalChecklistChange(capStorage, {
+      scope: { ...scope, jobId: `job-cap-${index}` },
+      serverItems,
+      itemKey: "kitchen",
+      checked: true,
+    });
+  } catch (error) {
+    capError = error;
+  }
+}
+const firstCapped = await loadChecklistDraft(capStorage, {
+  ...scope,
+  jobId: "job-cap-0",
+});
+check(
+  "The draft index stays under 2048 bytes and refuses a 17th job with a clear message",
+  capError instanceof Error &&
+    capError.message === CHECKLIST_DRAFT_INDEX_FULL_MESSAGE &&
+    firstCapped?.items[0].itemKey === "kitchen",
+);
+
+const explodingStorage = {
+  async read() {
+    throw new Error("index read failed");
+  },
+  async write() {
+    throw new Error("index write failed");
+  },
+  async remove() {
+    throw new Error("index remove failed");
+  },
+};
+let clearThrew = false;
+try {
+  await clearAllChecklistDrafts(explodingStorage);
+} catch {
+  clearThrew = true;
+}
+check("clearAllChecklistDrafts never throws", clearThrew === false);
+
+const accountStorage = createMemoryChecklistDraftStorage();
+await persistLocalChecklistChange(accountStorage, {
+  scope,
+  serverItems,
+  itemKey: "kitchen",
+  checked: true,
+});
+await applyChecklistDraftAccount(accountStorage, {
+  businessId: scope.businessId,
+  membershipId: scope.membershipId,
+});
+const sameAccountDraft = await loadChecklistDraft(accountStorage, scope);
+await applyChecklistDraftAccount(accountStorage, {
+  businessId: scope.businessId,
+  membershipId: scope.membershipId,
+});
+const stillSameAccountDraft = await loadChecklistDraft(accountStorage, scope);
+await applyChecklistDraftAccount(accountStorage, {
+  businessId: "biz-other",
+  membershipId: "mem-other",
+});
+const switchedAccountDraft = await loadChecklistDraft(accountStorage, scope);
+check(
+  "Sign-in keeps drafts for the same business+membership and clears only on account switch",
+  sameAccountDraft?.items[0].itemKey === "kitchen" &&
+    stillSameAccountDraft?.items[0].itemKey === "kitchen" &&
+    switchedAccountDraft === null,
 );
 
 try {
@@ -623,6 +868,41 @@ try {
     tradeCode: "CLEANING",
     assignedMembershipId: memberMem.id,
   });
+  const thirtyJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+    customerName: "Thirty Step Offline Checklist",
+  });
+  const outcomeRaceJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+  });
+  const completeRaceJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+  });
+  const attachRaceJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: memberMem.id,
+  });
+
+  const attachProcedure = await createOperatingProcedure(prisma, ownerA, {
+    title: "Replacement Crew Checklist",
+    tradeCode: "CLEANING",
+    steps: [
+      { title: "Entry walkthrough" },
+      { title: "Supply restock" },
+      { title: "Exit photo" },
+    ],
+  });
+  await setOperatingProcedureApproval(prisma, ownerA, {
+    procedureId: attachProcedure.id,
+    approvalState: "APPROVED",
+  });
 
   for (const job of [
     memberJob,
@@ -634,9 +914,17 @@ try {
     canceledJob,
     outcomeJob,
     concurrentJob,
+    thirtyJob,
+    outcomeRaceJob,
+    completeRaceJob,
+    attachRaceJob,
   ]) {
     await setCleaningVisitCadence(prisma, ownerA, { jobId: job.id, cadence: "WEEKLY" });
   }
+  await prisma.jobCrewVisit.update({
+    where: { jobId: thirtyJob.id },
+    data: { checklistJson: serializeChecklist(thirtyItems) },
+  });
   await prisma.jobCrewVisit.update({
     where: { jobId: outcomeJob.id },
     data: { outcomeStatus: "VISIT_COMPLETED" },
@@ -747,57 +1035,50 @@ try {
     prisma,
     ownerAccess.access,
     memberJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const memberOnOwner = await syncNativeAssignedChecklistDraft(
     prisma,
     memberAccess.access,
     ownerJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const stolen = await syncNativeAssignedChecklistDraft(
     prisma,
     otherAccess.access,
     memberJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const cross = await syncNativeAssignedChecklistDraft(
     prisma,
     betaAccess.access,
     memberJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const handyBareWrite = await syncNativeAssignedChecklistDraft(
     prisma,
     handyAccess.access,
     handyBareJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const blockedWrite = await syncNativeAssignedChecklistDraft(
     prisma,
     blockedAccess.access,
     blockedJob.id,
     {
-      expectedChecklist: expectedFrom({
-        checklist: { items: packCrewChecklist() },
-        visit: null,
-      }),
-      items: [{ itemKey: "kitchen", checked: true }],
+      ...syncPayload(packCrewChecklist(), [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
     },
   );
   const memberAfterAuth = await prisma.jobCrewVisit.findFirst({
@@ -846,10 +1127,9 @@ try {
     prisma,
     memberAccess.access,
     memberJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const memberReloaded = await loadNativeAssignedJob(prisma, memberAccess.access, memberJob.id);
   check(
@@ -871,8 +1151,9 @@ try {
     ownerAccess.access,
     ownerJob.id,
     {
-      expectedChecklist: expectedFrom(ownerDetail),
-      items: [{ itemKey: "floors", checked: true }],
+      ...syncPayload(expectedFrom(ownerDetail), [
+        { itemKey: "floors", checked: true, baseChecked: false },
+      ]),
     },
   );
   check(
@@ -885,10 +1166,9 @@ try {
     prisma,
     memberAccess.access,
     memberJob.id,
-    {
-      expectedChecklist: expectedMember,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedMember, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   check(
     "Replaying a committed draft succeeds as alreadySynced without rewriting",
@@ -905,8 +1185,9 @@ try {
     memberAccess.access,
     completedJob.id,
     {
-      expectedChecklist: completedExpected,
-      items: [{ itemKey: "kitchen", checked: true }],
+      ...syncPayload(completedExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
     },
   );
   const canceledExpected = expectedFrom(
@@ -917,8 +1198,9 @@ try {
     memberAccess.access,
     canceledJob.id,
     {
-      expectedChecklist: canceledExpected,
-      items: [{ itemKey: "kitchen", checked: true }],
+      ...syncPayload(canceledExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
     },
   );
   const outcomeExpected = expectedFrom(
@@ -929,8 +1211,9 @@ try {
     memberAccess.access,
     outcomeJob.id,
     {
-      expectedChecklist: outcomeExpected,
-      items: [{ itemKey: "kitchen", checked: true }],
+      ...syncPayload(outcomeExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
     },
   );
   const closedAfter = await prisma.jobCrewVisit.findMany({
@@ -973,20 +1256,18 @@ try {
       prisma,
       memberAccess.access,
       concurrentJob.id,
-      {
-        expectedChecklist: concurrentExpected,
-        items: [{ itemKey: "kitchen", checked: true }],
-      },
+      syncPayload(concurrentExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
       { afterInitialRead: waitForPeer },
     ),
     syncNativeAssignedChecklistDraft(
       prisma,
       memberAccess.access,
       concurrentJob.id,
-      {
-        expectedChecklist: concurrentExpected,
-        items: [{ itemKey: "bathrooms", checked: true }],
-      },
+      syncPayload(concurrentExpected, [
+        { itemKey: "bathrooms", checked: true, baseChecked: false },
+      ]),
       { afterInitialRead: waitForPeer },
     ),
   ]);
@@ -1017,10 +1298,9 @@ try {
     prisma,
     handyAccess.access,
     handyListedJob.id,
-    {
-      expectedChecklist: expectedFrom(handyListedDetail),
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(expectedFrom(handyListedDetail), [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const handyReloaded = await loadNativeAssignedJob(
     prisma,
@@ -1048,10 +1328,9 @@ try {
     prisma,
     memberAccess.access,
     staleJob.id,
-    {
-      expectedChecklist: staleExpected,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(staleExpected, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
   );
   const staleAfter = await prisma.jobCrewVisit.findFirst({
     where: { jobId: staleJob.id, businessId: businessA.id },
@@ -1072,10 +1351,9 @@ try {
     prisma,
     memberAccess.access,
     raceJob.id,
-    {
-      expectedChecklist: raceExpected,
-      items: [{ itemKey: "kitchen", checked: true }],
-    },
+    syncPayload(raceExpected, [
+      { itemKey: "kitchen", checked: true, baseChecked: false },
+    ]),
     {
       afterInitialRead: async () => {
         await prisma.job.update({
@@ -1100,6 +1378,231 @@ try {
     "Reassigned Job after the initial read leaves no checklist write",
     JSON.parse(raceVisit.checklistJson).every((item) => item.checked === false) &&
       raceJobAfter?.assignedMembershipId === otherMem.id,
+  );
+
+  const thirtyLiveScope = {
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: thirtyJob.id,
+  };
+  const thirtyLiveDraft = await persistLocalChecklistChange(
+    createMemoryChecklistDraftStorage(),
+    {
+      scope: thirtyLiveScope,
+      serverItems: thirtyItems,
+      itemKey: thirtyItems[0].key,
+      checked: true,
+    },
+  );
+  const thirtySync = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    thirtyJob.id,
+    {
+      expectedFingerprint: thirtyLiveDraft.expectedFingerprint,
+      items: thirtyLiveDraft.items,
+    },
+  );
+  const thirtyAfterSync = await loadNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    thirtyJob.id,
+  );
+  const thirtyServerItems =
+    thirtyAfterSync?.checklist?.items ?? thirtyAfterSync?.visit?.checklist ?? [];
+  const thirtyStaleDraft = await persistLocalChecklistChange(
+    createMemoryChecklistDraftStorage(),
+    {
+      scope: thirtyLiveScope,
+      serverItems: thirtyServerItems,
+      itemKey: thirtyItems[1].key,
+      checked: true,
+    },
+  );
+  await prisma.jobCrewVisit.update({
+    where: { jobId: thirtyJob.id },
+    data: {
+      checklistJson: serializeChecklist(
+        toggleChecklistItem(thirtyServerItems, thirtyItems[2].key, true),
+      ),
+    },
+  });
+  const thirtyStale = await syncNativeAssignedChecklistDraft(
+    prisma,
+    memberAccess.access,
+    thirtyJob.id,
+    {
+      expectedFingerprint: thirtyStaleDraft.expectedFingerprint,
+      items: thirtyStaleDraft.items,
+    },
+  );
+  const thirtyAfterStale = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: thirtyJob.id, businessId: businessA.id },
+  });
+  const thirtyAfterStaleItems = JSON.parse(thirtyAfterStale.checklistJson);
+  check(
+    "Thirty cuid-keyed items can tap, save a draft, sync, and fail a later stale check",
+    thirtyItems.length === 30 &&
+      thirtyItems.every((item) => /^c[0-9]{24}$/.test(item.key)) &&
+      thirtyLiveDraft?.items.length === 1 &&
+      thirtySync.ok === true &&
+      thirtySync.alreadySynced === false &&
+      thirtyAfterSync?.checklist?.items.find((item) => item.key === thirtyItems[0].key)
+        ?.checked === true &&
+      thirtyStale.ok === false &&
+      thirtyStale.status === 409 &&
+      thirtyStale.error === NATIVE_CHECKLIST_STALE_MESSAGE &&
+      thirtyAfterStaleItems.find((item) => item.key === thirtyItems[0].key)?.checked === true &&
+      thirtyAfterStaleItems.find((item) => item.key === thirtyItems[1].key)?.checked === false &&
+      thirtyAfterStaleItems.find((item) => item.key === thirtyItems[2].key)?.checked === true,
+  );
+
+  function createTwoPartyBarrier() {
+    let releaseBarrier;
+    let started = 0;
+    const barrier = new Promise((resolve) => {
+      releaseBarrier = resolve;
+    });
+    return async function waitForPeer() {
+      started += 1;
+      if (started === 2) releaseBarrier();
+      await barrier;
+    };
+  }
+
+  const outcomeRaceExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, outcomeRaceJob.id),
+  );
+  const waitOutcome = createTwoPartyBarrier();
+  const [outcomeRaceSync, outcomeRaceWrite] = await Promise.all([
+    syncNativeAssignedChecklistDraft(
+      prisma,
+      memberAccess.access,
+      outcomeRaceJob.id,
+      syncPayload(outcomeRaceExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
+      { afterInitialRead: waitOutcome },
+    ),
+    recordAssignedVisitOutcome(
+      prisma,
+      { businessId: businessA.id, membershipId: memberMem.id },
+      {
+        jobId: outcomeRaceJob.id,
+        outcomeStatus: "VISIT_COMPLETED",
+        afterInitialRead: waitOutcome,
+      },
+    )
+      .then((value) => ({ ok: true, value }))
+      .catch((error) => ({ ok: false, error })),
+  ]);
+  const outcomeRaceVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: outcomeRaceJob.id, businessId: businessA.id },
+  });
+  const outcomeRaceKitchen = JSON.parse(outcomeRaceVisit.checklistJson).find(
+    (item) => item.key === "kitchen",
+  )?.checked;
+  check(
+    "Sync vs recordAssignedVisitOutcome serializes to closed/stale 409 or one write, with no lost write",
+    ((outcomeRaceSync.ok === true &&
+      outcomeRaceKitchen === true &&
+      outcomeRaceWrite.ok === true) ||
+      (outcomeRaceSync.ok === false &&
+        outcomeRaceSync.status === 409 &&
+        (outcomeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE ||
+          outcomeRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE) &&
+        outcomeRaceKitchen === false &&
+        outcomeRaceWrite.ok === true)) &&
+      outcomeRaceVisit.outcomeStatus !== "NONE",
+  );
+
+  const completeRaceExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, completeRaceJob.id),
+  );
+  const waitComplete = createTwoPartyBarrier();
+  const [completeRaceSync, completeRaceWrite] = await Promise.all([
+    syncNativeAssignedChecklistDraft(
+      prisma,
+      memberAccess.access,
+      completeRaceJob.id,
+      syncPayload(completeRaceExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
+      { afterInitialRead: waitComplete },
+    ),
+    completeJobWithRunningTimeSafety(
+      prisma,
+      {
+        businessId: businessA.id,
+        jobId: completeRaceJob.id,
+        actorMembershipId: memberMem.id,
+      },
+      { afterInitialRead: waitComplete },
+    ),
+  ]);
+  const completeRaceVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: completeRaceJob.id, businessId: businessA.id },
+  });
+  const completeRaceJobAfter = await prisma.job.findFirst({
+    where: { id: completeRaceJob.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  const completeRaceKitchen = JSON.parse(completeRaceVisit.checklistJson).find(
+    (item) => item.key === "kitchen",
+  )?.checked;
+  check(
+    "Sync vs completeJobWithRunningTimeSafety serializes to closed/stale 409 or one write, with no lost write",
+    ((completeRaceSync.ok === true &&
+      completeRaceKitchen === true &&
+      completeRaceWrite.ok === true) ||
+      (completeRaceSync.ok === false &&
+        completeRaceSync.status === 409 &&
+        (completeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE ||
+          completeRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE) &&
+        completeRaceKitchen === false &&
+        completeRaceWrite.ok === true)) &&
+      completeRaceJobAfter?.status === "COMPLETED",
+  );
+
+  const attachRaceExpected = expectedFrom(
+    await loadNativeAssignedJob(prisma, memberAccess.access, attachRaceJob.id),
+  );
+  const waitAttach = createTwoPartyBarrier();
+  const [attachRaceSync, attachRaceWrite] = await Promise.all([
+    syncNativeAssignedChecklistDraft(
+      prisma,
+      memberAccess.access,
+      attachRaceJob.id,
+      syncPayload(attachRaceExpected, [
+        { itemKey: "kitchen", checked: true, baseChecked: false },
+      ]),
+      { afterInitialRead: waitAttach },
+    ),
+    attachCleaningCrewChecklist(prisma, ownerA, {
+      jobId: attachRaceJob.id,
+      procedureId: attachProcedure.id,
+      afterInitialRead: waitAttach,
+    })
+      .then((value) => ({ ok: true, value }))
+      .catch((error) => ({ ok: false, error })),
+  ]);
+  const attachRaceVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: attachRaceJob.id, businessId: businessA.id },
+  });
+  const attachRaceItems = JSON.parse(attachRaceVisit.checklistJson);
+  const attachWon = attachRaceItems.every((item) => item.key !== "kitchen");
+  const syncWonAlone =
+    attachRaceSync.ok === true &&
+    attachRaceItems.find((item) => item.key === "kitchen")?.checked === true;
+  check(
+    "Sync vs OWNER attachCleaningCrewChecklist serializes to stale 409 or one write, with no lost write",
+    attachRaceWrite.ok === true &&
+      ((attachRaceSync.ok === false &&
+        attachRaceSync.status === 409 &&
+        attachRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE &&
+        attachWon &&
+        attachRaceItems.every((item) => item.checked === false)) ||
+        (attachRaceSync.ok === true && (attachWon || syncWonAlone))),
   );
 
   const leftoverB = await prisma.jobCrewVisit.findMany({ where: { businessId: businessB.id } });
