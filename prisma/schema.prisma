@@ -424,7 +424,7 @@ model Business {
   estimateLineTemplates     EstimateLineTemplate[]
   estimateLineTemplateLines EstimateLineTemplateLine[]
   /// OWNER-set monthly targets for recorded jobs completed, invoices paid,
-  /// and revenue received. Targets are not forecasts or bank balance.
+  /// and collected payments (recorded). Targets are not forecasts or bank balance.
   monthlyBusinessGoals      MonthlyBusinessGoal[]
 }
 
@@ -521,7 +521,7 @@ model OwnerScenarioAssumptionSet {
 }
 
 /// OWNER-set monthly targets for recorded jobs completed, invoices paid,
-/// and revenue received. One row per business civil month. Targets are
+/// and collected payments (recorded). One row per business civil month. Targets are
 /// not forecasts, projected cash, or bank balance. Actuals are computed
 /// from recorded TBBT facts using Business.timezone month boundaries.
 /// ADMIN may view; MEMBER is denied. businessId comes from access.

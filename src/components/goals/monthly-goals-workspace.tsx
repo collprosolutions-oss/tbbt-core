@@ -13,7 +13,6 @@ import {
   REVENUE_RECEIVED_FACT_MESSAGE,
   TARGET_NOT_BANK_BALANCE_MESSAGE,
   TARGET_NOT_FORECAST_MESSAGE,
-  UNCLOCKED_COMPLETED_JOBS_MESSAGE,
   monthlyGoalHref,
   type MonthlyGoalProgress,
 } from "@/lib/monthly-goals";
@@ -97,8 +96,7 @@ function ProgressCard({
 }
 
 export function MonthlyGoalsWorkspace({ workspace }: { workspace: MonthlyGoalsWorkspaceData }) {
-  const { period, progress, targets, canWrite, goalsAvailable, unavailableMessage, unclockedCompletedJobs } =
-    workspace;
+  const { period, progress, targets, canWrite, goalsAvailable, unavailableMessage } = workspace;
 
   return (
     <div className="space-y-6">
@@ -137,13 +135,6 @@ export function MonthlyGoalsWorkspace({ workspace }: { workspace: MonthlyGoalsWo
             <CardDescription>{unavailableMessage}</CardDescription>
           </CardHeader>
         </Card>
-      ) : null}
-
-      {unclockedCompletedJobs > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {unclockedCompletedJobs} completed job{unclockedCompletedJobs === 1 ? "" : "s"} have no
-          recorded completion date. {UNCLOCKED_COMPLETED_JOBS_MESSAGE}
-        </p>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">

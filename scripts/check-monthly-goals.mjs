@@ -188,20 +188,20 @@ async function deniedAsync(fn) {
   }
 }
 
-const libSrc = readRepo("src/lib/monthly-goals.ts");
-const dataSrc = readRepo("src/lib/monthly-goals-data.ts");
-const opsSrc = readRepo("src/lib/monthly-goals-ops.ts");
-const actionSrc = readRepo("src/app/actions/monthly-goals.ts");
-const pageSrc = readRepo("src/app/(app)/goals/page.tsx");
-const uiSrc = readRepo("src/components/goals/monthly-goals-workspace.tsx");
-const reportsSrc = readRepo("src/app/(app)/reports/page.tsx");
-const navSrc = readRepo("src/lib/nav.ts");
-const schemaSrc = readRepo("prisma/schema.prisma");
-const migrationSrc = readRepo("prisma/migrations/20260929010700_monthly_business_goal/migration.sql");
-const packageSrc = readRepo("package.json");
-const allFeatureSrc = [libSrc, dataSrc, opsSrc, actionSrc, pageSrc, uiSrc].join("\n");
-
 try {
+  const libSrc = readRepo("src/lib/monthly-goals.ts");
+  const dataSrc = readRepo("src/lib/monthly-goals-data.ts");
+  const opsSrc = readRepo("src/lib/monthly-goals-ops.ts");
+  const actionSrc = readRepo("src/app/actions/monthly-goals.ts");
+  const pageSrc = readRepo("src/app/(app)/goals/page.tsx");
+  const uiSrc = readRepo("src/components/goals/monthly-goals-workspace.tsx");
+  const reportsSrc = readRepo("src/app/(app)/reports/page.tsx");
+  const navSrc = readRepo("src/lib/nav.ts");
+  const schemaSrc = readRepo("prisma/schema.prisma");
+  const migrationSrc = readRepo("prisma/migrations/20260929010700_monthly_business_goal/migration.sql");
+  const packageSrc = readRepo("package.json");
+  const allFeatureSrc = [libSrc, dataSrc, opsSrc, actionSrc, pageSrc, uiSrc].join("\n");
+
   console.log("\nSTATIC — Honesty, bounds, and no automatic side effects");
   check("Route is /goals", MONTHLY_GOALS_PATH === "/goals" && pageSrc.includes("MonthlyGoalsPage"));
   check(
@@ -432,6 +432,13 @@ try {
   });
   check("OWNER can set monthly targets", saved.saved.jobsCompletedTarget === 4 && saved.saved.invoicesPaidTarget === 3 && saved.saved.revenueReceivedTarget === 500);
   check("Save message refuses book writes", saved.message.includes(SAVE_DOES_NOT_WRITE_BOOKS_MESSAGE));
+  const firstSavedRow = await prisma.monthlyBusinessGoal.findFirst({
+    where: { businessId: businessA.id, year: 2026, month: 9 },
+  });
+  check(
+    "First save stores createdByMembershipId",
+    firstSavedRow?.createdByMembershipId === ownerMem.id,
+  );
   check("Invalid month is rejected", await (async () => {
     try {
       await saveMonthlyBusinessGoal(prisma, ownerA, { month: "2026-13", jobsCompleted: "1" });
@@ -857,6 +864,26 @@ try {
       receivedAt: new Date("2026-10-06T16:00:00.000Z"),
     },
   });
+  const octPaidPresence = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "PAID",
+      total: new Prisma.Decimal(300),
+      paidAt: new Date("2026-10-05T16:00:00.000Z"),
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      invoiceId: octPaidPresence.id,
+      purpose: "INVOICE_BALANCE",
+      amount: new Prisma.Decimal(20),
+      method: "CASH",
+      receivedAt: new Date("2026-09-20T16:00:00.000Z"),
+    },
+  });
   for (const status of ["VOID", "DRAFT", "SENT"]) {
     await prisma.invoice.create({
       data: {
@@ -874,10 +901,28 @@ try {
     { month: "2026-10" },
     new Date("2026-10-20T15:00:00.000Z"),
   );
-  check("October loader counts only the PAID invoice", workspaceOctober.progress.invoicesPaid.actual === 1);
+  check("October loader counts both PAID invoices", workspaceOctober.progress.invoicesPaid.actual === 2);
   check(
     "October loader counts only the $50 Payment, not the $400 invoice total",
     workspaceOctober.progress.revenueReceived.actual === 50,
+  );
+  check(
+    "October groupBy presence excludes the $300 PAID total and the $20 September Payment",
+    workspaceOctober.progress.revenueReceived.actual === 50 &&
+      workspaceOctober.progress.revenueReceived.actual !== 300 &&
+      workspaceOctober.progress.revenueReceived.actual !== 20 &&
+      workspaceOctober.progress.revenueReceived.actual !== 320 &&
+      workspaceOctober.progress.revenueReceived.actual !== 70,
+  );
+  const workspaceSeptemberAfterPresence = await loadMonthlyGoalsWorkspace(
+    prisma,
+    ownerA,
+    { month: "2026-09" },
+    new Date("2026-09-20T15:00:00.000Z"),
+  );
+  check(
+    "September collected payments include the $20 Payment received in September",
+    workspaceSeptemberAfterPresence.progress.revenueReceived.actual === 395,
   );
 
   console.log("\nRACE — two OWNER upserts released together");
@@ -946,6 +991,15 @@ try {
   const paymentCountAfter = await prisma.payment.count({ where: { businessId: businessA.id } });
   check("Saving targets does not create invoices", invoiceCountBefore === invoiceCountAfter);
   check("Saving targets does not create payments", paymentCountBefore === paymentCountAfter);
+  const secondSavedRow = await prisma.monthlyBusinessGoal.findFirst({
+    where: { businessId: businessA.id, year: 2026, month: 9 },
+  });
+  check(
+    "Second OWNER save leaves createdByMembershipId unchanged",
+    secondSavedRow?.createdByMembershipId === ownerMem.id &&
+      secondSavedRow?.createdByMembershipId === firstSavedRow?.createdByMembershipId &&
+      secondSavedRow?.jobsCompletedTarget === 5,
+  );
 
   console.log(
     failures === 0
