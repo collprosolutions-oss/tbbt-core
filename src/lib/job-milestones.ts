@@ -39,7 +39,14 @@ export const TITLE_BLANK_MESSAGE = "Each milestone needs a title.";
 export const TITLE_TOO_LONG_MESSAGE = `Milestone titles must be ${MAX_MILESTONE_TITLE_LENGTH} characters or fewer.`;
 export const DUPLICATE_TITLE_MESSAGE =
   "That milestone title is already recorded on this job.";
+export const DUPLICATE_SORT_ORDER_MESSAGE =
+  "That milestone order is already recorded on this job.";
 export const MILESTONE_BOUND_MESSAGE = `A job can record at most ${MAX_JOB_MILESTONES} milestones.`;
+export const JOB_MILESTONE_HISTORY_BOUND = 80;
+export const JOB_MILESTONE_STATUS_LABELS: Record<JobMilestoneStatus, string> = {
+  OPEN: "Not yet marked complete",
+  COMPLETED: "Completed",
+};
 export const MILESTONE_NOT_FOUND_MESSAGE =
   "That milestone is not in this workspace.";
 export const JOB_NOT_FOUND_MESSAGE = "That work order is not in this workspace.";
@@ -70,11 +77,16 @@ export type OwnerJobMilestone = {
 };
 
 export type CustomerJobMilestone = {
-  id: string;
   title: string;
   sortOrder: number;
   status: JobMilestoneStatus;
+  statusLabel: string;
   completedAt: Date | null;
+};
+
+export type OwnerJobMilestoneView = OwnerJobMilestone & {
+  statusLabel: string;
+  completedAtLabel: string | null;
 };
 
 export type JobMilestoneHistoryEvent = {
@@ -162,6 +174,11 @@ export function isJobMilestoneStatus(value: unknown): value is JobMilestoneStatu
   );
 }
 
+export function jobMilestoneStatusLabel(status: string): string {
+  const resolved = isJobMilestoneStatus(status) ? status : "OPEN";
+  return JOB_MILESTONE_STATUS_LABELS[resolved];
+}
+
 export function ownerMilestoneFromRow(row: {
   id: string;
   businessId: string;
@@ -185,7 +202,6 @@ export function ownerMilestoneFromRow(row: {
 }
 
 export function customerMilestoneFromRow(row: {
-  id: string;
   title: string;
   sortOrder: number;
   status: string;
@@ -193,11 +209,12 @@ export function customerMilestoneFromRow(row: {
   customerVisible: boolean;
 }): CustomerJobMilestone | null {
   if (!row.customerVisible) return null;
+  const status = isJobMilestoneStatus(row.status) ? row.status : "OPEN";
   return {
-    id: row.id,
     title: row.title,
     sortOrder: row.sortOrder,
-    status: isJobMilestoneStatus(row.status) ? row.status : "OPEN",
+    status,
+    statusLabel: JOB_MILESTONE_STATUS_LABELS[status],
     completedAt: row.completedAt,
   };
 }
@@ -209,19 +226,14 @@ export function isolateSameBusinessMilestones<T extends { businessId: string }>(
   return rows.filter((row) => row.businessId === businessId);
 }
 
-export function orderJobMilestones<T extends { sortOrder: number; id: string }>(
+export function orderJobMilestones<T extends { sortOrder: number }>(
   rows: readonly T[],
 ): T[] {
-  return [...rows].sort((left, right) => {
-    if (left.sortOrder !== right.sortOrder) {
-      return left.sortOrder - right.sortOrder;
-    }
-    return left.id.localeCompare(right.id);
-  });
+  return [...rows].sort((left, right) => left.sortOrder - right.sortOrder);
 }
 
 export function customerVisibleMilestones<
-  T extends { customerVisible: boolean; sortOrder: number; id: string },
+  T extends { customerVisible: boolean; sortOrder: number },
 >(rows: readonly T[]): T[] {
   return orderJobMilestones(rows.filter((row) => row.customerVisible));
 }

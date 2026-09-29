@@ -7,9 +7,12 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, canAccessManagementConsole } from "@/lib/authorization";
+import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   CUSTOMER_HIDDEN_BY_DEFAULT_MESSAGE,
+  DUPLICATE_SORT_ORDER_MESSAGE,
   DUPLICATE_TITLE_MESSAGE,
+  JOB_MILESTONE_HISTORY_BOUND,
   JOB_NOT_FOUND_MESSAGE,
   MAX_JOB_MILESTONES,
   MILESTONE_BOUND_MESSAGE,
@@ -60,18 +63,39 @@ function prismaErrorCode(error: unknown) {
 
 export function missingJobMilestoneSchema(error: unknown) {
   const code = prismaErrorCode(error);
-  if (code === "P2002") return false;
-  const message = error instanceof Error ? error.message : String(error);
+  return code === "P2021" || code === "P2022";
+}
+
+function prismaUniqueTargets(error: unknown): string[] {
+  if (!error || typeof error !== "object" || !("meta" in error)) return [];
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  if (Array.isArray(target)) return target.map(String);
+  if (typeof target === "string") return [target];
+  return [];
+}
+
+export function isDuplicateJobMilestoneSortOrderError(error: unknown) {
   return (
-    code === "P2021" ||
-    code === "P2022" ||
-    /JobMilestone|jobMilestone|does not exist/i.test(message)
+    prismaErrorCode(error) === "P2002" &&
+    prismaUniqueTargets(error).some((target) => /sortOrder/i.test(target))
   );
 }
 
 export function isDuplicateJobMilestoneTitleError(error: unknown) {
-  return prismaErrorCode(error) === "P2002";
+  return (
+    prismaErrorCode(error) === "P2002" &&
+    prismaUniqueTargets(error).some((target) => /titleKey/i.test(target))
+  );
 }
+
+/**
+ * Test-only barriers. Production never sets these.
+ * afterJobLock runs inside the write transaction after lockTenantOwnedJob
+ * and before the cap / status snapshot.
+ */
+export const jobMilestoneTestHooks: {
+  afterJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
+} = {};
 
 export function jobMilestoneErrorMessage(error: unknown, fallback: string) {
   if (error instanceof JobMilestoneError || error instanceof ForbiddenError) {
@@ -79,6 +103,9 @@ export function jobMilestoneErrorMessage(error: unknown, fallback: string) {
   }
   if (missingJobMilestoneSchema(error)) {
     return MILESTONE_UNAVAILABLE_MESSAGE;
+  }
+  if (isDuplicateJobMilestoneSortOrderError(error)) {
+    return DUPLICATE_SORT_ORDER_MESSAGE;
   }
   if (isDuplicateJobMilestoneTitleError(error)) {
     return DUPLICATE_TITLE_MESSAGE;
@@ -108,23 +135,6 @@ async function requireOwnedJob(db: Db, access: BusinessAccess, jobId: string) {
     }),
   );
   return job;
-}
-
-async function requireOwnedMilestone(
-  db: Db,
-  access: BusinessAccess,
-  milestoneId: string,
-) {
-  assertCanManageJobMilestones(access);
-  if (!milestoneId) {
-    throw new JobMilestoneError(MILESTONE_NOT_FOUND_MESSAGE);
-  }
-  const milestone = access.assertOwned(
-    await db.jobMilestone.findFirst({
-      where: { id: milestoneId, businessId: access.businessId },
-    }),
-  );
-  return milestone;
 }
 
 export async function listOwnerJobMilestones(
@@ -179,6 +189,7 @@ export async function listJobMilestoneHistory(
   const rows = await db.jobMilestoneEvent.findMany({
     where: { jobId: job.id, businessId: access.businessId },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: JOB_MILESTONE_HISTORY_BOUND,
     select: {
       id: true,
       milestoneId: true,
@@ -210,7 +221,6 @@ export async function loadCustomerVisibleMilestonesForProjectToken(
       },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: {
-        id: true,
         title: true,
         sortOrder: true,
         status: true,
@@ -249,73 +259,85 @@ export async function recordJobMilestones(
   const job = await requireOwnedJob(db, access, input.jobId);
   const actorId = actorMembershipId(access);
 
-  const created = await withWriteTx(db, async (tx) => {
-    const existing = await tx.jobMilestone.findMany({
-      where: { jobId: job.id, businessId: access.businessId },
-      select: { sortOrder: true, titleKey: true },
-    });
-    if (existing.length + parsed.items.length > MAX_JOB_MILESTONES) {
-      throw new JobMilestoneError(MILESTONE_BOUND_MESSAGE);
-    }
-    const existingKeys = new Set(existing.map((row) => row.titleKey));
-    let nextOrder =
-      existing.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
-    const rows: OwnerJobMilestone[] = [];
-    for (let index = 0; index < parsed.items.length; index += 1) {
-      const title = parsed.items[index].title;
-      const titleKey = milestoneTitleKey(title);
-      if (existingKeys.has(titleKey)) {
-        throw new JobMilestoneError(DUPLICATE_TITLE_MESSAGE);
+  try {
+    const created = await withWriteTx(db, async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
+      if (!locked) {
+        throw new JobMilestoneError(JOB_NOT_FOUND_MESSAGE);
       }
-      existingKeys.add(titleKey);
-      const customerVisible = input.items[index]?.customerVisible === true;
-      const row = await tx.jobMilestone.create({
-        data: {
-          businessId: access.businessId,
-          jobId: job.id,
-          title,
-          titleKey,
-          sortOrder: nextOrder,
-          customerVisible,
-          status: "OPEN",
-          createdByMembershipId: actorId,
-        },
+      await jobMilestoneTestHooks.afterJobLock?.({ jobId: job.id, kind: "record" });
+      const existing = await tx.jobMilestone.findMany({
+        where: { jobId: job.id, businessId: access.businessId },
+        select: { sortOrder: true, titleKey: true },
       });
-      nextOrder += 1;
-      await tx.jobMilestoneEvent.create({
-        data: {
-          businessId: access.businessId,
-          jobId: job.id,
-          milestoneId: row.id,
-          eventType: "RECORDED",
-          status: "OPEN",
-          actorMembershipId: actorId,
-          payload: customerVisible ? "customerVisible" : "customerHidden",
-        },
-      });
-      if (customerVisible) {
+      if (existing.length + parsed.items.length > MAX_JOB_MILESTONES) {
+        throw new JobMilestoneError(MILESTONE_BOUND_MESSAGE);
+      }
+      const existingKeys = new Set(existing.map((row) => row.titleKey));
+      let nextOrder =
+        existing.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
+      const rows: OwnerJobMilestone[] = [];
+      for (let index = 0; index < parsed.items.length; index += 1) {
+        const title = parsed.items[index].title;
+        const titleKey = milestoneTitleKey(title);
+        if (existingKeys.has(titleKey)) {
+          throw new JobMilestoneError(DUPLICATE_TITLE_MESSAGE);
+        }
+        existingKeys.add(titleKey);
+        const customerVisible = input.items[index]?.customerVisible === true;
+        const row = await tx.jobMilestone.create({
+          data: {
+            businessId: access.businessId,
+            jobId: job.id,
+            title,
+            titleKey,
+            sortOrder: nextOrder,
+            customerVisible,
+            status: "OPEN",
+            createdByMembershipId: actorId,
+          },
+        });
+        nextOrder += 1;
         await tx.jobMilestoneEvent.create({
           data: {
             businessId: access.businessId,
             jobId: job.id,
             milestoneId: row.id,
-            eventType: "CUSTOMER_EXPOSED",
+            eventType: "RECORDED",
             status: "OPEN",
             actorMembershipId: actorId,
+            payload: customerVisible ? "customerVisible" : "customerHidden",
           },
         });
+        if (customerVisible) {
+          await tx.jobMilestoneEvent.create({
+            data: {
+              businessId: access.businessId,
+              jobId: job.id,
+              milestoneId: row.id,
+              eventType: "CUSTOMER_EXPOSED",
+              status: "OPEN",
+              actorMembershipId: actorId,
+            },
+          });
+        }
+        rows.push(ownerMilestoneFromRow(row));
       }
-      rows.push(ownerMilestoneFromRow(row));
-    }
-    return rows;
-  });
+      return rows;
+    });
 
-  return {
-    milestones: created,
-    message: created.some((row) => row.customerVisible)
-      ? NO_AUTOMATIC_MESSAGE_MESSAGE
-      : CUSTOMER_HIDDEN_BY_DEFAULT_MESSAGE,
-  };
+    return {
+      milestones: created,
+      message: created.some((row) => row.customerVisible)
+        ? NO_AUTOMATIC_MESSAGE_MESSAGE
+        : CUSTOMER_HIDDEN_BY_DEFAULT_MESSAGE,
+    };
+  } catch (error) {
+    if (error instanceof JobMilestoneError || error instanceof ForbiddenError) {
+      throw error;
+    }
+    throw new JobMilestoneError(jobMilestoneErrorMessage(error, MILESTONE_BOUND_MESSAGE));
+  }
 }
 
 export async function completeJobMilestone(
@@ -327,58 +349,85 @@ export async function completeJobMilestone(
   alreadyComplete: boolean;
   message: string;
 }> {
-  const milestone = await requireOwnedMilestone(db, access, milestoneId);
+  assertCanManageJobMilestones(access);
+  if (!milestoneId) {
+    throw new JobMilestoneError(MILESTONE_NOT_FOUND_MESSAGE);
+  }
   const actorId = actorMembershipId(access);
   const now = new Date();
 
-  const updated = await db.jobMilestone.updateMany({
-    where: {
-      id: milestone.id,
-      businessId: access.businessId,
-      jobId: milestone.jobId,
-      status: "OPEN",
-    },
-    data: {
-      status: "COMPLETED",
-      completedAt: now,
-      completedByMembershipId: actorId,
-    },
-  });
-
-  if (updated.count !== 1) {
+  return withWriteTx(db, async (tx) => {
+    const preview = access.assertOwned(
+      await tx.jobMilestone.findFirst({
+        where: { id: milestoneId, businessId: access.businessId },
+      }),
+    );
+    const locked = await lockTenantOwnedJob(tx, access.businessId, preview.jobId);
+    if (!locked) {
+      throw new JobMilestoneError(JOB_NOT_FOUND_MESSAGE);
+    }
+    await jobMilestoneTestHooks.afterJobLock?.({
+      jobId: preview.jobId,
+      kind: "complete",
+    });
     const current = access.assertOwned(
-      await db.jobMilestone.findFirst({
-        where: { id: milestone.id, businessId: access.businessId },
+      await tx.jobMilestone.findFirst({
+        where: { id: preview.id, businessId: access.businessId },
+      }),
+    );
+    if (current.status === "COMPLETED") {
+      return {
+        milestone: ownerMilestoneFromRow(current),
+        alreadyComplete: true,
+        message: NO_INFERRED_COMPLETION_MESSAGE,
+      };
+    }
+    const updated = await tx.jobMilestone.updateMany({
+      where: {
+        id: current.id,
+        businessId: access.businessId,
+        jobId: current.jobId,
+        status: "OPEN",
+      },
+      data: {
+        status: "COMPLETED",
+        completedAt: now,
+        completedByMembershipId: actorId,
+      },
+    });
+    if (updated.count !== 1) {
+      const after = access.assertOwned(
+        await tx.jobMilestone.findFirst({
+          where: { id: current.id, businessId: access.businessId },
+        }),
+      );
+      return {
+        milestone: ownerMilestoneFromRow(after),
+        alreadyComplete: true,
+        message: NO_INFERRED_COMPLETION_MESSAGE,
+      };
+    }
+    await tx.jobMilestoneEvent.create({
+      data: {
+        businessId: access.businessId,
+        jobId: current.jobId,
+        milestoneId: current.id,
+        eventType: "COMPLETED",
+        status: "COMPLETED",
+        actorMembershipId: actorId,
+      },
+    });
+    const after = access.assertOwned(
+      await tx.jobMilestone.findFirst({
+        where: { id: current.id, businessId: access.businessId },
       }),
     );
     return {
-      milestone: ownerMilestoneFromRow(current),
-      alreadyComplete: true,
-      message: NO_INFERRED_COMPLETION_MESSAGE,
+      milestone: ownerMilestoneFromRow(after),
+      alreadyComplete: false,
+      message: NO_AUTOMATIC_MESSAGE_MESSAGE,
     };
-  }
-
-  await db.jobMilestoneEvent.create({
-    data: {
-      businessId: access.businessId,
-      jobId: milestone.jobId,
-      milestoneId: milestone.id,
-      eventType: "COMPLETED",
-      status: "COMPLETED",
-      actorMembershipId: actorId,
-    },
   });
-
-  const current = access.assertOwned(
-    await db.jobMilestone.findFirst({
-      where: { id: milestone.id, businessId: access.businessId },
-    }),
-  );
-  return {
-    milestone: ownerMilestoneFromRow(current),
-    alreadyComplete: false,
-    message: NO_AUTOMATIC_MESSAGE_MESSAGE,
-  };
 }
 
 export async function setJobMilestoneCustomerVisible(
@@ -389,52 +438,83 @@ export async function setJobMilestoneCustomerVisible(
   milestone: OwnerJobMilestone;
   unchanged: boolean;
 }> {
-  const milestone = await requireOwnedMilestone(db, access, input.milestoneId);
+  assertCanManageJobMilestones(access);
+  if (!input.milestoneId) {
+    throw new JobMilestoneError(MILESTONE_NOT_FOUND_MESSAGE);
+  }
   const actorId = actorMembershipId(access);
   const customerVisible = input.customerVisible === true;
 
-  const updated = await db.jobMilestone.updateMany({
-    where: {
-      id: milestone.id,
-      businessId: access.businessId,
-      jobId: milestone.jobId,
-      customerVisible: { not: customerVisible },
-    },
-    data: { customerVisible },
-  });
-
-  if (updated.count === 1) {
-    await db.jobMilestoneEvent.create({
-      data: {
-        businessId: access.businessId,
-        jobId: milestone.jobId,
-        milestoneId: milestone.id,
-        eventType: customerVisible ? "CUSTOMER_EXPOSED" : "CUSTOMER_HIDDEN",
-        status: resolveRecordedMilestoneStatus(milestone),
-        actorMembershipId: actorId,
-      },
+  return withWriteTx(db, async (tx) => {
+    const preview = access.assertOwned(
+      await tx.jobMilestone.findFirst({
+        where: { id: input.milestoneId, businessId: access.businessId },
+      }),
+    );
+    const locked = await lockTenantOwnedJob(tx, access.businessId, preview.jobId);
+    if (!locked) {
+      throw new JobMilestoneError(JOB_NOT_FOUND_MESSAGE);
+    }
+    await jobMilestoneTestHooks.afterJobLock?.({
+      jobId: preview.jobId,
+      kind: "visibility",
     });
-  }
-
-  const current = access.assertOwned(
-    await db.jobMilestone.findFirst({
-      where: { id: milestone.id, businessId: access.businessId },
-    }),
-  );
-  return {
-    milestone: ownerMilestoneFromRow(current),
-    unchanged: updated.count !== 1,
-  };
+    const current = access.assertOwned(
+      await tx.jobMilestone.findFirst({
+        where: { id: preview.id, businessId: access.businessId },
+      }),
+    );
+    const snapshotStatus = resolveRecordedMilestoneStatus(current);
+    if (current.customerVisible === customerVisible) {
+      return {
+        milestone: ownerMilestoneFromRow(current),
+        unchanged: true,
+      };
+    }
+    const updated = await tx.jobMilestone.updateMany({
+      where: {
+        id: current.id,
+        businessId: access.businessId,
+        jobId: current.jobId,
+        customerVisible: { not: customerVisible },
+      },
+      data: { customerVisible },
+    });
+    if (updated.count === 1) {
+      await tx.jobMilestoneEvent.create({
+        data: {
+          businessId: access.businessId,
+          jobId: current.jobId,
+          milestoneId: current.id,
+          eventType: customerVisible ? "CUSTOMER_EXPOSED" : "CUSTOMER_HIDDEN",
+          status: snapshotStatus,
+          actorMembershipId: actorId,
+        },
+      });
+    }
+    const after = access.assertOwned(
+      await tx.jobMilestone.findFirst({
+        where: { id: current.id, businessId: access.businessId },
+      }),
+    );
+    return {
+      milestone: ownerMilestoneFromRow(after),
+      unchanged: updated.count !== 1,
+    };
+  });
 }
 
 export function parseRecordedMilestoneFormItems(
   formData: FormData,
 ): RecordedJobMilestoneInput[] {
-  const fromLines = parseMilestoneTitleSet(
-    String(formData.get("titles") ?? "").split(/\r?\n/),
-  );
-  if (fromLines.items.length > 0 && !fromLines.error) {
-    const expose = formData.get("customerVisible") === "1";
+  const expose = formData.get("customerVisible") === "1";
+  if (formData.has("titles")) {
+    const fromLines = parseMilestoneTitleSet(
+      String(formData.get("titles") ?? "").split(/\r?\n/),
+    );
+    if (fromLines.error || fromLines.items.length === 0) {
+      throw new JobMilestoneError(fromLines.error ?? TITLE_REQUIRED_MESSAGE);
+    }
     return fromLines.items.map((item) => ({
       ...item,
       customerVisible: expose,
@@ -447,7 +527,6 @@ export function parseRecordedMilestoneFormItems(
   if (parsed.error || parsed.items.length === 0) {
     throw new JobMilestoneError(parsed.error ?? TITLE_REQUIRED_MESSAGE);
   }
-  const expose = formData.get("customerVisible") === "1";
   return parsed.items.map((item) => ({ ...item, customerVisible: expose }));
 }
 

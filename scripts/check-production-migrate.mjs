@@ -1405,7 +1405,7 @@ check(
 );
 
 const jobMilestonesMigration = readFileSync(
-  new URL("../prisma/migrations/20260929010000_job_milestones/migration.sql", import.meta.url),
+  new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
   "utf8",
 );
 check(
@@ -1415,11 +1415,12 @@ check(
     jobMilestonesMigration.includes('CREATE TABLE IF NOT EXISTS "JobMilestoneEvent"') &&
     !jobMilestonesMigration.includes('ALTER TABLE "Job"') &&
     !jobMilestonesMigration.includes('ADD COLUMN') &&
-    localNames.includes("20260929010000_job_milestones") &&
+    localNames.includes("20260929010600_job_milestones") &&
     localNames.includes("20260928190000_owner_studio_reminder_sms_destination") &&
+    !localNames.includes("20260929010000_job_milestones") &&
     !localNames.includes("20260928190000_job_milestones") &&
     localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") <
-      localNames.indexOf("20260929010000_job_milestones"),
+      localNames.indexOf("20260929010600_job_milestones"),
 );
 
 console.log(

@@ -18,6 +18,27 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error("DATABASE_URL must be set to run this check.");
+  process.exit(1);
+}
+
+let parsedUrl;
+try {
+  parsedUrl = new URL(baseUrl);
+} catch {
+  console.error("DATABASE_URL must be a valid URL.");
+  process.exit(1);
+}
+const dbHost = parsedUrl.hostname.toLowerCase();
+if (dbHost !== "localhost" && dbHost !== "127.0.0.1") {
+  console.error(
+    "Refusing to run: DATABASE_URL host must be localhost or 127.0.0.1.",
+  );
+  process.exit(1);
+}
+
 const generateEarly = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
 if (generateEarly.status !== 0) {
   console.error("Failed to generate Prisma client for job-milestone checks.");
@@ -26,11 +47,15 @@ if (generateEarly.status !== 0) {
 
 const { ForbiddenError } = await import("@/lib/authorization");
 const {
+  DUPLICATE_SORT_ORDER_MESSAGE,
   DUPLICATE_TITLE_MESSAGE,
+  JOB_MILESTONE_HISTORY_BOUND,
+  JOB_MILESTONE_STATUS_LABELS,
   JOB_NOT_FOUND_MESSAGE,
   MAX_JOB_MILESTONES,
   MAX_MILESTONE_TITLE_LENGTH,
   MILESTONE_BOUND_MESSAGE,
+  MILESTONE_UNAVAILABLE_MESSAGE,
   NO_AUTOMATIC_MESSAGE_MESSAGE,
   NO_INFERRED_COMPLETION_MESSAGE,
   TITLE_REQUIRED_MESSAGE,
@@ -40,7 +65,7 @@ const {
   canManageJobMilestones,
   customerVisibleMilestones,
   isolateSameBusinessMilestones,
-  milestoneTitleKey,
+  jobMilestoneStatusLabel,
   parseMilestoneTitle,
   parseMilestoneTitleSet,
   parseMilestoneTitlesFromText,
@@ -49,36 +74,41 @@ const {
 const {
   JobMilestoneError,
   completeJobMilestone,
+  isDuplicateJobMilestoneSortOrderError,
+  isDuplicateJobMilestoneTitleError,
+  jobMilestoneErrorMessage,
+  jobMilestoneTestHooks,
   listJobMilestoneHistory,
   listOwnerJobMilestones,
   loadCustomerVisibleMilestonesForProjectToken,
   loadWorkOrderMilestones,
+  missingJobMilestoneSchema,
+  parseRecordedMilestoneFormItems,
   recordJobMilestones,
   setJobMilestoneCustomerVisible,
 } = await import("@/lib/job-milestone-ops");
 const { resolveProjectProgressStep } = await import("@/lib/project-progress");
 
-const baseUrl = process.env.DATABASE_URL;
-if (!baseUrl) {
-  console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
-}
-
 const testDbName = "tbbt_job_milestones_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
+parsedUrl.pathname = `/${testDbName}`;
+const testUrl = parsedUrl.toString();
+const require = createRequire(import.meta.url);
 
-{
-  const { PrismaClient: AdminPrisma } = createRequire(import.meta.url)("@prisma/client");
+async function dropTestDatabase() {
+  const { PrismaClient: AdminPrisma } = require("@prisma/client");
   const admin = new AdminPrisma({ datasourceUrl: baseUrl });
-  await admin.$queryRawUnsafe(
-    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-    testDbName,
-  );
-  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  await admin.$disconnect();
+  try {
+    await admin.$queryRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      testDbName,
+    );
+    await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await admin.$disconnect();
+  }
 }
+
+await dropTestDatabase();
 
 const push = spawnSync(
   "npx",
@@ -87,12 +117,12 @@ const push = spawnSync(
 );
 if (push.status !== 0) {
   console.error("Failed to push schema for job-milestone test database.");
+  await dropTestDatabase();
   process.exit(push.status ?? 1);
 }
 
-const require = createRequire(import.meta.url);
 const { PrismaClient, Prisma } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+let prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -135,6 +165,39 @@ function makeAccess(businessId, role, membershipId) {
 
 function readRepo(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
+}
+
+function createCommitBarrier() {
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let arrived;
+  const waiting = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  return {
+    wait: async () => {
+      arrived();
+      await held;
+    },
+    arrived: waiting,
+    release: () => release(),
+  };
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function createWorkspace(name) {
@@ -186,7 +249,10 @@ async function createJob(businessId, status = "SCHEDULED") {
 
 try {
   const schema = readRepo("prisma/schema.prisma");
-  const migration = readRepo("prisma/migrations/20260929010000_job_milestones/migration.sql");
+  const migration = readRepo("prisma/migrations/20260929010600_job_milestones/migration.sql");
+  const selfSrc = readRepo("scripts/check-job-milestones.mjs");
+  const portalListSrc = readRepo("src/components/portal/project-milestones-list.tsx");
+  const cardSrc = readRepo("src/components/jobs/job-milestones-card.tsx");
   const libSrc = readRepo("src/lib/job-milestones.ts");
   const opsSrc = readRepo("src/lib/job-milestone-ops.ts");
   const actionSrc = readRepo("src/app/actions/job-milestones.ts");
@@ -241,10 +307,93 @@ try {
     workOrderSrc.includes("JobMilestonesCard") &&
       workOrderSrc.includes("canManageJobMilestones") &&
       workOrderSrc.includes("loadWorkOrderMilestones") &&
+      workOrderSrc.includes("formatDateTime(row.completedAt, timeZone)") &&
       !workOrderSrc.includes("milestones:") &&
       portalSrc.includes("loadCustomerVisibleMilestonesForProjectToken") &&
       portalSrc.includes("ProjectMilestonesList") &&
+      portalSrc.includes("timeZone={timeZone}") &&
       portalSrc.includes("customerMilestones.jobId === job.id"),
+  );
+  check(
+    "Localhost guard runs before prisma generate, clients, and db push",
+    selfSrc.indexOf('dbHost !== "localhost"') < selfSrc.indexOf('prisma", "generate"') &&
+      selfSrc.indexOf('prisma", "generate"') < selfSrc.indexOf("pg_terminate_backend") &&
+      selfSrc.indexOf("await dropTestDatabase()") < selfSrc.indexOf("db push") &&
+      selfSrc.includes("Failed to push schema") &&
+      selfSrc.lastIndexOf("await dropTestDatabase()") > selfSrc.lastIndexOf("} finally {"),
+  );
+  check(
+    "Portal list has no IDs and does not say In progress",
+    !portalListSrc.includes("milestone.id") &&
+      portalListSrc.includes("milestone.sortOrder") &&
+      portalListSrc.includes("timeZone") &&
+      !portalListSrc.includes("In progress") &&
+      portalListSrc.includes("statusLabel"),
+  );
+  check(
+    "Owner card uses server-formatted completedAt and confirms Mark complete",
+    cardSrc.includes("completedAtLabel") &&
+      !cardSrc.includes("formatDateTime") &&
+      cardSrc.includes("window.confirm") &&
+      cardSrc.includes("Mark this milestone complete? This cannot be undone."),
+  );
+  check(
+    "missingJobMilestoneSchema matches only P2021/P2022",
+    missingJobMilestoneSchema({ code: "P2021" }) &&
+      missingJobMilestoneSchema({ code: "P2022" }) &&
+      !missingJobMilestoneSchema(new Error("Can't reach database server; jobMilestone does not exist")) &&
+      !missingJobMilestoneSchema({ code: "P2002" }) &&
+      jobMilestoneErrorMessage({ code: "P2021" }, "fallback") === MILESTONE_UNAVAILABLE_MESSAGE &&
+      jobMilestoneErrorMessage(new Error("jobMilestone does not exist"), "fallback") === "fallback",
+  );
+  check(
+    "sortOrder P2002 is not mapped to a title-already-recorded message",
+    isDuplicateJobMilestoneSortOrderError({
+      code: "P2002",
+      meta: { target: ["jobId", "sortOrder"] },
+    }) &&
+      !isDuplicateJobMilestoneTitleError({
+        code: "P2002",
+        meta: { target: ["jobId", "sortOrder"] },
+      }) &&
+      jobMilestoneErrorMessage(
+        { code: "P2002", meta: { target: ["jobId", "sortOrder"] } },
+        "fallback",
+      ) === DUPLICATE_SORT_ORDER_MESSAGE &&
+      jobMilestoneErrorMessage(
+        { code: "P2002", meta: { target: ["jobId", "titleKey"] } },
+        "fallback",
+      ) === DUPLICATE_TITLE_MESSAGE,
+  );
+  check(
+    "Textarea parse surfaces the real duplicate-title error",
+    (() => {
+      const formData = new FormData();
+      formData.set("titles", "Prep\nprep");
+      try {
+        parseRecordedMilestoneFormItems(formData);
+        return false;
+      } catch (error) {
+        return error instanceof JobMilestoneError && error.message === DUPLICATE_TITLE_MESSAGE;
+      }
+    })(),
+  );
+  check(
+    "Customer-facing labels stay honest",
+    jobMilestoneStatusLabel("OPEN") === "Not yet marked complete" &&
+      jobMilestoneStatusLabel("COMPLETED") === "Completed" &&
+      JOB_MILESTONE_STATUS_LABELS.OPEN === "Not yet marked complete",
+  );
+  check("History list is bounded", JOB_MILESTONE_HISTORY_BOUND === 80 && opsSrc.includes("JOB_MILESTONE_HISTORY_BOUND"));
+  check("Record locks the Job before the cap check", opsSrc.includes("lockTenantOwnedJob") && opsSrc.indexOf("lockTenantOwnedJob") < opsSrc.indexOf("MAX_JOB_MILESTONES"));
+  check(
+    "Barrier races use afterJobLock and separate PrismaClients",
+    selfSrc.includes("jobMilestoneTestHooks.afterJobLock") &&
+      selfSrc.includes("Cap race A") &&
+      selfSrc.includes("record race first locker") &&
+      selfSrc.includes("complete vs complete first locker") &&
+      selfSrc.includes("complete-first locker") &&
+      selfSrc.includes("visibility-first locker"),
   );
   check("Dedicated test script is registered", packageSrc.includes("test:job-milestones"));
   check("OWNER-only write gate", canManageJobMilestones("OWNER") && !canManageJobMilestones("ADMIN") && !canManageJobMilestones("MEMBER"));
@@ -584,8 +733,240 @@ try {
     "Same-job milestones remain the original ordered set",
     leftover.map((row) => row.title).join("|") === "Materials ordered|Site prep|Install",
   );
+
+  console.log("\nDEDICATED DB — Cancelled jobs still show recorded milestones");
+  const cancelledJob = await createJob(alpha.business.id, "SCHEDULED");
+  const cancelledRecorded = await recordJobMilestones(prisma, ownerA, {
+    jobId: cancelledJob.id,
+    items: [
+      { title: "Cancelled job open", customerVisible: true },
+      { title: "Cancelled job done", customerVisible: true },
+      { title: "Cancelled hidden", customerVisible: false },
+    ],
+  });
+  await completeJobMilestone(prisma, ownerA, cancelledRecorded.milestones[1].id);
+  await prisma.job.update({
+    where: { id: cancelledJob.id },
+    data: { status: "CANCELLED" },
+  });
+  const portalCancelled = await loadCustomerVisibleMilestonesForProjectToken(
+    prisma,
+    cancelledJob.projectToken,
+  );
+  check(
+    "Cancelled job still shows OWNER-exposed milestones with recorded labels",
+    portalCancelled?.jobId === cancelledJob.id &&
+      portalCancelled.milestones.map((row) => row.title).join("|") ===
+        "Cancelled job open|Cancelled job done" &&
+      portalCancelled.milestones[0].status === "OPEN" &&
+      portalCancelled.milestones[0].statusLabel === "Not yet marked complete" &&
+      portalCancelled.milestones[1].status === "COMPLETED" &&
+      portalCancelled.milestones[1].statusLabel === "Completed" &&
+      !portalCancelled.milestones.some((row) => row.title === "Cancelled hidden"),
+  );
+  const cancelledOpen = await prisma.jobMilestone.findFirst({
+    where: { id: cancelledRecorded.milestones[0].id, businessId: alpha.business.id },
+  });
+  check(
+    "Job CANCELLED does not infer milestone completion or hide rows",
+    cancelledOpen?.status === "OPEN" &&
+      cancelledOpen.completedAt == null &&
+      cancelledOpen.customerVisible === true,
+  );
+
+  console.log("\nDEDICATED DB — Barrier races with separate PrismaClients");
+  const raceCapJob = await createJob(alpha.business.id, "SCHEDULED");
+  await recordJobMilestones(prisma, ownerA, {
+    jobId: raceCapJob.id,
+    items: Array.from({ length: 7 }, (_, index) => ({ title: `Cap seed ${index + 1}` })),
+  });
+  const recordBarrier = createCommitBarrier();
+  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
+    if (kind === "record") await recordBarrier.wait();
+  };
+  const recordClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const recordClientB = new PrismaClient({ datasourceUrl: testUrl });
+  let recordRace;
+  try {
+    const heldA = recordJobMilestones(recordClientA, ownerA, {
+      jobId: raceCapJob.id,
+      items: [{ title: "Cap race A" }],
+    });
+    const heldB = recordJobMilestones(recordClientB, ownerA, {
+      jobId: raceCapJob.id,
+      items: [{ title: "Cap race B" }],
+    });
+    await withTimeout(recordBarrier.arrived, 4000, "record race first locker");
+    recordBarrier.release();
+    recordRace = await Promise.allSettled([heldA, heldB]);
+  } finally {
+    jobMilestoneTestHooks.afterJobLock = undefined;
+    await recordClientA.$disconnect();
+    await recordClientB.$disconnect();
+  }
+  const recordWins = recordRace.filter((result) => result.status === "fulfilled");
+  const recordFails = recordRace.filter(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof JobMilestoneError &&
+      result.reason.message === MILESTONE_BOUND_MESSAGE,
+  );
+  const afterCap = await prisma.jobMilestone.findMany({
+    where: { jobId: raceCapJob.id, businessId: alpha.business.id },
+    orderBy: { sortOrder: "asc" },
+  });
+  const capOrders = afterCap.map((row) => row.sortOrder);
+  check(
+    "Concurrent record near the 8-cap: one success, one clear failure, total <= 8",
+    recordWins.length === 1 &&
+      recordFails.length === 1 &&
+      afterCap.length <= MAX_JOB_MILESTONES &&
+      afterCap.length === 8,
+  );
+  check(
+    "Concurrent record near the 8-cap keeps unique sortOrder",
+    new Set(capOrders).size === capOrders.length && capOrders.join(",") === "0,1,2,3,4,5,6,7",
+  );
+
+  const raceCompleteJob = await createJob(alpha.business.id, "SCHEDULED");
+  const raceCompleteRecorded = await recordJobMilestones(prisma, ownerA, {
+    jobId: raceCompleteJob.id,
+    items: [{ title: "Race complete once" }],
+  });
+  const raceCompleteId = raceCompleteRecorded.milestones[0].id;
+  const completeBarrier = createCommitBarrier();
+  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
+    if (kind === "complete") await completeBarrier.wait();
+  };
+  const completeClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const completeClientB = new PrismaClient({ datasourceUrl: testUrl });
+  let completeRace;
+  try {
+    const heldA = completeJobMilestone(completeClientA, ownerA, raceCompleteId);
+    const heldB = completeJobMilestone(completeClientB, ownerA, raceCompleteId);
+    await withTimeout(completeBarrier.arrived, 4000, "complete vs complete first locker");
+    completeBarrier.release();
+    completeRace = await Promise.allSettled([heldA, heldB]);
+  } finally {
+    jobMilestoneTestHooks.afterJobLock = undefined;
+    await completeClientA.$disconnect();
+    await completeClientB.$disconnect();
+  }
+  const completeFulfilled = completeRace.filter((result) => result.status === "fulfilled");
+  const newlyCompleted = completeFulfilled.filter(
+    (result) => result.status === "fulfilled" && result.value.alreadyComplete === false,
+  );
+  const alreadyCompleted = completeFulfilled.filter(
+    (result) => result.status === "fulfilled" && result.value.alreadyComplete === true,
+  );
+  const afterDoubleComplete = await prisma.jobMilestone.findFirst({
+    where: { id: raceCompleteId, businessId: alpha.business.id },
+  });
+  const completeEvents = await prisma.jobMilestoneEvent.findMany({
+    where: {
+      milestoneId: raceCompleteId,
+      businessId: alpha.business.id,
+      eventType: "COMPLETED",
+    },
+  });
+  check(
+    "complete vs complete: one COMPLETED event and completedAt unchanged",
+    completeFulfilled.length === 2 &&
+      newlyCompleted.length === 1 &&
+      alreadyCompleted.length === 1 &&
+      completeEvents.length === 1 &&
+      afterDoubleComplete?.status === "COMPLETED" &&
+      afterDoubleComplete.completedAt?.getTime() ===
+        newlyCompleted[0].value.milestone.completedAt?.getTime(),
+  );
+
+  const visAfterCompleteJob = await createJob(alpha.business.id, "SCHEDULED");
+  const visAfterCompleteRecorded = await recordJobMilestones(prisma, ownerA, {
+    jobId: visAfterCompleteJob.id,
+    items: [{ title: "Vis after complete", customerVisible: false }],
+  });
+  const visAfterCompleteId = visAfterCompleteRecorded.milestones[0].id;
+  const completeFirstBarrier = createCommitBarrier();
+  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
+    if (kind === "complete") await completeFirstBarrier.wait();
+  };
+  const completeFirstClient = new PrismaClient({ datasourceUrl: testUrl });
+  const visSecondClient = new PrismaClient({ datasourceUrl: testUrl });
+  let completeFirstRace;
+  try {
+    const heldComplete = completeJobMilestone(completeFirstClient, ownerA, visAfterCompleteId);
+    await withTimeout(completeFirstBarrier.arrived, 4000, "complete-first locker");
+    const heldVis = setJobMilestoneCustomerVisible(visSecondClient, ownerA, {
+      milestoneId: visAfterCompleteId,
+      customerVisible: true,
+    });
+    completeFirstBarrier.release();
+    completeFirstRace = await Promise.allSettled([heldComplete, heldVis]);
+  } finally {
+    jobMilestoneTestHooks.afterJobLock = undefined;
+    await completeFirstClient.$disconnect();
+    await visSecondClient.$disconnect();
+  }
+  const visAfterCompleteEvents = await prisma.jobMilestoneEvent.findMany({
+    where: { milestoneId: visAfterCompleteId, businessId: alpha.business.id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const visAfterCompleteExposed = visAfterCompleteEvents.find(
+    (event) => event.eventType === "CUSTOMER_EXPOSED",
+  );
+  const visAfterCompleteCompleted = visAfterCompleteEvents.find(
+    (event) => event.eventType === "COMPLETED",
+  );
+  check(
+    "complete-first visibility snapshot records COMPLETED under the lock",
+    completeFirstRace.every((result) => result.status === "fulfilled") &&
+      visAfterCompleteCompleted?.status === "COMPLETED" &&
+      visAfterCompleteExposed?.status === "COMPLETED",
+  );
+
+  const visFirstJob = await createJob(alpha.business.id, "SCHEDULED");
+  const visFirstRecorded = await recordJobMilestones(prisma, ownerA, {
+    jobId: visFirstJob.id,
+    items: [{ title: "Vis first then complete", customerVisible: false }],
+  });
+  const visFirstId = visFirstRecorded.milestones[0].id;
+  const visFirstBarrier = createCommitBarrier();
+  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
+    if (kind === "visibility") await visFirstBarrier.wait();
+  };
+  const visFirstClient = new PrismaClient({ datasourceUrl: testUrl });
+  const completeSecondClient = new PrismaClient({ datasourceUrl: testUrl });
+  let visFirstRace;
+  try {
+    const heldVis = setJobMilestoneCustomerVisible(visFirstClient, ownerA, {
+      milestoneId: visFirstId,
+      customerVisible: true,
+    });
+    await withTimeout(visFirstBarrier.arrived, 4000, "visibility-first locker");
+    const heldComplete = completeJobMilestone(completeSecondClient, ownerA, visFirstId);
+    visFirstBarrier.release();
+    visFirstRace = await Promise.allSettled([heldVis, heldComplete]);
+  } finally {
+    jobMilestoneTestHooks.afterJobLock = undefined;
+    await visFirstClient.$disconnect();
+    await completeSecondClient.$disconnect();
+  }
+  const visFirstEvents = await prisma.jobMilestoneEvent.findMany({
+    where: { milestoneId: visFirstId, businessId: alpha.business.id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const visFirstExposed = visFirstEvents.find((event) => event.eventType === "CUSTOMER_EXPOSED");
+  const visFirstCompleted = visFirstEvents.find((event) => event.eventType === "COMPLETED");
+  check(
+    "visibility-first snapshot stays OPEN; complete event is COMPLETED",
+    visFirstRace.every((result) => result.status === "fulfilled") &&
+      visFirstExposed?.status === "OPEN" &&
+      visFirstCompleted?.status === "COMPLETED",
+  );
 } finally {
+  jobMilestoneTestHooks.afterJobLock = undefined;
   await prisma.$disconnect();
+  await dropTestDatabase();
 }
 
 if (failures > 0) {

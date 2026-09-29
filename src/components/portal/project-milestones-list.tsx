@@ -1,16 +1,18 @@
 import { formatDateTime } from "@/lib/format";
 import type { CustomerJobMilestone } from "@/lib/job-milestones";
-import { StatusBadge } from "@/components/status-badge";
 
 /**
  * Customer-visible OWNER milestones only. The caller must already filter
  * to customerVisible rows for the token-scoped Job. This list never
  * decides visibility and never infers completion from Job/Invoice status.
+ * A cancelled Job still shows the same OWNER-exposed OPEN/COMPLETED labels.
  */
 export function ProjectMilestonesList({
   milestones,
+  timeZone,
 }: {
   milestones: CustomerJobMilestone[];
+  timeZone: string;
 }) {
   if (milestones.length === 0) {
     return null;
@@ -19,18 +21,19 @@ export function ProjectMilestonesList({
   return (
     <ol className="space-y-3">
       {milestones.map((milestone, index) => (
-        <li key={milestone.id} className="flex flex-wrap items-center gap-2 text-sm">
+        <li
+          key={`${milestone.sortOrder}-${index}`}
+          className="flex flex-wrap items-center gap-2 text-sm"
+        >
           <span className="font-medium">
             {index + 1}. {milestone.title}
           </span>
-          <StatusBadge status={milestone.status} />
+          <span>{milestone.statusLabel}</span>
           {milestone.completedAt ? (
             <span className="text-muted-foreground">
-              Completed {formatDateTime(milestone.completedAt)}
+              {formatDateTime(milestone.completedAt, timeZone)}
             </span>
-          ) : (
-            <span className="text-muted-foreground">In progress</span>
-          )}
+          ) : null}
         </li>
       ))}
     </ol>

@@ -78,7 +78,7 @@ import {
   formatDurationMinutes,
 } from "@/lib/job-schedule";
 import { loadWorkOrderMilestones } from "@/lib/job-milestone-ops";
-import { canManageJobMilestones } from "@/lib/job-milestones";
+import { canManageJobMilestones, jobMilestoneStatusLabel } from "@/lib/job-milestones";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import {
   OwnerRecordDepositSection,
@@ -581,7 +581,15 @@ export default async function JobPage({
         <CardContent>
           <JobMilestonesCard
             jobId={job.id}
-            milestones={await loadWorkOrderMilestones(prisma, access, job.id)}
+            milestones={(await loadWorkOrderMilestones(prisma, access, job.id)).map(
+              (row) => ({
+                ...row,
+                statusLabel: jobMilestoneStatusLabel(row.status),
+                completedAtLabel: row.completedAt
+                  ? formatDateTime(row.completedAt, timeZone)
+                  : null,
+              }),
+            )}
             canManage={canManageJobMilestones(access.workspace.role)}
           />
         </CardContent>

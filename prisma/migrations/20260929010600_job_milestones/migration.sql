@@ -3,7 +3,8 @@
 -- statement is IF NOT EXISTS. No backfill. Existing Jobs keep zero rows.
 -- Does NOT alter the Job table — no Job-column collision with other PRs.
 -- Completion is explicit; this migration never infers status from Job,
--- Invoice, or crew checklist. Timestamp is 20260929010000 so it is after
+-- Invoice, or crew checklist. Timestamp is 20260929010600 so it does not
+-- collide with 20260929010000_job_callback (#214) and stays after
 -- 20260928190000_owner_studio_reminder_sms_destination (#205).
 
 CREATE TABLE IF NOT EXISTS "JobMilestone" (

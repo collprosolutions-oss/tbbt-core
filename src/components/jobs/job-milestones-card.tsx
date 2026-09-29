@@ -8,15 +8,14 @@ import {
   type JobMilestoneActionState,
 } from "@/app/actions/job-milestones";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { StatusBadge } from "@/components/status-badge";
-import { formatDateTime } from "@/lib/format";
 import {
   CUSTOMER_HIDDEN_BY_DEFAULT_MESSAGE,
   MAX_JOB_MILESTONES,
   NO_AUTOMATIC_MESSAGE_MESSAGE,
-  type OwnerJobMilestone,
+  type OwnerJobMilestoneView,
 } from "@/lib/job-milestones";
 
 const initialState: JobMilestoneActionState = {};
@@ -27,7 +26,7 @@ export function JobMilestonesCard({
   canManage,
 }: {
   jobId: string;
-  milestones: OwnerJobMilestone[];
+  milestones: OwnerJobMilestoneView[];
   canManage: boolean;
 }) {
   return (
@@ -68,7 +67,7 @@ function MilestoneRow({
   index,
   canManage,
 }: {
-  milestone: OwnerJobMilestone;
+  milestone: OwnerJobMilestoneView;
   index: number;
   canManage: boolean;
 }) {
@@ -78,17 +77,17 @@ function MilestoneRow({
         <span className="font-medium">
           {index + 1}. {milestone.title}
         </span>
-        <StatusBadge status={milestone.status} />
+        <Badge variant={milestone.status === "COMPLETED" ? "success" : "secondary"}>
+          {milestone.statusLabel}
+        </Badge>
         <span className="text-xs text-muted-foreground">
           {milestone.customerVisible ? "Shown to customer" : "Hidden from customer"}
         </span>
       </div>
-      {milestone.completedAt ? (
-        <p className="text-xs text-muted-foreground">
-          Completed {formatDateTime(milestone.completedAt)}
-        </p>
+      {milestone.completedAtLabel ? (
+        <p className="text-xs text-muted-foreground">Completed {milestone.completedAtLabel}</p>
       ) : (
-        <p className="text-xs text-muted-foreground">Not marked complete</p>
+        <p className="text-xs text-muted-foreground">Not yet marked complete</p>
       )}
       {canManage ? (
         <div className="flex flex-wrap gap-2">
@@ -162,7 +161,18 @@ function CompleteMilestoneForm({ milestoneId }: { milestoneId: string }) {
   );
 
   return (
-    <form action={formAction}>
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        if (
+          !window.confirm(
+            "Mark this milestone complete? This cannot be undone.",
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
       <input type="hidden" name="milestoneId" value={milestoneId} />
       {state.error ? (
         <Alert variant="destructive">

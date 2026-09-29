@@ -494,7 +494,10 @@ export default async function CustomerProjectPortalPage({
               customerMilestones.milestones.length > 0 ? (
                 <div className="space-y-2 pt-2">
                   <p className="text-sm font-medium">Owner-shared milestones</p>
-                  <ProjectMilestonesList milestones={customerMilestones.milestones} />
+                  <ProjectMilestonesList
+                    milestones={customerMilestones.milestones}
+                    timeZone={timeZone}
+                  />
                 </div>
               ) : null}
             </CardContent>
