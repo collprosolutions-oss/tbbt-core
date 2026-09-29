@@ -260,6 +260,8 @@ export async function attachCleaningCrewChecklist(
     procedureId: string;
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
   },
 ) {
   if (access.workspace.role !== "OWNER") {
@@ -279,6 +281,9 @@ export async function attachCleaningCrewChecklist(
     const locked = await lockTenantOwnedJob(tx, access.businessId, job.id);
     if (!locked) {
       throw new CleaningVisitError("That job could not be updated.");
+    }
+    if (input.afterLock) {
+      await input.afterLock();
     }
     return upsertVisitRecord(tx, {
       businessId: access.businessId,
@@ -348,6 +353,8 @@ export async function recordAssignedVisitOutcome(
     outcomeStatus: string;
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
   },
 ) {
   const outcome = parseRecordedVisitOutcome(input.outcomeStatus);
@@ -369,6 +376,9 @@ export async function recordAssignedVisitOutcome(
       const locked = await lockTenantOwnedJob(tx, actor.businessId, job.id);
       if (!locked || locked.assignedMembershipId !== actor.membershipId) {
         throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+      }
+      if (input.afterLock) {
+        await input.afterLock();
       }
       if (
         outcome === "VISIT_COMPLETED" &&

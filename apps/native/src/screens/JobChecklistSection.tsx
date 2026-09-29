@@ -148,8 +148,12 @@ export function JobChecklistSection({
         }
         return;
       }
-      await clearChecklistDraft(storage, scope);
-      setDraft(null);
+      try {
+        await clearChecklistDraft(storage, scope);
+        setDraft(null);
+      } catch {
+        setError(CHECKLIST_DRAFT_STORAGE_ERROR);
+      }
       onJobUpdated(result.job);
     } catch {
       setError(NATIVE_CHECKLIST_OFFLINE_MESSAGE);

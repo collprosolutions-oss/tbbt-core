@@ -249,34 +249,6 @@ export async function completeNativeJob(
   return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
 }
 
-export async function recordNativeJobChecklistItem(
-  token: string,
-  jobId: string,
-  input: { itemKey: string; checked: boolean },
-): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/checklist`),
-    {
-      method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-    },
-  );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string"
-          ? body.error
-          : "That checklist item could not be updated.",
-    };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
-}
-
 export const NATIVE_CHECKLIST_OFFLINE_MESSAGE =
   "Couldn't reach the server — your changes are still saved on this phone.";
 

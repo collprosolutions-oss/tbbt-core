@@ -1118,10 +1118,17 @@ export type CompleteJobWithRunningTimeSafetyResult =
 export async function completeJobWithRunningTimeSafetyInTransaction(
   tx: Db,
   input: CloseRunningJobTimeForCompletionInput,
+  options?: {
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
+  },
 ): Promise<CompleteJobWithRunningTimeSafetyResult> {
   const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
   if (!job) {
     return { ok: false, error: "That job could not be completed." };
+  }
+  if (options?.afterLock) {
+    await options.afterLock();
   }
 
   const lifecycle = evaluateCompleteJob(job.status);
@@ -1172,6 +1179,8 @@ export async function completeJobWithRunningTimeSafety(
   options?: {
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
+    /** Proof hook: runs after the Job lock is taken and before persist. */
+    afterLock?: () => Promise<void>;
   },
 ): Promise<CompleteJobWithRunningTimeSafetyResult> {
   const existing = await db.job.findFirst({
@@ -1186,7 +1195,9 @@ export async function completeJobWithRunningTimeSafety(
   }
   try {
     return await db.$transaction((tx) =>
-      completeJobWithRunningTimeSafetyInTransaction(tx, input),
+      completeJobWithRunningTimeSafetyInTransaction(tx, input, {
+        afterLock: options?.afterLock,
+      }),
     );
   } catch (error) {
     if (isTimeCardError(error) || error instanceof ForbiddenError) {

@@ -37,7 +37,6 @@ export default function App() {
       if (isApiError(restored)) {
         if (restored.status === 401 || restored.status === 403) {
           await clearSessionToken();
-          await clearAllChecklistDrafts(secureChecklistDraftStorage);
         }
       } else {
         await applyChecklistDraftAccount(secureChecklistDraftStorage, {

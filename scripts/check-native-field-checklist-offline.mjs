@@ -137,6 +137,7 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const prismaRace = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -286,11 +287,19 @@ check(
     appSrc.includes("clearAllChecklistDrafts") &&
     appSrc.includes("restored.status === 401") &&
     appSrc.includes("restored.status === 403") &&
+    !appSrc
+      .slice(appSrc.indexOf("if (isApiError(restored))"), appSrc.indexOf("} else {"))
+      .includes("clearAllChecklistDrafts") &&
     signInSrc.includes("applyChecklistDraftAccount") &&
     !signInSrc.includes("clearAllChecklistDrafts(") &&
     checklistSectionSrc.includes("itemUnsynced") &&
     checklistSectionSrc.indexOf('? "Saved on this phone"') >
-      checklistSectionSrc.indexOf("itemUnsynced"),
+      checklistSectionSrc.indexOf("itemUnsynced") &&
+    checklistSectionSrc.includes("CHECKLIST_DRAFT_STORAGE_ERROR") &&
+    !nativeApiSrc.includes("recordNativeJobChecklistItem") &&
+    offlineCheckSrc.includes("new PrismaClient({ datasourceUrl: testUrl })") &&
+    offlineCheckSrc.includes("prismaRace") &&
+    offlineCheckSrc.includes("afterLock"),
 );
 
 function expectedFromItems(items) {
@@ -1485,12 +1494,12 @@ try {
       { afterInitialRead: waitOutcome },
     ),
     recordAssignedVisitOutcome(
-      prisma,
+      prismaRace,
       { businessId: businessA.id, membershipId: memberMem.id },
       {
         jobId: outcomeRaceJob.id,
         outcomeStatus: "VISIT_COMPLETED",
-        afterInitialRead: waitOutcome,
+        afterLock: waitOutcome,
       },
     )
       .then((value) => ({ ok: true, value }))
@@ -1503,17 +1512,13 @@ try {
     (item) => item.key === "kitchen",
   )?.checked;
   check(
-    "Sync vs recordAssignedVisitOutcome serializes to closed/stale 409 or one write, with no lost write",
-    ((outcomeRaceSync.ok === true &&
-      outcomeRaceKitchen === true &&
-      outcomeRaceWrite.ok === true) ||
-      (outcomeRaceSync.ok === false &&
-        outcomeRaceSync.status === 409 &&
-        (outcomeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE ||
-          outcomeRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE) &&
-        outcomeRaceKitchen === false &&
-        outcomeRaceWrite.ok === true)) &&
-      outcomeRaceVisit.outcomeStatus !== "NONE",
+    "Sync vs recordAssignedVisitOutcome loses to the held outcome lock with a closed 409",
+    outcomeRaceSync.ok === false &&
+      outcomeRaceSync.status === 409 &&
+      outcomeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE &&
+      outcomeRaceKitchen === false &&
+      outcomeRaceWrite.ok === true &&
+      outcomeRaceVisit.outcomeStatus === "VISIT_COMPLETED",
   );
 
   const completeRaceExpected = expectedFrom(
@@ -1531,13 +1536,13 @@ try {
       { afterInitialRead: waitComplete },
     ),
     completeJobWithRunningTimeSafety(
-      prisma,
+      prismaRace,
       {
         businessId: businessA.id,
         jobId: completeRaceJob.id,
         actorMembershipId: memberMem.id,
       },
-      { afterInitialRead: waitComplete },
+      { afterLock: waitComplete },
     ),
   ]);
   const completeRaceVisit = await prisma.jobCrewVisit.findFirst({
@@ -1551,16 +1556,12 @@ try {
     (item) => item.key === "kitchen",
   )?.checked;
   check(
-    "Sync vs completeJobWithRunningTimeSafety serializes to closed/stale 409 or one write, with no lost write",
-    ((completeRaceSync.ok === true &&
-      completeRaceKitchen === true &&
-      completeRaceWrite.ok === true) ||
-      (completeRaceSync.ok === false &&
-        completeRaceSync.status === 409 &&
-        (completeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE ||
-          completeRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE) &&
-        completeRaceKitchen === false &&
-        completeRaceWrite.ok === true)) &&
+    "Sync vs completeJobWithRunningTimeSafety loses to the held complete lock with a closed 409",
+    completeRaceSync.ok === false &&
+      completeRaceSync.status === 409 &&
+      completeRaceSync.error === NATIVE_CHECKLIST_CLOSED_MESSAGE &&
+      completeRaceKitchen === false &&
+      completeRaceWrite.ok === true &&
       completeRaceJobAfter?.status === "COMPLETED",
   );
 
@@ -1578,10 +1579,10 @@ try {
       ]),
       { afterInitialRead: waitAttach },
     ),
-    attachCleaningCrewChecklist(prisma, ownerA, {
+    attachCleaningCrewChecklist(prismaRace, ownerA, {
       jobId: attachRaceJob.id,
       procedureId: attachProcedure.id,
-      afterInitialRead: waitAttach,
+      afterLock: waitAttach,
     })
       .then((value) => ({ ok: true, value }))
       .catch((error) => ({ ok: false, error })),
@@ -1590,19 +1591,14 @@ try {
     where: { jobId: attachRaceJob.id, businessId: businessA.id },
   });
   const attachRaceItems = JSON.parse(attachRaceVisit.checklistJson);
-  const attachWon = attachRaceItems.every((item) => item.key !== "kitchen");
-  const syncWonAlone =
-    attachRaceSync.ok === true &&
-    attachRaceItems.find((item) => item.key === "kitchen")?.checked === true;
   check(
-    "Sync vs OWNER attachCleaningCrewChecklist serializes to stale 409 or one write, with no lost write",
-    attachRaceWrite.ok === true &&
-      ((attachRaceSync.ok === false &&
-        attachRaceSync.status === 409 &&
-        attachRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE &&
-        attachWon &&
-        attachRaceItems.every((item) => item.checked === false)) ||
-        (attachRaceSync.ok === true && (attachWon || syncWonAlone))),
+    "Sync vs OWNER attachCleaningCrewChecklist loses to the held attach lock with a stale 409",
+    attachRaceSync.ok === false &&
+      attachRaceSync.status === 409 &&
+      attachRaceSync.error === NATIVE_CHECKLIST_STALE_MESSAGE &&
+      attachRaceWrite.ok === true &&
+      attachRaceItems.every((item) => item.key !== "kitchen") &&
+      attachRaceItems.every((item) => item.checked === false),
   );
 
   const leftoverB = await prisma.jobCrewVisit.findMany({ where: { businessId: businessB.id } });
@@ -1634,6 +1630,7 @@ try {
   console.error("FAIL - live native checklist offline sync", error);
 } finally {
   await prisma.$disconnect();
+  await prismaRace.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {
     await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
