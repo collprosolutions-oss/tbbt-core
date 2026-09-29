@@ -5,13 +5,12 @@
  *   node scripts/run-p1-gate.mjs <domain> --audit [--strict] [--allow-missing]
  *
  * Before any child process, a domain that includes a DB-backed script
- * requires DATABASE_URL to parse as a URL whose host is exactly
- * localhost, 127.0.0.1, or ::1. Query parameters host, hostaddr, and
- * service are refused (any case), as is a comma in the host, because
- * libpq and Prisma honor those over the authority. DIRECT_URL,
- * POSTGRES_URL, POSTGRES_PRISMA_URL, PGHOST, PGHOSTADDR, and PGSERVICE
- * are removed from the child environment; a non-local value refuses
- * the run before any child starts.
+ * validates DATABASE_URL and the alternate Prisma/libpq environment
+ * variables with scripts/lib/local-database-guard.mjs. That module is
+ * the only locality definition. A non-local value refuses the run
+ * before any child starts. The same alternate variables are removed
+ * from the child environment. TZ=America/New_York is still set on the
+ * child.
  *
  * Children run serially. package.json decides plain `node` versus
  * `node --experimental-strip-types`. TZ=America/New_York is forced.
@@ -29,25 +28,17 @@ import { performance } from "node:perf_hooks";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  LOCAL_DATABASE_HOSTS,
   NEXT_BUILD_SCRIPTS,
   P1_DOMAINS,
   domainById,
   isDatabaseBacked,
 } from "./p1-gate-config.mjs";
+import {
+  localDatabaseEnvironmentProblem,
+  scrubAlternateDatabaseEnv,
+} from "./lib/local-database-guard.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const LOCAL_HOSTS = new Set(LOCAL_DATABASE_HOSTS);
-const BLOCKED_URL_PARAMS = new Set(["host", "hostaddr", "service"]);
-const SCRUBBED_CHILD_ENV = [
-  "DIRECT_URL",
-  "POSTGRES_URL",
-  "POSTGRES_PRISMA_URL",
-  "PGHOST",
-  "PGHOSTADDR",
-  "PGSERVICE",
-];
-const URL_ENV_VARS = ["DIRECT_URL", "POSTGRES_URL", "POSTGRES_PRISMA_URL"];
 const DEFAULT_CHILD_TIMEOUT_MS = 15 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 const TEAM_ONBOARDING_SCRIPT = "scripts/check-team-onboarding.mjs";
@@ -73,70 +64,8 @@ ${ids}
 The gate never runs npm run build or next build.`;
 }
 
-function localUrlProblem(raw, label) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return `${label} is not a valid URL. The host must be exactly localhost, 127.0.0.1, or ::1.`;
-  }
-  for (const key of parsed.searchParams.keys()) {
-    if (BLOCKED_URL_PARAMS.has(key.toLowerCase())) {
-      return `${label} must not set query parameter "${key}". libpq and Prisma honor host, hostaddr, and service over the authority host.`;
-    }
-  }
-  if (parsed.host.includes(",")) {
-    return `${label} host must be a single host, not a comma-separated list (got ${parsed.host}).`;
-  }
-  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (!LOCAL_HOSTS.has(host)) {
-    return `${label} host must be exactly localhost, 127.0.0.1, or ::1 (got ${host || "(empty)"}).`;
-  }
-  return null;
-}
-
-export function databaseHostProblem(raw) {
-  if (!raw) {
-    return "DATABASE_URL is not set. This domain includes a DB-backed script, so the host must be exactly localhost, 127.0.0.1, or ::1.";
-  }
-  return localUrlProblem(raw, "DATABASE_URL");
-}
-
-function bareHostProblem(raw, label) {
-  const host = String(raw).trim().replace(/^\[|\]$/g, "").toLowerCase();
-  if (!host || host.includes(",") || host.includes("/") || !LOCAL_HOSTS.has(host)) {
-    return `${label} must be exactly localhost, 127.0.0.1, or ::1 (got ${raw}).`;
-  }
-  return null;
-}
-
-export function alternateDatabaseEnvProblem(env = process.env) {
-  for (const name of URL_ENV_VARS) {
-    const value = env[name];
-    if (value == null || String(value).trim() === "") continue;
-    const problem = localUrlProblem(value, name);
-    if (problem) return problem;
-  }
-  if (env.PGHOST != null && String(env.PGHOST).trim() !== "") {
-    const problem = bareHostProblem(env.PGHOST, "PGHOST");
-    if (problem) return problem;
-  }
-  if (env.PGHOSTADDR != null && String(env.PGHOSTADDR).trim() !== "") {
-    const addr = String(env.PGHOSTADDR).trim().replace(/^\[|\]$/g, "").toLowerCase();
-    if (addr !== "127.0.0.1" && addr !== "::1") {
-      return `PGHOSTADDR must be exactly 127.0.0.1 or ::1 (got ${env.PGHOSTADDR}).`;
-    }
-  }
-  if (env.PGSERVICE != null && String(env.PGSERVICE).trim() !== "") {
-    return `PGSERVICE can point at a remote host and is not allowed (got ${env.PGSERVICE}).`;
-  }
-  return null;
-}
-
 export function childProcessEnv(base = process.env) {
-  const env = { ...base, TZ: "America/New_York" };
-  for (const name of SCRUBBED_CHILD_ENV) delete env[name];
-  return env;
+  return { ...scrubAlternateDatabaseEnv(base), TZ: "America/New_York" };
 }
 
 export function childTimeoutMs(env = process.env) {
@@ -519,8 +448,7 @@ async function runDomain(domain, options) {
   assertPendingNotRegistered(domain);
   const dbBacked = domain.scripts.filter((scriptPath) => isDatabaseBacked(scriptPath));
   if (dbBacked.length > 0) {
-    const problem =
-      databaseHostProblem(process.env.DATABASE_URL) || alternateDatabaseEnvProblem(process.env);
+    const problem = localDatabaseEnvironmentProblem(process.env.DATABASE_URL, process.env);
     if (problem) {
       console.error(`P1 gate refused to start ${domain.id}.`);
       console.error(problem);

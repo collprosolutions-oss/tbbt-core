@@ -22,16 +22,18 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
 
 ## Environment
 
-- A domain that lists any DB-backed script refuses to start unless
-  `DATABASE_URL` is set and its host is exactly `localhost`,
-  `127.0.0.1`, or `::1` (parsed with `URL`). A query parameter named
-  `host`, `hostaddr`, or `service` (any case) is refused, and so is a
-  comma in the host, because libpq and Prisma honor those over the
-  authority. `DIRECT_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`,
-  `PGHOST`, `PGHOSTADDR`, and `PGSERVICE` are removed from the child
-  environment. If one of them is set to a non-local value, the gate
-  exits before any child. `migration-and-db-safety` currently lists
-  only the static migrate check, so it does not require `DATABASE_URL`.
+- A domain that lists any DB-backed script refuses to start until
+  `scripts/lib/local-database-guard.mjs` accepts `DATABASE_URL` and the
+  alternate Prisma/libpq variables (`DIRECT_URL`, `POSTGRES_URL`,
+  `POSTGRES_PRISMA_URL`, `PGHOST`, `PGHOSTADDR`, `PGSERVICE`). That
+  module is the only locality definition. The refusal happens before
+  any child process. Those alternate variables are removed from the
+  child environment. `TZ` stays set to `America/New_York`.
+  `migration-and-db-safety` currently lists only the static migrate
+  check, so it does not require `DATABASE_URL`. The guard module
+  comes from the database-safety foundation (#235); this gate branch
+  includes that foundation so review can run, and #235 should merge
+  to main before this PR.
 - Node. `package.json` runs `scripts/check-production-migrate.mjs`
   with plain `node`. Every other listed script runs with
   `node --experimental-strip-types`. The gate follows that.

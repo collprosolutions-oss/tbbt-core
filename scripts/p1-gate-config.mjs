@@ -21,13 +21,10 @@
  *   5. native-active-membership
  */
 
-/** Hosts the runner accepts before it starts any DB-backed child. */
-export const LOCAL_DATABASE_HOSTS = ["localhost", "127.0.0.1", "::1"];
-
 /**
  * Listed scripts that do not open a database. Every other listed
- * script is treated as DB-backed, which forces the localhost
- * DATABASE_URL preflight before any child starts.
+ * script is treated as DB-backed, which forces the canonical
+ * scripts/lib/local-database-guard.mjs preflight before any child starts.
  */
 export const STATIC_SCRIPTS = new Set([
   "scripts/check-production-migrate.mjs",
