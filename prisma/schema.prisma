@@ -1212,16 +1212,23 @@ model Estimate {
 }
 
 /// OWNER-named, business-scoped set of draft estimate line snapshots.
-/// Apply copies these onto a DRAFT estimate only. Application code must
-/// never write ServiceCatalogItem prices or mutate SENT/APPROVED estimates
-/// from this model. Not a public catalog and not an hourly rate list.
+/// Apply copies these onto a DRAFT estimate only. Edit / rename / archive
+/// change this stored snapshot for future applications. Application code
+/// must never rewrite LineItem rows on estimates that already used a
+/// template, never write ServiceCatalogItem prices, and never mutate
+/// SENT/APPROVED estimates from this model. Not a public catalog and not
+/// an hourly rate list.
 model EstimateLineTemplate {
   id                    String   @id @default(cuid())
   businessId            String
   name                  String
   /// Case-folded unique key so "Bath refresh" and "bath refresh" collide
-  /// under concurrent same-business creates.
+  /// under concurrent same-business creates, including rename.
   nameKey               String
+  /// Archived templates stay in the workspace (and keep their nameKey)
+  /// but are hidden from apply pickers. Existing estimate lines that
+  /// already copied this snapshot stay exactly as recorded.
+  archived              Boolean  @default(false)
   createdByMembershipId String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -1232,6 +1239,7 @@ model EstimateLineTemplate {
 
   @@unique([businessId, nameKey])
   @@index([businessId, updatedAt])
+  @@index([businessId, archived])
 }
 
 /// Snapshot of one LABOR / MATERIAL / OTHER draft line stored on a

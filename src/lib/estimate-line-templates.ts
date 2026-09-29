@@ -57,6 +57,18 @@ export const INVALID_TEMPLATE_LINE_MESSAGE =
   "Each template line needs a description, a quantity greater than zero, and Labor, Material, or Other.";
 export const TEMPLATE_UNAVAILABLE_MESSAGE =
   "Named estimate templates are unavailable on this environment until the template migration is applied.";
+export const TEMPLATE_ARCHIVED_MESSAGE =
+  "That estimate template is archived. Restore it before applying it to a new draft.";
+export const TEMPLATE_FUTURE_ONLY_MESSAGE =
+  "Editing, renaming, or archiving a template changes future applications only. Estimates that already used it keep their recorded lines.";
+export const TEMPLATE_RENAMED_MESSAGE =
+  "Template renamed. Estimates that already used it keep their recorded lines.";
+export const TEMPLATE_LINES_REPLACED_MESSAGE =
+  "Saved template lines updated. Estimates that already used this template keep their recorded lines.";
+export const TEMPLATE_ARCHIVED_OK_MESSAGE =
+  "Template archived. It will not appear on new drafts. Estimates that already used it keep their recorded lines.";
+export const TEMPLATE_RESTORED_MESSAGE =
+  "Template restored. Future drafts can apply it again. Existing estimates stay unchanged.";
 
 export type EstimateLineTemplateSnapshotLine = {
   sortOrder: number;
@@ -70,11 +82,13 @@ export type SavedEstimateLineTemplate = {
   id: string;
   businessId: string;
   name: string;
+  archived: boolean;
   kind: typeof ESTIMATE_LINE_TEMPLATE_KIND;
   lineCount: number;
   lines: EstimateLineTemplateSnapshotLine[];
   writesCatalogPrices: false;
   appliesToApprovedEstimates: false;
+  rewritesAppliedEstimates: false;
 };
 
 export function canAccessEstimateLineTemplates(
@@ -216,6 +230,7 @@ export function toSavedEstimateLineTemplate(row: {
   id: string;
   businessId: string;
   name: string;
+  archived?: boolean;
   lines?: Array<{
     sortOrder: number;
     type: string;
@@ -239,11 +254,13 @@ export function toSavedEstimateLineTemplate(row: {
     id: row.id,
     businessId: row.businessId,
     name: row.name,
+    archived: Boolean(row.archived),
     kind: ESTIMATE_LINE_TEMPLATE_KIND,
     lineCount: lines.length,
     lines,
     writesCatalogPrices: false,
     appliesToApprovedEstimates: false,
+    rewritesAppliedEstimates: false,
   };
 }
 

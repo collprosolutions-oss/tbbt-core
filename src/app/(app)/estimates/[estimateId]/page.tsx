@@ -6,6 +6,7 @@ import { AddCatalogLineForm } from "@/components/estimates/add-catalog-line-form
 import { AddCustomLineForm } from "@/components/estimates/add-custom-line-form";
 import {
   ApplyEstimateLineTemplateForm,
+  ManageEstimateLineTemplates,
   SaveEstimateLineTemplateForm,
 } from "@/components/estimates/estimate-line-template-forms";
 import { ClearDraftEstimateButton } from "@/components/estimates/clear-draft-estimate-button";
@@ -134,8 +135,14 @@ import { loadBusinessEstimatingDefaults } from "@/lib/estimating-defaults-db";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 import { PurchaseListCard } from "@/components/materials/purchase-list-card";
 import { loadPurchaseWorkspace } from "@/lib/materials/board";
-import { canAccessEstimateLineTemplates } from "@/lib/estimate-line-templates";
-import { loadEstimateLineTemplateOptions } from "@/lib/estimate-line-template-ops";
+import {
+  canAccessEstimateLineTemplates,
+  TEMPLATE_FUTURE_ONLY_MESSAGE,
+} from "@/lib/estimate-line-templates";
+import {
+  loadEstimateLineTemplateDirectory,
+  loadEstimateLineTemplateOptions,
+} from "@/lib/estimate-line-template-ops";
 import {
   pickIntakeMeasurementForLine,
   suggestTakeoffInputs,
@@ -772,6 +779,9 @@ export default async function EstimateBuilderPage({
 
   const canManageTemplates = canAccessEstimateLineTemplates(access.workspace.role);
   const templateOptions = await loadEstimateLineTemplateOptions(prisma, access);
+  const templateDirectory = canManageTemplates
+    ? await loadEstimateLineTemplateDirectory(prisma, access)
+    : { available: true, templates: [], truncated: false };
   const templateCards =
     isDraft && canManageTemplates ? (
       <>
@@ -804,6 +814,22 @@ export default async function EstimateBuilderPage({
             <ApplyEstimateLineTemplateForm
               estimateId={estimate.id}
               templates={templateOptions}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Manage saved templates</CardTitle>
+            <CardDescription>
+              OWNER-only rename, replace saved lines, or archive.{" "}
+              {TEMPLATE_FUTURE_ONLY_MESSAGE}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ManageEstimateLineTemplates
+              estimateId={estimate.id}
+              canReplaceFromDraft={estimate.lineItems.length > 0}
+              templates={templateDirectory.templates}
             />
           </CardContent>
         </Card>

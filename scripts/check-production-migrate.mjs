@@ -1309,6 +1309,34 @@ const ownerStudioSmsDestinationMigration = readFileSync(
   ),
   "utf8",
 );
+const estimateLineTemplateArchiveMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260928200000_estimate_line_template_archive/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Estimate line template archive migration is additive and after owner SMS destination",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
+    estimateLineTemplateArchiveMigration,
+  ) &&
+    estimateLineTemplateArchiveMigration.includes(
+      'ADD COLUMN IF NOT EXISTS "archived"',
+    ) &&
+    estimateLineTemplateArchiveMigration.includes(
+      "EstimateLineTemplate_businessId_archived_idx",
+    ) &&
+    !estimateLineTemplateArchiveMigration.includes("CREATE TABLE") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    !localNames.includes("20260928190000_estimate_line_template_archive") &&
+    localNames.includes("20260928190000_owner_studio_reminder_sms_destination") &&
+    localNames.indexOf("20260928030000_estimate_line_template") <
+      localNames.indexOf("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928190000_owner_studio_reminder_sms_destination") <
+      localNames.indexOf("20260928200000_estimate_line_template_archive"),
+);
+
 check(
   "OWNER studio reminder SMS destination migration is additive and after #204",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(ownerStudioSmsDestinationMigration) &&
