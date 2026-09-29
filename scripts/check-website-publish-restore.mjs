@@ -345,7 +345,8 @@ check(
   read("src/lib/website-engine/snapshot.ts").includes("WEBSITE_PUBLISH_RESTORE_INTAKE_UNCHANGED") &&
     read("src/lib/website-engine/snapshot.ts").includes("predates captured intake") &&
     read("src/lib/website-engine/snapshot.ts").includes("websiteRestoreResultMessage") &&
-    read("src/lib/website-engine/snapshot.ts").includes("leaves intake pointers unchanged"),
+    read("src/lib/website-engine/snapshot.ts").includes("leaves intake pointers unchanged") &&
+    read("src/lib/website-engine/snapshot.ts").includes("tenantIntakeCaptured === false"),
 );
 
 try {
