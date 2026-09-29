@@ -81,6 +81,7 @@ export async function previewOperationalTestData(
     changeOrders,
     additionalWorkRequests,
     jobProblemReports,
+    jobCallbacks,
     timeEntries,
     timesheetWeeks,
     payrollRuns,
@@ -107,6 +108,7 @@ export async function previewOperationalTestData(
     db.changeOrder.count({ where: { businessId } }),
     db.additionalWorkRequest.count({ where: { businessId } }),
     db.jobProblemReport.count({ where: { businessId } }),
+    db.jobCallback.count({ where: { businessId } }),
     db.timeEntry.count({ where: { businessId } }),
     db.timesheetWeek.count({ where: { businessId } }),
     db.payrollRun.count({ where: { businessId } }),
@@ -138,6 +140,7 @@ export async function previewOperationalTestData(
       changeOrders,
       additionalWorkRequests,
       jobProblemReports,
+      jobCallbacks,
       timeEntries,
       timesheetWeeks,
       payrollRuns,
@@ -211,6 +214,8 @@ export async function executeOperationalTestDataCleanup(
       await tx.additionalWorkRequest.deleteMany({ where: { businessId } });
       await tx.changeOrder.deleteMany({ where: { businessId } });
       await tx.jobProblemReport.deleteMany({ where: { businessId } });
+      await tx.jobCallbackEvent.deleteMany({ where: { businessId } });
+      await tx.jobCallback.deleteMany({ where: { businessId } });
       await tx.jobPhoto.deleteMany({ where: { businessId } });
       await tx.expense.deleteMany({ where: { businessId } });
       await tx.job.deleteMany({ where: { businessId } });
