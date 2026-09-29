@@ -124,6 +124,27 @@ function appliedMigrationRecords(appliedRows = []) {
   return records;
 }
 
+function collectErrorCodes(error, depth = 0, codes = new Set()) {
+  if (!error || typeof error !== "object" || depth > 6) return codes;
+  if (typeof error.code === "string") codes.add(error.code);
+  if (typeof error.sqlState === "string") codes.add(error.sqlState);
+  if (error.meta && typeof error.meta.code === "string") codes.add(error.meta.code);
+  collectErrorCodes(error.cause, depth + 1, codes);
+  collectErrorCodes(error.originalError, depth + 1, codes);
+  collectErrorCodes(error.meta, depth + 1, codes);
+  return codes;
+}
+
+export function extractPostgresSqlState(error) {
+  const codes = collectErrorCodes(error);
+  if (codes.has("42P01")) return "42P01";
+  return [...codes][0] || "";
+}
+
+export function isPrismaMigrationsTableMissingError(error) {
+  return extractPostgresSqlState(error) === "42P01";
+}
+
 /**
  * Lock-free plan for whether `prisma migrate deploy` is actually needed.
  * Compare local migration folders to `_prisma_migrations` rows from a
@@ -132,14 +153,31 @@ function appliedMigrationRecords(appliedRows = []) {
  *
  * Fail closed before deploy when applied history is unavailable, an
  * applied name is missing locally, or a Prisma checksum diverges.
+ * Postgres 42P01 (_prisma_migrations absent) is the one exception:
+ * a brand-new empty database may bootstrap; existing user tables block.
  */
 export function planProductionMigrateDeploy({
   localNames = [],
   localChecksums = null,
   appliedRows,
   appliedQueryError = false,
+  appliedQueryCode = null,
+  migrationsTableMissing = false,
+  userTableCount = null,
 } = {}) {
   if (appliedQueryError || appliedRows == null) {
+    const missingTable =
+      migrationsTableMissing === true || appliedQueryCode === "42P01";
+    if (missingTable && userTableCount === 0) {
+      return { run: true, reason: "fresh empty database" };
+    }
+    if (missingTable && Number.isFinite(userTableCount) && userTableCount > 0) {
+      return {
+        run: false,
+        blocked: true,
+        reason: "_prisma_migrations missing with existing user tables",
+      };
+    }
     return {
       run: false,
       blocked: true,

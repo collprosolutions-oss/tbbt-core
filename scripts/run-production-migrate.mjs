@@ -13,6 +13,8 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  extractPostgresSqlState,
+  isPrismaMigrationsTableMissingError,
   listLocalMigrationChecksums,
   listLocalMigrationNames,
   planProductionMigrateDeploy,
@@ -35,6 +37,23 @@ async function readAppliedMigrationRows() {
   }
 }
 
+async function countPublicUserTables() {
+  const { PrismaClient } = require("@prisma/client");
+  const prisma = new PrismaClient();
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT COUNT(*)::int AS n
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_type = 'BASE TABLE'
+        AND table_name <> '_prisma_migrations'
+    `;
+    return rows[0]?.n ?? null;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
 async function main() {
   const decision = shouldRunProductionMigrate({
     vercelEnv: process.env.VERCEL_ENV,
@@ -52,12 +71,24 @@ async function main() {
   const localChecksums = listLocalMigrationChecksums(migrationsDir);
   let appliedRows;
   let appliedQueryError = false;
+  let appliedQueryCode = null;
+  let migrationsTableMissing = false;
+  let userTableCount = null;
   try {
     appliedRows = await readAppliedMigrationRows();
   } catch (error) {
     appliedQueryError = true;
+    appliedQueryCode = extractPostgresSqlState(error);
+    migrationsTableMissing = isPrismaMigrationsTableMissingError(error);
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`Could not read _prisma_migrations (${detail}).`);
+    if (migrationsTableMissing) {
+      try {
+        userTableCount = await countPublicUserTables();
+      } catch {
+        userTableCount = null;
+      }
+    }
   }
 
   const plan = planProductionMigrateDeploy({
@@ -65,6 +96,9 @@ async function main() {
     localChecksums,
     appliedRows,
     appliedQueryError,
+    appliedQueryCode,
+    migrationsTableMissing,
+    userTableCount,
   });
   if (plan.blocked) {
     console.error(`Refusing prisma migrate deploy (${plan.reason}).`);

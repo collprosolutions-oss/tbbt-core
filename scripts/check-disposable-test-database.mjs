@@ -15,6 +15,10 @@ import {
   uniqueTestDatabaseName,
   withDisposableTestDatabase,
 } from "./disposable-test-database.mjs";
+import {
+  alternateDatabaseEnvProblem,
+  databaseUrlProblem,
+} from "./lib/local-database-guard.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => readFileSync(join(root, rel), "utf8");
@@ -43,8 +47,12 @@ check("localhost is local", isLocalDatabaseHost("postgresql://u:p@localhost:5432
 check("127.0.0.1 is local", isLocalDatabaseHost("postgresql://u:p@127.0.0.1:5432/app"));
 check("::1 is local", isLocalDatabaseHost("postgresql://u:p@[::1]:5432/app"));
 check(
-  "unix socket query host is local",
-  isLocalDatabaseHost("postgresql://u:p@localhost/app?host=/var/run/postgresql"),
+  "unix socket query host is refused because Prisma would honor it over the authority",
+  isLocalDatabaseHost("postgresql://u:p@localhost/app?host=/var/run/postgresql") === false,
+);
+check(
+  "unix socket authority without query host stays local",
+  isLocalDatabaseHost("postgresql://u:p@/app") === true,
 );
 check(
   "remote host is refused",
@@ -66,6 +74,84 @@ try {
   );
 }
 
+const duplicateHostUrl = "postgresql://u:p@127.0.0.1:5432/app?host=127.0.0.1&host=127.0.0.2";
+const mixedCaseDuplicateUrl = "postgresql://u:p@127.0.0.1:5432/app?HOST=127.0.0.1&host=127.0.0.2";
+const encodedDuplicateUrl = "postgresql://u:p@127.0.0.1:5432/app?host=127.0.0.1&%68ost=127.0.0.2";
+check(
+  "Duplicate host query params are refused",
+  isLocalDatabaseHost(duplicateHostUrl) === false &&
+    databaseUrlProblem(duplicateHostUrl, "DATABASE_URL")?.includes("repeat"),
+);
+check(
+  "Mixed-case duplicate host query params are refused",
+  isLocalDatabaseHost(mixedCaseDuplicateUrl) === false &&
+    databaseUrlProblem(mixedCaseDuplicateUrl, "DATABASE_URL")?.includes("repeat"),
+);
+check(
+  "Encoded duplicate host query params are refused",
+  isLocalDatabaseHost(encodedDuplicateUrl) === false &&
+    databaseUrlProblem(encodedDuplicateUrl, "DATABASE_URL")?.includes("repeat"),
+);
+try {
+  assertLocalDatabaseUrl(duplicateHostUrl, "CREATE DATABASE");
+  check("assertLocalDatabaseUrl throws on duplicate host query params", false);
+} catch (error) {
+  check(
+    "assertLocalDatabaseUrl throws on duplicate host query params",
+    error instanceof RemoteDatabaseRefusedError && /repeat query parameter "host"/.test(error.message),
+  );
+}
+check(
+  "Comma-separated host query value is refused",
+  isLocalDatabaseHost("postgresql://u:p@localhost:5432/app?host=127.0.0.1,10.1.2.3") === false,
+);
+check(
+  "Non-empty hostaddr query param is refused",
+  isLocalDatabaseHost("postgresql://u:p@localhost:5432/app?hostaddr=10.1.2.3") === false,
+);
+check(
+  "Mixed-case hostaddr query param is refused",
+  isLocalDatabaseHost("postgresql://u:p@localhost:5432/app?HoStAdDr=127.0.0.1") === false,
+);
+check(
+  "Non-empty service query param is refused",
+  isLocalDatabaseHost("postgresql://u:p@localhost:5432/app?service=prod") === false,
+);
+check(
+  "Remote DIRECT_URL is refused even when DATABASE_URL is local",
+  Boolean(
+    alternateDatabaseEnvProblem({
+      DIRECT_URL: "postgresql://u:p@db.example.com:5432/prod",
+    }),
+  ),
+);
+check(
+  "Remote PGHOST is refused even when DATABASE_URL is local",
+  Boolean(alternateDatabaseEnvProblem({ PGHOST: "db.example.com" })),
+);
+
+{
+  const operations = createRecordingOperations();
+  let reachedWork = false;
+  let refused = false;
+  try {
+    await withDisposableTestDatabase(
+      {
+        databaseUrl: duplicateHostUrl,
+        namePrefix: "tbbt_harness_dup_host",
+        operations,
+      },
+      async () => {
+        reachedWork = true;
+      },
+    );
+  } catch (error) {
+    refused = error instanceof RemoteDatabaseRefusedError;
+  }
+  check("Duplicate-host URL is refused before any destructive activity", refused && reachedWork === false);
+  check("Duplicate-host URL produces an empty operations log", operations.log.length === 0);
+}
+
 const first = uniqueTestDatabaseName("tbbt_harness");
 const second = uniqueTestDatabaseName("tbbt_harness");
 check(
@@ -78,7 +164,16 @@ check(
 );
 
 console.log("\nSTATIC — audited verifiers import the shared harness");
+const guardSrc = read("scripts/lib/local-database-guard.mjs");
 const harnessSrc = read("scripts/disposable-test-database.mjs");
+check(
+  "Harness and #238 share scripts/lib/local-database-guard.mjs",
+  harnessSrc.includes('from "./lib/local-database-guard.mjs"') &&
+    guardSrc.includes("BLOCKED_URL_PARAMS") &&
+    guardSrc.includes("alternateDatabaseEnvProblem") &&
+    guardSrc.includes("hostaddr") &&
+    guardSrc.includes("must not repeat query parameter"),
+);
 const defaultOpsSrc = harnessSrc.slice(
   harnessSrc.indexOf("function defaultOperations()"),
   harnessSrc.indexOf("async function cleanupDisposableDatabase"),
@@ -98,18 +193,19 @@ const clientOpSrc = defaultOpsSrc.slice(
 const dropOpSrc = defaultOpsSrc.slice(defaultOpsSrc.indexOf("async dropDatabase"));
 check(
   "Harness refuses remote hosts before default Prisma / push / DROP operations",
-  harnessSrc.indexOf('assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE / prisma db push / DROP DATABASE")') <
-    harnessSrc.indexOf("await ops.createDatabase") &&
-    createOpSrc.indexOf("assertLocalDatabaseUrl") < createOpSrc.indexOf("PrismaClient") &&
-    createOpSrc.indexOf("assertLocalDatabaseUrl") < createOpSrc.indexOf("CREATE DATABASE") &&
-    pushOpSrc.indexOf("assertLocalDatabaseUrl") < pushOpSrc.indexOf("db\", \"push\"") &&
-    clientOpSrc.indexOf("assertLocalDatabaseUrl") < clientOpSrc.indexOf("new PrismaClient") &&
-    dropOpSrc.indexOf("assertLocalDatabaseUrl") < dropOpSrc.indexOf("DROP DATABASE") &&
-    harnessSrc.includes('assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE")') &&
-    harnessSrc.includes('assertLocalDatabaseUrl(testUrl, "prisma db push")') &&
-    harnessSrc.includes('assertLocalDatabaseUrl(testUrl, "PrismaClient")') &&
-    harnessSrc.includes('assertLocalDatabaseUrl(adminUrl, "pg_terminate_backend")') &&
-    harnessSrc.includes('assertLocalDatabaseUrl(adminUrl, "DROP DATABASE")') &&
+  harnessSrc.indexOf(
+    'assertSafeLocalDatabaseEnvironment(\n    adminUrl,\n    "CREATE DATABASE / prisma db push / DROP DATABASE"',
+  ) < harnessSrc.indexOf("await ops.createDatabase") &&
+    createOpSrc.indexOf("assertSafeLocalDatabaseEnvironment") < createOpSrc.indexOf("PrismaClient") &&
+    createOpSrc.indexOf("assertSafeLocalDatabaseEnvironment") < createOpSrc.indexOf("CREATE DATABASE") &&
+    pushOpSrc.indexOf("assertSafeLocalDatabaseEnvironment") < pushOpSrc.indexOf("db\", \"push\"") &&
+    clientOpSrc.indexOf("assertSafeLocalDatabaseEnvironment") < clientOpSrc.indexOf("new PrismaClient") &&
+    dropOpSrc.indexOf("assertSafeLocalDatabaseEnvironment") < dropOpSrc.indexOf("DROP DATABASE") &&
+    harnessSrc.includes('assertSafeLocalDatabaseEnvironment(adminUrl, "CREATE DATABASE")') &&
+    harnessSrc.includes('assertSafeLocalDatabaseEnvironment(testUrl, "prisma db push")') &&
+    harnessSrc.includes('assertSafeLocalDatabaseEnvironment(testUrl, "PrismaClient")') &&
+    harnessSrc.includes('assertSafeLocalDatabaseEnvironment(adminUrl, "pg_terminate_backend")') &&
+    harnessSrc.includes('assertSafeLocalDatabaseEnvironment(adminUrl, "DROP DATABASE")') &&
     harnessSrc.includes("DROP DATABASE IF EXISTS") &&
     harnessSrc.includes("WITH (FORCE)") &&
     harnessSrc.includes("pg_terminate_backend") &&

@@ -12,74 +12,26 @@
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import {
+  LOCAL_DATABASE_HOSTS as LOCAL_DATABASE_HOST_LIST,
+  RemoteDatabaseRefusedError,
+  assertLocalDatabaseUrl,
+  assertSafeLocalDatabaseEnvironment,
+  isLocalDatabaseHost,
+  isLocalDatabaseUrl,
+  scrubAlternateDatabaseEnv,
+} from "./lib/local-database-guard.mjs";
 
-export const LOCAL_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+export {
+  LOCAL_DATABASE_HOST_LIST,
+  RemoteDatabaseRefusedError,
+  assertLocalDatabaseUrl,
+  assertSafeLocalDatabaseEnvironment,
+  isLocalDatabaseHost,
+  isLocalDatabaseUrl,
+};
 
-export class RemoteDatabaseRefusedError extends Error {
-  constructor(message, { host, action } = {}) {
-    super(message);
-    this.name = "RemoteDatabaseRefusedError";
-    this.host = host ?? "";
-    this.action = action ?? "";
-  }
-}
-
-function parseDatabaseUrl(urlString) {
-  try {
-    return new URL(urlString);
-  } catch {
-    try {
-      return new URL(String(urlString).replace(/@\//, "@localhost/"));
-    } catch {
-      return null;
-    }
-  }
-}
-
-export function isLocalDatabaseHost(urlString) {
-  const parsedUrl = parseDatabaseUrl(urlString);
-  if (!parsedUrl) return false;
-  const protocol = parsedUrl.protocol.replace(/:$/, "").toLowerCase();
-  if (protocol !== "postgres" && protocol !== "postgresql") return false;
-  const hostParam = (parsedUrl.searchParams.get("host") || "").replace(/^\[|\]$/g, "").toLowerCase();
-  if (hostParam) {
-    return (
-      LOCAL_DATABASE_HOSTS.has(hostParam) ||
-      hostParam.startsWith("/")
-    );
-  }
-  const host = (parsedUrl.hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
-  if (LOCAL_DATABASE_HOSTS.has(host)) return true;
-  if (host.startsWith("/")) return true;
-  return !host;
-}
-
-export function assertLocalDatabaseUrl(urlString, action = "destructive database work") {
-  if (!urlString) {
-    throw new RemoteDatabaseRefusedError(
-      `Refusing to ${action}: DATABASE_URL is missing.`,
-      { action },
-    );
-  }
-  const parsedUrl = parseDatabaseUrl(urlString);
-  if (!parsedUrl) {
-    throw new RemoteDatabaseRefusedError(
-      `Refusing to ${action}: DATABASE_URL is not a valid URL.`,
-      { action },
-    );
-  }
-  if (!isLocalDatabaseHost(urlString)) {
-    const host =
-      parsedUrl.searchParams.get("host") ||
-      parsedUrl.hostname ||
-      "(empty)";
-    throw new RemoteDatabaseRefusedError(
-      `Refusing to ${action}: DATABASE_URL host is not localhost, 127.0.0.1, ::1, or a local socket (got ${host}).`,
-      { host, action },
-    );
-  }
-  return parsedUrl;
-}
+export const LOCAL_DATABASE_HOSTS = new Set(LOCAL_DATABASE_HOST_LIST);
 
 export function uniqueTestDatabaseName(prefix) {
   const raw = String(prefix || "tbbt_test")
@@ -153,7 +105,7 @@ function defaultOperations() {
   const require = createRequire(import.meta.url);
   return {
     async createDatabase({ adminUrl, testDbName }) {
-      assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE");
+      assertSafeLocalDatabaseEnvironment(adminUrl, "CREATE DATABASE");
       const name = assertSafeDatabaseName(testDbName);
       const { PrismaClient } = require("@prisma/client");
       const admin = new PrismaClient({ datasourceUrl: adminUrl });
@@ -164,23 +116,26 @@ function defaultOperations() {
       }
     },
     async pushSchema({ testUrl }) {
-      assertLocalDatabaseUrl(testUrl, "prisma db push");
+      assertSafeLocalDatabaseEnvironment(testUrl, "prisma db push");
       const push = spawnSync(
         "npx",
         ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-        { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+        {
+          stdio: "inherit",
+          env: { ...scrubAlternateDatabaseEnv(process.env), DATABASE_URL: testUrl },
+        },
       );
       if (push.status !== 0) {
         throw new Error("Failed to push schema for disposable test database.");
       }
     },
     createClient({ testUrl }) {
-      assertLocalDatabaseUrl(testUrl, "PrismaClient");
+      assertSafeLocalDatabaseEnvironment(testUrl, "PrismaClient");
       const { PrismaClient } = require("@prisma/client");
       return new PrismaClient({ datasourceUrl: testUrl });
     },
     async terminateBackends({ adminUrl, testDbName }) {
-      assertLocalDatabaseUrl(adminUrl, "pg_terminate_backend");
+      assertSafeLocalDatabaseEnvironment(adminUrl, "pg_terminate_backend");
       const name = assertSafeDatabaseName(testDbName);
       const { PrismaClient } = require("@prisma/client");
       const admin = new PrismaClient({ datasourceUrl: adminUrl });
@@ -200,7 +155,7 @@ function defaultOperations() {
       }
     },
     async dropDatabase({ adminUrl, testDbName }) {
-      assertLocalDatabaseUrl(adminUrl, "DROP DATABASE");
+      assertSafeLocalDatabaseEnvironment(adminUrl, "DROP DATABASE");
       const name = assertSafeDatabaseName(testDbName);
       const { PrismaClient } = require("@prisma/client");
       const admin = new PrismaClient({ datasourceUrl: adminUrl });
@@ -258,7 +213,10 @@ export async function openDisposableTestDatabase({
   operations,
 } = {}) {
   const adminUrl = databaseUrl;
-  assertLocalDatabaseUrl(adminUrl, "CREATE DATABASE / prisma db push / DROP DATABASE");
+  assertSafeLocalDatabaseEnvironment(
+    adminUrl,
+    "CREATE DATABASE / prisma db push / DROP DATABASE",
+  );
   const ops = operations ?? defaultOperations();
   const testDbName = uniqueTestDatabaseName(namePrefix);
   const testUrl = testDatabaseUrlForName(adminUrl, testDbName);

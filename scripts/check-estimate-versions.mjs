@@ -21,6 +21,7 @@
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   assertLocalDatabaseUrl,

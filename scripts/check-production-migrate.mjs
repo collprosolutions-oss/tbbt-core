@@ -60,6 +60,14 @@ check(
     !runner.includes("Falling through to prisma migrate deploy"),
 );
 check(
+  "Fresh empty databases can still bootstrap after 42P01",
+  runner.includes("isPrismaMigrationsTableMissingError") &&
+    runner.includes("countPublicUserTables") &&
+    runner.includes("appliedQueryCode") &&
+    runner.includes("userTableCount") &&
+    runner.includes("information_schema.tables"),
+);
+check(
   "Intake measurement migration is still additive",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration) &&
     migration.includes('ADD COLUMN "intakeMeasurementMode"') &&
@@ -973,6 +981,85 @@ check(
     }).blocked === true &&
     planProductionMigrateDeploy({ localNames, localChecksums }).blocked === true &&
     planProductionMigrateDeploy({ localNames, localChecksums }).run === false,
+);
+check(
+  "Fresh empty database with missing _prisma_migrations still runs migrate deploy",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: undefined,
+    appliedQueryError: true,
+    appliedQueryCode: "42P01",
+    migrationsTableMissing: true,
+    userTableCount: 0,
+  }).run === true &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+      appliedQueryCode: "42P01",
+      migrationsTableMissing: true,
+      userTableCount: 0,
+    }).reason === "fresh empty database" &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+      appliedQueryCode: "42P01",
+      migrationsTableMissing: true,
+      userTableCount: 0,
+    }).blocked !== true,
+);
+check(
+  "Missing _prisma_migrations with existing user tables fails closed",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: undefined,
+    appliedQueryError: true,
+    appliedQueryCode: "42P01",
+    migrationsTableMissing: true,
+    userTableCount: 4,
+  }).run === false &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+      appliedQueryCode: "42P01",
+      migrationsTableMissing: true,
+      userTableCount: 4,
+    }).blocked === true &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+      appliedQueryCode: "42P01",
+      migrationsTableMissing: true,
+      userTableCount: 4,
+    }).reason.includes("existing user tables"),
+);
+check(
+  "42P01 without a verified user-table count stays fail-closed",
+  planProductionMigrateDeploy({
+    localNames,
+    localChecksums,
+    appliedRows: undefined,
+    appliedQueryError: true,
+    appliedQueryCode: "42P01",
+    migrationsTableMissing: true,
+  }).blocked === true &&
+    planProductionMigrateDeploy({
+      localNames,
+      localChecksums,
+      appliedRows: undefined,
+      appliedQueryError: true,
+      appliedQueryCode: "42P01",
+      migrationsTableMissing: true,
+    }).run === false,
 );
 check(
   "Applied migration missing locally fails closed before deploy",
