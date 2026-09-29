@@ -9,8 +9,7 @@
  * The normal conversion action stays idempotent and concurrency-safe:
  * it locks the ServiceRequest FOR UPDATE, re-reads, and returns the
  * earliest existing linked estimate. Simultaneous conversion attempts
- * converge on that row instead of creating duplicates. It does not
- * impose a global one-estimate-per-request product rule.
+ * converge on that row instead of creating duplicates. It does not impose a global one-estimate-per-request product rule.
  */
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
