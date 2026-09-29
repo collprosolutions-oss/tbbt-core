@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
+  ABSORBED_CONTACT_AUDIT_MESSAGE,
   MERGE_CONFIRM_LABEL,
   NAME_IS_NOT_IDENTITY_MESSAGE,
 } from "@/lib/customer-merge";
@@ -60,7 +61,7 @@ export function MergeCustomersForm({
       <p className="text-xs text-muted-foreground">
         Jobs, estimates, invoices, properties, and communication history stay attached to the
         record you keep. SMS consent becomes the stricter of the two (REVOKED, then UNKNOWN,
-        then GRANTED).
+        then GRANTED). {ABSORBED_CONTACT_AUDIT_MESSAGE}
       </p>
 
       <div className="flex items-start gap-2">

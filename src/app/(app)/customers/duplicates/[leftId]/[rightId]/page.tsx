@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
 import {
+  ABSORBED_CONTACT_AUDIT_MESSAGE,
   CUSTOMER_MERGE_ROUTE,
   CustomerMergeError,
   NAME_IS_NOT_IDENTITY_MESSAGE,
@@ -68,7 +69,7 @@ export default async function ConfirmCustomerMergePage({
     <PageContainer width="narrow">
       <PageHeader
         title="Confirm customer merge"
-        description="Choose which record to keep. The other record is removed only after every job, estimate, invoice, property, and message moves."
+        description={`Choose which record to keep. The other record is removed only after every related row moves. ${ABSORBED_CONTACT_AUDIT_MESSAGE}`}
       >
         <Button asChild size="sm" variant="outline">
           <Link href={CUSTOMER_MERGE_ROUTE}>Back to possible duplicates</Link>

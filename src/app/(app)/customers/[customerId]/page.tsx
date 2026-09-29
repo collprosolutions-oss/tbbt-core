@@ -22,7 +22,7 @@ import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { pairHref } from "@/lib/customer-merge";
 import {
   findSurvivorForAbsorbedCustomer,
-  loadDuplicateReview,
+  loadPossibleDuplicatesForCustomer,
 } from "@/lib/customer-merge-ops";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
@@ -71,9 +71,7 @@ export default async function CustomerProfilePage({
 
   const possiblePairs =
     access.workspace.role === "OWNER"
-      ? (await loadDuplicateReview(prisma, access)).pairs.filter(
-          (pair) => pair.left.id === customer.id || pair.right.id === customer.id,
-        )
+      ? (await loadPossibleDuplicatesForCustomer(prisma, access, customer.id)).pairs
       : [];
 
   const recordNavItems = await loadRecordJourney(prisma, access, {

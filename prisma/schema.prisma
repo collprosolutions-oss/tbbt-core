@@ -699,11 +699,11 @@ model CustomerMerge {
   absorbedSnapshot     Json
   /// Comma-separated email and/or phone. Never "name".
   matchReasons         String
-  mergedByMembershipId String
+  mergedByMembershipId String?
   createdAt            DateTime @default(now())
 
-  business Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  mergedBy Membership @relation("CustomerMergeActor", fields: [mergedByMembershipId], references: [id], onDelete: Restrict)
+  business Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  mergedBy Membership? @relation("CustomerMergeActor", fields: [mergedByMembershipId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, absorbedCustomerId])
   @@index([businessId])

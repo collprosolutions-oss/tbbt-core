@@ -2,6 +2,8 @@
 -- Preview shares Production and skips migrate, so every statement is IF NOT EXISTS.
 -- Re-running is safe. Statements are additive only. No destructive statements.
 -- The absorbed customer id has no FK so that row can be deleted after relations move.
+-- mergedByMembershipId is nullable with ON DELETE SET NULL so removing a
+-- membership keeps the audit row.
 
 CREATE TABLE IF NOT EXISTS "CustomerMerge" (
     "id" TEXT NOT NULL,
@@ -10,7 +12,7 @@ CREATE TABLE IF NOT EXISTS "CustomerMerge" (
     "absorbedCustomerId" TEXT NOT NULL,
     "absorbedSnapshot" JSONB NOT NULL,
     "matchReasons" TEXT NOT NULL,
-    "mergedByMembershipId" TEXT NOT NULL,
+    "mergedByMembershipId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "CustomerMerge_pkey" PRIMARY KEY ("id")
 );
@@ -26,6 +28,8 @@ CREATE INDEX IF NOT EXISTS "CustomerMerge_absorbedCustomerId_idx"
 
 DO $$
 BEGIN
+  ALTER TABLE "CustomerMerge" ALTER COLUMN "mergedByMembershipId" DROP NOT NULL;
+
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'CustomerMerge_businessId_fkey'
   ) THEN
@@ -33,11 +37,14 @@ BEGIN
       ADD CONSTRAINT "CustomerMerge_businessId_fkey"
       FOREIGN KEY ("businessId") REFERENCES "Business"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
-  IF NOT EXISTS (
+
+  IF EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'CustomerMerge_mergedByMembershipId_fkey'
   ) THEN
-    ALTER TABLE "CustomerMerge"
-      ADD CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey"
-      FOREIGN KEY ("mergedByMembershipId") REFERENCES "Membership"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    ALTER TABLE "CustomerMerge" DROP CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey";
   END IF;
+
+  ALTER TABLE "CustomerMerge"
+    ADD CONSTRAINT "CustomerMerge_mergedByMembershipId_fkey"
+    FOREIGN KEY ("mergedByMembershipId") REFERENCES "Membership"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 END $$;

@@ -40,8 +40,21 @@ export const CROSS_BUSINESS_MERGE_MESSAGE =
 export const MERGE_ALREADY_ABSORBED_MESSAGE =
   "One of those customer records was already merged.";
 
+export const MERGE_TRY_AGAIN_MESSAGE =
+  "That merge could not finish because another change happened at the same time. Try again.";
+
+export const MERGE_LEFTOVER_REFERENCES_MESSAGE =
+  "Merge stopped because another record still pointed at the absorbed customer. Try again.";
+
+export const ABSORBED_CONTACT_AUDIT_MESSAGE =
+  "The absorbed record's name, email, and phone are kept only in the merge audit snapshot. They are not copied onto the record you keep unless that record is missing an email or phone.";
+
 export const MERGE_CONFIRM_LABEL =
   "I confirm these two records are the same customer. Matching names alone are not enough.";
+
+export const DUPLICATE_REVIEW_GROUP_TAKE = 25;
+export const DUPLICATE_REVIEW_MAX_CUSTOMERS_PER_GROUP = 8;
+export const CUSTOMER_DETAIL_DUPLICATE_TAKE = 12;
 
 export const MERGE_MATCH_REASONS = ["email", "phone"] as const;
 export type MergeMatchReason = (typeof MERGE_MATCH_REASONS)[number];
@@ -138,7 +151,9 @@ export function encodeMatchReasons(reasons: MergeMatchReason[]) {
 
 export function findPossibleDuplicatePairs(
   customers: CustomerMergeIdentity[],
+  options: { maxCustomersPerGroup?: number } = {},
 ): PossibleDuplicatePair[] {
+  const maxPerGroup = options.maxCustomersPerGroup ?? DUPLICATE_REVIEW_MAX_CUSTOMERS_PER_GROUP;
   const byId = new Map(customers.map((row) => [row.id, row]));
   const emailGroups = new Map<string, string[]>();
   const phoneGroups = new Map<string, string[]>();
@@ -164,10 +179,11 @@ export function findPossibleDuplicatePairs(
     const unique = [...new Set(group)];
     if (unique.length < 2) return;
     unique.sort();
-    for (let i = 0; i < unique.length; i += 1) {
-      for (let j = i + 1; j < unique.length; j += 1) {
-        const left = byId.get(unique[i]);
-        const right = byId.get(unique[j]);
+    const capped = unique.slice(0, Math.max(2, maxPerGroup));
+    for (let i = 0; i < capped.length; i += 1) {
+      for (let j = i + 1; j < capped.length; j += 1) {
+        const left = byId.get(capped[i]);
+        const right = byId.get(capped[j]);
         if (!left || !right || left.businessId !== right.businessId) continue;
         const key = `${left.id}:${right.id}`;
         const existing = pairs.get(key);
