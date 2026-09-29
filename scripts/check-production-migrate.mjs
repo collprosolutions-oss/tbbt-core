@@ -1486,6 +1486,17 @@ check(
       localNames.indexOf("20260929010400_estimate_options"),
 );
 
+const monthlyBusinessGoalMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010700_monthly_business_goal/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Monthly business goal migration is additive and IF NOT EXISTS",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(monthlyBusinessGoalMigration) &&
+    monthlyBusinessGoalMigration.includes('CREATE TABLE IF NOT EXISTS "MonthlyBusinessGoal"') &&
+    localNames.includes("20260929010700_monthly_business_goal"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

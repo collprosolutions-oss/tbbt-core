@@ -143,10 +143,10 @@ export const CAPABILITIES = {
    */
   MANAGE_EXPENSE_RECEIPTS: "MANAGE_EXPENSE_RECEIPTS",
   /**
-   * Read business-wide Reports (invoices, labor, customers, services).
-   * OWNER/ADMIN only. MEMBER must never receive this -- Reports hold
-   * private financial data for the whole business, not assigned-job
-   * field work.
+   * Read business-wide Reports (invoices, labor, customers, services)
+   * and monthly goal progress. OWNER/ADMIN only. MEMBER must never
+   * receive this -- Reports and monthly goals hold private financial
+   * data for the whole business, not assigned-job field work.
    */
   VIEW_REPORTS: "VIEW_REPORTS",
   /**
@@ -276,7 +276,7 @@ export function requireBusinessCapability(
 /**
  * Coarse, temporary READ gate for the entire authenticated management
  * console (Dashboard, Requests, Customers, Estimates, Materials, Jobs, Invoices,
- * Reports, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Business Protection, Services, Time Cards, Payroll, Expenses, Settings).
+ * Reports, Monthly goals, Marketing, Growth, Reviews, Pipeline, Knowledge, Communications, Business Protection, Services, Time Cards, Payroll, Expenses, Settings).
  *
  * Every one of those pages exists to browse or mutate business-wide
  * management data, and MEMBER has no capability over any of it today (see

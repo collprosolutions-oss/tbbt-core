@@ -438,6 +438,9 @@ model Business {
   /// untouched. Completion is explicit — never inferred from Job.status.
   jobMilestones             JobMilestone[]
   jobMilestoneEvents        JobMilestoneEvent[]
+  /// OWNER-set monthly targets for recorded jobs completed, invoices paid,
+  /// and collected payments (recorded). Targets are not forecasts or bank balance.
+  monthlyBusinessGoals      MonthlyBusinessGoal[]
 }
 
 /// First-class membership of a Business in a configured trade.
@@ -530,6 +533,32 @@ model OwnerScenarioAssumptionSet {
 
   @@unique([businessId, name])
   @@index([businessId, updatedAt])
+}
+
+/// OWNER-set monthly targets for recorded jobs completed, invoices paid,
+/// and collected payments (recorded). One row per business civil month. Targets are
+/// not forecasts, projected cash, or bank balance. Actuals are computed
+/// from recorded TBBT facts using Business.timezone month boundaries.
+/// ADMIN may view; MEMBER is denied. businessId comes from access.
+model MonthlyBusinessGoal {
+  id                    String   @id @default(cuid())
+  businessId            String
+  year                  Int
+  /// Civil month 1-12 in Business.timezone.
+  month                 Int
+  jobsCompletedTarget   Int?
+  invoicesPaidTarget    Int?
+  revenueReceivedTarget Decimal?
+  createdByMembershipId String?
+  updatedByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership? @relation("MonthlyBusinessGoalCreator", fields: [createdByMembershipId], references: [id], onDelete: SetNull)
+  updatedBy Membership? @relation("MonthlyBusinessGoalUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, year, month])
 }
 
 model Membership {
@@ -665,6 +694,8 @@ model Membership {
   recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
   completedJobMilestones JobMilestone[] @relation("JobMilestoneCompleter")
   jobMilestoneEvents JobMilestoneEvent[] @relation("JobMilestoneEventActor")
+  createdMonthlyBusinessGoals MonthlyBusinessGoal[] @relation("MonthlyBusinessGoalCreator")
+  updatedMonthlyBusinessGoals MonthlyBusinessGoal[] @relation("MonthlyBusinessGoalUpdater")
 
   @@unique([userId, businessId])
   @@index([businessId])
