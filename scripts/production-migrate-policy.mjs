@@ -13,7 +13,8 @@
  * unfinished migrations still run migrate deploy with Prisma locking on.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 export const COLLPRO_RENO_VERCEL_PROJECT_ID = "prj_7xmTwilZyg0plUHRzHgvboCusHLp";
@@ -72,6 +73,24 @@ export function listLocalMigrationNames(migrationsDir) {
     .sort();
 }
 
+/**
+ * Prisma stores sha256(migration.sql file bytes) as a 64-char hex checksum.
+ * Hash the on-disk file; do not rename or edit an already-applied directory.
+ */
+export function prismaMigrationChecksum(sqlBytes) {
+  return createHash("sha256").update(sqlBytes).digest("hex");
+}
+
+export function listLocalMigrationChecksums(migrationsDir) {
+  const checksums = {};
+  for (const name of listLocalMigrationNames(migrationsDir)) {
+    checksums[name] = prismaMigrationChecksum(
+      readFileSync(path.join(migrationsDir, name, "migration.sql")),
+    );
+  }
+  return checksums;
+}
+
 function appliedMigrationNames(appliedRows = []) {
   const names = new Set();
   for (const row of appliedRows) {
@@ -91,20 +110,110 @@ function hasUnfinishedAppliedMigration(appliedRows = []) {
   });
 }
 
+function appliedMigrationRecords(appliedRows = []) {
+  const records = [];
+  for (const row of appliedRows) {
+    const finishedAt = row.finished_at ?? row.finishedAt ?? null;
+    const rolledBackAt = row.rolled_back_at ?? row.rolledBackAt ?? null;
+    const name = row.migration_name ?? row.migrationName;
+    const checksum = row.checksum ?? null;
+    if (name && finishedAt && !rolledBackAt) {
+      records.push({ name, checksum });
+    }
+  }
+  return records;
+}
+
+function collectErrorCodes(error, depth = 0, codes = new Set()) {
+  if (!error || typeof error !== "object" || depth > 6) return codes;
+  if (typeof error.code === "string") codes.add(error.code);
+  if (typeof error.sqlState === "string") codes.add(error.sqlState);
+  if (error.meta && typeof error.meta.code === "string") codes.add(error.meta.code);
+  collectErrorCodes(error.cause, depth + 1, codes);
+  collectErrorCodes(error.originalError, depth + 1, codes);
+  collectErrorCodes(error.meta, depth + 1, codes);
+  return codes;
+}
+
+export function extractPostgresSqlState(error) {
+  const codes = collectErrorCodes(error);
+  if (codes.has("42P01")) return "42P01";
+  return [...codes][0] || "";
+}
+
+export function isPrismaMigrationsTableMissingError(error) {
+  return extractPostgresSqlState(error) === "42P01";
+}
+
 /**
  * Lock-free plan for whether `prisma migrate deploy` is actually needed.
  * Compare local migration folders to `_prisma_migrations` rows from a
  * normal SELECT. Do not use `prisma migrate status` here; that takes the
  * same advisory lock as migrate deploy.
+ *
+ * Fail closed before deploy when applied history is unavailable, an
+ * applied name is missing locally, or a Prisma checksum diverges.
+ * Postgres 42P01 (_prisma_migrations absent) is the one exception:
+ * a brand-new empty database may bootstrap; existing user tables block.
  */
 export function planProductionMigrateDeploy({
   localNames = [],
+  localChecksums = null,
   appliedRows,
   appliedQueryError = false,
+  appliedQueryCode = null,
+  migrationsTableMissing = false,
+  userTableCount = null,
 } = {}) {
   if (appliedQueryError || appliedRows == null) {
-    return { run: true, reason: "could not verify applied migrations" };
+    const missingTable =
+      migrationsTableMissing === true || appliedQueryCode === "42P01";
+    if (missingTable && userTableCount === 0) {
+      return { run: true, reason: "fresh empty database" };
+    }
+    if (missingTable && Number.isFinite(userTableCount) && userTableCount > 0) {
+      return {
+        run: false,
+        blocked: true,
+        reason: "_prisma_migrations missing with existing user tables",
+      };
+    }
+    return {
+      run: false,
+      blocked: true,
+      reason: "applied migration history unavailable",
+    };
   }
+
+  const localNameSet = new Set(localNames);
+  const appliedRecords = appliedMigrationRecords(appliedRows);
+  const missingLocally = appliedRecords
+    .map((row) => row.name)
+    .filter((name) => !localNameSet.has(name));
+  if (missingLocally.length > 0) {
+    return {
+      run: false,
+      blocked: true,
+      reason: `applied migrations missing locally: ${missingLocally.join(", ")}`,
+    };
+  }
+
+  if (localChecksums) {
+    const mismatches = appliedRecords
+      .filter((row) => {
+        const localChecksum = localChecksums[row.name];
+        return row.checksum && localChecksum && row.checksum !== localChecksum;
+      })
+      .map((row) => row.name);
+    if (mismatches.length > 0) {
+      return {
+        run: false,
+        blocked: true,
+        reason: `checksum mismatch: ${mismatches.join(", ")}`,
+      };
+    }
+  }
+
   if (hasUnfinishedAppliedMigration(appliedRows)) {
     return { run: true, reason: "unfinished migration recorded" };
   }
