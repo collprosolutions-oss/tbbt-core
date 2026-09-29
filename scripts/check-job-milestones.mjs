@@ -123,6 +123,7 @@ if (push.status !== 0) {
 
 const { PrismaClient, Prisma } = require("@prisma/client");
 let prisma = new PrismaClient({ datasourceUrl: testUrl });
+const lockWatch = new PrismaClient({ datasourceUrl: baseUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -197,6 +198,55 @@ async function withTimeout(promise, ms, label) {
     ]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function installJobLockHold(holdKind) {
+  const barrier = createCommitBarrier();
+  let afterJobLockCount = 0;
+  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
+    afterJobLockCount += 1;
+    if (kind === holdKind) await barrier.wait();
+  };
+  return {
+    barrier,
+    afterJobLockCount: () => afterJobLockCount,
+  };
+}
+
+async function waitUntilTestDbHasLockWait(admin, label) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const rows = await admin.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND wait_event_type = 'Lock'
+        AND pid <> pg_backend_pid()
+    `;
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows;
+    }
+    await sleep(25);
+  }
+  throw new Error(
+    `${label}: no pg_stat_activity Lock wait in ${testDbName} after 4000ms`,
+  );
+}
+
+async function proveSecondContenderLockedThenRelease(admin, hold, label) {
+  try {
+    await waitUntilTestDbHasLockWait(admin, label);
+    check(
+      `${label}: afterJobLock reached exactly once before release`,
+      hold.afterJobLockCount() === 1,
+    );
+  } finally {
+    hold.barrier.release();
   }
 }
 
@@ -335,7 +385,8 @@ try {
     cardSrc.includes("completedAtLabel") &&
       !cardSrc.includes("formatDateTime") &&
       cardSrc.includes("window.confirm") &&
-      cardSrc.includes("Mark this milestone complete? This cannot be undone."),
+      cardSrc.includes("Mark this milestone complete? This cannot be undone.") &&
+      !cardSrc.includes("Not yet marked complete"),
   );
   check(
     "missingJobMilestoneSchema matches only P2021/P2022",
@@ -384,12 +435,26 @@ try {
       jobMilestoneStatusLabel("COMPLETED") === "Completed" &&
       JOB_MILESTONE_STATUS_LABELS.OPEN === "Not yet marked complete",
   );
-  check("History list is bounded", JOB_MILESTONE_HISTORY_BOUND === 80 && opsSrc.includes("JOB_MILESTONE_HISTORY_BOUND"));
+  check(
+    "History list keeps the newest events within the bound",
+    JOB_MILESTONE_HISTORY_BOUND === 80 &&
+      opsSrc.includes("JOB_MILESTONE_HISTORY_BOUND") &&
+      opsSrc.includes('createdAt: "desc"') &&
+      opsSrc.includes(".reverse()"),
+  );
   check("Record locks the Job before the cap check", opsSrc.includes("lockTenantOwnedJob") && opsSrc.indexOf("lockTenantOwnedJob") < opsSrc.indexOf("MAX_JOB_MILESTONES"));
+  check(
+    "Unknown record failures are not remapped to the 8-cap message",
+    opsSrc.includes("if (isDuplicateJobMilestoneTitleError(error))") &&
+      opsSrc.includes("throw error;") &&
+      !opsSrc.includes("jobMilestoneErrorMessage(error, MILESTONE_BOUND_MESSAGE)"),
+  );
   check(
     "Barrier races use afterJobLock and separate PrismaClients",
     selfSrc.includes("jobMilestoneTestHooks.afterJobLock") &&
       selfSrc.includes("Cap race A") &&
+      selfSrc.includes("wait_event_type = 'Lock'") &&
+      selfSrc.includes("proveSecondContenderLockedThenRelease") &&
       selfSrc.includes("record race first locker") &&
       selfSrc.includes("complete vs complete first locker") &&
       selfSrc.includes("complete-first locker") &&
@@ -774,16 +839,36 @@ try {
       cancelledOpen.customerVisible === true,
   );
 
+  const remapJob = await createJob(alpha.business.id, "SCHEDULED");
+  const syntheticRecordError = new Error("synthetic non-prisma record failure");
+  jobMilestoneTestHooks.afterJobLock = async () => {
+    throw syntheticRecordError;
+  };
+  try {
+    await expectError(
+      "Unknown record failure is not remapped to the 8-cap message",
+      () =>
+        recordJobMilestones(prisma, ownerA, {
+          jobId: remapJob.id,
+          items: [{ title: "Should not look like a cap error" }],
+        }),
+      (error) =>
+        error === syntheticRecordError &&
+        !(error instanceof JobMilestoneError) &&
+        jobMilestoneErrorMessage(error, "Could not record those milestones.") ===
+          "Could not record those milestones.",
+    );
+  } finally {
+    jobMilestoneTestHooks.afterJobLock = undefined;
+  }
+
   console.log("\nDEDICATED DB — Barrier races with separate PrismaClients");
   const raceCapJob = await createJob(alpha.business.id, "SCHEDULED");
   await recordJobMilestones(prisma, ownerA, {
     jobId: raceCapJob.id,
     items: Array.from({ length: 7 }, (_, index) => ({ title: `Cap seed ${index + 1}` })),
   });
-  const recordBarrier = createCommitBarrier();
-  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
-    if (kind === "record") await recordBarrier.wait();
-  };
+  const recordHold = installJobLockHold("record");
   const recordClientA = new PrismaClient({ datasourceUrl: testUrl });
   const recordClientB = new PrismaClient({ datasourceUrl: testUrl });
   let recordRace;
@@ -796,8 +881,8 @@ try {
       jobId: raceCapJob.id,
       items: [{ title: "Cap race B" }],
     });
-    await withTimeout(recordBarrier.arrived, 4000, "record race first locker");
-    recordBarrier.release();
+    await withTimeout(recordHold.barrier.arrived, 4000, "record race first locker");
+    await proveSecondContenderLockedThenRelease(lockWatch, recordHold, "record race");
     recordRace = await Promise.allSettled([heldA, heldB]);
   } finally {
     jobMilestoneTestHooks.afterJobLock = undefined;
@@ -834,18 +919,15 @@ try {
     items: [{ title: "Race complete once" }],
   });
   const raceCompleteId = raceCompleteRecorded.milestones[0].id;
-  const completeBarrier = createCommitBarrier();
-  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
-    if (kind === "complete") await completeBarrier.wait();
-  };
+  const completeHold = installJobLockHold("complete");
   const completeClientA = new PrismaClient({ datasourceUrl: testUrl });
   const completeClientB = new PrismaClient({ datasourceUrl: testUrl });
   let completeRace;
   try {
     const heldA = completeJobMilestone(completeClientA, ownerA, raceCompleteId);
     const heldB = completeJobMilestone(completeClientB, ownerA, raceCompleteId);
-    await withTimeout(completeBarrier.arrived, 4000, "complete vs complete first locker");
-    completeBarrier.release();
+    await withTimeout(completeHold.barrier.arrived, 4000, "complete vs complete first locker");
+    await proveSecondContenderLockedThenRelease(lockWatch, completeHold, "complete vs complete");
     completeRace = await Promise.allSettled([heldA, heldB]);
   } finally {
     jobMilestoneTestHooks.afterJobLock = undefined;
@@ -886,21 +968,18 @@ try {
     items: [{ title: "Vis after complete", customerVisible: false }],
   });
   const visAfterCompleteId = visAfterCompleteRecorded.milestones[0].id;
-  const completeFirstBarrier = createCommitBarrier();
-  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
-    if (kind === "complete") await completeFirstBarrier.wait();
-  };
+  const completeFirstHold = installJobLockHold("complete");
   const completeFirstClient = new PrismaClient({ datasourceUrl: testUrl });
   const visSecondClient = new PrismaClient({ datasourceUrl: testUrl });
   let completeFirstRace;
   try {
     const heldComplete = completeJobMilestone(completeFirstClient, ownerA, visAfterCompleteId);
-    await withTimeout(completeFirstBarrier.arrived, 4000, "complete-first locker");
+    await withTimeout(completeFirstHold.barrier.arrived, 4000, "complete-first locker");
     const heldVis = setJobMilestoneCustomerVisible(visSecondClient, ownerA, {
       milestoneId: visAfterCompleteId,
       customerVisible: true,
     });
-    completeFirstBarrier.release();
+    await proveSecondContenderLockedThenRelease(lockWatch, completeFirstHold, "complete-first");
     completeFirstRace = await Promise.allSettled([heldComplete, heldVis]);
   } finally {
     jobMilestoneTestHooks.afterJobLock = undefined;
@@ -930,10 +1009,7 @@ try {
     items: [{ title: "Vis first then complete", customerVisible: false }],
   });
   const visFirstId = visFirstRecorded.milestones[0].id;
-  const visFirstBarrier = createCommitBarrier();
-  jobMilestoneTestHooks.afterJobLock = async ({ kind }) => {
-    if (kind === "visibility") await visFirstBarrier.wait();
-  };
+  const visFirstHold = installJobLockHold("visibility");
   const visFirstClient = new PrismaClient({ datasourceUrl: testUrl });
   const completeSecondClient = new PrismaClient({ datasourceUrl: testUrl });
   let visFirstRace;
@@ -942,9 +1018,9 @@ try {
       milestoneId: visFirstId,
       customerVisible: true,
     });
-    await withTimeout(visFirstBarrier.arrived, 4000, "visibility-first locker");
+    await withTimeout(visFirstHold.barrier.arrived, 4000, "visibility-first locker");
     const heldComplete = completeJobMilestone(completeSecondClient, ownerA, visFirstId);
-    visFirstBarrier.release();
+    await proveSecondContenderLockedThenRelease(lockWatch, visFirstHold, "visibility-first");
     visFirstRace = await Promise.allSettled([heldVis, heldComplete]);
   } finally {
     jobMilestoneTestHooks.afterJobLock = undefined;
@@ -966,6 +1042,7 @@ try {
 } finally {
   jobMilestoneTestHooks.afterJobLock = undefined;
   await prisma.$disconnect();
+  await lockWatch.$disconnect();
   await dropTestDatabase();
 }
 

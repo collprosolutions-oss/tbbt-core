@@ -86,9 +86,7 @@ function MilestoneRow({
       </div>
       {milestone.completedAtLabel ? (
         <p className="text-xs text-muted-foreground">Completed {milestone.completedAtLabel}</p>
-      ) : (
-        <p className="text-xs text-muted-foreground">Not yet marked complete</p>
-      )}
+      ) : null}
       {canManage ? (
         <div className="flex flex-wrap gap-2">
           {milestone.status === "OPEN" ? (

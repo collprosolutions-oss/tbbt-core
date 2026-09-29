@@ -189,7 +189,7 @@ export async function listJobMilestoneHistory(
   const job = await requireOwnedJob(db, access, jobId);
   const rows = await db.jobMilestoneEvent.findMany({
     where: { jobId: job.id, businessId: access.businessId },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: JOB_MILESTONE_HISTORY_BOUND,
     select: {
       id: true,
@@ -199,7 +199,7 @@ export async function listJobMilestoneHistory(
       createdAt: true,
     },
   });
-  return rows;
+  return [...rows].reverse();
 }
 
 export async function loadCustomerVisibleMilestonesForProjectToken(
@@ -337,7 +337,16 @@ export async function recordJobMilestones(
     if (error instanceof JobMilestoneError || error instanceof ForbiddenError) {
       throw error;
     }
-    throw new JobMilestoneError(jobMilestoneErrorMessage(error, MILESTONE_BOUND_MESSAGE));
+    if (missingJobMilestoneSchema(error)) {
+      throw new JobMilestoneError(MILESTONE_UNAVAILABLE_MESSAGE);
+    }
+    if (isDuplicateJobMilestoneSortOrderError(error)) {
+      throw new JobMilestoneError(DUPLICATE_SORT_ORDER_MESSAGE);
+    }
+    if (isDuplicateJobMilestoneTitleError(error)) {
+      throw new JobMilestoneError(DUPLICATE_TITLE_MESSAGE);
+    }
+    throw error;
   }
 }
 
