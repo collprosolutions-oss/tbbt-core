@@ -1392,6 +1392,26 @@ check(
       .includes("sendOwnerSms"),
 );
 
+const estimateOptionsMigration = readFileSync(
+  new URL("../prisma/migrations/20260929010000_estimate_options/migration.sql", import.meta.url),
+  "utf8",
+);
+check(
+  "Estimate options migration is additive and after template archive",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE|UPDATE\s+"LineItem"|UPDATE\s+"Estimate"/i.test(
+    estimateOptionsMigration,
+  ) &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateOption"') &&
+    estimateOptionsMigration.includes('CREATE TABLE IF NOT EXISTS "EstimateVersionOption"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedOptionId"') &&
+    estimateOptionsMigration.includes('ADD COLUMN IF NOT EXISTS "approvedEstimateOptionId"') &&
+    localNames.includes("20260929010000_estimate_options") &&
+    !localNames.includes("20260928200000_estimate_options") &&
+    localNames.includes("20260928200000_estimate_line_template_archive") &&
+    localNames.indexOf("20260928200000_estimate_line_template_archive") <
+      localNames.indexOf("20260929010000_estimate_options"),
+);
+
 const materialsSchema = readFileSync(
   new URL("../src/lib/materials/schema.ts", import.meta.url),
   "utf8",

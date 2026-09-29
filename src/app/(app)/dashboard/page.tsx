@@ -205,6 +205,7 @@ export default async function DashboardPage() {
           select: { id: true, status: true, total: true, invoiceId: true, approvedAt: true, createdAt: true },
         },
         estimate: { select: { total: true } },
+        approvedEstimateOption: { select: { total: true } },
         approvedEstimateVersion: { select: { total: true } },
       },
       orderBy: { updatedAt: "desc" },
@@ -274,7 +275,11 @@ export default async function DashboardPage() {
   const unbilledCompletedJobs = completedJobsForBilling.filter((job) => {
     const attention = completedJobBillingAttention({
       jobStatus: "COMPLETED",
-      originalApprovedTotal: job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null,
+      originalApprovedTotal:
+        job.approvedEstimateOption?.total ??
+        job.approvedEstimateVersion?.total ??
+        job.estimate?.total ??
+        null,
       invoices: job.invoices,
       changeOrders: job.changeOrders,
     });

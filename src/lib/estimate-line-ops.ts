@@ -7,6 +7,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
+import { resolveDraftLineOptionId } from "@/lib/estimate-option-ops";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import {
@@ -102,6 +103,7 @@ export async function addCatalogItemToDraftEstimate(
     catalogItemId: string;
     quantity: Prisma.Decimal;
     unitPrice?: Prisma.Decimal | null;
+    optionId?: string | null;
   },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_ESTIMATES);
@@ -149,6 +151,11 @@ export async function addCatalogItemToDraftEstimate(
   }
 
   const total = input.quantity.mul(unitPrice);
+  const optionId = await resolveDraftLineOptionId(db, {
+    estimateId: estimate.id,
+    businessId: access.businessId,
+    optionId: input.optionId,
+  });
   const title =
     unitPrice.lte(0) && catalogItem.pricingMode === "CUSTOM_QUOTE"
       ? `${catalogItem.name} ${CUSTOM_QUOTE_DRAFT_MARKER}`
@@ -160,6 +167,7 @@ export async function addCatalogItemToDraftEstimate(
       data: {
         businessId: access.businessId,
         estimateId: estimate.id,
+        optionId,
         serviceCatalogItemId: catalogItem.id,
         description: joinLineDescription(
           title,

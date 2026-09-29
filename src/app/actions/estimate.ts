@@ -18,6 +18,15 @@ import {
 import { createEstimateVersionSnapshot } from "@/lib/estimate-version";
 import { persistDraftEstimateTotal } from "@/lib/labor-minimum";
 import {
+  addEstimateOption,
+  collapseEstimateOptions,
+  estimateOptionErrorMessage,
+  removeEstimateOption,
+  renameEstimateOption,
+  resolveDraftLineOptionId,
+  startEstimateOptions,
+} from "@/lib/estimate-option-ops";
+import {
   addCatalogItemToDraftEstimate,
   applyDraftEstimateCalculator,
   estimateLineErrorMessage,
@@ -562,6 +571,7 @@ export async function addCatalogLineItem(
       catalogItemId,
       quantity,
       unitPrice: parseDecimal(readString(formData, "unitPrice")),
+      optionId: readString(formData, "optionId") || null,
     });
   } catch (error) {
     return { error: estimateLineErrorMessage(error, "Could not add that service.") };
@@ -604,12 +614,23 @@ export async function addCustomLineItem(
   }
 
   const total = quantity.mul(unitPrice);
+  let optionId: string | null;
+  try {
+    optionId = await resolveDraftLineOptionId(prisma, {
+      estimateId: estimate.id,
+      businessId: access.businessId,
+      optionId: readString(formData, "optionId") || null,
+    });
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "That priced option is not on this draft.") };
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.lineItem.create({
       data: {
         businessId: access.businessId,
         estimateId: estimate.id,
+        optionId,
         description: joinLineDescription(
           description,
           type === "MATERIAL"
@@ -1403,7 +1424,10 @@ export async function sendEstimate(
   const estimate = access.assertOwned(
     await prisma.estimate.findFirst({
       where: { id: estimateId, ...access.scope },
-      include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
+      include: {
+        lineItems: { select: { id: true, description: true, unitPrice: true, optionId: true } },
+        options: { select: { id: true, name: true, sortOrder: true }, orderBy: { sortOrder: "asc" } },
+      },
     }),
   );
 
@@ -1415,7 +1439,10 @@ export async function sendEstimate(
   const result = await prisma.$transaction(async (tx) => {
     const current = await tx.estimate.findFirst({
       where: { id: estimate.id, businessId: access.businessId },
-      include: { lineItems: { select: { id: true, description: true, unitPrice: true } } },
+      include: {
+        lineItems: { select: { id: true, description: true, unitPrice: true, optionId: true } },
+        options: { select: { id: true, name: true, sortOrder: true }, orderBy: { sortOrder: "asc" } },
+      },
     });
 
     if (!current) {
@@ -1623,4 +1650,98 @@ export async function emailSentEstimate(
 
   revalidatePath(`/estimates/${estimate.id}`);
   return { message: `Estimate emailed to ${recipient}` };
+}
+
+export async function startDraftEstimateOptions(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+  if (!operating.ok) return { error: operating.error };
+  const estimateId = readString(formData, "estimateId");
+  if (!estimateId) return { error: "That estimate could not be updated." };
+  try {
+    const result = await startEstimateOptions(prisma, operating.access, estimateId);
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "Priced options could not be started.") };
+  }
+}
+
+export async function addDraftEstimateOption(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+  if (!operating.ok) return { error: operating.error };
+  const estimateId = readString(formData, "estimateId");
+  if (!estimateId) return { error: "That estimate could not be updated." };
+  try {
+    const result = await addEstimateOption(prisma, operating.access, estimateId);
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "Another priced option could not be added.") };
+  }
+}
+
+export async function renameDraftEstimateOption(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+  if (!operating.ok) return { error: operating.error };
+  const estimateId = readString(formData, "estimateId");
+  const optionId = readString(formData, "optionId");
+  if (!estimateId || !optionId) return { error: "That priced option could not be renamed." };
+  try {
+    const result = await renameEstimateOption(prisma, operating.access, {
+      estimateId,
+      optionId,
+      name: readString(formData, "name"),
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "That priced option could not be renamed.") };
+  }
+}
+
+export async function removeDraftEstimateOption(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+  if (!operating.ok) return { error: operating.error };
+  const estimateId = readString(formData, "estimateId");
+  const optionId = readString(formData, "optionId");
+  if (!estimateId || !optionId) return { error: "That priced option could not be removed." };
+  try {
+    const result = await removeEstimateOption(prisma, operating.access, {
+      estimateId,
+      optionId,
+    });
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "That priced option could not be removed.") };
+  }
+}
+
+export async function collapseDraftEstimateOptions(
+  _prev: EstimateActionState,
+  formData: FormData,
+): Promise<EstimateActionState> {
+  const operating = await requireOperatingProductAccessForForm(PRODUCT_CAPABILITIES.ESTIMATES_INVOICES);
+  if (!operating.ok) return { error: operating.error };
+  const estimateId = readString(formData, "estimateId");
+  if (!estimateId) return { error: "Those priced options could not be removed." };
+  try {
+    const result = await collapseEstimateOptions(prisma, operating.access, estimateId);
+    revalidatePath(`/estimates/${estimateId}`);
+    return { message: result.message };
+  } catch (error) {
+    return { error: estimateOptionErrorMessage(error, "Those priced options could not be removed.") };
+  }
 }

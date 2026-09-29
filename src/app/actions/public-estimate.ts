@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { findCurrentEstimateVersion } from "@/lib/estimate-version";
+import {
+  MIN_ESTIMATE_OPTIONS,
+  OPTION_REQUIRED_MESSAGE,
+} from "@/lib/estimate-options";
 import { prisma } from "@/lib/prisma";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
@@ -17,7 +21,10 @@ const STALE_VERSION_ERROR =
 
 type ApproveTransactionResult =
   | { ok: true }
-  | { ok: false; reason: "not_ready" | "stale" | "already_approved" };
+  | {
+      ok: false;
+      reason: "not_ready" | "stale" | "already_approved" | "option_required";
+    };
 
 export async function approveEstimate(
   _prev: ApproveEstimateResult,
@@ -33,6 +40,12 @@ export async function approveEstimate(
   // is never trusted to select which version gets approved.
   const submittedVersionId =
     typeof rawVersionId === "string" ? rawVersionId.trim() : "";
+  const rawOptionId = formData.get("estimateOptionId");
+  // Required when the current SENT version has frozen priced options.
+  // Compared against EstimateVersionOption rows on the current version
+  // only — never trusted to select a historical or cross-tenant option.
+  const submittedOptionId =
+    typeof rawOptionId === "string" ? rawOptionId.trim() : "";
 
   if (!token) {
     return { error: GENERIC_ERROR };
@@ -59,7 +72,7 @@ export async function approveEstimate(
     async (tx): Promise<ApproveTransactionResult> => {
       const current = await tx.estimate.findFirst({
         where: { publicToken: token },
-        select: { id: true, status: true },
+        select: { id: true, businessId: true, status: true },
       });
 
       if (!current) {
@@ -96,11 +109,43 @@ export async function approveEstimate(
         return { ok: false, reason: "stale" };
       }
 
+      const versionOptions = await tx.estimateVersionOption.findMany({
+        where: {
+          estimateVersionId: currentVersion.id,
+          businessId: current.businessId,
+        },
+        orderBy: { sortOrder: "asc" },
+      });
+      let approvedOptionId: string | null = null;
+      let chosenTotal = currentVersion.total;
+      let chosenAdjustment = currentVersion.laborMinimumAdjustment;
+
+      if (versionOptions.length > 0) {
+        if (versionOptions.length < MIN_ESTIMATE_OPTIONS) {
+          return { ok: false, reason: "not_ready" };
+        }
+        if (!submittedOptionId) {
+          return { ok: false, reason: "option_required" };
+        }
+        const chosen = versionOptions.find((option) => option.id === submittedOptionId);
+        if (!chosen) {
+          return { ok: false, reason: "stale" };
+        }
+        approvedOptionId = chosen.id;
+        chosenTotal = chosen.total;
+        chosenAdjustment = chosen.laborMinimumAdjustment;
+      } else if (submittedOptionId) {
+        return { ok: false, reason: "stale" };
+      }
+
       const updated = await tx.estimate.updateMany({
         where: { id: current.id, status: "SENT" },
         data: {
           status: "APPROVED",
           approvedVersionId: currentVersion.id,
+          approvedOptionId,
+          total: chosenTotal,
+          laborMinimumAdjustment: chosenAdjustment,
         },
       });
 
@@ -112,6 +157,12 @@ export async function approveEstimate(
         where: { id: currentVersion.id },
         data: { approvedAt: new Date() },
       });
+      if (approvedOptionId) {
+        await tx.estimateVersionOption.update({
+          where: { id: approvedOptionId },
+          data: { approvedAt: new Date() },
+        });
+      }
 
       return { ok: true };
     },
@@ -120,6 +171,9 @@ export async function approveEstimate(
   if (!result.ok) {
     if (result.reason === "stale") {
       return { error: STALE_VERSION_ERROR };
+    }
+    if (result.reason === "option_required") {
+      return { error: OPTION_REQUIRED_MESSAGE };
     }
     if (result.reason === "already_approved") {
       return { status: "APPROVED" };

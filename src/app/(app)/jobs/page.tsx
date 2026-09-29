@@ -92,6 +92,7 @@ const LINE_ITEM_SELECT = {
   unitPrice: true,
   total: true,
   type: true,
+  optionId: true,
 } as const;
 
 const UNSCHEDULED_PANEL_SELECT = {
@@ -106,6 +107,10 @@ const UNSCHEDULED_PANEL_SELECT = {
       region: true,
       postalCode: true,
     },
+  },
+  approvedEstimateOptionId: true,
+  approvedEstimateOption: {
+    select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
   },
   approvedEstimateVersion: {
     select: {
@@ -161,11 +166,16 @@ function rangeFilterStart(preset: string | undefined, now: Date) {
  * logic; it calls the exact same canonical Change Order sum helper.
  */
 function computeJobTotal(job: {
+  approvedEstimateOption?: { total: Prisma.Decimal } | null;
   approvedEstimateVersion: { total: Prisma.Decimal } | null;
   estimate: { total: Prisma.Decimal } | null;
   changeOrders: { status: string; total: Prisma.Decimal }[];
 }): Prisma.Decimal | null {
-  const base = job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null;
+  const base =
+    job.approvedEstimateOption?.total ??
+    job.approvedEstimateVersion?.total ??
+    job.estimate?.total ??
+    null;
   if (!base) return null;
   return resolveCurrentApprovedProjectTotal(base, job.changeOrders);
 }
@@ -309,6 +319,7 @@ export default async function JobsPage({
     prisma.job.findMany({
       where: { ...access.scope, scheduledAt: { gte: thisWeek.start, lt: thisWeek.end } },
       select: {
+        approvedEstimateOption: { select: { total: true } },
         approvedEstimateVersion: { select: { total: true } },
         estimate: { select: { total: true } },
         changeOrders: { select: { status: true, total: true } },
@@ -321,6 +332,7 @@ export default async function JobsPage({
         updatedAt: { gte: thisWeek.start, lt: thisWeek.end },
       },
       select: {
+        approvedEstimateOption: { select: { total: true } },
         approvedEstimateVersion: { select: { total: true } },
         estimate: { select: { total: true } },
         changeOrders: { select: { status: true, total: true } },
@@ -342,6 +354,9 @@ export default async function JobsPage({
           select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true },
         },
         estimate: { select: { total: true, lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } } },
+        approvedEstimateOption: {
+          select: { id: true, name: true, total: true, laborMinimumAdjustment: true },
+        },
         approvedEstimateVersion: {
           select: {
             versionNumber: true,
@@ -410,11 +425,20 @@ export default async function JobsPage({
     ].filter((id): id is string => Boolean(id)),
   );
   const unscheduledPanelJobs = unscheduledJobs.map((job) => {
-    const lineItems =
-      job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+    const optionId = job.approvedEstimateOptionId ?? job.approvedEstimateOption?.id ?? null;
+    const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
+    const lineItems = optionId
+      ? versionLines.filter((line) => line.optionId === optionId)
+      : versionLines.length > 0
+        ? versionLines
+        : job.estimate?.lineItems ?? [];
     const requiredDeposit = resolveMaterialDeposit({
       lines: lineItems,
-      total: job.approvedEstimateVersion?.total ?? job.estimate?.total ?? 0,
+      total:
+        job.approvedEstimateOption?.total ??
+        job.approvedEstimateVersion?.total ??
+        job.estimate?.total ??
+        0,
     }).amount;
     const paidTowardDeposit = job.estimateId
       ? (depositPaid.get(job.estimateId) ?? new Prisma.Decimal(0))
@@ -429,13 +453,23 @@ export default async function JobsPage({
     };
   });
   const jobs: JobListItem[] = jobsRawForList.map((job) => {
-    const approvedTotal = job.approvedEstimateVersion?.total ?? job.estimate?.total ?? null;
+    const optionId = job.approvedEstimateOptionId ?? job.approvedEstimateOption?.id ?? null;
+    const versionLines = job.approvedEstimateVersion?.lineItems ?? [];
+    const approvedTotal =
+      job.approvedEstimateOption?.total ??
+      job.approvedEstimateVersion?.total ??
+      job.estimate?.total ??
+      null;
     const source: JobListItem["approvedScopeSource"] = job.approvedEstimateVersion
       ? "version"
       : job.estimate
         ? "legacy-estimate"
         : "none";
-    const lineItems = job.approvedEstimateVersion?.lineItems ?? job.estimate?.lineItems ?? [];
+    const lineItems = optionId
+      ? versionLines.filter((line) => line.optionId === optionId)
+      : versionLines.length > 0
+        ? versionLines
+        : job.estimate?.lineItems ?? [];
     const approvedChangeOrders: JobChangeOrderSummary[] = job.changeOrders
       .filter((co) => co.status === "APPROVED")
       .map((co) => ({ id: co.id, title: co.title, totalLabel: formatMoney(co.total) }));

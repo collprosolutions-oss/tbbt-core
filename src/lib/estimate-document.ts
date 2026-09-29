@@ -46,6 +46,7 @@ import {
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
 import { loadEstimatePaymentSummary } from "@/lib/project-payments";
+import { resolveChosenCommercialScope } from "@/lib/estimate-options";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -96,6 +97,22 @@ export type EstimateDocumentLine = {
   showLinePricing: boolean;
 };
 
+export type EstimateDocumentOption = {
+  id: string;
+  name: string;
+  sortOrder: number;
+  totalLabel: string;
+  laborTotalLabel: string;
+  materialTotalLabel: string;
+  otherTotalLabel: string | null;
+  laborMinimumLabel: string | null;
+  laborMinimumAmountLabel: string | null;
+  laborLines: EstimateDocumentLine[];
+  materialLines: EstimateDocumentLine[];
+  otherLines: EstimateDocumentLine[];
+  approved: boolean;
+};
+
 export type EstimateDocumentPolicy = {
   id?: string;
   title: string;
@@ -126,6 +143,9 @@ export type EstimateDocumentView = {
   };
   serviceAddress: string | null;
   currentVersionId: string | null;
+  requiresOptionChoice: boolean;
+  approvedOptionId: string | null;
+  options: EstimateDocumentOption[];
   lineItems: EstimateDocumentLine[];
   laborLines: EstimateDocumentLine[];
   materialLines: EstimateDocumentLine[];
@@ -197,6 +217,18 @@ const ESTIMATE_DOCUMENT_INCLUDE = {
           unitPrice: true,
           total: true,
           type: true,
+          optionId: true,
+        },
+      },
+      options: {
+        orderBy: { sortOrder: "asc" as const },
+        select: {
+          id: true,
+          name: true,
+          sortOrder: true,
+          total: true,
+          laborMinimumAdjustment: true,
+          approvedAt: true,
         },
       },
     },
@@ -330,14 +362,36 @@ function toDocumentView(estimate: {
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
       type: LineItemType;
+      optionId?: string | null;
+    }>;
+    options?: Array<{
+      id: string;
+      name: string;
+      sortOrder: number;
+      total: Prisma.Decimal;
+      laborMinimumAdjustment: Prisma.Decimal;
+      approvedAt: Date | null;
     }>;
   }>;
+  approvedOptionId?: string | null;
 }): EstimateDocumentView {
   const currentVersion = estimate.versions[0] ?? null;
-  const total = currentVersion?.total ?? estimate.total;
+  const versionOptions = currentVersion?.options ?? [];
+  const approvedOptionId = estimate.approvedOptionId ?? null;
+  const chosenOption =
+    versionOptions.find((option) => option.id === approvedOptionId) ?? null;
+  const total = chosenOption?.total ?? currentVersion?.total ?? estimate.total;
   const laborMinimumAdjustment =
-    currentVersion?.laborMinimumAdjustment ?? estimate.laborMinimumAdjustment;
-  const rawLines = currentVersion?.lineItems ?? estimate.lineItems;
+    chosenOption?.laborMinimumAdjustment ??
+    currentVersion?.laborMinimumAdjustment ??
+    estimate.laborMinimumAdjustment;
+  const allVersionLines = currentVersion?.lineItems ?? estimate.lineItems;
+  const rawLines =
+    chosenOption
+      ? allVersionLines.filter((line) => line.optionId === chosenOption.id)
+      : versionOptions.length >= 2
+        ? []
+        : allVersionLines;
   const customerName = currentVersion?.customerName ?? estimate.customer?.name ?? null;
   const customerEmail =
     currentVersion?.customerEmail ?? estimate.customer?.email ?? null;
@@ -412,6 +466,42 @@ function toDocumentView(estimate: {
     },
     serviceAddress: property ? formatMailingAddress(property) : null,
     currentVersionId: currentVersion?.id ?? null,
+    requiresOptionChoice: estimate.status === "SENT" && versionOptions.length >= 2,
+    approvedOptionId,
+    options: versionOptions.map((option) => {
+      const optionLines = allVersionLines.filter((line) => line.optionId === option.id);
+      const optionDocs = toDocumentLines(optionLines);
+      const optionLabor = optionLines
+        .filter((line) => line.type === "LABOR")
+        .reduce((sum, line) => sum.add(line.total), ZERO);
+      const optionMaterials = resolveCustomerMaterialsTotal(optionLines).amount;
+      const optionOther = optionLines
+        .filter((line) => line.type === "OTHER")
+        .reduce((sum, line) => sum.add(line.total), ZERO);
+      const optionUnpriced = optionLines.some(isUnpricedLaborLine);
+      const optionPriced = optionLines.some(
+        (line) => line.type === "LABOR" && !isUnpricedLaborLine(line),
+      );
+      const optionQuote = optionUnpriced && !optionPriced;
+      const showOptionMinimum = option.laborMinimumAdjustment.gt(0);
+      return {
+        id: option.id,
+        name: option.name,
+        sortOrder: option.sortOrder,
+        totalLabel: documentAmountLabel(option.total, optionQuote),
+        laborTotalLabel: documentAmountLabel(optionLabor, optionQuote),
+        materialTotalLabel: formatMoney(optionMaterials),
+        otherTotalLabel: optionOther.gt(0) ? formatMoney(optionOther) : null,
+        laborMinimumLabel: showOptionMinimum ? LABOR_MINIMUM_CUSTOMER_LABEL : null,
+        laborMinimumAmountLabel: showOptionMinimum
+          ? formatMoney(option.laborMinimumAdjustment)
+          : null,
+        laborLines: optionDocs.filter((line) => line.type === "LABOR"),
+        materialLines: optionDocs.filter((line) => line.type === "MATERIAL"),
+        otherLines: optionDocs.filter((line) => line.type === "OTHER"),
+        approved: option.id === approvedOptionId,
+      };
+    }),
     lineItems,
     laborLines: lineItems.filter((line) => line.type === "LABOR"),
     materialLines: lineItems.filter((line) => line.type === "MATERIAL"),
@@ -429,7 +519,12 @@ function toDocumentView(estimate: {
     laborMinimumAmountLabel: showLaborMinimum
       ? formatMoney(laborMinimumAdjustment)
       : null,
-    totalLabel: documentAmountLabel(total, quoteWhenZero),
+    totalLabel:
+      !chosenOption && versionOptions.length >= 2
+        ? versionOptions
+            .map((option) => `${option.name} ${formatMoney(option.total)}`)
+            .join(" · ")
+        : documentAmountLabel(total, quoteWhenZero),
     materialDepositLabel: showDeposit ? formatMoney(deposit.amount) : null,
     remainingBalanceLabel: showDeposit ? formatMoney(deposit.remaining) : null,
     materialDepositNote: showDeposit ? MATERIAL_DEPOSIT_CUSTOMER_NOTE : null,
@@ -456,9 +551,21 @@ async function withPaymentSummary(
   document: EstimateDocumentView,
   db: PrismaClient,
 ): Promise<EstimateDocumentView> {
+  if (document.requiresOptionChoice) return document;
   const version = estimate.versions?.[0];
-  const lines = version?.lineItems ?? estimate.lineItems;
-  const total = version?.total ?? estimate.total;
+  const chosen = resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: "approvedOptionId" in estimate ? estimate.approvedOptionId : null,
+    approvedVersion: version
+      ? {
+          total: version.total,
+          lineItems: version.lineItems,
+        }
+      : null,
+  });
+  const lines = chosen.lineItems;
+  const total = chosen.total;
   const deposit = resolveMaterialDeposit({ lines, total });
   if (deposit.amount.lte(0)) return document;
   const summary = await loadEstimatePaymentSummary(db, {
@@ -514,6 +621,13 @@ export function estimateDocumentPlainText(document: EstimateDocumentView): strin
     document.customer.email ?? "",
     document.customer.phone ?? "",
     document.serviceAddress ?? "",
+    ...document.options.flatMap((option) => [
+      option.name,
+      option.totalLabel,
+      ...sectionPlainText(ESTIMATE_LABOR_SECTION_TITLE, option.laborLines),
+      ...sectionPlainText(ESTIMATE_MATERIALS_SECTION_TITLE, option.materialLines),
+      ...sectionPlainText(ESTIMATE_OTHER_SECTION_TITLE, option.otherLines),
+    ]),
     ...sectionPlainText(ESTIMATE_LABOR_SECTION_TITLE, document.laborLines),
     ...sectionPlainText(ESTIMATE_MATERIALS_SECTION_TITLE, document.materialLines),
     ...sectionPlainText(ESTIMATE_OTHER_SECTION_TITLE, document.otherLines),
