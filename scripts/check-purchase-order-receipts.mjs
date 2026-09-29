@@ -783,17 +783,6 @@ try {
     "List item stays ORDERED while another non-cancelled PO line is outstanding",
     sharedAfterOne.status === "ORDERED",
   );
-  await updatePurchaseOrderStatus(prisma, ownerA, {
-    purchaseOrderId: sharedPoOne.id,
-    status: "CANCELLED",
-  });
-  const sharedAfterCancelOpen = await prisma.materialPurchaseListItem.findUnique({
-    where: { id: shared.id },
-  });
-  check(
-    "Cancel leaves a list item in place when another non-cancelled PO line remains",
-    sharedAfterCancelOpen.status === "ORDERED",
-  );
   await recordPurchaseOrderReceipt(prisma, ownerA, {
     purchaseOrderId: sharedPoTwo.id,
     attemptKey: "receipt-shared-two",
@@ -803,6 +792,69 @@ try {
     where: { id: shared.id },
   });
   check("List item becomes RECEIVED only after every open PO line is filled", sharedAfterTwo.status === "RECEIVED");
+
+  const siblingEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const siblingList = await ensurePurchaseList(prisma, ownerA, { estimateId: siblingEstimate.id });
+  const siblingItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: siblingList.id,
+    name: "Sibling stay-open",
+    quantityNeeded: "6",
+    unit: "ea",
+    supplierId: depot.id,
+  });
+  const siblingKeep = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: siblingList.id,
+    supplierId: depot.id,
+    itemIds: [siblingItem.id],
+  });
+  const siblingDrop = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: siblingList.id,
+    supplierId: depot.id,
+    itemIds: [siblingItem.id],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: siblingKeep.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: siblingDrop.id,
+    status: "ORDERED_EXTERNALLY",
+  });
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: siblingDrop.id,
+    attemptKey: "receipt-sibling-partial",
+    items: [{ purchaseOrderItemId: siblingDrop.items[0].id, quantityReceived: "2" }],
+  });
+  await updatePurchaseOrderStatus(prisma, ownerA, {
+    purchaseOrderId: siblingDrop.id,
+    status: "CANCELLED",
+  });
+  const siblingAfterCancel = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: siblingItem.id },
+  });
+  check(
+    "Cancel leaves a list item in place when another non-cancelled PO line remains",
+    siblingAfterCancel.status === "ORDERED",
+  );
+  await recordPurchaseOrderReceipt(prisma, ownerA, {
+    purchaseOrderId: siblingKeep.id,
+    attemptKey: "receipt-sibling-keep",
+    items: [{ purchaseOrderItemId: siblingKeep.items[0].id, quantityReceived: "6" }],
+  });
+  const siblingAfterKeep = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: siblingItem.id },
+  });
+  check(
+    "Receipt can mark a previously cancelled sibling's list item RECEIVED",
+    siblingAfterKeep.status === "RECEIVED",
+  );
 
   console.log("\nTEST — Concurrent cancel versus receipt uses a real lock barrier");
   const barrierEstimate = await prisma.estimate.create({

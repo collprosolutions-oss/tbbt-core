@@ -771,12 +771,42 @@ async function applyPurchaseOrderStatus(
         purchaseOrderId: { not: existing.id },
         purchaseOrder: { status: { not: "CANCELLED" } },
       },
-      select: { purchaseListItemId: true },
+      select: {
+        purchaseListItemId: true,
+        quantity: true,
+        quantityReceived: true,
+      },
     });
-    const openSiblingIds = new Set(openSiblings.map((row) => row.purchaseListItemId));
-    const cancellableIds = listItemIds.filter(
-      (id) => listStatusById.get(id) !== "RECEIVED" && !openSiblingIds.has(id),
-    );
+    const siblingsByListItem = new Map<string, typeof openSiblings>();
+    for (const line of openSiblings) {
+      const rows = siblingsByListItem.get(line.purchaseListItemId) ?? [];
+      rows.push(line);
+      siblingsByListItem.set(line.purchaseListItemId, rows);
+    }
+    const receivedIds: string[] = [];
+    const cancellableIds: string[] = [];
+    for (const id of listItemIds) {
+      if (listStatusById.get(id) === "RECEIVED") continue;
+      const siblings = siblingsByListItem.get(id) ?? [];
+      if (siblings.length > 0) {
+        if (siblings.every((line) => line.quantityReceived.gte(line.quantity))) {
+          receivedIds.push(id);
+        }
+        continue;
+      }
+      cancellableIds.push(id);
+    }
+    if (receivedIds.length > 0) {
+      await db.materialPurchaseListItem.updateMany({
+        where: {
+          businessId: access.businessId,
+          purchaseListId: existing.purchaseListId,
+          id: { in: receivedIds },
+          NOT: { status: "RECEIVED" },
+        },
+        data: { status: "RECEIVED" },
+      });
+    }
     if (cancellableIds.length > 0) {
       await db.materialPurchaseListItem.updateMany({
         where: {
