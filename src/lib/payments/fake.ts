@@ -30,6 +30,26 @@ export type FakePaymentProvider = PaymentProvider & {
   completeCheckout(sessionId: string): void;
 };
 
+/**
+ * Local/test only. Comma-separated connected account ids the fake adapter
+ * may treat as charges-enabled when they were stored outside this process
+ * (the portal verifier writes BusinessPaymentAccount, then `next start`
+ * gets a fresh in-memory provider). Unknown ids stay not ready.
+ * Ignored when VERCEL_ENV=production. The Stripe adapter never reads this.
+ * A global "any unknown account is ready" switch is intentionally absent.
+ */
+export const FAKE_PAYMENT_READY_ACCOUNTS_ENV = "TBBT_FAKE_PAYMENT_READY_ACCOUNTS";
+
+function explicitlyReadyFakeAccount(accountId: string) {
+  if (process.env.VERCEL_ENV === "production") return false;
+  const raw = process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV] ?? "";
+  return raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .includes(accountId);
+}
+
 export function createFakePaymentProvider(): FakePaymentProvider {
   const accounts = new Map<string, FakeAccountState>();
   const checkouts: FakeCheckoutSession[] = [];
@@ -45,8 +65,7 @@ export function createFakePaymentProvider(): FakePaymentProvider {
     invoiceId: string | null;
     estimateId: string | null;
   }): FakeCheckoutSession {
-    const account = accounts.get(input.connectedAccountId);
-    if (!account?.chargesEnabled) {
+    if (chargesEnabledFor(input.connectedAccountId) !== true) {
       throw new Error("Connected account is not payment-ready.");
     }
     sessionSeq += 1;
@@ -64,6 +83,13 @@ export function createFakePaymentProvider(): FakePaymentProvider {
     };
     checkouts.push(result);
     return result;
+  }
+
+  function chargesEnabledFor(accountId: string): boolean | null {
+    const account = accounts.get(accountId);
+    if (account) return account.chargesEnabled;
+    if (explicitlyReadyFakeAccount(accountId)) return true;
+    return null;
   }
 
   function toVerified(session: FakeCheckoutSession): VerifiedCheckoutPayment {
@@ -120,14 +146,11 @@ export function createFakePaymentProvider(): FakePaymentProvider {
       return { url: `https://connect.stripe.test/setup/${input.accountId}` };
     },
     async getAccountReadiness(accountId: string) {
-      const account = accounts.get(accountId);
-      if (account) {
-        return {
-          accountId: account.accountId,
-          chargesEnabled: account.chargesEnabled,
-        };
+      const chargesEnabled = chargesEnabledFor(accountId);
+      if (chargesEnabled === null) {
+        throw new Error("Unknown connected account.");
       }
-      throw new Error("Unknown connected account.");
+      return { accountId, chargesEnabled };
     },
     async createInvoiceCheckoutSession(input: CreateInvoiceCheckoutInput) {
       return createCheckout({

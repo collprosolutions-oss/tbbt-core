@@ -36,7 +36,9 @@ cp .env.example .env
 # Set DATABASE_URL to a reachable Postgres database.
 # For local-only adapters add:
 #   TBBT_PAYMENTS_ADAPTER=fake
-#   TBBT_PAYMENTS_FAKE_READY=1
+# Unknown Stripe account ids stay not-ready. Do not set
+# TBBT_PAYMENTS_FAKE_READY. A test may list specific ids in
+# TBBT_FAKE_PAYMENT_READY_ACCOUNTS (ignored when VERCEL_ENV=production).
 #   TBBT_SAAS_BILLING_ADAPTER=fake
 #   TBBT_CUSTOMER_MESSAGING_ADAPTER=fake
 npm ci

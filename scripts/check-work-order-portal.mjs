@@ -15,25 +15,36 @@
  *      else" -- has to be proven against the raw response body, not just
  *      the Prisma query shape.
  *
- * Requires the app to already be built (`npm run build`) so `next start`
- * has a `.next` directory to serve.
+ * Requires the app to already be built (`npx prisma generate && npx next build`)
+ * so `next start` has a `.next` directory to serve.
  *
  * Run with:
- *   npm run build && node --experimental-strip-types scripts/check-work-order-portal.mjs
+ *   node --experimental-strip-types scripts/check-work-order-portal.mjs
+ *
+ * Needs a prior `npx prisma generate && npx next build` so `next start`
+ * has a `.next` directory. Do not use `npm run build` (that runs the
+ * production migrate).
  */
-import { createRequire } from "node:module";
+import { createRequire, register } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import {
-  createEstimateVersionSnapshot,
-  findCurrentEstimateVersion,
-} from "../src/lib/estimate-version.ts";
-import { resolveApprovedWorkOrderScope } from "../src/lib/job-work-order.ts";
-import {
-  customerFacingJobStatusLabel,
-  resolveProjectProgressStep,
-} from "../src/lib/project-progress.ts";
+
+// estimate-version.ts imports @/lib/estimate-options. Register the alias
+// loader before that module graph loads; a static import would resolve
+// before register() runs.
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const { createEstimateVersionSnapshot, findCurrentEstimateVersion } = await import(
+  "../src/lib/estimate-version.ts"
+);
+const { resolveApprovedWorkOrderScope } = await import("../src/lib/job-work-order.ts");
+const { customerFacingJobStatusLabel, resolveProjectProgressStep } = await import(
+  "../src/lib/project-progress.ts"
+);
+const { FAKE_PAYMENT_READY_ACCOUNTS_ENV } = await import("../src/lib/payments/fake.ts");
+
+const PORTAL_READY_ACCOUNT_ID = "acct_test_portal_ready";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -539,7 +550,7 @@ try {
     data: {
       businessId: businessB.id,
       provider: "stripe",
-      stripeAccountId: "acct_test_portal_ready",
+      stripeAccountId: PORTAL_READY_ACCOUNT_ID,
     },
   });
   const customerPay = await prisma.customer.create({
@@ -677,18 +688,22 @@ try {
     },
   });
 
+  const serverEnv = {
+    ...process.env,
+    DATABASE_URL: testUrl,
+    NODE_ENV: "production",
+    NEXT_PUBLIC_APP_URL: APP_URL,
+    TBBT_PAYMENTS_ADAPTER: "fake",
+    [FAKE_PAYMENT_READY_ACCOUNTS_ENV]: PORTAL_READY_ACCOUNT_ID,
+  };
+  delete serverEnv.TBBT_PAYMENTS_FAKE_READY;
+  delete serverEnv.VERCEL_ENV;
   serverProcess = spawn(
     "node_modules/.bin/next",
     ["start", "--hostname", "127.0.0.1", "--port", String(PORT)],
     {
       cwd: repoRoot.replace(/\/$/, ""),
-      env: {
-        ...process.env,
-        DATABASE_URL: testUrl,
-        NODE_ENV: "production",
-        TBBT_PAYMENTS_ADAPTER: "fake",
-        TBBT_PAYMENTS_FAKE_READY: "1",
-      },
+      env: serverEnv,
       stdio: "pipe",
     },
   );
