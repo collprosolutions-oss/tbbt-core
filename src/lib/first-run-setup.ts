@@ -6,11 +6,12 @@
  * sent through /setup instead of an unfinished Dashboard. Completion is
  * never inferred from phone/email being populated.
  *
- * Preview shares Production and skips migrate. The column is added with a
- * one-shot backfill of businesses that already existed when the column
- * appeared. Later ensure calls must not UPDATE WHERE NULL.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when firstRunSetupCompletedAt is missing. They must not ADD COLUMN or
+ * backfill createdAt. Historical SQL below is the migrate-system stand-in.
  */
 import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
+import { assertRequiredColumnsExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { isCollProRenoSlug } from "@/lib/public-site";
@@ -34,6 +35,7 @@ type SetupClient = PrismaClient | Prisma.TransactionClient;
 
 export const FIRST_RUN_SETUP_PATH = "/setup";
 
+/** Historical migration SQL. Never execute from a request path. */
 export const FIRST_RUN_SETUP_ENSURE_SQL = `
 DO $$
 BEGIN
@@ -60,9 +62,9 @@ export function resetFirstRunSetupSchemaEnsure() {
 
 export async function ensureFirstRunSetupSchema(db: SetupClient) {
   if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      await db.$executeRawUnsafe(FIRST_RUN_SETUP_ENSURE_SQL);
-    })().catch((error) => {
+    ensureSchemaPromise = assertRequiredColumnsExist(db, "Business", [
+      "firstRunSetupCompletedAt",
+    ]).catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });

@@ -1,11 +1,12 @@
 /**
  * Durable business-scoped persistence for estimating defaults.
  *
- * Preview shares Production and skips migrate, so reads/writes first
- * ensure the table exists with CREATE TABLE IF NOT EXISTS. Production
- * migrate deploy is then a no-op for this additive migration.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when BusinessEstimatingDefault is missing. They must not CREATE TABLE.
+ * Historical SQL below is the migrate-system stand-in only.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { assertRequiredTablesExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
@@ -23,7 +24,8 @@ import {
   type BusinessEstimatingDefaultPayload,
 } from "@/lib/estimating-defaults";
 
-const CREATE_TABLE_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CREATE_BUSINESS_ESTIMATING_DEFAULT_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS "BusinessEstimatingDefault" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -37,19 +39,17 @@ CREATE TABLE IF NOT EXISTS "BusinessEstimatingDefault" (
 
 let ensureTablePromise: Promise<void> | null = null;
 
+export function resetBusinessEstimatingDefaultTableEnsure() {
+  ensureTablePromise = null;
+}
+
 export async function ensureBusinessEstimatingDefaultTable(
   db: PrismaClient | Prisma.TransactionClient,
 ) {
   if (!ensureTablePromise) {
-    ensureTablePromise = (async () => {
-      await db.$executeRawUnsafe(CREATE_TABLE_SQL);
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "BusinessEstimatingDefault_businessId_workspaceId_key" ON "BusinessEstimatingDefault"("businessId", "workspaceId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "BusinessEstimatingDefault_businessId_idx" ON "BusinessEstimatingDefault"("businessId")`,
-      );
-    })().catch((error) => {
+    ensureTablePromise = assertRequiredTablesExist(db, [
+      "BusinessEstimatingDefault",
+    ]).catch((error) => {
       ensureTablePromise = null;
       throw error;
     });

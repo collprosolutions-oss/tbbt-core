@@ -172,10 +172,11 @@ check(
     !timezoneLoadFns.includes("ALTER TABLE"),
 );
 check(
-  "Preview-safe runtime ensure adds availability columns/table before Settings reads",
-  availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&
-    availabilityData.includes("CREATE TABLE IF NOT EXISTS \"BusinessUnavailableDate\"") &&
+  "Availability request path fail-closes instead of adding columns/table before Settings reads",
+  availabilityData.includes("fail closed") &&
+    availabilityData.includes("assertRequiredTablesExist") &&
     availabilityData.includes("export async function ensureBusinessAvailabilitySchema") &&
+    !availabilityData.includes("$executeRawUnsafe") &&
     settingsData.includes("await ensureBusinessAvailabilitySchema(prisma)") &&
     settingsOps.includes("await ensureBusinessAvailabilitySchema(db)") &&
     /await ensureBusinessAvailabilitySchema\(db\);[\s\S]*businessSettings\.findUnique/.test(
@@ -696,50 +697,43 @@ try {
   );
 
   resetBusinessAvailabilitySchemaEnsure();
-  const recoveredSettings = await loadAvailabilitySettings(prisma, businessA.id);
+  let missingLoadError = null;
+  try {
+    await loadAvailabilitySettings(prisma, businessA.id);
+  } catch (error) {
+    missingLoadError = error;
+  }
+  const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
   check(
-    "loadAvailabilitySettings recreates the schema and returns defaults-or-saved hours",
-    recoveredSettings.workStartMinutes === 480 &&
-      recoveredSettings.schedulingBufferMinutes === 30 &&
-      recoveredSettings.workingWeekdays.join(",") === "1,2,3,4,5",
+    "loadAvailabilitySettings fail-closes when availability schema is missing",
+    missingLoadError instanceof RequestPathSchemaUnavailableError &&
+      missingLoadError.failClosed === true,
   );
 
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workStartMinutes"`,
-  );
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workEndMinutes"`,
-  );
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "workingWeekdays"`,
-  );
-  await prisma.$executeRawUnsafe(
-    `ALTER TABLE "BusinessSettings" DROP COLUMN IF EXISTS "schedulingBufferMinutes"`,
-  );
-  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessUnavailableDate"`);
   resetBusinessAvailabilitySchemaEnsure();
-
-  // Same reads Settings → Scheduling uses via loadSettingsSnapshot.
-  await ensureBusinessAvailabilitySchema(prisma);
-  const [preferencesRow, unavailableDates] = await Promise.all([
-    prisma.businessSettings.findUnique({ where: { businessId: businessA.id } }),
-    prisma.businessUnavailableDate.findMany({
-      where: { businessId: businessA.id },
-      select: { date: true },
-      orderBy: { date: "asc" },
-    }),
-  ]);
-  const scheduling = availabilitySettingsFromRow(
-    preferencesRow,
-    unavailableDates.map((row) => row.date),
-  );
+  let missingEnsureError = null;
+  try {
+    await ensureBusinessAvailabilitySchema(prisma);
+  } catch (error) {
+    missingEnsureError = error;
+  }
+  const missingAvailabilityTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename = 'BusinessUnavailableDate'
+  `;
+  const missingAvailabilityColumns = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'BusinessSettings'
+      AND column_name = 'workStartMinutes'
+  `;
   check(
-    "Settings → Scheduling snapshot queries succeed after preview-skip-migrate schema ensure",
-    scheduling.workStartMinutes === 480 &&
-      scheduling.workEndMinutes === 1020 &&
-      scheduling.schedulingBufferMinutes === 30 &&
-      scheduling.workingWeekdays.join(",") === "1,2,3,4,5" &&
-      formatAvailabilitySummary(scheduling).includes("30-minute"),
+    "ensureBusinessAvailabilitySchema fail-closes and does not recreate schema",
+    missingEnsureError instanceof RequestPathSchemaUnavailableError &&
+      missingEnsureError.failClosed === true &&
+      missingAvailabilityTables.length === 0 &&
+      missingAvailabilityColumns.length === 0,
   );
 } finally {
   await prisma.$disconnect();

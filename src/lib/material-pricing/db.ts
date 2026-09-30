@@ -2,10 +2,12 @@
  * Durable, business-scoped persistence for supplier preferences,
  * material mappings, and current supplier prices.
  *
- * Preview shares Production and skips migrate, so reads/writes first
- * ensure tables exist with CREATE TABLE IF NOT EXISTS.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when these tables are missing. They must not CREATE TABLE. Historical
+ * SQL below is the migrate-system stand-in only.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { assertRequiredTablesExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { roundMoney } from "@/lib/estimate-calculators/types";
@@ -27,7 +29,8 @@ import { lineMaterialTakeoff } from "@/lib/estimate-line-scope";
 import { normalizeTakeoffSnapshot } from "@/lib/material-takeoff/engine";
 import type { TakeoffSnapshot } from "@/lib/material-takeoff/types";
 
-const CREATE_PREFERENCE_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CREATE_PREFERENCE_SQL = `
 CREATE TABLE IF NOT EXISTS "BusinessSupplierPreference" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -42,7 +45,8 @@ CREATE TABLE IF NOT EXISTS "BusinessSupplierPreference" (
 );
 `;
 
-const CREATE_MAPPING_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CREATE_MAPPING_SQL = `
 CREATE TABLE IF NOT EXISTS "BusinessMaterialSupplierMapping" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -60,7 +64,8 @@ CREATE TABLE IF NOT EXISTS "BusinessMaterialSupplierMapping" (
 );
 `;
 
-const CREATE_PRICE_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CREATE_PRICE_SQL = `
 CREATE TABLE IF NOT EXISTS "SupplierPriceRecord" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -86,41 +91,25 @@ CREATE TABLE IF NOT EXISTS "SupplierPriceRecord" (
 );
 `;
 
+export const MATERIAL_PRICE_ENGINE_REQUIRED_TABLES = [
+  "BusinessSupplierPreference",
+  "BusinessMaterialSupplierMapping",
+  "SupplierPriceRecord",
+] as const;
+
 let ensureTablesPromise: Promise<void> | null = null;
+
+export function resetMaterialPriceEngineTablesEnsure() {
+  ensureTablesPromise = null;
+}
 
 export async function ensureMaterialPriceEngineTables(
   db: PrismaClient | Prisma.TransactionClient,
 ) {
   if (!ensureTablesPromise) {
-    ensureTablesPromise = (async () => {
-      await db.$executeRawUnsafe(CREATE_PREFERENCE_SQL);
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "BusinessSupplierPreference_businessId_providerId_key" ON "BusinessSupplierPreference"("businessId", "providerId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "BusinessSupplierPreference_businessId_idx" ON "BusinessSupplierPreference"("businessId")`,
-      );
-      await db.$executeRawUnsafe(CREATE_MAPPING_SQL);
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "BusinessMaterialSupplierMapping_businessId_providerId_materialIdentity_key" ON "BusinessMaterialSupplierMapping"("businessId", "providerId", "materialIdentity")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "BusinessMaterialSupplierMapping_businessId_idx" ON "BusinessMaterialSupplierMapping"("businessId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "BusinessMaterialSupplierMapping_businessId_providerId_idx" ON "BusinessMaterialSupplierMapping"("businessId", "providerId")`,
-      );
-      await db.$executeRawUnsafe(CREATE_PRICE_SQL);
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "SupplierPriceRecord_businessId_providerId_providerProductId_locationKey_key" ON "SupplierPriceRecord"("businessId", "providerId", "providerProductId", "locationKey")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "SupplierPriceRecord_businessId_idx" ON "SupplierPriceRecord"("businessId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "SupplierPriceRecord_businessId_providerId_idx" ON "SupplierPriceRecord"("businessId", "providerId")`,
-      );
-    })().catch((error) => {
+    ensureTablesPromise = assertRequiredTablesExist(db, [
+      ...MATERIAL_PRICE_ENGINE_REQUIRED_TABLES,
+    ]).catch((error) => {
       ensureTablesPromise = null;
       throw error;
     });

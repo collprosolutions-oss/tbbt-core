@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
+  classifyRequestPathSql,
+  failClosedRequiredSchema,
+  isPreviewSharedProductionRuntime,
   listLocalMigrationChecksums,
   listLocalMigrationNames,
   planProductionMigrateDeploy,
+  planRequestPathSchemaEnsure,
   prismaMigrationChecksum,
+  requestPathSchemaWritesBlocked,
   shouldRunProductionMigrate,
 } from "./production-migrate-policy.mjs";
 
@@ -89,6 +94,18 @@ check(
     estimatingDefaultsMigration.includes('"workspaceId"') &&
     estimatingDefaultsMigration.includes('"payload"'),
 );
+const estimatingDefaultsDb = readFileSync(
+  new URL("../src/lib/estimating-defaults-db.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Estimating defaults request path fail-closes instead of CREATE TABLE",
+  estimatingDefaultsDb.includes("fail closed") &&
+    estimatingDefaultsDb.includes("ensureBusinessEstimatingDefaultTable") &&
+    estimatingDefaultsDb.includes("assertRequiredTablesExist") &&
+    estimatingDefaultsDb.includes("Never execute from a request path") &&
+    !estimatingDefaultsDb.includes("$executeRawUnsafe"),
+);
 
 const paymentsMigration = readFileSync(
   new URL("../prisma/migrations/20260908010000_add_payments/migration.sql", import.meta.url),
@@ -101,6 +118,17 @@ check(
     paymentsMigration.includes('"purpose"') &&
     paymentsMigration.includes('"stripeCheckoutSessionId"') &&
     paymentsMigration.includes('"stripePaymentIntentId"'),
+);
+const projectPayments = readFileSync(
+  new URL("../src/lib/project-payments.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Project payments request path fail-closes instead of CREATE TABLE",
+  projectPayments.includes("fail closed") &&
+    projectPayments.includes("ensurePaymentTable") &&
+    projectPayments.includes("assertRequiredTablesExist") &&
+    !projectPayments.includes("$executeRawUnsafe"),
 );
 
 const availabilityMigration = readFileSync(
@@ -132,10 +160,11 @@ const materialPriceDb = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers material price engine tables skipped by migrate",
-  materialPriceDb.includes("Preview shares Production and skips migrate") &&
-    materialPriceDb.includes("CREATE TABLE IF NOT EXISTS") &&
-    materialPriceDb.includes("ensureMaterialPriceEngineTables"),
+  "Material price request path fail-closes instead of CREATE TABLE",
+  materialPriceDb.includes("fail closed") &&
+    materialPriceDb.includes("ensureMaterialPriceEngineTables") &&
+    materialPriceDb.includes("Never execute from a request path") &&
+    !materialPriceDb.includes("$executeRawUnsafe"),
 );
 
 const publicContactMigration = readFileSync(
@@ -155,23 +184,42 @@ const businessContact = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers public contact columns skipped by migrate",
-  businessContact.includes("Preview shares Production and skips migrate") &&
-    businessContact.includes('ADD COLUMN IF NOT EXISTS "publicPhone"') &&
-    businessContact.includes("ensureBusinessPublicContactSchema"),
+  "Public contact request path fail-closes instead of ADD COLUMN",
+  businessContact.includes("fail closed") &&
+    businessContact.includes("ensureBusinessPublicContactSchema") &&
+    !businessContact.includes("ADD COLUMN IF NOT EXISTS") &&
+    !businessContact.includes("$executeRawUnsafe"),
 );
 
 const workspaceLoader = readFileSync(
   new URL("../src/lib/workspace.ts", import.meta.url),
   "utf8",
 );
+const workspaceRequestLoader = readFileSync(
+  new URL("../src/lib/workspace-request.ts", import.meta.url),
+  "utf8",
+);
 check(
-  "Authenticated workspace load ensures public contact columns before Business SELECT",
-  workspaceLoader.includes("loadActiveWorkspaceMemberships") &&
+  "Authenticated workspace load probes public contact columns before Business SELECT",
+  workspaceLoader.includes("requireWorkspaceFromRequest") &&
+    workspaceRequestLoader.includes("loadActiveWorkspaceMemberships") &&
     businessContact.includes("export async function loadActiveWorkspaceMemberships") &&
     businessContact.includes("include: { business: true }") &&
     businessContact.indexOf("await ensureBusinessPublicContactSchema(db)") <
       businessContact.lastIndexOf("include: { business: true }"),
+);
+check(
+  "Authenticated workspace load is not a second migration engine",
+  !workspaceLoader.includes("ensureAppointmentConfirmationSchema") &&
+    !workspaceLoader.includes("ensureFirstRunSetupSchema") &&
+    !workspaceLoader.includes("ensureStarterServicesSetupSchema") &&
+    !workspaceLoader.includes("ensureWebsiteSetupSchema") &&
+    !workspaceLoader.includes("ensureSaasBillingSchema") &&
+    !workspaceLoader.includes("ensureBusinessTimezoneSchema") &&
+    !workspaceLoader.includes("ensureCustomerMessagingSchema") &&
+    !workspaceLoader.includes("$executeRaw") &&
+    !workspaceRequestLoader.includes("ensureSaasBillingSchema") &&
+    !workspaceRequestLoader.includes("$executeRaw"),
 );
 
 const availabilityData = readFileSync(
@@ -179,11 +227,12 @@ const availabilityData = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers availability columns/table skipped by migrate",
-  availabilityData.includes("Preview shares Production and skips migrate") &&
-    availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&
-    availabilityData.includes("CREATE TABLE IF NOT EXISTS \"BusinessUnavailableDate\"") &&
-    availabilityData.includes("ensureBusinessAvailabilitySchema"),
+  "Availability request path fail-closes instead of ADD COLUMN / CREATE TABLE",
+  availabilityData.includes("fail closed") &&
+    availabilityData.includes("ensureBusinessAvailabilitySchema") &&
+    availabilityData.includes("assertRequiredTablesExist") &&
+    availabilityData.includes("Never execute from a request path") &&
+    !availabilityData.includes("$executeRawUnsafe"),
 );
 
 const appointmentMigration = readFileSync(
@@ -207,17 +256,18 @@ const appointmentData = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers appointment confirmation columns/table skipped by migrate",
-  appointmentData.includes("Preview shares Production and skips migrate") &&
-    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
-    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
-    appointmentData.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"') &&
-    appointmentData.includes("ensureAppointmentConfirmationSchema"),
+  "Appointment confirmation request path fail-closes instead of CREATE/ALTER/repair",
+  appointmentData.includes("fail closed") &&
+    appointmentData.includes("ensureAppointmentConfirmationSchema") &&
+    appointmentData.includes("assertRequiredTablesExist") &&
+    appointmentData.includes("Never execute from a request path") &&
+    !appointmentData.includes("$executeRawUnsafe") &&
+    !appointmentData.includes("repairMisfiledChangeRequestAccessFields"),
 );
 
 check(
-  "Authenticated workspace load ensures appointment columns before Job SELECT",
-  workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
+  "Authenticated workspace load does not run appointment confirmation DDL",
+  !workspaceLoader.includes("ensureAppointmentConfirmationSchema"),
 );
 
 const firstRunMigration = readFileSync(
@@ -238,16 +288,18 @@ const firstRunSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers first-run setup column skipped by migrate",
-  firstRunSetup.includes("Preview shares Production and skips migrate") &&
+  "First-run request path fail-closes instead of ADD COLUMN / backfill",
+  firstRunSetup.includes("fail closed") &&
     firstRunSetup.includes("ensureFirstRunSetupSchema") &&
+    firstRunSetup.includes("assertRequiredColumnsExist") &&
+    firstRunSetup.includes("Never execute from a request path") &&
     firstRunSetup.includes("FIRST_RUN_SETUP_ENSURE_SQL") &&
-    firstRunSetup.includes('ADD COLUMN "firstRunSetupCompletedAt"'),
+    !firstRunSetup.includes("$executeRawUnsafe"),
 );
 
 check(
-  "Authenticated workspace load ensures first-run setup column before Business SELECT",
-  workspaceLoader.includes("ensureFirstRunSetupSchema"),
+  "Authenticated workspace load does not run first-run setup DDL",
+  !workspaceLoader.includes("ensureFirstRunSetupSchema"),
 );
 
 const starterServicesMigration = readFileSync(
@@ -268,16 +320,17 @@ const starterServicesSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers starter-services setup columns skipped by migrate",
-  starterServicesSetup.includes("Preview shares Production and skips migrate") &&
+  "Starter-services request path fail-closes instead of ADD COLUMN / backfill",
+  starterServicesSetup.includes("fail closed") &&
     starterServicesSetup.includes("ensureStarterServicesSetupSchema") &&
-    starterServicesSetup.includes("STARTER_SERVICES_SETUP_ENSURE_SQL") &&
-    starterServicesSetup.includes('ADD COLUMN "starterServicesSetupCompletedAt"'),
+    starterServicesSetup.includes("assertRequiredColumnsExist") &&
+    starterServicesSetup.includes("Never execute from a request path") &&
+    !starterServicesSetup.includes("$executeRawUnsafe"),
 );
 
 check(
-  "Authenticated workspace load ensures starter-services setup columns before Business SELECT",
-  workspaceLoader.includes("ensureStarterServicesSetupSchema"),
+  "Authenticated workspace load does not run starter-services setup DDL",
+  !workspaceLoader.includes("ensureStarterServicesSetupSchema"),
 );
 
 const websiteSetupMigration = readFileSync(
@@ -299,16 +352,17 @@ const websiteSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers website setup columns skipped by migrate",
-  websiteSetup.includes("Preview shares Production and skips migrate") &&
+  "Website setup request path fail-closes instead of ADD COLUMN / backfill",
+  websiteSetup.includes("fail closed") &&
     websiteSetup.includes("ensureWebsiteSetupSchema") &&
-    websiteSetup.includes("WEBSITE_SETUP_ENSURE_SQL") &&
-    websiteSetup.includes('ADD COLUMN "websiteSetupCompletedAt"'),
+    websiteSetup.includes("assertRequiredColumnsExist") &&
+    websiteSetup.includes("Never execute from a request path") &&
+    !websiteSetup.includes("$executeRawUnsafe"),
 );
 
 check(
-  "Authenticated workspace load ensures website setup columns before Business SELECT",
-  workspaceLoader.includes("ensureWebsiteSetupSchema"),
+  "Authenticated workspace load does not run website setup DDL",
+  !workspaceLoader.includes("ensureWebsiteSetupSchema"),
 );
 
 const saasBillingMigration = readFileSync(
@@ -330,16 +384,17 @@ const saasBillingSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers SaaS billing tables skipped by migrate",
-  saasBillingSchema.includes("Preview shares Production and skips migrate") &&
+  "SaaS billing request path fail-closes instead of CREATE/ALTER/backfill",
+  saasBillingSchema.includes("fail closed") &&
     saasBillingSchema.includes("ensureSaasBillingSchema") &&
-    saasBillingSchema.includes("SAAS_BILLING_ENSURE_SQL") &&
-    saasBillingSchema.includes('CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription"'),
+    saasBillingSchema.includes("assertSaasBillingSchemaPresent") &&
+    !saasBillingSchema.includes("$executeRawUnsafe") &&
+    saasBillingSchema.includes("Never execute from a request path"),
 );
 
 check(
-  "Authenticated workspace load ensures SaaS billing tables before Business SELECT",
-  workspaceLoader.includes("ensureSaasBillingSchema"),
+  "Authenticated workspace load does not run SaaS billing DDL or backfill",
+  !workspaceLoader.includes("ensureSaasBillingSchema"),
 );
 
 const founderTrialMigration = readFileSync(
@@ -399,15 +454,16 @@ const businessTimezone = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers business timezone column skipped by migrate",
-  businessTimezone.includes("Preview shares Production and skips migrate") &&
+  "Business timezone request path fail-closes instead of ADD COLUMN",
+  businessTimezone.includes("fail closed") &&
     businessTimezone.includes("ensureBusinessTimezoneSchema") &&
-    businessTimezone.includes("BUSINESS_TIMEZONE_ENSURE_SQL") &&
-    businessTimezone.includes('ADD COLUMN IF NOT EXISTS "timezone"'),
+    businessTimezone.includes("assertRequiredColumnsExist") &&
+    businessTimezone.includes("Never execute from a request path") &&
+    !businessTimezone.includes("$executeRawUnsafe"),
 );
 check(
-  "Authenticated workspace load ensures business timezone column before Business SELECT",
-  workspaceLoader.includes("ensureBusinessTimezoneSchema"),
+  "Authenticated workspace load does not run business timezone DDL",
+  !workspaceLoader.includes("ensureBusinessTimezoneSchema"),
 );
 
 const customerMessagingMigration = readFileSync(
@@ -428,14 +484,12 @@ const customerMessagingSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers customer messaging schema skipped by migrate",
-  customerMessagingSchema.includes("Preview shares Production and skips migrate") &&
+  "Customer messaging request path fail-closes instead of CREATE/ALTER",
+  customerMessagingSchema.includes("fail closed") &&
     customerMessagingSchema.includes("ensureCustomerMessagingSchema") &&
-    customerMessagingSchema.includes("CUSTOMER_MESSAGING_ENSURE_SQL") &&
-    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "smsConsentStatus"') &&
-    customerMessagingSchema.includes("CustomerCommunication") &&
-    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "operationalSmsNumber"') &&
-    customerMessagingSchema.includes("CustomerMessagingWebhookEvent"),
+    customerMessagingSchema.includes("assertRequiredTablesExist") &&
+    customerMessagingSchema.includes("Never execute from a request path") &&
+    !customerMessagingSchema.includes("$executeRawUnsafe"),
 );
 
 const twilioSmsMigration = readFileSync(
@@ -451,8 +505,8 @@ check(
     !/UPDATE "Customer"/i.test(twilioSmsMigration),
 );
 check(
-  "Authenticated workspace load ensures customer messaging schema before Business SELECT",
-  workspaceLoader.includes("ensureCustomerMessagingSchema"),
+  "Authenticated workspace load does not run customer messaging DDL",
+  !workspaceLoader.includes("ensureCustomerMessagingSchema"),
 );
 
 const ownerIntelligenceMigration = readFileSync(
@@ -1901,6 +1955,73 @@ check(
     !localNames.includes("20260928210000_owner_equipment_register") &&
     localNames.indexOf("20260928200000_estimate_line_template_archive") <
       localNames.indexOf("20260929010800_owner_equipment_register"),
+);
+
+const revenueIsolationMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260929233000_revenue_integrity_business_isolation/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Revenue-integrity business-isolation migration is forward-only after the original backfill",
+  localNames.includes("20260929233000_revenue_integrity_business_isolation") &&
+    localNames.indexOf("20260926100000_revenue_integrity_supplemental_invoices") <
+      localNames.indexOf("20260929233000_revenue_integrity_business_isolation") &&
+    revenueIsolationMigration.includes("Do not edit that already-applied migration") &&
+    revenueIsolationMigration.includes("RevenueIntegrityBusinessIsolationFinding") &&
+    revenueIsolationMigration.includes("change_order_attached_foreign_invoice") &&
+    revenueIsolationMigration.includes("payment_attached_foreign_invoice") &&
+    !/DELETE FROM "(Invoice|Payment|ChangeOrder)"/i.test(revenueIsolationMigration),
+);
+check(
+  "Original revenue-integrity backfill is unchanged and still lacks business-equality predicates",
+  revenueIntegrityMigration.includes('WHERE co."jobId" = first_invoice."jobId"') &&
+    !revenueIntegrityMigration.includes('co."businessId" = first_invoice."businessId"') &&
+    !revenueIntegrityMigration.includes('p."businessId" = original."businessId"') &&
+    !revenueIntegrityMigration.includes('p."businessId" = j."businessId"'),
+);
+check(
+  "Corrective revenue-integrity backfill requires business-equality on every attach UPDATE",
+  revenueIsolationMigration.includes('AND co."businessId" = first_invoice."businessId"') &&
+    revenueIsolationMigration.includes('AND p."businessId" = original."businessId"') &&
+    revenueIsolationMigration.includes('AND p."businessId" = j."businessId"') &&
+    revenueIsolationMigration.includes('AND original."businessId" = j."businessId"') &&
+    revenueIsolationMigration.includes('p."invoiceId" IS NULL') &&
+    revenueIsolationMigration.includes('co."invoiceId" IS NULL'),
+);
+
+check(
+  "Preview is the shared-production runtime that skips migrate",
+  isPreviewSharedProductionRuntime({ vercelEnv: "preview" }) === true &&
+    isPreviewSharedProductionRuntime({ vercelEnv: "production" }) === false,
+);
+check("Request-path schema writes are always blocked", requestPathSchemaWritesBlocked() === true);
+check(
+  "Request-path CREATE/INSERT statements fail closed",
+  planRequestPathSchemaEnsure({
+    statements: [
+      'CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription" (id text)',
+      'INSERT INTO "BusinessSaasSubscription" ("id") VALUES (\'x\')',
+    ],
+  }).allowed === false &&
+    classifyRequestPathSql("ALTER TABLE \"Business\" ADD COLUMN IF NOT EXISTS \"publicPhone\" TEXT")
+      .schemaDdl === true,
+);
+check(
+  "Request-path information_schema reads stay allowed",
+  planRequestPathSchemaEnsure({
+    statements: [
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'Business'",
+    ],
+  }).allowed === true,
+);
+check(
+  "Missing required schema fail-closes",
+  failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).failClosed === true &&
+    failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).ok === false &&
+    failClosedRequiredSchema({ present: true, name: "Business.publicPhone" }).ok === true,
 );
 
 console.log(

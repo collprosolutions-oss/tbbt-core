@@ -25,6 +25,7 @@ const {
   postAuthenticationPath,
   resetFirstRunSetupSchemaEnsure,
 } = await import("@/lib/first-run-setup");
+const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
 const { provisionOwnerWorkspace } = await import("@/lib/signup-provision");
 const { ForbiddenError } = await import("@/lib/authorization");
 const { parsePublicServiceAreaLabel } = await import("@/lib/business-contact");
@@ -684,13 +685,6 @@ try {
       postAuthenticationPath({ role: "MEMBER", business: afterStarter }) === "/field",
   );
 
-  const preexisting = await prisma.business.create({
-    data: {
-      name: "Already Live Co",
-      slug: `already-live-${randomUUID().slice(0, 8)}`,
-      tradeCode: "HANDYMAN",
-    },
-  });
   await prisma.$executeRawUnsafe(
     `ALTER TABLE "Business" DROP COLUMN IF EXISTS "websiteSetupChoice"`,
   );
@@ -698,35 +692,26 @@ try {
     `ALTER TABLE "Business" DROP COLUMN IF EXISTS "websiteSetupCompletedAt"`,
   );
   resetWebsiteSetupSchemaEnsure();
-  await ensureWebsiteSetupSchema(prisma);
-  const backfilled = await prisma.business.findUnique({
-    where: { id: preexisting.id },
-  });
+  let missingWebsiteError = null;
+  try {
+    await ensureWebsiteSetupSchema(prisma);
+  } catch (error) {
+    missingWebsiteError = error;
+  }
+  const missingWebsiteColumns = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'Business'
+      AND column_name = 'websiteSetupCompletedAt'
+  `;
   check(
-    "Existing businesses are backfilled and not forced through Task 3",
-    backfilled?.websiteSetupCompletedAt instanceof Date &&
-      ownerNeedsWebsiteSetup({ role: "OWNER", business: backfilled }) === false,
+    "Missing website setup columns fail-close without ADD COLUMN or backfill",
+    missingWebsiteError instanceof RequestPathSchemaUnavailableError &&
+      missingWebsiteError.failClosed === true &&
+      /websiteSetupCompletedAt/i.test(missingWebsiteError.message),
   );
-
-  const later = await provisionOwnerWorkspace(prisma, {
-    name: "Later Owner",
-    email: `later-${randomUUID().slice(0, 8)}@example.com`,
-    passwordHash,
-    businessName: "Later Handyman",
-  });
-  resetWebsiteSetupSchemaEnsure();
-  await ensureWebsiteSetupSchema(prisma);
-  const laterAfterEnsure = await prisma.business.findUnique({
-    where: { id: later.business.id },
-  });
-  check(
-    "Later signup stays incomplete after a second ensure",
-    laterAfterEnsure?.websiteSetupCompletedAt === null &&
-      ownerNeedsWebsiteSetup({
-        role: "OWNER",
-        business: laterAfterEnsure,
-      }) === true,
-  );
+  check("Dropped websiteSetupCompletedAt is still absent", missingWebsiteColumns.length === 0);
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

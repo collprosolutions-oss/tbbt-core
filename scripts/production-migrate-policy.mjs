@@ -224,3 +224,90 @@ export function planProductionMigrateDeploy({
   }
   return { run: true, reason: `pending migrations: ${pending.join(", ")}` };
 }
+
+/**
+ * Preview shares Production DATABASE_URL and skips migrate deploy.
+ * Request paths must never become a second migration engine: no schema
+ * DDL and no backfill DML. Missing required schema fails closed.
+ */
+export const REQUEST_PATH_SCHEMA_WRITES_BLOCKED = true;
+
+export function isPreviewSharedProductionRuntime({ vercelEnv } = {}) {
+  return String(vercelEnv ?? "").trim().toLowerCase() === "preview";
+}
+
+export function classifyRequestPathSql(sql) {
+  const text = String(sql ?? "");
+  const schemaDdl =
+    /\b(CREATE|ALTER|DROP|TRUNCATE)\s+(TABLE|INDEX|UNIQUE|SCHEMA|DATABASE|COLUMN|CONSTRAINT|TYPE)\b/i.test(
+      text,
+    ) ||
+    /\bADD\s+COLUMN\b/i.test(text) ||
+    /\bCREATE\s+(UNIQUE\s+)?INDEX\b/i.test(text) ||
+    /\bCREATE\s+TABLE\b/i.test(text);
+  const createdAtBackfill =
+    /\bUPDATE\b/i.test(text) &&
+    /"createdAt"/i.test(text) &&
+    /\bIS\s+NULL\b/i.test(text);
+  const infoSchemaMigration =
+    /\binformation_schema\b/i.test(text) &&
+    /\b(UPDATE|INSERT|ALTER|ADD\s+COLUMN)\b/i.test(text);
+  const compatibilityCopy =
+    /\bINSERT\s+INTO\b/i.test(text) &&
+    /\bSELECT\b/i.test(text) &&
+    /\bFROM\b/i.test(text) &&
+    /\bWHERE\s+NOT\s+EXISTS\b/i.test(text);
+  const founderAccessRepair =
+    /\bUPDATE\s+"Job"/i.test(text) && /propertyAccess/i.test(text);
+  const onboardingSentinelBackfill =
+    /\bUPDATE\b/i.test(text) &&
+    /firstRunSetupCompletedAt|starterServicesSetupCompletedAt|websiteSetupCompletedAt|saasFounderTrialBackfilledAt|legacyExempt/i.test(
+      text,
+    );
+  const backfillDml =
+    createdAtBackfill ||
+    infoSchemaMigration ||
+    compatibilityCopy ||
+    founderAccessRepair ||
+    onboardingSentinelBackfill;
+  return { schemaDdl, backfillDml };
+}
+
+export function requestPathSchemaWritesBlocked() {
+  return REQUEST_PATH_SCHEMA_WRITES_BLOCKED === true;
+}
+
+export function planRequestPathSchemaEnsure({ statements = [] } = {}) {
+  const classified = statements.map((sql) => ({
+    sql,
+    ...classifyRequestPathSql(sql),
+  }));
+  const ddl = classified.filter((row) => row.schemaDdl);
+  const dml = classified.filter((row) => row.backfillDml);
+  if (ddl.length > 0 || dml.length > 0) {
+    return {
+      allowed: false,
+      blocked: true,
+      failClosed: true,
+      reason: "request-path schema writes are forbidden; use the migration system",
+    };
+  }
+  return {
+    allowed: true,
+    blocked: false,
+    failClosed: true,
+    reason: "request path is not a migration engine",
+  };
+}
+
+export function failClosedRequiredSchema({ present, name } = {}) {
+  if (!present) {
+    return {
+      ok: false,
+      blocked: true,
+      failClosed: true,
+      reason: `required schema unavailable: ${name || "unknown"}`,
+    };
+  }
+  return { ok: true, blocked: false, failClosed: true };
+}

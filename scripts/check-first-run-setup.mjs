@@ -28,6 +28,7 @@ const {
   postAuthenticationPath,
   resetFirstRunSetupSchemaEnsure,
 } = await import("@/lib/first-run-setup");
+const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
 const { provisionOwnerWorkspace } = await import("@/lib/signup-provision");
 const { ForbiddenError } = await import("@/lib/authorization");
 const { SettingsError } = await import("@/lib/settings-ops");
@@ -295,6 +296,11 @@ check(
     FIRST_RUN_SETUP_ENSURE_SQL.includes('ADD COLUMN "firstRunSetupCompletedAt"') &&
     (migrationSql.match(/UPDATE "Business"/g) || []).length === 1,
 );
+check(
+  "Request-path first-run ensure does not execute historical DDL or backfill",
+  readRepo("src/lib/first-run-setup.ts").includes("assertRequiredColumnsExist") &&
+    !readRepo("src/lib/first-run-setup.ts").includes("$executeRawUnsafe"),
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -507,46 +513,31 @@ try {
       postAuthenticationPath({ role: "OWNER", business: collpro }) === "/dashboard",
   );
 
-  console.log("\nDB — Preview one-shot backfill does not mark later signups complete");
-  const preexisting = await prisma.business.create({
-    data: {
-      name: "Already Live Co",
-      slug: `already-live-${randomUUID().slice(0, 8)}`,
-      tradeCode: "HANDYMAN",
-    },
-  });
+  console.log("\nDB — Missing first-run column fail-closes without backfill");
   await prisma.$executeRawUnsafe(
     `ALTER TABLE "Business" DROP COLUMN IF EXISTS "firstRunSetupCompletedAt"`,
   );
   resetFirstRunSetupSchemaEnsure();
-  await ensureFirstRunSetupSchema(prisma);
-  const backfilled = await prisma.business.findUnique({
-    where: { id: preexisting.id },
-  });
+  let missingColumnError = null;
+  try {
+    await ensureFirstRunSetupSchema(prisma);
+  } catch (error) {
+    missingColumnError = error;
+  }
+  const missingColumns = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'Business'
+      AND column_name = 'firstRunSetupCompletedAt'
+  `;
   check(
-    "First ensure backfills businesses that already existed",
-    backfilled?.firstRunSetupCompletedAt instanceof Date,
+    "Missing firstRunSetupCompletedAt fail-closes without ADD COLUMN or backfill",
+    missingColumnError instanceof RequestPathSchemaUnavailableError &&
+      missingColumnError.failClosed === true &&
+      /firstRunSetupCompletedAt/i.test(missingColumnError.message),
   );
-
-  const later = await provisionOwnerWorkspace(prisma, {
-    name: "Later Owner",
-    email: `later-${randomUUID().slice(0, 8)}@example.com`,
-    passwordHash,
-    businessName: "Later Handyman",
-  });
-  resetFirstRunSetupSchemaEnsure();
-  await ensureFirstRunSetupSchema(prisma);
-  const laterAfterEnsure = await prisma.business.findUnique({
-    where: { id: later.business.id },
-  });
-  check(
-    "Later signup stays incomplete after a second ensure",
-    laterAfterEnsure?.firstRunSetupCompletedAt === null &&
-      ownerNeedsFirstRunSetup({
-        role: "OWNER",
-        business: laterAfterEnsure,
-      }) === true,
-  );
+  check("Dropped firstRunSetupCompletedAt is still absent", missingColumns.length === 0);
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

@@ -1,60 +1,30 @@
 import { redirect } from "next/navigation";
-import type { Business, Membership, MembershipRole } from "@prisma/client";
 import { getSessionUser, getWorkspaceCookie, setWorkspaceCookie } from "@/lib/auth";
-import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
-import { loadActiveWorkspaceMemberships } from "@/lib/business-contact";
-import { ensureBusinessTimezoneSchema } from "@/lib/business-timezone";
-import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging";
-import { ensureFirstRunSetupSchema } from "@/lib/first-run-setup";
 import { prisma } from "@/lib/prisma";
-import { ensureStarterServicesSetupSchema } from "@/lib/starter-services-setup";
-import { ensureWebsiteSetupSchema } from "@/lib/website-setup";
-import { ensureSaasBillingSchema } from "@/lib/saas-billing";
+import {
+  requireWorkspace as requireWorkspaceFromRequest,
+  type WorkspaceContext,
+  type WorkspaceRequestDeps,
+} from "@/lib/workspace-request";
 
-export type WorkspaceContext = {
-  user: { id: string; email: string; name: string };
-  business: Business;
-  membership: Membership;
-  role: MembershipRole;
-};
+export type { WorkspaceContext, WorkspaceRequestDeps };
 
-export async function requireWorkspace(): Promise<WorkspaceContext> {
-  const user = await getSessionUser();
-  if (!user) {
-    redirect("/sign-in");
-  }
+export type OptionalWorkspaceRequestDeps = Partial<WorkspaceRequestDeps>;
 
-  // Only an ACTIVE membership resolves to a real workspace -- an
-  // OWNER/ADMIN-deactivated MEMBER membership (see removeTeamMember() in
-  // src/app/actions/team.ts) must lose access here, at the single place
-  // every authenticated page/action derives its workspace from, not just
-  // in the Team UI.
-  await ensureAppointmentConfirmationSchema(prisma);
-  await ensureFirstRunSetupSchema(prisma);
-  await ensureStarterServicesSetupSchema(prisma);
-  await ensureWebsiteSetupSchema(prisma);
-  await ensureSaasBillingSchema(prisma);
-  await ensureBusinessTimezoneSchema(prisma);
-  await ensureCustomerMessagingSchema(prisma);
-  const memberships = await loadActiveWorkspaceMemberships(prisma, user.id);
-
-  if (memberships.length === 0) {
-    redirect("/sign-in");
-  }
-
-  const requestedId = await getWorkspaceCookie();
-  const current =
-    memberships.find((membership) => membership.businessId === requestedId) ??
-    memberships[0];
-
-  if (current.businessId !== requestedId) {
-    await setWorkspaceCookie(current.businessId);
-  }
-
-  return {
-    user,
-    business: current.business,
-    membership: current,
-    role: current.role,
-  };
+/**
+ * Authenticated workspace load. Schema/data migration belongs exclusively
+ * to the migration system. Missing required Business contact columns
+ * fail closed via loadActiveWorkspaceMemberships — this is not a second
+ * migrate deploy, including on Preview (shared production DATABASE_URL).
+ */
+export async function requireWorkspace(
+  deps: OptionalWorkspaceRequestDeps = {},
+): Promise<WorkspaceContext> {
+  return requireWorkspaceFromRequest({
+    db: deps.db ?? prisma,
+    getSessionUser: deps.getSessionUser ?? getSessionUser,
+    getWorkspaceCookie: deps.getWorkspaceCookie ?? getWorkspaceCookie,
+    setWorkspaceCookie: deps.setWorkspaceCookie ?? setWorkspaceCookie,
+    redirect: deps.redirect ?? redirect,
+  });
 }

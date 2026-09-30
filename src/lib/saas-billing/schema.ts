@@ -1,14 +1,43 @@
 /**
- * Preview shares Production and skips migrate, so SaaS billing reads
- * and writes first ensure these additive tables exist. Do not backfill
- * Stripe Customer or Subscription ids for existing tenants. Founder
- * trial columns are additive; existing businesses are marked
- * legacyExempt once and are not given a trial.
+ * SaaS billing schema presence for request paths.
+ *
+ * Schema DDL and founder-trial backfill belong exclusively to
+ * prisma migrate. Preview shares Production and skips migrate deploy,
+ * so request paths must fail closed when required tables/columns are
+ * missing — they must not CREATE/ALTER or INSERT/UPDATE compatibility
+ * rows. Historical SQL below is the migration-system stand-in only.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  assertRequiredColumnsExist,
+  assertRequiredTablesExist,
+} from "@/lib/request-path-schema";
 
 type BillingClient = PrismaClient | Prisma.TransactionClient;
 
+export const SAAS_BILLING_REQUIRED_TABLES = [
+  "BusinessSaasSubscription",
+  "SaasBillingWebhookEvent",
+] as const;
+
+export const SAAS_BILLING_REQUIRED_COLUMNS = {
+  BusinessSaasSubscription: [
+    "trialStartedAt",
+    "trialEndsAt",
+    "founderEligible",
+    "founderConvertedAt",
+    "founderEligibilityEndedAt",
+    "legacyExempt",
+    "saasFounderTrialBackfilledAt",
+    "lastStripeEventCreatedAt",
+  ],
+  SaasBillingWebhookEvent: ["stripeEventCreatedAt"],
+} as const;
+
+/**
+ * Historical migration SQL. Never execute from a request path.
+ * Tests may apply it as the migrate-system stand-in on a disposable DB.
+ */
 export const SAAS_BILLING_ENSURE_SQL = [
   `CREATE TABLE IF NOT EXISTS "BusinessSaasSubscription" (
     "id" TEXT NOT NULL,
@@ -70,6 +99,8 @@ ALTER TABLE "SaasBillingWebhookEvent" ADD COLUMN IF NOT EXISTS "stripeEventCreat
  * (or CollPro) before Founder trials existed. Does not insert Stripe
  * Customer/Subscription ids. Businesses still in Tasks 1–3 are left
  * without a row so completing website setup can start a real trial.
+ *
+ * Execute only from the migration system (or a test simulating migrate).
  */
 export const SAAS_FOUNDER_TRIAL_BACKFILL_SQL = `
 DO $$
@@ -136,19 +167,6 @@ BEGIN
 END $$;
 `.trim();
 
-const SAAS_BILLING_CONSTRAINTS_SQL = `
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'BusinessSaasSubscription_businessId_fkey'
-  ) THEN
-    ALTER TABLE "BusinessSaasSubscription"
-      ADD CONSTRAINT "BusinessSaasSubscription_businessId_fkey"
-      FOREIGN KEY ("businessId") REFERENCES "Business"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-  END IF;
-END $$;
-`.trim();
-
 let ensureTablesPromise: Promise<void> | null = null;
 let ensureBackfillPromise: Promise<void> | null = null;
 
@@ -157,25 +175,23 @@ export function resetSaasBillingSchemaEnsure() {
   ensureBackfillPromise = null;
 }
 
+export async function assertSaasBillingSchemaPresent(db: BillingClient) {
+  await assertRequiredTablesExist(db, [...SAAS_BILLING_REQUIRED_TABLES]);
+  await assertRequiredColumnsExist(
+    db,
+    "BusinessSaasSubscription",
+    [...SAAS_BILLING_REQUIRED_COLUMNS.BusinessSaasSubscription],
+  );
+  await assertRequiredColumnsExist(
+    db,
+    "SaasBillingWebhookEvent",
+    [...SAAS_BILLING_REQUIRED_COLUMNS.SaasBillingWebhookEvent],
+  );
+}
+
 export async function ensureSaasBillingTablesAndColumns(db: BillingClient) {
   if (!ensureTablesPromise) {
-    ensureTablesPromise = (async () => {
-      for (const statement of SAAS_BILLING_ENSURE_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
-      await db.$executeRawUnsafe(SAAS_BILLING_CONSTRAINTS_SQL);
-      for (const statement of SAAS_FOUNDER_TRIAL_ENSURE_SQL.split(";")
-        .map((part) => part.trim())
-        .filter(Boolean)) {
-        await db.$executeRawUnsafe(statement);
-      }
-      await db.$executeRawUnsafe(SAAS_FOUNDER_TRIAL_SENTINEL_SQL);
-      for (const statement of SAAS_SUBSCRIPTION_LIFECYCLE_ENSURE_SQL.split(";")
-        .map((part) => part.trim())
-        .filter(Boolean)) {
-        await db.$executeRawUnsafe(statement);
-      }
-    })().catch((error) => {
+    ensureTablesPromise = assertSaasBillingSchemaPresent(db).catch((error) => {
       ensureTablesPromise = null;
       throw error;
     });
@@ -185,10 +201,7 @@ export async function ensureSaasBillingTablesAndColumns(db: BillingClient) {
 
 export async function ensureSaasFounderTrialBackfill(db: BillingClient) {
   if (!ensureBackfillPromise) {
-    ensureBackfillPromise = (async () => {
-      await ensureSaasBillingTablesAndColumns(db);
-      await db.$executeRawUnsafe(SAAS_FOUNDER_TRIAL_BACKFILL_SQL);
-    })().catch((error) => {
+    ensureBackfillPromise = ensureSaasBillingTablesAndColumns(db).catch((error) => {
       ensureBackfillPromise = null;
       throw error;
     });

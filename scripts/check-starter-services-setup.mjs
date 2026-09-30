@@ -25,6 +25,7 @@ const {
   postAuthenticationPath,
   resetFirstRunSetupSchemaEnsure,
 } = await import("@/lib/first-run-setup");
+const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
 const { provisionOwnerWorkspace } = await import("@/lib/signup-provision");
 const { ForbiddenError } = await import("@/lib/authorization");
 const {
@@ -47,6 +48,7 @@ const {
   installOnboardingStarterServicesOp,
   ownerNeedsStarterServicesSetup,
   resetStarterServicesSetupSchemaEnsure,
+  STARTER_SERVICES_SETUP_ENSURE_SQL,
   skipOnboardingStarterServicesOp,
   STARTER_SERVICES_SETUP_INSTALLED,
   STARTER_SERVICES_SETUP_PATH,
@@ -528,13 +530,6 @@ try {
       ownerNeedsStarterServicesSetup({ role: "OWNER", business: collpro }) === false,
   );
 
-  const preexisting = await prisma.business.create({
-    data: {
-      name: "Already Live Co",
-      slug: `already-live-${randomUUID().slice(0, 8)}`,
-      tradeCode: "HANDYMAN",
-    },
-  });
   await prisma.$executeRawUnsafe(
     `ALTER TABLE "Business" DROP COLUMN IF EXISTS "starterServicesSetupChoice"`,
   );
@@ -542,15 +537,30 @@ try {
     `ALTER TABLE "Business" DROP COLUMN IF EXISTS "starterServicesSetupCompletedAt"`,
   );
   resetStarterServicesSetupSchemaEnsure();
-  await ensureStarterServicesSetupSchema(prisma);
-  const backfilled = await prisma.business.findUnique({
-    where: { id: preexisting.id },
-  });
+  let missingStarterError = null;
+  try {
+    await ensureStarterServicesSetupSchema(prisma);
+  } catch (error) {
+    missingStarterError = error;
+  }
+  const missingStarterColumns = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'Business'
+      AND column_name = 'starterServicesSetupCompletedAt'
+  `;
   check(
-    "Existing businesses are backfilled and not forced through Task 2",
-    backfilled?.starterServicesSetupCompletedAt instanceof Date &&
-      ownerNeedsStarterServicesSetup({ role: "OWNER", business: backfilled }) === false,
+    "Missing starter-services columns fail-close without ADD COLUMN or backfill",
+    missingStarterError instanceof RequestPathSchemaUnavailableError &&
+      missingStarterError.failClosed === true &&
+      /starterServicesSetupCompletedAt/i.test(missingStarterError.message),
   );
+  check(
+    "Dropped starterServicesSetupCompletedAt is still absent",
+    missingStarterColumns.length === 0,
+  );
+  await prisma.$executeRawUnsafe(STARTER_SERVICES_SETUP_ENSURE_SQL);
 
   const later = await provisionOwnerWorkspace(prisma, {
     name: "Later Owner",
@@ -558,19 +568,6 @@ try {
     passwordHash,
     businessName: "Later Handyman",
   });
-  resetStarterServicesSetupSchemaEnsure();
-  await ensureStarterServicesSetupSchema(prisma);
-  const laterAfterEnsure = await prisma.business.findUnique({
-    where: { id: later.business.id },
-  });
-  check(
-    "Later signup stays incomplete after a second ensure",
-    laterAfterEnsure?.starterServicesSetupCompletedAt === null &&
-      ownerNeedsStarterServicesSetup({
-        role: "OWNER",
-        business: laterAfterEnsure,
-      }) === true,
-  );
 
   const servicesInstall = await installHandymanStarterCatalogForBusiness(
     prisma,

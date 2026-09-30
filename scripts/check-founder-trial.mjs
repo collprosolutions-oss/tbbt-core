@@ -47,6 +47,7 @@ const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 
 const { ForbiddenError } = await import("@/lib/authorization");
+const { SAAS_FOUNDER_TRIAL_BACKFILL_SQL } = await import("@/lib/saas-billing/schema");
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
 const { postAuthenticationPath } = await import("@/lib/first-run-setup");
 const { createFakeSaasBillingProvider } = await import("@/lib/saas-billing/fake");
@@ -554,6 +555,17 @@ try {
     data: { businessId: collpro.business.id, name: "CollPro Customer" },
   });
   await ensureSaasBillingSchema(prisma);
+  const existingBeforeBackfill = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: existing.business.id },
+  });
+  const collproBeforeBackfill = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: collpro.business.id },
+  });
+  check(
+    "Request-path ensure does not backfill legacy-exempt SaaS rows",
+    existingBeforeBackfill == null && collproBeforeBackfill == null,
+  );
+  await prisma.$executeRawUnsafe(SAAS_FOUNDER_TRIAL_BACKFILL_SQL);
   const existingRow = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: existing.business.id },
   });

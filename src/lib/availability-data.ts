@@ -3,11 +3,16 @@
  * authenticated (or public-site-resolved) businessId — never a client-
  * supplied business id.
  *
- * Preview shares Production and skips migrate, so reads/writes first
- * ensure the additive availability columns/table exist. Production
- * migrate deploy is then a no-op for this additive migration.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when availability columns or BusinessUnavailableDate are missing. They
+ * must not CREATE/ALTER. Historical SQL below is the migrate-system
+ * stand-in only.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import {
+  assertRequiredColumnsExist,
+  assertRequiredTablesExist,
+} from "@/lib/request-path-schema";
 import {
   DEFAULT_AVAILABILITY_SETTINGS,
   DEFAULT_SCHEDULING_BUFFER_MINUTES,
@@ -25,7 +30,17 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 
 type AvailabilityClient = PrismaClient | Prisma.TransactionClient;
 
-const ENSURE_AVAILABILITY_SQL = [
+export const AVAILABILITY_REQUIRED_TABLES = ["BusinessUnavailableDate"] as const;
+
+export const AVAILABILITY_REQUIRED_SETTINGS_COLUMNS = [
+  "workStartMinutes",
+  "workEndMinutes",
+  "workingWeekdays",
+  "schedulingBufferMinutes",
+] as const;
+
+/** Historical migration SQL. Never execute from a request path. */
+export const ENSURE_AVAILABILITY_SQL = [
   `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "workStartMinutes" INTEGER NOT NULL DEFAULT 480`,
   `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "workEndMinutes" INTEGER NOT NULL DEFAULT 1020`,
   `ALTER TABLE "BusinessSettings" ADD COLUMN IF NOT EXISTS "workingWeekdays" TEXT NOT NULL DEFAULT '1,2,3,4,5'`,
@@ -50,9 +65,10 @@ export function resetBusinessAvailabilitySchemaEnsure() {
 export async function ensureBusinessAvailabilitySchema(db: AvailabilityClient) {
   if (!ensureSchemaPromise) {
     ensureSchemaPromise = (async () => {
-      for (const statement of ENSURE_AVAILABILITY_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
+      await assertRequiredTablesExist(db, [...AVAILABILITY_REQUIRED_TABLES]);
+      await assertRequiredColumnsExist(db, "BusinessSettings", [
+        ...AVAILABILITY_REQUIRED_SETTINGS_COLUMNS,
+      ]);
     })().catch((error) => {
       ensureSchemaPromise = null;
       throw error;

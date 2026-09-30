@@ -432,10 +432,15 @@ try {
     /businessId:\s*access\.businessId,[\s\S]{0,80}active:\s*true/.test(jobActionsSrc),
   );
   const workspaceSrc = readFileSync(new URL("../src/lib/workspace.ts", import.meta.url), "utf8");
+  const workspaceRequestSrc = readFileSync(
+    new URL("../src/lib/workspace-request.ts", import.meta.url),
+    "utf8",
+  );
   const contactSrc = readFileSync(new URL("../src/lib/business-contact.ts", import.meta.url), "utf8");
   check(
     "requireWorkspace() only resolves workspaces from active memberships",
-    workspaceSrc.includes("loadActiveWorkspaceMemberships") &&
+    (workspaceSrc.includes("loadActiveWorkspaceMemberships") ||
+      workspaceRequestSrc.includes("loadActiveWorkspaceMemberships")) &&
       /where:\s*\{\s*userId,\s*active:\s*true\s*\}/.test(contactSrc),
   );
   const authActionsSrc = readFileSync(new URL("../src/app/actions/auth.ts", import.meta.url), "utf8");

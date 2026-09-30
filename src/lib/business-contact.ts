@@ -6,8 +6,8 @@
  * SENT/APPROVED line items stay frozen; contact can be corrected for the
  * next customer view without rewriting prices.
  *
- * Preview shares Production and skips migrate, so reads/writes first
- * ensure the additive columns exist.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when these additive columns are missing. They must not ADD COLUMN.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { formatPublicPhoneDisplay } from "@/lib/format";
@@ -16,15 +16,16 @@ import {
   COLLPRO_RENO_PHONE,
   isCollProRenoSlug,
 } from "@/lib/public-site";
+import { assertRequiredColumnsExist } from "@/lib/request-path-schema";
 
 type ContactClient = PrismaClient | Prisma.TransactionClient;
 
-const ENSURE_PUBLIC_CONTACT_SQL = [
-  `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicPhone" TEXT`,
-  `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicEmail" TEXT`,
-  `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicWebsite" TEXT`,
-  `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "publicServiceAreaLabel" TEXT`,
-];
+export const BUSINESS_PUBLIC_CONTACT_COLUMNS = [
+  "publicPhone",
+  "publicEmail",
+  "publicWebsite",
+  "publicServiceAreaLabel",
+] as const;
 
 let ensureSchemaPromise: Promise<void> | null = null;
 
@@ -34,11 +35,11 @@ export function resetBusinessPublicContactSchemaEnsure() {
 
 export async function ensureBusinessPublicContactSchema(db: ContactClient) {
   if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      for (const statement of ENSURE_PUBLIC_CONTACT_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
-    })().catch((error) => {
+    ensureSchemaPromise = assertRequiredColumnsExist(
+      db,
+      "Business",
+      [...BUSINESS_PUBLIC_CONTACT_COLUMNS],
+    ).catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });
@@ -143,8 +144,7 @@ export function contactFromBusinessRow(
 
 /**
  * Authenticated workspace memberships include the full Business row.
- * Preview shares Production and skips migrate, so this must ADD the
- * contact columns before Prisma SELECTs them.
+ * Fail closed if public contact columns are missing. Do not ADD them.
  */
 export async function loadActiveWorkspaceMemberships(
   db: ContactClient,
