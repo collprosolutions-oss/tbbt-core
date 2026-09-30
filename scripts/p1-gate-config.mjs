@@ -28,6 +28,7 @@
  */
 export const STATIC_SCRIPTS = new Set([
   "scripts/check-production-migrate.mjs",
+  "scripts/check-p1-request-path-schema-scan.mjs",
 ]);
 
 /**
@@ -51,6 +52,9 @@ export const P1_DOMAINS = [
     scripts: [
       // Static file read. package.json runs this with plain `node` (no strip-types). No database.
       "scripts/check-production-migrate.mjs",
+      "scripts/check-p1-request-path-schema-scan.mjs",
+      "scripts/check-p1-preview-request-schema.mjs",
+      "scripts/check-p1-revenue-integrity-business-isolation.mjs",
     ],
     pending: [
       {
