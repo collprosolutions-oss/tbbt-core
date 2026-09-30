@@ -1,7 +1,9 @@
 /**
  * OWNER future recurring Cleaning bookings.
  *
- * Dedicated database: tbbt_cleaning_recurring_booking_test
+ * Dedicated unique local disposable database. Remote DATABASE_URL
+ * hosts are refused before Prisma generate, schema push, or forced
+ * database drop.
  *
  * Proves authorization, tenant isolation, timezone date boundaries,
  * stop/cancel canonical Job.status, resume eligibility, schedule
@@ -13,17 +15,28 @@
  * Run with:
  *   npm run test:cleaning-recurring-booking
  */
-import { createRequire, register } from "node:module";
+import { register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertLocalDatabaseUrl,
+  openDisposableTestDatabase,
+} from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => readFileSync(join(root, rel), "utf8");
+
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error("DATABASE_URL must be set to run the Cleaning recurring-booking check.");
+  process.exit(1);
+}
+assertLocalDatabaseUrl(baseUrl, "Cleaning recurring-booking disposable database");
 
 const generateEarly = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
 if (generateEarly.status !== 0) {
@@ -95,37 +108,8 @@ const { changeOwnerDayRouteAppointment } = await import(
 );
 const { businessScheduleReservationLockKey } = await import("@/lib/schedule-reservation");
 
-const baseUrl = process.env.DATABASE_URL;
-if (!baseUrl) {
-  console.error("DATABASE_URL must be set to run the Cleaning recurring-booking check.");
-  process.exit(1);
-}
-
-const testDbName = "tbbt_cleaning_recurring_booking_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-process.env.DATABASE_URL = testUrl;
-
-const adminUrl = new URL(baseUrl);
-adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) process.exit(push.status ?? 1);
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+let session;
+let prisma;
 
 let passed = 0;
 let failed = 0;
@@ -378,6 +362,13 @@ check(
     parseScheduleStart("2026-10-05", "18:00", "America/Los_Angeles")?.toISOString() ===
       "2026-10-06T01:00:00.000Z",
 );
+
+session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_cleaning_recurring_booking",
+  setProcessEnv: true,
+});
+prisma = session.prisma;
 
 try {
   const suffix = randomUUID().slice(0, 8);
@@ -1527,7 +1518,7 @@ try {
   console.error("FAIL - live Cleaning recurring-booking proofs crashed");
   console.error(error);
 } finally {
-  await prisma.$disconnect();
+  if (session) await session.cleanup();
 }
 
 console.log(
