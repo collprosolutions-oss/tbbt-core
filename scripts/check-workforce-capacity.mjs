@@ -24,6 +24,8 @@ const {
   DEFAULT_SCHEDULING_POLICY,
   appointmentModeForPosition,
   appointmentPositionOnDay,
+  arrivalWindowMinutesForAppointment,
+  laneArrivalWindowUpdates,
   parseSkillList,
   parseWorkforceProgression,
 } = await import("@/lib/workforce");
@@ -172,6 +174,12 @@ check(
   "Work Order copy derives first/later from the day lane, not scheduledAt boolean",
   jobPage.includes("appointmentPositionOnDay") &&
     !jobPage.includes("alreadyScheduled: Boolean(job.scheduledAt)"),
+);
+check(
+  "scheduleJob and assignJobMember persist first/later arrival windows from the day lane",
+  jobAction.includes("persistLaneArrivalWindows") &&
+    jobAction.includes("arrivalWindowMinutesForMode") &&
+    jobAction.includes("syncAssignedJobArrivalWindows"),
 );
 check(
   "Preferred/allowed job types stay non-authoritative metadata",
@@ -490,6 +498,70 @@ const workerBFirst = appointmentPositionOnDay({
   dateKey,
 });
 check("Two workers may each have their own first appointment", workerBFirst === "first");
+
+const persistedAfterAssign = laneArrivalWindowUpdates(
+  [
+    {
+      id: "job-first",
+      scheduledAt: firstAt,
+      assignedMembershipId: "mem-1",
+      status: "SCHEDULED",
+      arrivalWindowMinutes: null,
+    },
+    {
+      id: "job-later",
+      scheduledAt: laterAt,
+      assignedMembershipId: "mem-1",
+      status: "SCHEDULED",
+      arrivalWindowMinutes: null,
+    },
+  ],
+  policy,
+  dateKey,
+);
+check(
+  "Schedule-then-assign to a worker who already has an earlier job persists a later arrival window",
+  persistedAfterAssign.length === 1 &&
+    persistedAfterAssign[0].id === "job-later" &&
+    persistedAfterAssign[0].arrivalWindowMinutes === policy.defaultArrivalWindowMinutes &&
+    arrivalWindowMinutesForAppointment({
+      start: laterAt,
+      jobId: "job-later",
+      assignedMembershipId: "mem-1",
+      jobs: laneJobs,
+      policy,
+      dateKey,
+    }) === policy.defaultArrivalWindowMinutes,
+);
+const persistedAfterInsert = laneArrivalWindowUpdates(
+  [
+    {
+      id: "job-first",
+      scheduledAt: firstAt,
+      assignedMembershipId: "mem-1",
+      status: "SCHEDULED",
+      arrivalWindowMinutes: null,
+    },
+    {
+      id: "job-earlier",
+      scheduledAt: new Date(2026, 8, 7, 7, 0, 0),
+      assignedMembershipId: "mem-1",
+      status: "SCHEDULED",
+      arrivalWindowMinutes: null,
+    },
+  ],
+  policy,
+  dateKey,
+);
+check(
+  "Inserting an earlier job on the same lane persists a window on the former first appointment",
+  persistedAfterInsert.some(
+    (row) =>
+      row.id === "job-first" &&
+      row.arrivalWindowMinutes === policy.defaultArrivalWindowMinutes,
+  ) &&
+    !persistedAfterInsert.some((row) => row.id === "job-earlier"),
+);
 
 console.log("\nUNIT — Pickup occupies time before the appointment");
 

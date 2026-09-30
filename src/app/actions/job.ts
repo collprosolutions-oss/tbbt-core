@@ -49,8 +49,10 @@ import { formatISODateInTimeZone } from "@/lib/business-timezone";
 import {
   appointmentModeForPosition,
   appointmentPositionOnDay,
+  arrivalWindowMinutesForMode,
   parseBoundedInt,
   parseSkillList,
+  pickupMinutesForJob,
   requireOptionalWorkforceProgression,
   requireWorkforceSkillKey,
   serializeSkillList,
@@ -63,6 +65,7 @@ import {
   loadSchedulingPolicy,
   loadWorkforceMembers,
   loadWorkforceTimeZone,
+  persistLaneArrivalWindows,
 } from "@/lib/workforce-data";
 import {
   conflictAcknowledgement,
@@ -258,8 +261,13 @@ export async function scheduleJob(
   const evaluation = evaluateProposedSchedule({
     start,
     durationMinutes: duration.minutes,
+    pickupMinutes: pickupMinutesForJob(pickupDurationMinutes, policy).minutes,
     settings,
-    existing: others,
+    existing: others.map((row) => ({
+      ...row,
+      pickupDurationMinutes: pickupMinutesForJob(row.pickupDurationMinutes, policy)
+        .minutes,
+    })),
     timeZone,
   });
   const conflicts = detectScheduleConflicts({
@@ -364,7 +372,7 @@ export async function scheduleJob(
       pickupDurationMinutes: pickupDurationMinutes || null,
       requiredSkills,
       requiredProgression,
-      arrivalWindowMinutes: mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null,
+      arrivalWindowMinutes: arrivalWindowMinutesForMode(mode, policy),
       nextOccurrenceAt,
       ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
       ...(materialChange
@@ -385,6 +393,21 @@ export async function scheduleJob(
           }
         : {}),
     },
+  });
+
+  await persistLaneArrivalWindows(prisma, {
+    businessId: access.businessId,
+    timeZone,
+    policy,
+    jobs: [
+      {
+        id: job.id,
+        scheduledAt: start,
+        assignedMembershipId: job.assignedMembershipId,
+        status: job.status === "UNSCHEDULED" ? "SCHEDULED" : job.status,
+      },
+      ...capacityJobs.filter((row) => row.id !== job.id),
+    ],
   });
 
   await emitAndProcessBusinessEvent(prisma, {
@@ -742,6 +765,10 @@ export async function assignJobMember(
       where: { id: job.id },
       data: { assignedMembershipId: null },
     });
+    await syncAssignedJobArrivalWindows(access.businessId, {
+      ...job,
+      assignedMembershipId: null,
+    });
     revalidatePath(`/jobs/${job.id}`);
     revalidatePath("/jobs");
     revalidatePath("/field");
@@ -773,9 +800,54 @@ export async function assignJobMember(
     data: { assignedMembershipId: membership.id },
   });
 
+  await syncAssignedJobArrivalWindows(access.businessId, {
+    ...job,
+    assignedMembershipId: membership.id,
+  });
+
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath("/jobs");
   revalidatePath("/field");
   revalidatePath(`/field/jobs/${job.id}`);
   return {};
+}
+
+async function syncAssignedJobArrivalWindows(
+  businessId: string,
+  job: {
+    id: string;
+    scheduledAt: Date | null;
+    scheduledDurationMinutes: number | null;
+    assignedMembershipId: string | null;
+    status: string;
+  },
+) {
+  if (!job.scheduledAt) {
+    return;
+  }
+  const [policy, capacityJobs, timeZone] = await Promise.all([
+    loadSchedulingPolicy(prisma, businessId),
+    loadCapacityJobs(prisma, businessId),
+    loadWorkforceTimeZone(prisma, businessId),
+  ]);
+  const nextJobs = capacityJobs.map((row) =>
+    row.id === job.id
+      ? { ...row, assignedMembershipId: job.assignedMembershipId, status: job.status }
+      : row,
+  );
+  if (!nextJobs.some((row) => row.id === job.id)) {
+    nextJobs.push({
+      id: job.id,
+      scheduledAt: job.scheduledAt,
+      scheduledDurationMinutes: job.scheduledDurationMinutes,
+      assignedMembershipId: job.assignedMembershipId,
+      status: job.status,
+    });
+  }
+  await persistLaneArrivalWindows(prisma, {
+    businessId,
+    timeZone,
+    policy,
+    jobs: nextJobs,
+  });
 }

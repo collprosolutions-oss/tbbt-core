@@ -276,6 +276,38 @@ check(
   ),
 );
 
+const pickupExisting = [
+  {
+    id: "job-pickup",
+    scheduledAt: civil(2026, 9, 7, 10, 0),
+    scheduledDurationMinutes: 60,
+    pickupDurationMinutes: 90,
+    customerName: "Pickup",
+  },
+];
+const pickupEval = evaluateProposedSchedule({
+  start: civil(2026, 9, 7, 8, 0),
+  durationMinutes: 45,
+  settings: { ...settings, schedulingBufferMinutes: 0 },
+  existing: pickupExisting,
+  timeZone: NY,
+});
+const pickupNoOverlapEval = evaluateProposedSchedule({
+  start: civil(2026, 9, 7, 8, 0),
+  durationMinutes: 30,
+  settings: { ...settings, schedulingBufferMinutes: 0 },
+  existing: pickupExisting,
+  timeZone: NY,
+});
+check(
+  "Known 90-minute pickup before a 10:00 job overlaps an 8:00–8:45 slot even with buffer 0",
+  Boolean(pickupEval.overlap) && pickupEval.overlaps[0]?.id === "job-pickup",
+);
+check(
+  "An 8:00–8:30 slot stays free when the known pickup only occupies 8:30–11:00",
+  !pickupNoOverlapEval.overlap,
+);
+
 const overlapEval = evaluateProposedSchedule({
   start: civil(2026, 9, 7, 9, 0),
   durationMinutes: 60,

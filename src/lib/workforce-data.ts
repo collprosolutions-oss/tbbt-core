@@ -5,10 +5,16 @@
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
-import { resolveBusinessTimeZone, startOfZonedDay, addZonedCalendarDays } from "@/lib/business-timezone";
+import {
+  addZonedCalendarDays,
+  formatISODateInTimeZone,
+  resolveBusinessTimeZone,
+  startOfZonedDay,
+} from "@/lib/business-timezone";
 import {
   isAssignableFieldMember,
   isWorkforceProgression,
+  laneArrivalWindowUpdates,
   parseSkillList,
   parseWorkforceProgression,
   schedulingPolicyFromRow,
@@ -228,6 +234,54 @@ const CAPACITY_JOB_SELECT = {
   requiredProgression: true,
   customer: { select: { name: true } },
 } as const;
+
+export async function persistLaneArrivalWindows(
+  db: WorkforceClient,
+  input: {
+    businessId: string;
+    timeZone: string;
+    policy: SchedulingPolicy;
+    jobs: Array<{
+      id: string;
+      scheduledAt: Date | null;
+      assignedMembershipId?: string | null;
+      status?: string | null;
+    }>;
+  },
+) {
+  const scheduled = input.jobs.filter(
+    (job) =>
+      job.scheduledAt && job.status !== "COMPLETED" && job.status !== "CANCELLED",
+  );
+  if (scheduled.length === 0) {
+    return [];
+  }
+
+  const current = await db.job.findMany({
+    where: {
+      businessId: input.businessId,
+      id: { in: scheduled.map((job) => job.id) },
+    },
+    select: { id: true, arrivalWindowMinutes: true },
+  });
+  const currentById = new Map(current.map((row) => [row.id, row.arrivalWindowMinutes]));
+  const updates = laneArrivalWindowUpdates(
+    scheduled.map((job) => ({
+      ...job,
+      arrivalWindowMinutes: currentById.get(job.id) ?? null,
+    })),
+    input.policy,
+    (date) => formatISODateInTimeZone(date, input.timeZone),
+  );
+
+  for (const update of updates) {
+    await db.job.updateMany({
+      where: { id: update.id, businessId: input.businessId },
+      data: { arrivalWindowMinutes: update.arrivalWindowMinutes },
+    });
+  }
+  return updates;
+}
 
 export async function loadCapacityJobs(
   db: WorkforceClient,

@@ -35,6 +35,7 @@
     "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs",
     "test:scheduling-availability": "node --experimental-strip-types scripts/check-scheduling-availability.mjs",
     "test:job-schedule-duration": "node --experimental-strip-types scripts/check-job-schedule-duration.mjs",
+    "test:handyman-schedule-field-day": "node --experimental-strip-types scripts/check-handyman-schedule-field-day.mjs",
     "test:estimate-document": "node --experimental-strip-types scripts/check-estimate-document.mjs",
     "test:estimate-terms": "node --experimental-strip-types scripts/check-estimate-terms.mjs",
     "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs",

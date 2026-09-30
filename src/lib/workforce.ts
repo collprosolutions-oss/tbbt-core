@@ -556,6 +556,70 @@ export function appointmentModeForPosition(
   return position === "later" ? policy.laterAppointmentMode : policy.firstAppointmentMode;
 }
 
+export function arrivalWindowMinutesForMode(
+  mode: AppointmentMode,
+  policy: Pick<SchedulingPolicy, "defaultArrivalWindowMinutes">,
+): number | null {
+  return mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null;
+}
+
+export function arrivalWindowMinutesForAppointment(input: {
+  start: Date;
+  jobId?: string;
+  assignedMembershipId?: string | null;
+  jobs: Array<{
+    id: string;
+    scheduledAt: Date | null;
+    assignedMembershipId?: string | null;
+    status?: string | null;
+  }>;
+  policy: SchedulingPolicy;
+  dateKey: (date: Date) => string;
+}): number | null {
+  return arrivalWindowMinutesForMode(
+    appointmentModeForPosition(appointmentPositionOnDay(input), input.policy),
+    input.policy,
+  );
+}
+
+export type LaneArrivalWindowJob = {
+  id: string;
+  scheduledAt: Date | null;
+  assignedMembershipId?: string | null;
+  status?: string | null;
+  arrivalWindowMinutes?: number | null;
+};
+
+/**
+ * Persistable first/later arrival windows for one worker-day lane.
+ * Uses the same position + policy helpers scheduleJob already applies to
+ * the job being saved. Does not move scheduledAt or reset confirmation.
+ */
+export function laneArrivalWindowUpdates(
+  jobs: LaneArrivalWindowJob[],
+  policy: SchedulingPolicy,
+  dateKey: (date: Date) => string,
+): Array<{ id: string; arrivalWindowMinutes: number | null }> {
+  const updates: Array<{ id: string; arrivalWindowMinutes: number | null }> = [];
+  for (const job of jobs) {
+    if (!job.scheduledAt || job.status === "COMPLETED" || job.status === "CANCELLED") {
+      continue;
+    }
+    const next = arrivalWindowMinutesForAppointment({
+      start: job.scheduledAt,
+      jobId: job.id,
+      assignedMembershipId: job.assignedMembershipId,
+      jobs,
+      policy,
+      dateKey,
+    });
+    if ((job.arrivalWindowMinutes ?? null) !== next) {
+      updates.push({ id: job.id, arrivalWindowMinutes: next });
+    }
+  }
+  return updates;
+}
+
 /** @deprecated Use appointmentPositionOnDay + appointmentModeForPosition. */
 export function appointmentModeForJob(input: {
   alreadyScheduled?: boolean;
