@@ -79,6 +79,8 @@
     "test:client-portal-excellence": "node --experimental-strip-types scripts/check-client-portal-excellence.mjs",
     "test:customer-estimate-layout": "node scripts/check-customer-estimate-layout.mjs",
     "test:production-migrate": "node scripts/check-production-migrate.mjs",
+    "preflight:founder": "node --experimental-strip-types scripts/founder-production-preflight.mjs",
+    "test:founder-production-preflight": "node --experimental-strip-types scripts/check-founder-production-preflight.mjs",
     "test:p1-preview-request-schema": "node --experimental-strip-types scripts/check-p1-preview-request-schema.mjs",
     "test:p1-request-path-schema-scan": "node scripts/check-p1-request-path-schema-scan.mjs",
     "test:p1-revenue-integrity-business-isolation": "node --experimental-strip-types scripts/check-p1-revenue-integrity-business-isolation.mjs",
