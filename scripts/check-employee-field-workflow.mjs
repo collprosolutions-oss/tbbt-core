@@ -1231,6 +1231,21 @@ try {
   check("TEST 29 - Customer portal still shows the customer-sourced additional-work request text", portalPage.body.includes(httpCustomerAdditionalWorkDescription));
   check("TEST 29 - Customer portal never shows the assigned member's name (no employee assignment surfaced to the customer)", !portalPage.body.includes(member1User.name));
   check("TEST 29 - Customer portal never shows the DRAFT/SENT/DECLINED/CANCELLED change order titles", !portalPage.body.includes(CO_DRAFT) && !portalPage.body.includes(CO_CANCELLED));
+  const portalInvoice = await fetchRaw(null, `/p/${scopeJob.projectToken}/invoice`);
+  const portalInvoicePdf = await fetchRaw(null, `/p/${scopeJob.projectToken}/invoice/pdf`);
+  const portalVisit = await fetchRaw(null, `/p/${scopeJob.projectToken}/request-visit`);
+  check(
+    "TEST 29 - Customer invoice HTML never shows employee-sourced additional-work text",
+    !portalInvoice.body.includes(httpAdditionalWorkDescription),
+  );
+  check(
+    "TEST 29 - Customer invoice PDF never shows employee-sourced additional-work text",
+    !portalInvoicePdf.body.includes(httpAdditionalWorkDescription),
+  );
+  check(
+    "TEST 29 - Customer request-visit HTML never shows employee-sourced additional-work text",
+    !portalVisit.body.includes(httpAdditionalWorkDescription),
+  );
 
   console.log(
     failures === 0

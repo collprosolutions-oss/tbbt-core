@@ -20,6 +20,13 @@ export const inboundConsentTestHooks: {
   beforeCleanup?: () => Promise<void> | void;
 } = {};
 
+/** Claimed but not yet applied. Completing the event sets a later timestamp. */
+export const INBOUND_WEBHOOK_PENDING_AT = new Date(0);
+
+function isPendingWebhookProcessedAt(value: Date | null | undefined) {
+  return !value || value.getTime() === 0;
+}
+
 export type InboundConsentResult = {
   applied: boolean;
   reason: string;
@@ -44,6 +51,7 @@ async function rememberWebhookEvent(
         providerEventId: input.providerEventId,
         eventKind: input.eventKind,
         businessId: input.businessId ?? null,
+        processedAt: INBOUND_WEBHOOK_PENDING_AT,
       },
     });
     return "recorded";
@@ -66,6 +74,38 @@ export async function rememberCustomerMessagingWebhookEvent(
 ) {
   await ensureCustomerMessagingSchema(db);
   return rememberWebhookEvent(db, input);
+}
+
+async function isCompletedWebhookEvent(
+  db: Db,
+  input: { provider: string; providerEventId: string; eventKind: "delivery" | "inbound" },
+) {
+  const row = await db.customerMessagingWebhookEvent.findUnique({
+    where: {
+      provider_providerEventId_eventKind: {
+        provider: input.provider,
+        providerEventId: input.providerEventId,
+        eventKind: input.eventKind,
+      },
+    },
+    select: { processedAt: true },
+  });
+  return Boolean(row && !isPendingWebhookProcessedAt(row.processedAt));
+}
+
+async function completeWebhookEvent(
+  db: Db,
+  input: { provider: string; providerEventId: string; eventKind: "delivery" | "inbound" },
+) {
+  await db.customerMessagingWebhookEvent.updateMany({
+    where: {
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+      eventKind: input.eventKind,
+      processedAt: INBOUND_WEBHOOK_PENDING_AT,
+    },
+    data: { processedAt: new Date() },
+  });
 }
 
 function receivingNumberDigits(value: string) {
@@ -101,13 +141,16 @@ export async function applyInboundConsentEvent(
 ): Promise<InboundConsentResult> {
   await ensureCustomerMessagingSchema(db);
 
+  const claimIdentity = {
+    provider: inbound.provider,
+    providerEventId: inbound.providerEventId,
+    eventKind: "inbound" as const,
+  };
+
   const toDigits = receivingNumberDigits(inbound.to);
   if (!toDigits) {
-    await rememberWebhookEvent(db, {
-      provider: inbound.provider,
-      providerEventId: inbound.providerEventId,
-      eventKind: "inbound",
-    });
+    await rememberWebhookEvent(db, claimIdentity);
+    await completeWebhookEvent(db, claimIdentity);
     return { applied: false, reason: "unknown_tenant" };
   }
 
@@ -116,28 +159,29 @@ export async function applyInboundConsentEvent(
     select: { id: true },
   });
   if (!business) {
-    await rememberWebhookEvent(db, {
-      provider: inbound.provider,
-      providerEventId: inbound.providerEventId,
-      eventKind: "inbound",
-    });
+    await rememberWebhookEvent(db, claimIdentity);
+    await completeWebhookEvent(db, claimIdentity);
     return { applied: false, reason: "unknown_tenant" };
   }
 
-  // Claim is identity-only. A leftover row from a failed apply is not
-  // completion and must not return false idempotent success.
-  await rememberWebhookEvent(db, {
-    provider: inbound.provider,
-    providerEventId: inbound.providerEventId,
-    eventKind: "inbound",
+  // Claim is identity-only until processedAt leaves the pending sentinel.
+  // A leftover pending row is not completion and must stay retryable.
+  // A completed row must not re-apply (STOP replay after START).
+  const claim = await rememberWebhookEvent(db, {
+    ...claimIdentity,
     businessId: business.id,
   });
+  if (claim === "duplicate" && (await isCompletedWebhookEvent(db, claimIdentity))) {
+    return { applied: true, reason: "idempotent", businessId: business.id };
+  }
   if (inboundConsentTestHooks.afterClaim) {
     await inboundConsentTestHooks.afterClaim();
   }
 
   try {
-    return await applyRecordedInboundConsent(db, inbound, business.id);
+    const result = await applyRecordedInboundConsent(db, inbound, business.id);
+    await completeWebhookEvent(db, claimIdentity);
+    return result;
   } catch (error) {
     await abandonRecordedInboundWebhook(db, {
       businessId: business.id,
@@ -315,10 +359,32 @@ async function absorbedPhoneSurvivorIds(
   return [...survivorIds];
 }
 
+async function resolveLiveSurvivor(
+  db: Db,
+  businessId: string,
+  customerId: string,
+): Promise<{ id: string; smsConsentStatus: string } | null> {
+  let currentId = customerId;
+  for (let hop = 0; hop <= CONSENT_MERGE_HOPS; hop += 1) {
+    const live = await db.customer.findFirst({
+      where: { id: currentId, businessId },
+      select: { id: true, smsConsentStatus: true },
+    });
+    if (live) return live;
+    const merge = await db.customerMerge.findFirst({
+      where: { businessId, absorbedCustomerId: currentId },
+      select: { survivorCustomerId: true },
+    });
+    if (!merge) return null;
+    currentId = merge.survivorCustomerId;
+  }
+  return null;
+}
+
 /**
  * Same-business STOP only. Maps an absorbed former phone onto exactly one
  * surviving customer. Does not match email, name, or other tenants.
- * If that survivor was later absorbed, applyConsentStatus hops the id.
+ * If that survivor was later absorbed, hop to the live descendant.
  */
 async function findUnambiguousSurvivorForAbsorbedPhone(
   db: Db,
@@ -330,16 +396,14 @@ async function findUnambiguousSurvivorForAbsorbedPhone(
   | { status: "matched"; customer: { id: string; smsConsentStatus: string } }
 > {
   const survivorIds = await absorbedPhoneSurvivorIds(db, businessId, fromDigits);
-  if (survivorIds.length === 0) return { status: "none", customer: null };
-  if (survivorIds.length !== 1) return { status: "ambiguous", customer: null };
-  const survivor = await db.customer.findFirst({
-    where: { id: survivorIds[0], businessId },
-    select: { id: true, smsConsentStatus: true },
-  });
-  return {
-    status: "matched",
-    customer: survivor ?? { id: survivorIds[0], smsConsentStatus: "UNKNOWN" },
-  };
+  const liveById = new Map<string, { id: string; smsConsentStatus: string }>();
+  for (const survivorId of survivorIds) {
+    const live = await resolveLiveSurvivor(db, businessId, survivorId);
+    if (live) liveById.set(live.id, live);
+  }
+  if (liveById.size === 0) return { status: "none", customer: null };
+  if (liveById.size !== 1) return { status: "ambiguous", customer: null };
+  return { status: "matched", customer: [...liveById.values()][0] };
 }
 
 const CONSENT_MERGE_HOPS = 4;

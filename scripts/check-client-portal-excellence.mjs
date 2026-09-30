@@ -57,6 +57,10 @@ const additionalForm = readRepo("src/components/portal/request-additional-work-f
 const publicAdditional = readRepo("src/app/actions/public-additional-work-request.ts");
 const publicChange = readRepo("src/app/actions/public-change-order.ts");
 const payRoute = readRepo("src/app/p/[token]/pay/route.ts");
+const depositRoute = readRepo("src/app/p/[token]/deposit/route.ts");
+const invoicePage = readRepo("src/app/p/[token]/invoice/page.tsx");
+const invoicePdf = readRepo("src/app/p/[token]/invoice/pdf/route.ts");
+const requestVisit = readRepo("src/app/p/[token]/request-visit/page.tsx");
 const timeline = readRepo("src/lib/communications/timeline.ts");
 
 console.log("\nSTATIC — Canonical portal only, no second portal or schema");
@@ -103,6 +107,16 @@ check(
   "Portal additional-work history is customer-source only",
   homeHelper.includes('source: "CUSTOMER"') &&
     homeHelper.includes("Employee-originated field requests stay on owner/internal views"),
+);
+check(
+  "Other customer-token routes never query AdditionalWorkRequest",
+  !invoicePage.includes("additionalWorkRequest") &&
+    !invoicePdf.includes("additionalWorkRequest") &&
+    !requestVisit.includes("additionalWorkRequest") &&
+    !payRoute.includes("additionalWorkRequest") &&
+    !depositRoute.includes("additionalWorkRequest") &&
+    !page.includes("prisma.additionalWorkRequest") &&
+    page.includes("loadPortalAdditionalWorkRequests"),
 );
 check(
   "Internal cost/vault/notes stay off the portal page",
@@ -915,6 +929,33 @@ try {
         "owned portal HTML omits same-job employee-originated additional-work text",
         !ownedBody.includes("Alpha employee-only extra leak work"),
       );
+      const ownedInvoice = await fetch(`${APP_URL}/p/${jobA.job.projectToken}/invoice`, {
+        redirect: "manual",
+      });
+      const ownedInvoiceBody = await ownedInvoice.text();
+      const ownedInvoicePdf = await fetch(`${APP_URL}/p/${jobA.job.projectToken}/invoice/pdf`, {
+        redirect: "manual",
+      });
+      const ownedInvoicePdfBody = await ownedInvoicePdf.text();
+      const ownedVisit = await fetch(`${APP_URL}/p/${jobA.job.projectToken}/request-visit`, {
+        redirect: "manual",
+      });
+      const ownedVisitBody = await ownedVisit.text();
+      check(
+        "owned invoice HTML omits employee-originated additional-work text",
+        !ownedInvoiceBody.includes("Alpha employee-only extra leak work") &&
+          !ownedInvoiceBody.includes("Sibling extra leak work"),
+      );
+      check(
+        "owned invoice PDF omits employee-originated additional-work text",
+        !ownedInvoicePdfBody.includes("Alpha employee-only extra leak work") &&
+          !ownedInvoicePdfBody.includes("Sibling extra leak work"),
+      );
+      check(
+        "owned request-visit HTML omits employee-originated additional-work text",
+        !ownedVisitBody.includes("Alpha employee-only extra leak work") &&
+          !ownedVisitBody.includes("Sibling extra leak work"),
+      );
       check("owned page shows this customer", ownedBody.includes("Alpha Owner Customer"));
       check("owned page is Project Home", ownedBody.includes("Project Home"));
       check(
@@ -991,6 +1032,7 @@ try {
         siblingBody.includes("Sibling Secret Customer") &&
           !siblingBody.includes("Alpha Owner Customer") &&
           !siblingBody.includes("Alpha extra outlet") &&
+          !siblingBody.includes("Alpha employee-only extra leak work") &&
           !siblingBody.includes("Alpha owned appointment reminder"),
       );
 

@@ -289,10 +289,18 @@ try {
       !webhookHandlerSrc.includes("businessId"),
   );
   check(
+    "Failed inbound apply returns a non-2xx so the provider retries",
+    webhookHandlerSrc.includes("status: 500") &&
+      webhookHandlerSrc.includes("Unable to process.") &&
+      webhookHandlerSrc.includes("GENERIC_UNAVAILABLE"),
+  );
+  check(
     "Inbound STOP claim is not treated as consent completion",
-    inboundSrc.includes("Claim is identity-only") &&
+    inboundSrc.includes("Claim is identity-only until processedAt leaves the pending sentinel") &&
       inboundSrc.includes("inboundConsentTestHooks") &&
-      !inboundSrc.includes('if (duplicate === "duplicate")'),
+      inboundSrc.includes("INBOUND_WEBHOOK_PENDING_AT") &&
+      inboundSrc.includes('if (claim === "duplicate"') &&
+      inboundSrc.includes("isCompletedWebhookEvent"),
   );
   check(
     "Public request opt-in checkbox starts unchecked",
@@ -1082,8 +1090,10 @@ try {
   inboundConsentTestHooks.beforeConsentWrite = undefined;
   inboundConsentTestHooks.beforeCleanup = undefined;
   check(
-    "Signed leftover STOP rejects after consent and cleanup failure",
-    leftoverFirst[0].status === "rejected" && leftoverFirst[0].reason === leftoverWriteError,
+    "Signed leftover STOP returns non-2xx after consent and cleanup failure",
+    leftoverFirst[0].status === "fulfilled" &&
+      leftoverFirst[0].value.status === 500 &&
+      leftoverFirst[0].value.body.error === "Unable to process.",
   );
   check(
     "Unsigned leftover retry is still rejected",
@@ -1137,6 +1147,153 @@ try {
   check(
     "Leftover STOP did not revoke the other-tenant same-phone customer",
     (await prisma.customer.findFirst({ where: { id: samePhoneBeta.id } })).smsConsentStatus === "GRANTED",
+  );
+
+  console.log("\nTEST — Concurrent identical STOP and STOP-then-START replay");
+  const replayPhone = uniqueSmsDigits("239");
+  const replayCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Replay Consent",
+      phone: replayPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const concurrentPhone = uniqueSmsDigits("239");
+  const concurrentCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Concurrent Consent",
+      phone: concurrentPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const concurrentParams = {
+    MessageSid: `SM_http_concurrent_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${concurrentPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const concurrentBody = new URLSearchParams(concurrentParams).toString();
+  const concurrentSig = twilioRequestSignature("twilio_test_token", webhookUrl, concurrentParams);
+  const concurrentClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const concurrentClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const [concurrentA, concurrentB] = await Promise.all([
+    handleCustomerMessagingWebhookRequest(concurrentClientA, {
+      url: webhookUrl,
+      twilioSignature: concurrentSig,
+      tbbtSignature: null,
+      rawBody: concurrentBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+    handleCustomerMessagingWebhookRequest(concurrentClientB, {
+      url: webhookUrl,
+      twilioSignature: concurrentSig,
+      tbbtSignature: null,
+      rawBody: concurrentBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+  ]);
+  await Promise.all([concurrentClientA.$disconnect(), concurrentClientB.$disconnect()]);
+  check(
+    "Two concurrent identical signed STOPs both acknowledge without error",
+    concurrentA.status === 200 &&
+      concurrentA.body.ok === true &&
+      concurrentB.status === 200 &&
+      concurrentB.body.ok === true,
+  );
+  check(
+    "Two concurrent identical STOPs apply REVOKED exactly once",
+    (await prisma.customer.findFirst({ where: { id: concurrentCustomer.id } })).smsConsentStatus ===
+      "REVOKED" &&
+      (await prisma.customerMessagingWebhookEvent.count({
+        where: { provider: "twilio", providerEventId: concurrentParams.MessageSid },
+      })) === 1,
+  );
+
+  const stopThenStartParams = {
+    MessageSid: `SM_http_stop_then_start_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${replayPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const startAfterStopParams = {
+    MessageSid: `SM_http_start_after_stop_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${replayPhone}`,
+    To: alphaE164,
+    Body: "START",
+    OptOutType: "START",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const stopThenStartBody = new URLSearchParams(stopThenStartParams).toString();
+  const startAfterStopBody = new URLSearchParams(startAfterStopParams).toString();
+  const stopThenStart = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, stopThenStartParams),
+    tbbtSignature: null,
+    rawBody: stopThenStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "STOP then START first applies REVOKED",
+    stopThenStart.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const startAfterStop = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, startAfterStopParams),
+    tbbtSignature: null,
+    rawBody: startAfterStopBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "START after STOP restores GRANTED on the same live phone",
+    startAfterStop.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  const stopReplay = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, stopThenStartParams),
+    tbbtSignature: null,
+    rawBody: stopThenStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Replayed STOP after START does not resurrect REVOKED",
+    stopReplay.status === 200 &&
+      stopReplay.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  const startReplay = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, startAfterStopParams),
+    tbbtSignature: null,
+    rawBody: startAfterStopBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Replayed START after STOP stays GRANTED exactly once",
+    startReplay.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  check(
+    "Replay claims stay tenant-scoped to the receiving business",
+    (await prisma.customerMessagingWebhookEvent.findFirst({
+      where: { provider: "twilio", providerEventId: stopThenStartParams.MessageSid },
+    }))?.businessId === alpha.business.id &&
+      (await prisma.customer.findFirst({ where: { id: samePhoneBeta.id } })).smsConsentStatus ===
+        "GRANTED",
   );
 
   console.log("\nTEST — Public opt-in capture and existing customer behavior");
