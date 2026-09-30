@@ -1,17 +1,22 @@
 /**
  * Repo-wide request-path schema scanner.
  *
- * Walks executable Prisma raw-SQL call sites under src/. Historical
- * CREATE/ALTER/backfill stand-in constants are not violations unless a
- * request-path $executeRaw / $executeRawUnsafe actually runs them.
- * Advisory locks, SELECT FOR UPDATE, and application INSERT ON CONFLICT
- * are classified, not rejected.
+ * $executeRawUnsafe is prohibited under src/ in every executable form:
+ * calls, binds, aliases, bracket access, wrappers, concatenated SQL,
+ * and imported/renamed constants. There are no legitimate
+ * $executeRawUnsafe uses on the request path.
+ *
+ * $executeRaw / $queryRaw stay classified: advisory locks, SELECT FOR
+ * UPDATE, presence-probe reads, and application INSERT ON CONFLICT
+ * are allowed. Schema DDL / migration-style backfill on those APIs
+ * is still a violation.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { classifyRequestPathSql } from "../production-migrate-policy.mjs";
 
 const WRITE_METHODS = new Set(["$executeRaw", "$executeRawUnsafe"]);
+const UNSAFE_METHOD = "$executeRawUnsafe";
 
 function walkTsFiles(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -165,15 +170,117 @@ function readCallArg(source, start) {
   return { text: "", ident: null };
 }
 
+function blankComments(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    if (source[i] === "/" && source[i + 1] === "/") {
+      out += "  ";
+      i += 2;
+      while (i < source.length && source[i] !== "\n") {
+        out += " ";
+        i += 1;
+      }
+      continue;
+    }
+    if (source[i] === "/" && source[i + 1] === "*") {
+      out += "  ";
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        out += source[i] === "\n" ? "\n" : " ";
+        i += 1;
+      }
+      if (i < source.length) {
+        out += "  ";
+        i += 2;
+      }
+      continue;
+    }
+    if (source[i] === "'" || source[i] === '"' || source[i] === "`") {
+      const quoted = readQuoted(source, i);
+      if (quoted) {
+        out += source.slice(i, quoted.end);
+        i = quoted.end;
+        continue;
+      }
+    }
+    out += source[i];
+    i += 1;
+  }
+  return out;
+}
+
+function skipWs(source, start) {
+  let i = start;
+  while (i < source.length && /\s/.test(source[i])) i += 1;
+  return i;
+}
+
+function skipWsAndOptionalChain(source, start) {
+  let i = skipWs(source, start);
+  if (source[i] === "?" && source[i + 1] === ".") {
+    i = skipWs(source, i + 2);
+  }
+  return i;
+}
+
+function isUnsafeBracketIdent(source, identIndex) {
+  const before = source.slice(Math.max(0, identIndex - 12), identIndex);
+  return /\[\s*['"`]$/.test(before);
+}
+
+function finishUnsafeAccess(source, afterAccess, index, stylePrefix) {
+  const afterWs = skipWs(source, afterAccess);
+  if (/^(\?\.|\.)\s*bind\b/.test(source.slice(afterWs))) {
+    return {
+      method: UNSAFE_METHOD,
+      style: `${stylePrefix}-bind`,
+      arg: "",
+      argName: null,
+      index,
+    };
+  }
+  const cursor = skipWsAndOptionalChain(source, afterAccess);
+  if (source[cursor] === "(") {
+    const arg = readCallArg(source, cursor + 1);
+    return {
+      method: UNSAFE_METHOD,
+      style: `${stylePrefix}-call`,
+      arg: arg.text,
+      argName: arg.ident,
+      index,
+    };
+  }
+  return {
+    method: UNSAFE_METHOD,
+    style: `${stylePrefix}-ref`,
+    arg: "",
+    argName: null,
+    index,
+  };
+}
+
 function findRawCalls(source) {
+  const code = blankComments(source);
   const calls = [];
-  const re = /\$((?:execute|query)Raw(?:Unsafe)?)/g;
+
+  const bracketRe = /(\?\.)?\s*\[\s*(['"`])\$executeRawUnsafe\2\s*\]/g;
   let match;
-  while ((match = re.exec(source))) {
+  while ((match = bracketRe.exec(code))) {
+    calls.push(
+      finishUnsafeAccess(source, match.index + match[0].length, match.index, "bracket"),
+    );
+  }
+
+  const re = /\$((?:execute|query)Raw(?:Unsafe)?)/g;
+  while ((match = re.exec(code))) {
     const method = `$${match[1]}`;
-    let cursor = skipTypeArgs(source, match.index + match[0].length);
-    while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-    if (source[cursor] === "`") {
+    if (method === UNSAFE_METHOD && isUnsafeBracketIdent(code, match.index)) {
+      continue;
+    }
+    let cursor = skipTypeArgs(code, match.index + match[0].length);
+    cursor = skipWs(code, cursor);
+    if (code[cursor] === "`") {
       const quoted = readQuoted(source, cursor);
       calls.push({
         method,
@@ -182,7 +289,9 @@ function findRawCalls(source) {
         argName: null,
         index: match.index,
       });
-    } else if (source[cursor] === "(") {
+      continue;
+    }
+    if (code[cursor] === "(") {
       const arg = readCallArg(source, cursor + 1);
       calls.push({
         method,
@@ -191,6 +300,10 @@ function findRawCalls(source) {
         argName: arg.ident,
         index: match.index,
       });
+      continue;
+    }
+    if (method === UNSAFE_METHOD) {
+      calls.push(finishUnsafeAccess(source, match.index + match[0].length, match.index, "ident"));
     }
   }
   return calls;
@@ -253,17 +366,10 @@ export function scanSourceText(relPath, source) {
       }
     }
     const classification = classifyCallKind(sql, call.method);
-    const looksLikeEnsureArg =
-      /ENSURE_|CREATE_|BACKFILL_|REPAIR_|CONSTRAINTS_SQL/i.test(resolvedFrom || "") ||
-      /ensure[A-Z][A-Za-z]+(Schema|Table|Tables|Columns|Backfill)/.test(source.slice(Math.max(0, call.index - 240), call.index));
-    const unresolvedUnsafeEnsure =
-      WRITE_METHODS.has(call.method) &&
-      !sql.trim() &&
-      looksLikeEnsureArg;
     const violation =
+      call.method === UNSAFE_METHOD ||
       (WRITE_METHODS.has(call.method) &&
-        (classification.schemaDdl || classification.backfillDml)) ||
-      unresolvedUnsafeEnsure;
+        (classification.schemaDdl || classification.backfillDml));
     executable.push({
       file: relPath,
       method: call.method,
@@ -291,10 +397,12 @@ export function scanSourceText(relPath, source) {
     }
   }
 
+  const unsafeRefs = executable.filter((row) => row.method === UNSAFE_METHOD);
   return {
     file: relPath,
     executable,
     standIns,
+    unsafeRefs,
     violations: executable.filter((row) => row.violation),
   };
 }
@@ -313,6 +421,7 @@ export function scanSrcTree(repoRoot) {
     violations: results.flatMap((row) => row.violations),
     executable: results.flatMap((row) => row.executable),
     standIns: results.flatMap((row) => row.standIns),
+    unsafeRefs: results.flatMap((row) => row.unsafeRefs),
   };
 }
 

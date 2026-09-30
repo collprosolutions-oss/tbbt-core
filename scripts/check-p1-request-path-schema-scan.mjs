@@ -1,9 +1,10 @@
 /**
  * P1-02 — repo-wide request-path schema scanner + mutation proof.
  *
- * Catches executable $executeRaw / $executeRawUnsafe schema DDL and
- * migration-style backfill under src/. Historical stand-in SQL that is
- * not executed is classified, not rejected.
+ * $executeRawUnsafe is fail-closed under src/. Historical stand-in SQL
+ * that is not executed is classified, not rejected. $executeRaw /
+ * $queryRaw stay classified so locks, probes, and ON CONFLICT upserts
+ * remain allowed.
  *
  * Run with:
  *   node scripts/check-p1-request-path-schema-scan.mjs
@@ -41,6 +42,11 @@ const groups = classifyRemainingRawSql(scan);
 
 console.log("\nSTATIC — current src/ has no executable request-path migration SQL");
 check("Repo-wide scan finds zero executable schema DDL or backfill", scan.violations.length === 0);
+check(
+  "Real src/ tree has zero $executeRawUnsafe references",
+  (scan.unsafeRefs ?? []).length === 0 &&
+    !scan.executable.some((row) => row.method === "$executeRawUnsafe"),
+);
 check(
   "Historical first-run SQL is a stand-in, not an executed call",
   scan.standIns.some(
@@ -196,6 +202,147 @@ check(
   scanSourceText("src/lib/lock-thing.ts", advisoryOnly).violations.length === 0 &&
     classifyRequestPathSql("SELECT pg_advisory_xact_lock(hashtext(?))").schemaDdl === false &&
     classifyRequestPathSql("SELECT pg_advisory_xact_lock(hashtext(?))").backfillDml === false,
+);
+
+function unsafeRejected(src) {
+  const result = scanSourceText("src/lib/adversarial-bypass.ts", src);
+  return result.violations.some((row) => row.method === "$executeRawUnsafe");
+}
+
+console.log("\nMUTATION — independently demonstrated $executeRawUnsafe bypasses must fail");
+check(
+  "Bound/alias $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  const run = db.$executeRawUnsafe.bind(db);
+  await run(\`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`);
+}
+`),
+);
+check(
+  "Concatenated SQL passed to $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  await db.$executeRawUnsafe(
+    "CREATE" + ' TABLE IF NOT EXISTS "Leak" (id text)'
+  );
+}
+`),
+);
+check(
+  "Imported/renamed SQL constant passed to $executeRawUnsafe is a violation",
+  unsafeRejected(`
+import { HISTORICAL_SQL as q } from "./stand-in";
+export async function boot(db) {
+  await db.$executeRawUnsafe(q);
+}
+`),
+);
+check(
+  "Helper/wrapper $executeRawUnsafe is a violation",
+  unsafeRejected(`
+async function applySql(db, sql) {
+  await db.$executeRawUnsafe(sql);
+}
+export async function boot(db) {
+  await applySql(
+    db,
+    \`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`
+  );
+}
+`),
+);
+check(
+  "Bracket-access $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  await db["$executeRawUnsafe"](
+    \`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`
+  );
+}
+`),
+);
+
+check(
+  "Single-quoted bracket access with newlines is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  await db[
+    '$executeRawUnsafe'
+  ](
+    \`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`
+  );
+}
+`),
+);
+check(
+  "Optional-chaining property $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  await db?.$executeRawUnsafe(\`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`);
+}
+`),
+);
+check(
+  "Optional-chaining bracket $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  await db?.[
+    "$executeRawUnsafe"
+  ](\`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`);
+}
+`),
+);
+check(
+  "Whitespace-split property access and bind is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  const run = db
+    .$executeRawUnsafe
+    .bind(db);
+  await run(\`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`);
+}
+`),
+);
+check(
+  "Optional-chaining bind of $executeRawUnsafe is a violation",
+  unsafeRejected(`
+export async function ensureLeak(db) {
+  const run = db.$executeRawUnsafe?.bind?.(db);
+  await run(\`CREATE TABLE IF NOT EXISTS "Leak" ("id" TEXT NOT NULL)\`);
+}
+`),
+);
+check(
+  "Comment mentioning $executeRawUnsafe is not a violation",
+  !unsafeRejected(`
+// never call $executeRawUnsafe from a request path
+export async function lockThing(tx, key) {
+  await tx.$executeRaw\`SELECT pg_advisory_xact_lock(hashtext(\${key}))\`;
+}
+`),
+);
+check(
+  "Legitimate $executeRaw FOR UPDATE is still allowed",
+  scanSourceText(
+    "src/lib/lock-row.ts",
+    `
+export async function lockRow(tx, id) {
+  await tx.$queryRaw\`SELECT id FROM "Job" WHERE id = \${id} FOR UPDATE\`;
+}
+`,
+  ).violations.length === 0,
+);
+check(
+  "Legitimate $executeRaw INSERT ON CONFLICT is still allowed",
+  scanSourceText(
+    "src/lib/upsert.ts",
+    `
+export async function upsert(tx) {
+  await tx.$executeRaw\`INSERT INTO "Foo" ("id") VALUES ('x') ON CONFLICT ("id") DO NOTHING\`;
+}
+`,
+  ).violations.length === 0,
 );
 
 console.log("\nCLASSIFICATION — remaining executable raw SQL under src/");
