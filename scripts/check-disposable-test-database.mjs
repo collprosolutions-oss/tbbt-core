@@ -40,6 +40,7 @@ const auditedScripts = [
   "scripts/check-chief-of-staff.mjs",
   "scripts/check-estimate-versions.mjs",
   "scripts/check-password-recovery.mjs",
+  "scripts/check-founder-handyman-launch.mjs",
 ];
 
 console.log("\nSTATIC — local host gate and unique names");
