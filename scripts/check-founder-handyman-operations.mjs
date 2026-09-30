@@ -92,6 +92,19 @@ function closeMoney(left, right) {
   return Math.abs(money(left) - money(right)) < 0.005;
 }
 
+/** Independently pinned business outcomes. Literals only — never derived from persisted Estimate/Invoice totals. */
+const PINNED_ESTIMATE_TOTAL = 185;
+const PINNED_FIELD_CHANGE_ORDER_TOTAL = 40;
+const PINNED_ORIGINAL_INVOICE_TOTAL = 225;
+const PINNED_SUPPLEMENTAL_INVOICE_TOTAL = 75;
+const PINNED_BILLED_TOTAL = 300;
+const PINNED_COLLECTED_TOTAL = 300;
+const PINNED_MATERIALS = 25;
+const PINNED_LABOR_HOURS = 1.5;
+const PINNED_LABOR_WAGE = 45;
+const PINNED_LABOR_COST = 67.5;
+const PINNED_OUTSTANDING = 0;
+
 async function followRedirect(fn) {
   try {
     const result = await fn();
@@ -130,6 +143,7 @@ function operationsGraphHolds(state) {
   if (state.estimate.serviceRequestId !== state.request.id) return false;
   if (state.estimate.customerId !== state.customerId) return false;
   if (state.estimate.status !== "APPROVED") return false;
+  if (!closeMoney(state.estimate.total, PINNED_ESTIMATE_TOTAL)) return false;
   if (state.job.estimateId !== state.estimate.id) return false;
   if (state.job.customerId !== state.customerId) return false;
   if (state.job.status !== "COMPLETED") return false;
@@ -141,9 +155,12 @@ function operationsGraphHolds(state) {
   if (state.timeEntry.businessId !== state.businessId) return false;
   if (state.timeEntry.membershipId !== state.workerMembershipId) return false;
   if (state.timeEntry.status !== "APPROVED") return false;
+  if (!closeMoney(state.timeEntry.approvedHours, PINNED_LABOR_HOURS)) return false;
+  if (!closeMoney(state.approvedLaborCost, PINNED_LABOR_COST)) return false;
   if (!state.expense || state.expense.jobId !== state.jobId) return false;
   if (state.expense.businessId !== state.businessId) return false;
   if (state.expense.category !== "MATERIALS") return false;
+  if (!closeMoney(state.expense.amount, PINNED_MATERIALS)) return false;
   if (!state.purchaseItem || state.purchaseItem.expenseId !== state.expense.id) return false;
   if (state.purchaseListJobId !== state.jobId) return false;
   if (!closeMoney(state.purchaseItem.actualCost, state.expense.amount)) return false;
@@ -152,6 +169,7 @@ function operationsGraphHolds(state) {
   if (state.fieldRequest?.changeOrderId !== state.fieldChangeOrder?.id) return false;
   if (state.fieldChangeOrder?.jobId !== state.jobId) return false;
   if (state.fieldChangeOrder?.status !== "APPROVED") return false;
+  if (!closeMoney(state.fieldChangeOrder?.total, PINNED_FIELD_CHANGE_ORDER_TOTAL)) return false;
   if (state.fieldChangeOrder?.invoiceId !== original.id) return false;
   if (state.customerRequest?.jobId !== state.jobId) return false;
   if (state.customerRequest?.status !== "CONVERTED") return false;
@@ -163,8 +181,8 @@ function operationsGraphHolds(state) {
   if (original.paymentMethod !== "STRIPE") return false;
   if (supplemental.jobId !== state.jobId || supplemental.status !== "PAID") return false;
   if (supplemental.paymentMethod !== "CASH") return false;
-  if (!closeMoney(original.total, state.expectedOriginalTotal)) return false;
-  if (!closeMoney(supplemental.total, state.expectedSupplementalTotal)) return false;
+  if (!closeMoney(original.total, PINNED_ORIGINAL_INVOICE_TOTAL)) return false;
+  if (!closeMoney(supplemental.total, PINNED_SUPPLEMENTAL_INVOICE_TOTAL)) return false;
   const stripe = payments.find((payment) => payment.method === "STRIPE");
   const cash = payments.find((payment) => payment.method === "CASH");
   if (!stripe || !cash) return false;
@@ -175,14 +193,12 @@ function operationsGraphHolds(state) {
   if (!closeMoney(cash.amount, supplemental.total)) return false;
   if (!state.closeout || state.closeout.jobId !== state.jobId) return false;
   if (state.closeout.businessId !== state.businessId) return false;
-  if (!closeMoney(state.closeout.invoiceTotal, money(original.total) + money(supplemental.total))) {
-    return false;
-  }
-  if (!closeMoney(state.closeout.recordedPayments, state.closeout.invoiceTotal)) return false;
-  if (!closeMoney(state.closeout.outstandingBalance, 0)) return false;
-  if (!closeMoney(state.closeout.materialCost, state.expense.amount)) return false;
+  if (!closeMoney(state.closeout.invoiceTotal, PINNED_BILLED_TOTAL)) return false;
+  if (!closeMoney(state.closeout.recordedPayments, PINNED_COLLECTED_TOTAL)) return false;
+  if (!closeMoney(state.closeout.outstandingBalance, PINNED_OUTSTANDING)) return false;
+  if (!closeMoney(state.closeout.materialCost, PINNED_MATERIALS)) return false;
   if (!(state.approvedLaborCost > 0)) return false;
-  if (!closeMoney(state.closeout.laborCost, state.approvedLaborCost)) return false;
+  if (!closeMoney(state.closeout.laborCost, PINNED_LABOR_COST)) return false;
   if (state.historyCustomerId !== state.customerId) return false;
   if (state.historyJobCount !== 1 || state.historyInvoiceCount !== 2) return false;
   if (state.historyRequestCount !== 1) return false;
@@ -197,6 +213,21 @@ check(
   selfSrc.includes('from "./disposable-test-database.mjs"') &&
     selfSrc.includes("openDisposableTestDatabase") &&
     selfSrc.includes("assertLocalDatabaseUrl"),
+);
+check(
+  "Pinned $185/$225/$300 are literals, not estimate-plus-invoice arithmetic",
+  selfSrc.includes("const PINNED_ESTIMATE_TOTAL = 185") &&
+    selfSrc.includes("const PINNED_ORIGINAL_INVOICE_TOTAL = 225") &&
+    selfSrc.includes("const PINNED_BILLED_TOTAL = 300") &&
+    !selfSrc.includes("money(approvedEstimate.total) + money(fieldChangeOrder.total)") &&
+    !selfSrc.includes("money(original.total) + money(supplemental.total)"),
+);
+check(
+  "Pinned labor is 1.5 hours at $45 = $67.50",
+  selfSrc.includes("const PINNED_LABOR_HOURS = 1.5") &&
+    selfSrc.includes("const PINNED_LABOR_WAGE = 45") &&
+    selfSrc.includes("const PINNED_LABOR_COST = 67.5") &&
+    closeMoney(PINNED_LABOR_HOURS * PINNED_LABOR_WAGE, PINNED_LABOR_COST),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -564,6 +595,15 @@ try {
     form({ publicToken: sentEstimate.publicToken, estimateVersionId: version.id }),
   );
   demand("Customer token approved the estimate", approved.status === "APPROVED");
+  const approvedEstimateTotal = await prisma.estimate.findUnique({
+    where: { id: estimateCreate.id },
+    select: { total: true, status: true },
+  });
+  demand(
+    "Approved estimate total is independently $185",
+    approvedEstimateTotal?.status === "APPROVED" &&
+      closeMoney(approvedEstimateTotal.total, PINNED_ESTIMATE_TOTAL),
+  );
   const jobsAfterApproval = await prisma.job.count({
     where: {
       businessId: businessA.id,
@@ -780,8 +820,9 @@ try {
     "OWNER approved 1.5 hours of worker time on this job at the $45 wage",
     approvedTime?.status === "APPROVED" &&
       approvedTime.jobId === jobId &&
-      money(approvedTime.approvedHours) === 1.5 &&
-      closeMoney(approvedTime.approvedLaborCost, 67.5),
+      closeMoney(approvedTime.approvedHours, PINNED_LABOR_HOURS) &&
+      closeMoney(memberMem.hourlyWage, PINNED_LABOR_WAGE) &&
+      closeMoney(approvedTime.approvedLaborCost, PINNED_LABOR_COST),
   );
   setTestAccess(memberA);
   await expectThrow(
@@ -816,7 +857,7 @@ try {
   });
   demand(
     "Purchase recorded one materials expense on this job",
-    purchased.expenseId && closeMoney(purchased.actualCost, 25),
+    purchased.expenseId && closeMoney(purchased.actualCost, PINNED_MATERIALS),
   );
   const materialExpense = await prisma.expense.findUnique({ where: { id: purchased.expenseId } });
   demand(
@@ -824,7 +865,7 @@ try {
     materialExpense?.businessId === businessA.id &&
       materialExpense.jobId === jobId &&
       materialExpense.category === "MATERIALS" &&
-      closeMoney(materialExpense.amount, 25),
+      closeMoney(materialExpense.amount, PINNED_MATERIALS),
   );
   const replayPurchase = await recordPurchaseOperation(prisma, ownerA, {
     attemptKey: purchaseAttempt,
@@ -963,10 +1004,11 @@ try {
       originalInvoice.customerId === request.customerId &&
       fieldChangeOrder?.invoiceId === originalInvoice.id,
   );
-  const expectedOriginal = money(approvedEstimate.total) + money(fieldChangeOrder.total);
   demand(
-    "Original invoice total is the approved estimate plus the approved change order",
-    closeMoney(originalInvoice.total, expectedOriginal) && money(fieldChangeOrder.total) === 40,
+    "Approved estimate, field change order, and original invoice totals are independently pinned",
+    closeMoney(approvedEstimate.total, PINNED_ESTIMATE_TOTAL) &&
+      closeMoney(fieldChangeOrder.total, PINNED_FIELD_CHANGE_ORDER_TOTAL) &&
+      closeMoney(originalInvoice.total, PINNED_ORIGINAL_INVOICE_TOTAL),
   );
   const replayComplete = await completeJobAndSendInvoice(prisma, {
     businessId: businessA.id,
@@ -1090,7 +1132,7 @@ try {
     "Later change order inherited the catalog price on this job",
     laterDraft?.jobId === jobId &&
       laterDraft.lineItems.length === 1 &&
-      closeMoney(laterDraft.total, 75),
+      closeMoney(laterDraft.total, PINNED_SUPPLEMENTAL_INVOICE_TOTAL),
   );
   const laterSent = await sendChangeOrder({}, form({ changeOrderId: laterChangeOrderId }));
   demand("OWNER sent the later change order", !laterSent?.error);
@@ -1130,7 +1172,7 @@ try {
     supplemental?.status === "SENT" &&
       supplemental.kind === "SUPPLEMENTAL" &&
       supplemental.jobId === jobId &&
-      closeMoney(supplemental.total, 75) &&
+      closeMoney(supplemental.total, PINNED_SUPPLEMENTAL_INVOICE_TOTAL) &&
       laterChangeOrder?.invoiceId === supplemental.id,
   );
   const invoiceCount = await prisma.invoice.count({ where: { businessId: businessA.id, jobId } });
@@ -1263,6 +1305,14 @@ try {
 
   const closeout = await loadJobProfitabilityCloseout(prisma, ownerA, jobId);
   demand("OWNER closeout loads this job", closeout != null && closeout.jobId === jobId);
+  demand(
+    "Closeout billed, collected, materials, labor, and outstanding are independently pinned",
+    closeMoney(closeout.billing.invoiceTotal, PINNED_BILLED_TOTAL) &&
+      closeMoney(closeout.billing.recordedPayments, PINNED_COLLECTED_TOTAL) &&
+      closeMoney(closeout.billing.outstandingBalance, PINNED_OUTSTANDING) &&
+      closeMoney(closeout.actualWork.materialCost.amount, PINNED_MATERIALS) &&
+      closeMoney(closeout.actualWork.laborCost.amount, PINNED_LABOR_COST),
+  );
   await expectThrow(
     "MEMBER cannot read profitability closeout",
     () => loadJobProfitabilityCloseout(prisma, memberA, jobId),
@@ -1307,8 +1357,6 @@ try {
     customerChangeOrder: laterChangeOrder,
     invoices: [paidOriginal, paidSupplemental],
     payments,
-    expectedOriginalTotal: expectedOriginal,
-    expectedSupplementalTotal: 75,
     closeout: {
       jobId: closeout.jobId,
       businessId: closeout.businessId,
@@ -1355,6 +1403,25 @@ try {
     ["closeout billed a different total", { closeout: { ...graph.closeout, invoiceTotal: 1 } }],
     ["customer history dropped the job", { historyJobCount: 0 }],
     ["other tenant received a payment", { otherBusinessPaymentCount: 1 }],
+    [
+      "estimate/catalog amount becomes $0 while change order remains $40",
+      { estimate: { ...approvedEstimate, total: 0 } },
+    ],
+    [
+      "original invoice becomes $40",
+      { invoices: [{ ...paidOriginal, total: 40 }, paidSupplemental] },
+    ],
+    [
+      "original invoice becomes $185 and drops the change order",
+      {
+        invoices: [{ ...paidOriginal, total: 185 }, paidSupplemental],
+        fieldChangeOrder: { ...fieldChangeOrder, invoiceId: null },
+      },
+    ],
+    [
+      "billed/collected total is not $300",
+      { closeout: { ...graph.closeout, invoiceTotal: 115, recordedPayments: 115 } },
+    ],
     ["empty graph", {}],
   ];
   for (const [label, patch] of mutations) {
