@@ -1,22 +1,28 @@
 /**
  * Repo-wide request-path schema scanner.
  *
- * $executeRawUnsafe is prohibited under src/ in every executable form:
- * calls, binds, aliases, bracket access, wrappers, concatenated SQL,
- * and imported/renamed constants. There are no legitimate
- * $executeRawUnsafe uses on the request path.
+ * $executeRawUnsafe and $queryRawUnsafe are prohibited under src/ in
+ * every executable form: calls, binds, aliases, bracket access,
+ * wrappers, concatenated SQL, and imported/renamed constants.
  *
  * $executeRaw / $queryRaw stay classified: advisory locks, SELECT FOR
  * UPDATE, presence-probe reads, and application INSERT ON CONFLICT
- * are allowed. Schema DDL / migration-style backfill on those APIs
- * is still a violation.
+ * are allowed. Schema DDL / migration-style backfill on those APIs —
+ * including Prisma.raw / Prisma.sql wrappers — is a violation.
+ * $queryRaw executes writes on Postgres, so CREATE/ALTER/backfill
+ * through tagged $queryRaw is not a read.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { classifyRequestPathSql } from "../production-migrate-policy.mjs";
 
-const WRITE_METHODS = new Set(["$executeRaw", "$executeRawUnsafe"]);
-const UNSAFE_METHOD = "$executeRawUnsafe";
+const WRITE_CAPABLE_METHODS = new Set([
+  "$executeRaw",
+  "$executeRawUnsafe",
+  "$queryRaw",
+  "$queryRawUnsafe",
+]);
+const UNSAFE_METHODS = new Set(["$executeRawUnsafe", "$queryRawUnsafe"]);
 
 function walkTsFiles(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -160,6 +166,16 @@ function readCallArg(source, start) {
         : readQuoted(source, i);
     return { text: quoted?.value ?? "", ident: null };
   }
+  const prismaRaw = source.slice(i).match(/^Prisma\.raw\b/);
+  if (prismaRaw) {
+    let cursor = skipWs(source, i + prismaRaw[0].length);
+    if (source[cursor] === "(") return { ...readCallArg(source, cursor + 1), ident: "Prisma.raw" };
+    if (source[cursor] === "`") {
+      const quoted = readTaggedTemplateArg(source, cursor) ?? readQuoted(source, cursor);
+      return { text: quoted?.value ?? "", ident: "Prisma.raw" };
+    }
+    return { text: "", ident: "Prisma.raw" };
+  }
   const prismaSql = source.slice(i).match(/^Prisma\.sql\s*`/);
   if (prismaSql) {
     const quoted = readTaggedTemplateArg(source, i + prismaSql[0].length - 1);
@@ -229,11 +245,11 @@ function isUnsafeBracketIdent(source, identIndex) {
   return /\[\s*['"`]$/.test(before);
 }
 
-function finishUnsafeAccess(source, afterAccess, index, stylePrefix) {
+function finishUnsafeAccess(source, afterAccess, index, stylePrefix, method) {
   const afterWs = skipWs(source, afterAccess);
   if (/^(\?\.|\.)\s*bind\b/.test(source.slice(afterWs))) {
     return {
-      method: UNSAFE_METHOD,
+      method,
       style: `${stylePrefix}-bind`,
       arg: "",
       argName: null,
@@ -244,7 +260,7 @@ function finishUnsafeAccess(source, afterAccess, index, stylePrefix) {
   if (source[cursor] === "(") {
     const arg = readCallArg(source, cursor + 1);
     return {
-      method: UNSAFE_METHOD,
+      method,
       style: `${stylePrefix}-call`,
       arg: arg.text,
       argName: arg.ident,
@@ -252,7 +268,7 @@ function finishUnsafeAccess(source, afterAccess, index, stylePrefix) {
     };
   }
   return {
-    method: UNSAFE_METHOD,
+    method,
     style: `${stylePrefix}-ref`,
     arg: "",
     argName: null,
@@ -264,18 +280,24 @@ function findRawCalls(source) {
   const code = blankComments(source);
   const calls = [];
 
-  const bracketRe = /(\?\.)?\s*\[\s*(['"`])\$executeRawUnsafe\2\s*\]/g;
+  const bracketRe = /(\?\.)?\s*\[\s*(['"`])(\$(?:execute|query)RawUnsafe)\2\s*\]/g;
   let match;
   while ((match = bracketRe.exec(code))) {
     calls.push(
-      finishUnsafeAccess(source, match.index + match[0].length, match.index, "bracket"),
+      finishUnsafeAccess(
+        source,
+        match.index + match[0].length,
+        match.index,
+        "bracket",
+        match[3],
+      ),
     );
   }
 
   const re = /\$((?:execute|query)Raw(?:Unsafe)?)/g;
   while ((match = re.exec(code))) {
     const method = `$${match[1]}`;
-    if (method === UNSAFE_METHOD && isUnsafeBracketIdent(code, match.index)) {
+    if (UNSAFE_METHODS.has(method) && isUnsafeBracketIdent(code, match.index)) {
       continue;
     }
     let cursor = skipTypeArgs(code, match.index + match[0].length);
@@ -302,8 +324,10 @@ function findRawCalls(source) {
       });
       continue;
     }
-    if (method === UNSAFE_METHOD) {
-      calls.push(finishUnsafeAccess(source, match.index + match[0].length, match.index, "ident"));
+    if (UNSAFE_METHODS.has(method)) {
+      calls.push(
+        finishUnsafeAccess(source, match.index + match[0].length, match.index, "ident", method),
+      );
     }
   }
   return calls;
@@ -341,7 +365,7 @@ function classifyCallKind(sql, method) {
   if (/\b(INSERT|UPDATE|DELETE)\b/i.test(text)) {
     return { kind: "transactional-write", ...classified };
   }
-  if (WRITE_METHODS.has(method) && !text.trim()) {
+  if (WRITE_CAPABLE_METHODS.has(method) && !text.trim()) {
     return { kind: "unresolved-write", ...classified };
   }
   return { kind: "other", ...classified };
@@ -366,9 +390,14 @@ export function scanSourceText(relPath, source) {
       }
     }
     const classification = classifyCallKind(sql, call.method);
+    const unresolvedPrismaRaw =
+      resolvedFrom === "Prisma.raw" &&
+      WRITE_CAPABLE_METHODS.has(call.method) &&
+      !sql.trim();
     const violation =
-      call.method === UNSAFE_METHOD ||
-      (WRITE_METHODS.has(call.method) &&
+      UNSAFE_METHODS.has(call.method) ||
+      unresolvedPrismaRaw ||
+      (WRITE_CAPABLE_METHODS.has(call.method) &&
         (classification.schemaDdl || classification.backfillDml));
     executable.push({
       file: relPath,
@@ -397,7 +426,7 @@ export function scanSourceText(relPath, source) {
     }
   }
 
-  const unsafeRefs = executable.filter((row) => row.method === UNSAFE_METHOD);
+  const unsafeRefs = executable.filter((row) => UNSAFE_METHODS.has(row.method));
   return {
     file: relPath,
     executable,
