@@ -1,16 +1,47 @@
 /**
- * Preview shares Production and skips migrate, so appointment
- * confirmation reads/writes first ensure the additive Job columns and
- * JobAppointmentEvent table exist. Production migrate deploy is then a
- * no-op for this additive migration.
+ * Appointment confirmation schema presence for request paths.
+ *
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when Job appointment columns or JobAppointmentEvent are missing. They
+ * must not CREATE/ALTER or run access-field repair DML. Historical SQL
+ * below is the migrate-system stand-in only. Never execute from a request path.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { repairMisfiledChangeRequestAccessFields } from "@/lib/appointment-change-request";
 import { eventPayload, type AppointmentEventType } from "@/lib/appointment-confirmation";
+import {
+  assertRequiredColumnsExist,
+  assertRequiredTablesExist,
+} from "@/lib/request-path-schema";
 
 type AppointmentClient = PrismaClient | Prisma.TransactionClient;
 
-const ENSURE_APPOINTMENT_SQL = [
+export const APPOINTMENT_REQUIRED_TABLES = ["JobAppointmentEvent"] as const;
+
+export const APPOINTMENT_REQUIRED_JOB_COLUMNS = [
+  "appointmentConfirmationStatus",
+  "appointmentProposalId",
+  "appointmentConfirmedAt",
+  "appointmentConfirmedForProposalId",
+  "appointmentConfirmationSource",
+  "appointmentConfirmedByMembershipId",
+  "propertyAccessMethod",
+  "propertyAccessInstructions",
+  "propertyAccessContactName",
+  "propertyAccessContactInfo",
+  "propertyAccessPickupLocation",
+  "propertyAccessNote",
+  "appointmentChangeRequestNote",
+  "appointmentNotificationStatus",
+  "appointmentNotificationError",
+  "appointmentNotifiedAt",
+  "appointmentNotifiedForProposalId",
+  "startWithoutConfirmationAt",
+  "startWithoutConfirmationReason",
+  "startWithoutConfirmationByMembershipId",
+] as const;
+
+/** Historical migration SQL. Never execute from a request path. */
+export const ENSURE_APPOINTMENT_SQL = [
   `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus" TEXT NOT NULL DEFAULT 'NONE'`,
   `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentProposalId" INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS "appointmentConfirmedAt" TIMESTAMP(3)`,
@@ -52,7 +83,8 @@ const ENSURE_APPOINTMENT_SQL = [
   `CREATE INDEX IF NOT EXISTS "JobAppointmentEvent_businessId_createdAt_idx" ON "JobAppointmentEvent"("businessId", "createdAt")`,
 ];
 
-const ENSURE_APPOINTMENT_CONSTRAINTS = `
+/** Historical migration SQL. Never execute from a request path. */
+export const ENSURE_APPOINTMENT_CONSTRAINTS = `
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -107,17 +139,16 @@ export function resetAppointmentConfirmationSchemaEnsure() {
 export async function ensureAppointmentConfirmationSchema(db: AppointmentClient) {
   if (!ensureSchemaPromise) {
     ensureSchemaPromise = (async () => {
-      for (const statement of ENSURE_APPOINTMENT_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
-      await db.$executeRawUnsafe(ENSURE_APPOINTMENT_CONSTRAINTS);
+      await assertRequiredTablesExist(db, [...APPOINTMENT_REQUIRED_TABLES]);
+      await assertRequiredColumnsExist(db, "Job", [
+        ...APPOINTMENT_REQUIRED_JOB_COLUMNS,
+      ]);
     })().catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });
   }
   await ensureSchemaPromise;
-  await repairMisfiledChangeRequestAccessFields(db);
 }
 
 export async function recordAppointmentEvent(

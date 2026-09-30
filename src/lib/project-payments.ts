@@ -3,9 +3,11 @@
  *
  * Payment rows are the source of truth. Estimate/job/invoice UIs derive
  * Deposit Due / Paid and Amount Due from those rows. Preview shares
- * Production and skips migrate, so reads/writes first ensure the table.
+ * Production and skips migrate. Request paths fail closed when Payment
+ * is missing. They must not CREATE TABLE.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { assertRequiredTablesExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
@@ -32,7 +34,8 @@ export const MATERIAL_DEPOSIT_STATUS_LABELS: Record<MaterialDepositStatus, strin
   paid: "Deposit Paid",
 };
 
-const CREATE_TABLE_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CREATE_PAYMENT_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS "Payment" (
     "id" TEXT NOT NULL,
     "businessId" TEXT NOT NULL,
@@ -64,32 +67,18 @@ export class ProjectPaymentError extends Error {
 
 type PaymentsDb = PrismaClient | Prisma.TransactionClient;
 
+export function resetPaymentTableEnsure() {
+  ensureTablePromise = null;
+}
+
 export async function ensurePaymentTable(db: PaymentsDb) {
   if (!ensureTablePromise) {
-    ensureTablePromise = (async () => {
-      await db.$executeRawUnsafe(CREATE_TABLE_SQL);
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "Payment_stripeCheckoutSessionId_key" ON "Payment"("stripeCheckoutSessionId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "Payment_stripePaymentIntentId_key" ON "Payment"("stripePaymentIntentId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "Payment_businessId_idx" ON "Payment"("businessId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "Payment_estimateId_idx" ON "Payment"("estimateId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "Payment_jobId_idx" ON "Payment"("jobId")`,
-      );
-      await db.$executeRawUnsafe(
-        `CREATE INDEX IF NOT EXISTS "Payment_invoiceId_idx" ON "Payment"("invoiceId")`,
-      );
-    })().catch((error) => {
-      ensureTablePromise = null;
-      throw error;
-    });
+    ensureTablePromise = assertRequiredTablesExist(db, ["Payment"]).catch(
+      (error) => {
+        ensureTablePromise = null;
+        throw error;
+      },
+    );
   }
   await ensureTablePromise;
 }

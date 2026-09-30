@@ -6,11 +6,12 @@
  * inferred from catalog item count. Handyman and Cleaning both register
  * starter catalogs through TradeConfiguration; this is not a fake picker.
  *
- * Preview shares Production and skips migrate. Columns are added with a
- * one-shot backfill of businesses that already existed when the columns
- * appeared. Later ensure calls must not UPDATE WHERE NULL.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when these columns are missing. They must not ADD COLUMN or backfill.
+ * Historical SQL below is the migrate-system stand-in only.
  */
 import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
+import { assertRequiredColumnsExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { isCollProRenoSlug } from "@/lib/public-site";
@@ -25,6 +26,7 @@ export const STARTER_SERVICES_SETUP_PATH = "/setup/services";
 export const STARTER_SERVICES_SETUP_INSTALLED = "INSTALLED";
 export const STARTER_SERVICES_SETUP_SKIPPED = "SKIPPED";
 
+/** Historical migration SQL. Never execute from a request path. */
 export const STARTER_SERVICES_SETUP_ENSURE_SQL = `
 DO $$
 BEGIN
@@ -52,9 +54,10 @@ export function resetStarterServicesSetupSchemaEnsure() {
 
 export async function ensureStarterServicesSetupSchema(db: SetupClient) {
   if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      await db.$executeRawUnsafe(STARTER_SERVICES_SETUP_ENSURE_SQL);
-    })().catch((error) => {
+    ensureSchemaPromise = assertRequiredColumnsExist(db, "Business", [
+      "starterServicesSetupCompletedAt",
+      "starterServicesSetupChoice",
+    ]).catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });

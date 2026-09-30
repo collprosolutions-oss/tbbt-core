@@ -166,8 +166,12 @@ check(
   !accessSrc.includes("instructions ?? note"),
 );
 check(
-  "Preview ensure repairs stale founder change-request text in access fields",
-  readRepo("src/lib/appointment-data.ts").includes("repairMisfiledChangeRequestAccessFields") &&
+  "Request-path appointment ensure does not run founder access-field repair DML",
+  !readRepo("src/lib/appointment-data.ts").includes("repairMisfiledChangeRequestAccessFields") &&
+    !readRepo("src/lib/appointment-data.ts").includes("$executeRawUnsafe") &&
+    readRepo("src/lib/appointment-change-request.ts").includes(
+      "not a request-path operation",
+    ) &&
     jobActionSrc.includes("withoutMisfiledChangeRequestAccess"),
 );
 
@@ -813,10 +817,10 @@ try {
     where: { id: poisonedStanley.id },
   });
   check(
-    "Stale founder note is cleared from property-access fields only",
-    cleanedStanley?.propertyAccessInstructions !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
-      cleanedStanley?.propertyAccessNote !== FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
-      cleanedStanley?.propertyAccessMethod === "CUSTOMER_PRESENT" &&
+    "Request-path ensure does not repair stale founder access fields",
+    cleanedStanley?.propertyAccessInstructions === FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+      cleanedStanley?.propertyAccessNote === FOUNDER_TEST_CHANGE_REQUEST_NOTE &&
+      cleanedStanley?.propertyAccessMethod === "ACCESS_CODE" &&
       cleanedStanley?.appointmentChangeRequestNote == null &&
       cleanedStanley?.appointmentConfirmationStatus === "CONFIRMED" &&
       cleanedStanley?.appointmentProposalId === 2,

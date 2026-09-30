@@ -4,6 +4,7 @@ import {
   propertyAccessMethodById,
   type AccessArrangement,
 } from "@/lib/property-access";
+import { RequestPathSchemaUnavailableError } from "@/lib/request-path-schema";
 
 export const APPOINTMENT_ACTION_FIELD = "appointmentAction";
 export const APPOINTMENT_ACTION_CONFIRM = "confirm";
@@ -154,28 +155,38 @@ export function withoutMisfiledChangeRequestAccess(
 type AppointmentClient = PrismaClient | Prisma.TransactionClient;
 
 /**
- * Preview shares Production. The pre-fix write left the founder test note
- * in property-access columns. Clear that exact text from access fields only.
+ * Historical request-time repair DML. Never execute from a request path.
+ * Write-path sanitization stays in withoutMisfiledChangeRequestAccess.
  */
-export async function repairMisfiledChangeRequestAccessFields(db: AppointmentClient) {
-  await db.$executeRaw`
-    UPDATE "Job"
-    SET
-      "propertyAccessMethod" = CASE
-        WHEN "propertyAccessInstructions" = ${FOUNDER_TEST_CHANGE_REQUEST_NOTE}
-          AND "propertyAccessMethod" IN ('ACCESS_CODE', 'KEY_AT_PROPERTY', 'OTHER')
-        THEN 'CUSTOMER_PRESENT'
-        ELSE "propertyAccessMethod"
-      END,
-      "propertyAccessInstructions" = CASE
-        WHEN "propertyAccessInstructions" = ${FOUNDER_TEST_CHANGE_REQUEST_NOTE} THEN NULL
-        ELSE "propertyAccessInstructions"
-      END,
-      "propertyAccessNote" = CASE
-        WHEN "propertyAccessNote" = ${FOUNDER_TEST_CHANGE_REQUEST_NOTE} THEN NULL
-        ELSE "propertyAccessNote"
-      END
-    WHERE "propertyAccessInstructions" = ${FOUNDER_TEST_CHANGE_REQUEST_NOTE}
-       OR "propertyAccessNote" = ${FOUNDER_TEST_CHANGE_REQUEST_NOTE}
-  `;
+export const REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL = `
+UPDATE "Job"
+SET
+  "propertyAccessMethod" = CASE
+    WHEN "propertyAccessInstructions" = 'make it 9am instead'
+      AND "propertyAccessMethod" IN ('ACCESS_CODE', 'KEY_AT_PROPERTY', 'OTHER')
+    THEN 'CUSTOMER_PRESENT'
+    ELSE "propertyAccessMethod"
+  END,
+  "propertyAccessInstructions" = CASE
+    WHEN "propertyAccessInstructions" = 'make it 9am instead' THEN NULL
+    ELSE "propertyAccessInstructions"
+  END,
+  "propertyAccessNote" = CASE
+    WHEN "propertyAccessNote" = 'make it 9am instead' THEN NULL
+    ELSE "propertyAccessNote"
+  END
+WHERE "propertyAccessInstructions" = 'make it 9am instead'
+   OR "propertyAccessNote" = 'make it 9am instead'
+`.trim();
+
+/**
+ * Request paths must not run founder-note access-field repair DML.
+ * Preview shares Production; this is not a second migration engine.
+ */
+export async function repairMisfiledChangeRequestAccessFields(
+  _db: AppointmentClient,
+): Promise<never> {
+  throw new RequestPathSchemaUnavailableError(
+    "misfiled change-request access-field repair is not a request-path operation",
+  );
 }

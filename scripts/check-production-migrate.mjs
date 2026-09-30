@@ -94,6 +94,18 @@ check(
     estimatingDefaultsMigration.includes('"workspaceId"') &&
     estimatingDefaultsMigration.includes('"payload"'),
 );
+const estimatingDefaultsDb = readFileSync(
+  new URL("../src/lib/estimating-defaults-db.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Estimating defaults request path fail-closes instead of CREATE TABLE",
+  estimatingDefaultsDb.includes("fail closed") &&
+    estimatingDefaultsDb.includes("ensureBusinessEstimatingDefaultTable") &&
+    estimatingDefaultsDb.includes("assertRequiredTablesExist") &&
+    estimatingDefaultsDb.includes("Never execute from a request path") &&
+    !estimatingDefaultsDb.includes("$executeRawUnsafe"),
+);
 
 const paymentsMigration = readFileSync(
   new URL("../prisma/migrations/20260908010000_add_payments/migration.sql", import.meta.url),
@@ -106,6 +118,17 @@ check(
     paymentsMigration.includes('"purpose"') &&
     paymentsMigration.includes('"stripeCheckoutSessionId"') &&
     paymentsMigration.includes('"stripePaymentIntentId"'),
+);
+const projectPayments = readFileSync(
+  new URL("../src/lib/project-payments.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Project payments request path fail-closes instead of CREATE TABLE",
+  projectPayments.includes("fail closed") &&
+    projectPayments.includes("ensurePaymentTable") &&
+    projectPayments.includes("assertRequiredTablesExist") &&
+    !projectPayments.includes("$executeRawUnsafe"),
 );
 
 const availabilityMigration = readFileSync(
@@ -137,10 +160,11 @@ const materialPriceDb = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers material price engine tables skipped by migrate",
-  materialPriceDb.includes("Preview shares Production and skips migrate") &&
-    materialPriceDb.includes("CREATE TABLE IF NOT EXISTS") &&
-    materialPriceDb.includes("ensureMaterialPriceEngineTables"),
+  "Material price request path fail-closes instead of CREATE TABLE",
+  materialPriceDb.includes("fail closed") &&
+    materialPriceDb.includes("ensureMaterialPriceEngineTables") &&
+    materialPriceDb.includes("Never execute from a request path") &&
+    !materialPriceDb.includes("$executeRawUnsafe"),
 );
 
 const publicContactMigration = readFileSync(
@@ -203,11 +227,12 @@ const availabilityData = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers availability columns/table skipped by migrate",
-  availabilityData.includes("Preview shares Production and skips migrate") &&
-    availabilityData.includes("ADD COLUMN IF NOT EXISTS \"workStartMinutes\"") &&
-    availabilityData.includes("CREATE TABLE IF NOT EXISTS \"BusinessUnavailableDate\"") &&
-    availabilityData.includes("ensureBusinessAvailabilitySchema"),
+  "Availability request path fail-closes instead of ADD COLUMN / CREATE TABLE",
+  availabilityData.includes("fail closed") &&
+    availabilityData.includes("ensureBusinessAvailabilitySchema") &&
+    availabilityData.includes("assertRequiredTablesExist") &&
+    availabilityData.includes("Never execute from a request path") &&
+    !availabilityData.includes("$executeRawUnsafe"),
 );
 
 const appointmentMigration = readFileSync(
@@ -231,12 +256,13 @@ const appointmentData = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers appointment confirmation columns/table skipped by migrate",
-  appointmentData.includes("Preview shares Production and skips migrate") &&
-    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentConfirmationStatus"') &&
-    appointmentData.includes('ADD COLUMN IF NOT EXISTS "appointmentChangeRequestNote"') &&
-    appointmentData.includes('CREATE TABLE IF NOT EXISTS "JobAppointmentEvent"') &&
-    appointmentData.includes("ensureAppointmentConfirmationSchema"),
+  "Appointment confirmation request path fail-closes instead of CREATE/ALTER/repair",
+  appointmentData.includes("fail closed") &&
+    appointmentData.includes("ensureAppointmentConfirmationSchema") &&
+    appointmentData.includes("assertRequiredTablesExist") &&
+    appointmentData.includes("Never execute from a request path") &&
+    !appointmentData.includes("$executeRawUnsafe") &&
+    !appointmentData.includes("repairMisfiledChangeRequestAccessFields"),
 );
 
 check(
@@ -262,11 +288,13 @@ const firstRunSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers first-run setup column skipped by migrate",
-  firstRunSetup.includes("Preview shares Production and skips migrate") &&
+  "First-run request path fail-closes instead of ADD COLUMN / backfill",
+  firstRunSetup.includes("fail closed") &&
     firstRunSetup.includes("ensureFirstRunSetupSchema") &&
+    firstRunSetup.includes("assertRequiredColumnsExist") &&
+    firstRunSetup.includes("Never execute from a request path") &&
     firstRunSetup.includes("FIRST_RUN_SETUP_ENSURE_SQL") &&
-    firstRunSetup.includes('ADD COLUMN "firstRunSetupCompletedAt"'),
+    !firstRunSetup.includes("$executeRawUnsafe"),
 );
 
 check(
@@ -292,11 +320,12 @@ const starterServicesSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers starter-services setup columns skipped by migrate",
-  starterServicesSetup.includes("Preview shares Production and skips migrate") &&
+  "Starter-services request path fail-closes instead of ADD COLUMN / backfill",
+  starterServicesSetup.includes("fail closed") &&
     starterServicesSetup.includes("ensureStarterServicesSetupSchema") &&
-    starterServicesSetup.includes("STARTER_SERVICES_SETUP_ENSURE_SQL") &&
-    starterServicesSetup.includes('ADD COLUMN "starterServicesSetupCompletedAt"'),
+    starterServicesSetup.includes("assertRequiredColumnsExist") &&
+    starterServicesSetup.includes("Never execute from a request path") &&
+    !starterServicesSetup.includes("$executeRawUnsafe"),
 );
 
 check(
@@ -323,11 +352,12 @@ const websiteSetup = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers website setup columns skipped by migrate",
-  websiteSetup.includes("Preview shares Production and skips migrate") &&
+  "Website setup request path fail-closes instead of ADD COLUMN / backfill",
+  websiteSetup.includes("fail closed") &&
     websiteSetup.includes("ensureWebsiteSetupSchema") &&
-    websiteSetup.includes("WEBSITE_SETUP_ENSURE_SQL") &&
-    websiteSetup.includes('ADD COLUMN "websiteSetupCompletedAt"'),
+    websiteSetup.includes("assertRequiredColumnsExist") &&
+    websiteSetup.includes("Never execute from a request path") &&
+    !websiteSetup.includes("$executeRawUnsafe"),
 );
 
 check(
@@ -424,11 +454,12 @@ const businessTimezone = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers business timezone column skipped by migrate",
-  businessTimezone.includes("Preview shares Production and skips migrate") &&
+  "Business timezone request path fail-closes instead of ADD COLUMN",
+  businessTimezone.includes("fail closed") &&
     businessTimezone.includes("ensureBusinessTimezoneSchema") &&
-    businessTimezone.includes("BUSINESS_TIMEZONE_ENSURE_SQL") &&
-    businessTimezone.includes('ADD COLUMN IF NOT EXISTS "timezone"'),
+    businessTimezone.includes("assertRequiredColumnsExist") &&
+    businessTimezone.includes("Never execute from a request path") &&
+    !businessTimezone.includes("$executeRawUnsafe"),
 );
 check(
   "Authenticated workspace load does not run business timezone DDL",
@@ -453,14 +484,12 @@ const customerMessagingSchema = readFileSync(
   "utf8",
 );
 check(
-  "Preview runtime ensure covers customer messaging schema skipped by migrate",
-  customerMessagingSchema.includes("Preview shares Production and skips migrate") &&
+  "Customer messaging request path fail-closes instead of CREATE/ALTER",
+  customerMessagingSchema.includes("fail closed") &&
     customerMessagingSchema.includes("ensureCustomerMessagingSchema") &&
-    customerMessagingSchema.includes("CUSTOMER_MESSAGING_ENSURE_SQL") &&
-    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "smsConsentStatus"') &&
-    customerMessagingSchema.includes("CustomerCommunication") &&
-    customerMessagingSchema.includes('ADD COLUMN IF NOT EXISTS "operationalSmsNumber"') &&
-    customerMessagingSchema.includes("CustomerMessagingWebhookEvent"),
+    customerMessagingSchema.includes("assertRequiredTablesExist") &&
+    customerMessagingSchema.includes("Never execute from a request path") &&
+    !customerMessagingSchema.includes("$executeRawUnsafe"),
 );
 
 const twilioSmsMigration = readFileSync(

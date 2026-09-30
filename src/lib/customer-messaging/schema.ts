@@ -1,12 +1,29 @@
 /**
- * Preview shares Production and skips migrate, so customer messaging
- * reads/writes first ensure the additive Customer consent columns and
- * CustomerCommunication table exist.
+ * Customer messaging schema presence for request paths.
+ *
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when consent columns or messaging tables are missing. They must not
+ * CREATE/ALTER. Historical SQL below is the migrate-system stand-in only.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  assertRequiredColumnsExist,
+  assertRequiredTablesExist,
+} from "@/lib/request-path-schema";
 
 type MessagingClient = PrismaClient | Prisma.TransactionClient;
 
+export const CUSTOMER_MESSAGING_REQUIRED_TABLES = [
+  "CustomerCommunication",
+  "CustomerMessagingWebhookEvent",
+] as const;
+
+export const CUSTOMER_MESSAGING_REQUIRED_COLUMNS = {
+  Customer: ["smsConsentStatus", "smsConsentUpdatedAt"],
+  Business: ["operationalSmsNumber"],
+} as const;
+
+/** Historical migration SQL. Never execute from a request path. */
 export const CUSTOMER_MESSAGING_ENSURE_SQL = [
   `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "smsConsentStatus" TEXT NOT NULL DEFAULT 'UNKNOWN'`,
   `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "smsConsentUpdatedAt" TIMESTAMP(3)`,
@@ -53,7 +70,8 @@ export const CUSTOMER_MESSAGING_ENSURE_SQL = [
   `CREATE INDEX IF NOT EXISTS "CustomerMessagingWebhookEvent_businessId_idx" ON "CustomerMessagingWebhookEvent"("businessId")`,
 ];
 
-const CUSTOMER_MESSAGING_CONSTRAINTS_SQL = `
+/** Historical migration SQL. Never execute from a request path. */
+export const CUSTOMER_MESSAGING_CONSTRAINTS_SQL = `
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -96,10 +114,17 @@ export function resetCustomerMessagingSchemaEnsure() {
 export async function ensureCustomerMessagingSchema(db: MessagingClient) {
   if (!ensurePromise) {
     ensurePromise = (async () => {
-      for (const statement of CUSTOMER_MESSAGING_ENSURE_SQL) {
-        await db.$executeRawUnsafe(statement);
-      }
-      await db.$executeRawUnsafe(CUSTOMER_MESSAGING_CONSTRAINTS_SQL);
+      await assertRequiredTablesExist(db, [...CUSTOMER_MESSAGING_REQUIRED_TABLES]);
+      await assertRequiredColumnsExist(
+        db,
+        "Customer",
+        [...CUSTOMER_MESSAGING_REQUIRED_COLUMNS.Customer],
+      );
+      await assertRequiredColumnsExist(
+        db,
+        "Business",
+        [...CUSTOMER_MESSAGING_REQUIRED_COLUMNS.Business],
+      );
     })().catch((error) => {
       ensurePromise = null;
       throw error;

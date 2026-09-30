@@ -7,12 +7,12 @@
  * public site stays the TBBT-hosted /hire/[slug] route — not CollPro's
  * apex /, and not a custom domain.
  *
- * Preview shares Production and skips migrate. Completion columns are
- * added with a one-shot backfill of businesses that already existed when
- * the columns appeared. Later ensure calls must not UPDATE WHERE NULL.
- * publicServiceAreaLabel is additive with no backfill.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when these columns are missing. They must not ADD COLUMN or backfill.
+ * Historical SQL below is the migrate-system stand-in only.
  */
 import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
+import { assertRequiredColumnsExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { isCollProRenoSlug } from "@/lib/public-site";
@@ -57,6 +57,7 @@ export function websiteSetupCompletionCopy(input: {
   };
 }
 
+/** Historical migration SQL. Never execute from a request path. */
 export const WEBSITE_SETUP_ENSURE_SQL = `
 DO $$
 BEGIN
@@ -87,10 +88,11 @@ export function resetWebsiteSetupSchemaEnsure() {
 
 export async function ensureWebsiteSetupSchema(db: SetupClient) {
   if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      await db.$executeRawUnsafe(WEBSITE_SETUP_ENSURE_SQL);
-      await db.$executeRawUnsafe(PUBLIC_SERVICE_AREA_LABEL_ENSURE_SQL);
-    })().catch((error) => {
+    ensureSchemaPromise = assertRequiredColumnsExist(db, "Business", [
+      "websiteSetupCompletedAt",
+      "websiteSetupChoice",
+      "publicServiceAreaLabel",
+    ]).catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });

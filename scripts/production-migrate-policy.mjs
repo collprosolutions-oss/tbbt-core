@@ -245,7 +245,31 @@ export function classifyRequestPathSql(sql) {
     /\bADD\s+COLUMN\b/i.test(text) ||
     /\bCREATE\s+(UNIQUE\s+)?INDEX\b/i.test(text) ||
     /\bCREATE\s+TABLE\b/i.test(text);
-  const backfillDml = /\b(INSERT|UPDATE|DELETE)\s+(INTO\s+|FROM\s+)?/i.test(text);
+  const createdAtBackfill =
+    /\bUPDATE\b/i.test(text) &&
+    /"createdAt"/i.test(text) &&
+    /\bIS\s+NULL\b/i.test(text);
+  const infoSchemaMigration =
+    /\binformation_schema\b/i.test(text) &&
+    /\b(UPDATE|INSERT|ALTER|ADD\s+COLUMN)\b/i.test(text);
+  const compatibilityCopy =
+    /\bINSERT\s+INTO\b/i.test(text) &&
+    /\bSELECT\b/i.test(text) &&
+    /\bFROM\b/i.test(text) &&
+    /\bWHERE\s+NOT\s+EXISTS\b/i.test(text);
+  const founderAccessRepair =
+    /\bUPDATE\s+"Job"\b/i.test(text) && /propertyAccess/i.test(text);
+  const onboardingSentinelBackfill =
+    /\bUPDATE\b/i.test(text) &&
+    /firstRunSetupCompletedAt|starterServicesSetupCompletedAt|websiteSetupCompletedAt|saasFounderTrialBackfilledAt|legacyExempt/i.test(
+      text,
+    );
+  const backfillDml =
+    createdAtBackfill ||
+    infoSchemaMigration ||
+    compatibilityCopy ||
+    founderAccessRepair ||
+    onboardingSentinelBackfill;
   return { schemaDdl, backfillDml };
 }
 

@@ -33,6 +33,61 @@ const {
   ensureBusinessPublicContactSchema,
   resetBusinessPublicContactSchemaEnsure,
 } = await import("@/lib/business-contact");
+const {
+  ensureFirstRunSetupSchema,
+  resetFirstRunSetupSchemaEnsure,
+  FIRST_RUN_SETUP_ENSURE_SQL,
+} = await import("@/lib/first-run-setup");
+const {
+  ensureStarterServicesSetupSchema,
+  resetStarterServicesSetupSchemaEnsure,
+  STARTER_SERVICES_SETUP_ENSURE_SQL,
+} = await import("@/lib/starter-services-setup");
+const {
+  ensureWebsiteSetupSchema,
+  resetWebsiteSetupSchemaEnsure,
+  WEBSITE_SETUP_ENSURE_SQL,
+  PUBLIC_SERVICE_AREA_LABEL_ENSURE_SQL,
+} = await import("@/lib/website-setup");
+const {
+  ensureBusinessTimezoneSchema,
+  resetBusinessTimezoneSchemaEnsure,
+  BUSINESS_TIMEZONE_ENSURE_SQL,
+} = await import("@/lib/business-timezone");
+const {
+  ensureAppointmentConfirmationSchema,
+  resetAppointmentConfirmationSchemaEnsure,
+  ENSURE_APPOINTMENT_SQL,
+} = await import("@/lib/appointment-data");
+const {
+  ensureBusinessEstimatingDefaultTable,
+  resetBusinessEstimatingDefaultTableEnsure,
+  CREATE_BUSINESS_ESTIMATING_DEFAULT_TABLE_SQL,
+} = await import("@/lib/estimating-defaults-db");
+const {
+  ensurePaymentTable,
+  resetPaymentTableEnsure,
+  CREATE_PAYMENT_TABLE_SQL,
+} = await import("@/lib/project-payments");
+const {
+  ensureMaterialPriceEngineTables,
+  resetMaterialPriceEngineTablesEnsure,
+  CREATE_PRICE_SQL,
+} = await import("@/lib/material-pricing/db");
+const {
+  ensureCustomerMessagingSchema,
+  resetCustomerMessagingSchemaEnsure,
+  CUSTOMER_MESSAGING_ENSURE_SQL,
+} = await import("@/lib/customer-messaging/schema");
+const {
+  ensureBusinessAvailabilitySchema,
+  resetBusinessAvailabilitySchemaEnsure,
+  ENSURE_AVAILABILITY_SQL,
+} = await import("@/lib/availability-data");
+const {
+  repairMisfiledChangeRequestAccessFields,
+  REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL,
+} = await import("@/lib/appointment-change-request");
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -131,6 +186,40 @@ check(
     !contactSrc.includes("ADD COLUMN IF NOT EXISTS") &&
     !contactSrc.includes("$executeRawUnsafe"),
 );
+const convertedEnsureFiles = [
+  "src/lib/first-run-setup.ts",
+  "src/lib/starter-services-setup.ts",
+  "src/lib/website-setup.ts",
+  "src/lib/business-timezone.ts",
+  "src/lib/appointment-data.ts",
+  "src/lib/estimating-defaults-db.ts",
+  "src/lib/project-payments.ts",
+  "src/lib/material-pricing/db.ts",
+  "src/lib/customer-messaging/schema.ts",
+  "src/lib/availability-data.ts",
+];
+check(
+  "Converted ensure helpers fail closed and do not $executeRawUnsafe",
+  convertedEnsureFiles.every((rel) => {
+    const src = readRepo(rel);
+    return (
+      src.includes("assertRequired") &&
+      !src.includes("$executeRawUnsafe") &&
+      /fail closed/i.test(src)
+    );
+  }) &&
+    !readRepo("src/lib/appointment-data.ts").includes("repairMisfiledChangeRequestAccessFields") &&
+    readRepo("src/lib/appointment-change-request.ts").includes(
+      "not a request-path operation",
+    ),
+);
+check(
+  "Historical founder access-repair SQL is classified as forbidden backfill",
+  classifyRequestPathSql(REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL).backfillDml === true &&
+    planRequestPathSchemaEnsure({
+      statements: [REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL],
+    }).allowed === false,
+);
 
 const vulnerablePlan = planRequestPathSchemaEnsure({
   statements: [...SAAS_BILLING_ENSURE_SQL, SAAS_FOUNDER_TRIAL_BACKFILL_SQL],
@@ -225,6 +314,297 @@ try {
     "ensureSaasBillingSchema is a compatible-read presence probe when schema exists",
     recordedWrites(billingProbe.statements).length === 0 &&
       billingProbe.statements.every((row) => /information_schema|pg_tables/i.test(row.sql)),
+  );
+
+  const helperCases = [
+    {
+      name: "first-run setup",
+      reset: resetFirstRunSetupSchemaEnsure,
+      ensure: ensureFirstRunSetupSchema,
+      missingPattern: /firstRunSetupCompletedAt/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "firstRunSetupCompletedAt"`,
+        );
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(FIRST_RUN_SETUP_ENSURE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'Business'
+            AND column_name = 'firstRunSetupCompletedAt'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "starter-services setup",
+      reset: resetStarterServicesSetupSchemaEnsure,
+      ensure: ensureStarterServicesSetupSchema,
+      missingPattern: /starterServicesSetupCompletedAt/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "starterServicesSetupChoice"`,
+        );
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "starterServicesSetupCompletedAt"`,
+        );
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(STARTER_SERVICES_SETUP_ENSURE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'Business'
+            AND column_name = 'starterServicesSetupCompletedAt'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "website setup",
+      reset: resetWebsiteSetupSchemaEnsure,
+      ensure: ensureWebsiteSetupSchema,
+      missingPattern: /websiteSetupCompletedAt|publicServiceAreaLabel/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "websiteSetupChoice"`,
+        );
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "websiteSetupCompletedAt"`,
+        );
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "publicServiceAreaLabel"`,
+        );
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(WEBSITE_SETUP_ENSURE_SQL);
+        await db.$executeRawUnsafe(PUBLIC_SERVICE_AREA_LABEL_ENSURE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'Business'
+            AND column_name = 'websiteSetupCompletedAt'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "business timezone",
+      reset: resetBusinessTimezoneSchemaEnsure,
+      ensure: ensureBusinessTimezoneSchema,
+      missingPattern: /timezone/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "Business" DROP COLUMN IF EXISTS "timezone"`,
+        );
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(BUSINESS_TIMEZONE_ENSURE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'Business'
+            AND column_name = 'timezone'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "appointment confirmation",
+      reset: resetAppointmentConfirmationSchemaEnsure,
+      ensure: ensureAppointmentConfirmationSchema,
+      missingPattern: /JobAppointmentEvent/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobAppointmentEvent" CASCADE`);
+      },
+      restore: async (db) => {
+        for (const statement of ENSURE_APPOINTMENT_SQL) {
+          await db.$executeRawUnsafe(statement);
+        }
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'JobAppointmentEvent'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "estimating defaults",
+      reset: resetBusinessEstimatingDefaultTableEnsure,
+      ensure: ensureBusinessEstimatingDefaultTable,
+      missingPattern: /BusinessEstimatingDefault/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessEstimatingDefault" CASCADE`);
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(CREATE_BUSINESS_ESTIMATING_DEFAULT_TABLE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'BusinessEstimatingDefault'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "project payments",
+      reset: resetPaymentTableEnsure,
+      ensure: ensurePaymentTable,
+      missingPattern: /Payment/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "Payment" CASCADE`);
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(CREATE_PAYMENT_TABLE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'Payment'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "material price engine",
+      reset: resetMaterialPriceEngineTablesEnsure,
+      ensure: ensureMaterialPriceEngineTables,
+      missingPattern: /SupplierPriceRecord/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "SupplierPriceRecord" CASCADE`);
+      },
+      restore: async (db) => {
+        await db.$executeRawUnsafe(CREATE_PRICE_SQL);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'SupplierPriceRecord'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "customer messaging",
+      reset: resetCustomerMessagingSchemaEnsure,
+      ensure: ensureCustomerMessagingSchema,
+      missingPattern: /CustomerCommunication/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "CustomerCommunication" CASCADE`);
+      },
+      restore: async (db) => {
+        const create = CUSTOMER_MESSAGING_ENSURE_SQL.find((sql) =>
+          sql.includes('CREATE TABLE IF NOT EXISTS "CustomerCommunication"'),
+        );
+        await db.$executeRawUnsafe(create);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'CustomerCommunication'
+        `;
+        return rows.length === 0;
+      },
+    },
+    {
+      name: "availability",
+      reset: resetBusinessAvailabilitySchemaEnsure,
+      ensure: ensureBusinessAvailabilitySchema,
+      missingPattern: /BusinessUnavailableDate/i,
+      drop: async (db) => {
+        await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessUnavailableDate" CASCADE`);
+      },
+      restore: async (db) => {
+        const create = ENSURE_AVAILABILITY_SQL.find((sql) =>
+          sql.includes('CREATE TABLE IF NOT EXISTS "BusinessUnavailableDate"'),
+        );
+        await db.$executeRawUnsafe(create);
+      },
+      stillMissing: async (db) => {
+        const rows = await db.$queryRaw`
+          SELECT tablename FROM pg_tables
+          WHERE schemaname = 'public' AND tablename = 'BusinessUnavailableDate'
+        `;
+        return rows.length === 0;
+      },
+    },
+  ];
+
+  console.log("\nDYNAMIC — converted helpers: current schema + missing object, Preview and Production");
+  for (const helper of helperCases) {
+    for (const env of ["preview", "production"]) {
+      process.env.VERCEL_ENV = env;
+      helper.reset();
+      const present = instrumentPrisma(prisma);
+      await helper.ensure(present.client);
+      const presentWrites = recordedWrites(present.statements);
+      check(
+        `${env} ${helper.name} current schema is a presence probe`,
+        presentWrites.length === 0 &&
+          present.statements.every((row) => /information_schema|pg_tables/i.test(row.sql)),
+      );
+
+      await helper.drop(prisma);
+      helper.reset();
+      const missing = instrumentPrisma(prisma);
+      let missingError = null;
+      try {
+        await helper.ensure(missing.client);
+      } catch (error) {
+        missingError = error;
+      }
+      const missingWrites = recordedWrites(missing.statements);
+      check(
+        `${env} ${helper.name} missing object → RequestPathSchemaUnavailableError`,
+        missingError instanceof RequestPathSchemaUnavailableError &&
+          missingError.failClosed === true &&
+          helper.missingPattern.test(missingError.message),
+      );
+      check(
+        `${env} ${helper.name} zero schema DDL`,
+        missingWrites.filter((row) => classifyRequestPathSql(row.sql).schemaDdl).length === 0,
+      );
+      check(
+        `${env} ${helper.name} zero backfill/repair DML`,
+        missingWrites.filter((row) => classifyRequestPathSql(row.sql).backfillDml).length === 0,
+      );
+      check(
+        `${env} ${helper.name} missing schema is not recreated`,
+        await helper.stillMissing(prisma),
+      );
+      await helper.restore(prisma);
+    }
+  }
+
+  process.env.VERCEL_ENV = "preview";
+  const repairProbe = instrumentPrisma(prisma);
+  let repairError = null;
+  try {
+    await repairMisfiledChangeRequestAccessFields(repairProbe.client);
+  } catch (error) {
+    repairError = error;
+  }
+  check(
+    "Preview repairMisfiledChangeRequestAccessFields fail-closes without DML",
+    repairError instanceof RequestPathSchemaUnavailableError &&
+      recordedWrites(repairProbe.statements).length === 0,
   );
 
   console.log("\nDYNAMIC — missing required schema fail-closes without DDL");

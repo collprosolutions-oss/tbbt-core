@@ -9,15 +9,17 @@
  * Business.timezone.
  *
  * DST is resolved with Intl (IANA), never a hard-coded hour offset.
- * Preview shares Production and skips migrate, so reads first ensure the
- * additive column exists.
+ * Preview shares Production and skips migrate. Request paths fail closed
+ * when Business.timezone is missing. They must not ADD COLUMN.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { assertRequiredColumnsExist } from "@/lib/request-path-schema";
 
 type TimezoneClient = PrismaClient | Prisma.TransactionClient;
 
 export const DEFAULT_BUSINESS_TIMEZONE = "America/New_York";
 
+/** Historical migration SQL. Never execute from a request path. */
 export const BUSINESS_TIMEZONE_ENSURE_SQL =
   `ALTER TABLE "Business" ADD COLUMN IF NOT EXISTS "timezone" TEXT`;
 
@@ -29,9 +31,9 @@ export function resetBusinessTimezoneSchemaEnsure() {
 
 export async function ensureBusinessTimezoneSchema(db: TimezoneClient) {
   if (!ensureSchemaPromise) {
-    ensureSchemaPromise = (async () => {
-      await db.$executeRawUnsafe(BUSINESS_TIMEZONE_ENSURE_SQL);
-    })().catch((error) => {
+    ensureSchemaPromise = assertRequiredColumnsExist(db, "Business", [
+      "timezone",
+    ]).catch((error) => {
       ensureSchemaPromise = null;
       throw error;
     });
