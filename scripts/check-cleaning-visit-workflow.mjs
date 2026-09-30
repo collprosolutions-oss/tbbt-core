@@ -211,6 +211,15 @@ check(
       checklistItemSrc.indexOf("jobCrewVisit.update"),
 );
 check(
+  "Assigned visit writes recheck exact active membership after the Job lock",
+  checklistItemSrc.includes("exactActiveMembershipHeld") &&
+    recordOutcomeSrc.includes("exactActiveMembershipHeld") &&
+    checklistItemSrc.indexOf("lockTenantOwnedJob") <
+      checklistItemSrc.indexOf("exactActiveMembershipHeld") &&
+    recordOutcomeSrc.indexOf("lockTenantOwnedJob") <
+      recordOutcomeSrc.indexOf("exactActiveMembershipHeld"),
+);
+check(
   "Handyman jobs are not eligible; Cleaning recurrenceSupport is required",
   cleaningVisitWorkflowEligible("CLEANING") === true &&
     cleaningVisitWorkflowEligible("HANDYMAN") === false &&
@@ -719,6 +728,96 @@ try {
       visitAfterStatusRace?.outcomeRecordedByMembershipId == null &&
       jobAfterStatusRace?.status === "SCHEDULED" &&
       jobAfterStatusRace?.assignedMembershipId === memWorkerA.id,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Visit",
+      email: `deactivate-visit-${suffix}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: cleanA.id, role: "MEMBER" },
+  });
+  async function deactivateExactMembership() {
+    const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+    try {
+      await otherClient.membership.update({
+        where: { id: deactivateMem.id },
+        data: { active: false },
+      });
+    } finally {
+      await otherClient.$disconnect();
+    }
+  }
+  const jobChecklistDeactivate = await createTradeJob(cleanA.id, "CLEANING", deactivateMem.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobChecklistDeactivate.id,
+    cadence: "WEEKLY",
+  });
+  await expectThrow(
+    "Membership deactivation after the initial read refuses a checklist tap",
+    () =>
+      setAssignedChecklistItem(
+        prisma,
+        { businessId: cleanA.id, membershipId: deactivateMem.id },
+        {
+          jobId: jobChecklistDeactivate.id,
+          itemKey: "kitchen",
+          checked: true,
+          afterInitialRead: deactivateExactMembership,
+        },
+      ),
+    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
+  );
+  const visitAfterChecklistDeactivate = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobChecklistDeactivate.id, businessId: cleanA.id },
+  });
+  check(
+    "Deactivated checklist tap leaves no progress write",
+    JSON.parse(visitAfterChecklistDeactivate.checklistJson).every((item) => item.checked === false),
+  );
+
+  await prisma.membership.update({
+    where: { id: deactivateMem.id },
+    data: { active: true },
+  });
+  const jobOutcomeDeactivate = await createTradeJob(cleanA.id, "CLEANING", deactivateMem.id);
+  await setCleaningVisitCadence(prisma, ownerA, {
+    jobId: jobOutcomeDeactivate.id,
+    cadence: "WEEKLY",
+  });
+  await prisma.job.update({
+    where: { id: jobOutcomeDeactivate.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  await expectThrow(
+    "Membership deactivation after the initial read refuses VISIT_COMPLETED",
+    () =>
+      recordAssignedVisitOutcome(
+        prisma,
+        { businessId: cleanA.id, membershipId: deactivateMem.id },
+        {
+          jobId: jobOutcomeDeactivate.id,
+          outcomeStatus: "VISIT_COMPLETED",
+          afterInitialRead: deactivateExactMembership,
+        },
+      ),
+    (error) => error instanceof Error && error.message === ASSIGNED_WORKER_ONLY_MESSAGE,
+  );
+  const visitAfterOutcomeDeactivate = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: jobOutcomeDeactivate.id, businessId: cleanA.id },
+  });
+  const jobAfterOutcomeDeactivate = await prisma.job.findFirst({
+    where: { id: jobOutcomeDeactivate.id, businessId: cleanA.id },
+  });
+  check(
+    "Deactivated VISIT_COMPLETED leaves no visit or Job write",
+    visitAfterOutcomeDeactivate?.outcomeStatus === "NONE" &&
+      visitAfterOutcomeDeactivate?.outcomeRecordedAt == null &&
+      jobAfterOutcomeDeactivate?.status === "IN_PROGRESS" &&
+      jobAfterOutcomeDeactivate?.assignedMembershipId === deactivateMem.id,
   );
 
   const procedure = await createOperatingProcedure(prisma, ownerA, {

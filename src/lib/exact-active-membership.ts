@@ -1,11 +1,11 @@
 /**
  * Transaction-scoped exact active-membership guard.
  *
- * Native assigned-job writes authorize once before the Job lock. Session
- * issuance and that pre-transaction read are not enough: a MEMBER can be
- * deactivated after the authorize read and still hold a live access
- * object. Callers lock/re-read the Job, recheck assignment, then invoke
- * this helper immediately before mutation.
+ * Assigned-job writes (web and native) authorize once before the Job
+ * lock. Session issuance and that pre-transaction read are not enough:
+ * a MEMBER can be deactivated after the authorize read and still hold a
+ * live access object. Callers lock/re-read the Job, recheck assignment,
+ * then invoke this helper immediately before mutation.
  *
  * The query is exact: THIS Membership id in THIS business, locked for
  * the remainder of the transaction. It does not accept another person's

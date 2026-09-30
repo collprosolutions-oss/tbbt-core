@@ -34,10 +34,9 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { evaluateCompleteJob, evaluateStartJob } = await import(
   "../src/lib/job-lifecycle.ts"
 );
-const {
-  CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
-  startJobRequiresCustomerConfirmation,
-} = await import("../src/lib/appointment-confirmation.ts");
+const { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT } = await import(
+  "../src/lib/appointment-confirmation.ts"
+);
 const { groupFieldJobs } = await import("../src/lib/field-jobs.ts");
 const { directionsUrl, telHref } = await import("../src/lib/directions.ts");
 const { groupJobsByAssignedMember } = await import("../src/lib/schedule.ts");
@@ -46,6 +45,12 @@ const {
   ForbiddenError,
   requireBusinessCapability,
 } = await import("../src/lib/authorization.ts");
+const {
+  FIELD_JOB_NOT_ASSIGNED,
+  reportAssignedJobProblem,
+  requestAssignedJobAdditionalWork,
+  startAssignedFieldJob,
+} = await import("../src/lib/field-job-ops.ts");
 const {
   clockInTime,
   clockOutTime,
@@ -171,6 +176,38 @@ check(
     fieldJobActionsSrc.includes("requireAssignedJobOperating") &&
     !fieldJobActionsSrc.includes('from "@/lib/complete-job-invoice"') &&
     !fieldJobActionsSrc.includes("persistDraftInvoiceFromCompletedJob"),
+);
+const fieldJobOpsSrc = readFileSync(new URL("../src/lib/field-job-ops.ts", import.meta.url), "utf8");
+const timeCardOpsSrc = readFileSync(new URL("../src/lib/time-card-ops.ts", import.meta.url), "utf8");
+const startFieldFnSrc = fieldJobOpsSrc.slice(
+  fieldJobOpsSrc.indexOf("export async function startAssignedFieldJob"),
+);
+const completeInTxSrc = timeCardOpsSrc.slice(
+  timeCardOpsSrc.indexOf("export async function completeJobWithRunningTimeSafetyInTransaction"),
+  timeCardOpsSrc.indexOf("export async function completeJobWithRunningTimeSafety("),
+);
+check(
+  "Web assigned start/report/additional-work lock the Job and recheck exact active membership before writing",
+  fieldJobActionsSrc.includes("startAssignedFieldJob") &&
+    fieldJobActionsSrc.includes("reportAssignedJobProblem") &&
+    fieldJobActionsSrc.includes("requestAssignedJobAdditionalWork") &&
+    startFieldFnSrc.includes("lockTenantOwnedJob") &&
+    startFieldFnSrc.includes("afterInitialRead") &&
+    startFieldFnSrc.includes("exactActiveMembershipHeld") &&
+    startFieldFnSrc.slice(startFieldFnSrc.indexOf("$transaction")).indexOf("exactActiveMembershipHeld") >=
+      0 &&
+    fieldJobOpsSrc.includes("reportAssignedJobProblem") &&
+    fieldJobOpsSrc.includes("requestAssignedJobAdditionalWork") &&
+    !fieldJobOpsSrc.includes("userId"),
+);
+check(
+  "Canonical completion rechecks exact active membership after the Job lock",
+  completeInTxSrc.includes("lockTenantOwnedJob") &&
+    completeInTxSrc.includes("exactActiveMembershipHeld") &&
+    completeInTxSrc.indexOf("lockTenantOwnedJob") <
+      completeInTxSrc.indexOf("exactActiveMembershipHeld") &&
+    completeInTxSrc.indexOf("exactActiveMembershipHeld") <
+      completeInTxSrc.indexOf("evaluateCompleteJob"),
 );
 check(
   "Field job photos authorize through R2, not a File body on the server action",
@@ -379,23 +416,21 @@ async function findAssignedJobLike(jobId, businessId, membershipId) {
   return prisma.job.findFirst({ where: { id: jobId, businessId, assignedMembershipId: membershipId } });
 }
 
-/** Mirrors startAssignedJob() in src/app/actions/field-job.ts, using the REAL evaluateStartJob(). */
-async function simulateStartAssignedJob(jobId, businessId, membershipId) {
-  const job = await findAssignedJobLike(jobId, businessId, membershipId);
-  if (!job) {
-    return { ok: false, reason: "not-assigned" };
-  }
-  const result = evaluateStartJob(job.status);
+/** Uses the REAL assigned-job start write (lock + exact active membership). */
+async function simulateStartAssignedJob(jobId, businessId, membershipId, options) {
+  const result = await startAssignedFieldJob(
+    prisma,
+    { businessId, membershipId },
+    jobId,
+    options,
+  );
   if (!result.ok) {
-    return { ok: false, reason: result.error };
+    return {
+      ok: false,
+      reason: result.error === FIELD_JOB_NOT_ASSIGNED ? "not-assigned" : result.error,
+    };
   }
-  if (result.nextStatus && startJobRequiresCustomerConfirmation(job)) {
-    return { ok: false, reason: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
-  }
-  if (result.nextStatus) {
-    await prisma.job.update({ where: { id: job.id }, data: { status: result.nextStatus } });
-  }
-  return { ok: true, job: await prisma.job.findUnique({ where: { id: job.id } }) };
+  return { ok: true, job: await prisma.job.findUnique({ where: { id: jobId } }) };
 }
 
 /** Mirrors completeAssignedJob() in src/app/actions/field-job.ts, using the REAL completion/time safety. */
@@ -415,28 +450,42 @@ async function simulateCompleteAssignedJob(jobId, businessId, membershipId) {
   return { ok: true, job: await prisma.job.findUnique({ where: { id: job.id } }) };
 }
 
-/** Mirrors reportJobProblem() in src/app/actions/field-job.ts. */
-async function simulateReportJobProblem(jobId, businessId, membershipId, description) {
-  const job = await findAssignedJobLike(jobId, businessId, membershipId);
-  if (!job) {
-    return { ok: false, reason: "not-assigned" };
+/** Uses the REAL assigned-job problem-report write. */
+async function simulateReportJobProblem(jobId, businessId, membershipId, description, options) {
+  const result = await reportAssignedJobProblem(
+    prisma,
+    { businessId, membershipId },
+    { jobId, description, afterInitialRead: options?.afterInitialRead },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      reason: result.error === FIELD_JOB_NOT_ASSIGNED ? "not-assigned" : result.error,
+    };
   }
-  const report = await prisma.jobProblemReport.create({
-    data: { businessId, jobId: job.id, membershipId, description },
-  });
-  return { ok: true, report };
+  return { ok: true, report: result.report };
 }
 
-/** Mirrors requestAdditionalWorkFromField() in src/app/actions/field-job.ts. */
-async function simulateRequestAdditionalWorkFromField(jobId, businessId, membershipId, description) {
-  const job = await findAssignedJobLike(jobId, businessId, membershipId);
-  if (!job) {
-    return { ok: false, reason: "not-assigned" };
+/** Uses the REAL assigned-job additional-work write. */
+async function simulateRequestAdditionalWorkFromField(
+  jobId,
+  businessId,
+  membershipId,
+  description,
+  options,
+) {
+  const result = await requestAssignedJobAdditionalWork(
+    prisma,
+    { businessId, membershipId },
+    { jobId, description, afterInitialRead: options?.afterInitialRead },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      reason: result.error === FIELD_JOB_NOT_ASSIGNED ? "not-assigned" : result.error,
+    };
   }
-  const request = await prisma.additionalWorkRequest.create({
-    data: { businessId, jobId: job.id, description, source: "EMPLOYEE" },
-  });
-  return { ok: true, request };
+  return { ok: true, request: result.request };
 }
 
 let serverProcess;
@@ -799,6 +848,269 @@ try {
     (await prisma.timeEntryAdjustment.count({
       where: { timeEntryId: fieldClock.id, reason: JOB_COMPLETION_TIME_CLOSED_REASON },
     })) === 1,
+  );
+
+  console.log("\nTEST — Deactivated membership cannot mutate assigned Field writes after the initial read");
+  async function createDeactivationWorker(label) {
+    const user = await prisma.user.create({
+      data: {
+        name: `${label} Worker`,
+        email: `${label}-${randomUUID()}@field-deactivate.example`,
+        passwordHash: "x",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: user.id, businessId: businessA.id, role: "MEMBER" },
+    });
+    return { user, membership, access: makeAccess(businessA.id, "MEMBER", membership.id) };
+  }
+  async function deactivateExactMembership(membershipId) {
+    const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+    try {
+      await otherClient.membership.update({
+        where: { id: membershipId },
+        data: { active: false },
+      });
+    } finally {
+      await otherClient.$disconnect();
+    }
+  }
+
+  const deactivateStartWorker = await createDeactivationWorker("start");
+  const deactivateStartJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      assignedMembershipId: deactivateStartWorker.membership.id,
+    },
+  });
+  const deactivateStart = await simulateStartAssignedJob(
+    deactivateStartJob.id,
+    businessA.id,
+    deactivateStartWorker.membership.id,
+    { afterInitialRead: () => deactivateExactMembership(deactivateStartWorker.membership.id) },
+  );
+  const deactivateStartJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "Start after membership deactivation is refused",
+    deactivateStart.ok === false && deactivateStart.reason === "not-assigned",
+  );
+  check(
+    "Refused deactivated start leaves Job SCHEDULED and assigned",
+    deactivateStartJobAfter?.status === "SCHEDULED" &&
+      deactivateStartJobAfter?.assignedMembershipId === deactivateStartWorker.membership.id,
+  );
+
+  const deactivateCompleteWorker = await createDeactivationWorker("complete");
+  const deactivateCompleteJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateCompleteWorker.membership.id,
+    },
+  });
+  const deactivateCompleteTime = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: deactivateCompleteWorker.membership.id,
+      jobId: deactivateCompleteJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      source: "CLOCK",
+      startedAt: new Date(Date.now() - 90_000),
+      endedAt: null,
+    },
+  });
+  const deactivateComplete = await completeJobWithRunningTimeSafety(
+    prisma,
+    {
+      businessId: businessA.id,
+      jobId: deactivateCompleteJob.id,
+      actorMembershipId: deactivateCompleteWorker.membership.id,
+    },
+    { afterInitialRead: () => deactivateExactMembership(deactivateCompleteWorker.membership.id) },
+  );
+  const deactivateCompleteJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateCompleteJob.id, businessId: businessA.id },
+  });
+  const deactivateCompleteTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: deactivateCompleteTime.id, businessId: businessA.id },
+  });
+  check(
+    "Complete after membership deactivation is refused",
+    deactivateComplete.ok === false &&
+      deactivateComplete.error === "That job could not be completed.",
+  );
+  check(
+    "Refused deactivated complete leaves Job and RUNNING time unchanged",
+    deactivateCompleteJobAfter?.status === "IN_PROGRESS" &&
+      deactivateCompleteJobAfter?.assignedMembershipId ===
+        deactivateCompleteWorker.membership.id &&
+      deactivateCompleteTimeAfter?.status === "RUNNING" &&
+      deactivateCompleteTimeAfter?.endedAt === null,
+  );
+
+  const ownerCompletesInactiveAssigneeJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateCompleteWorker.membership.id,
+    },
+  });
+  const ownerCompletesInactive = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: ownerCompletesInactiveAssigneeJob.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const ownerCompletesInactiveAfter = await prisma.job.findFirst({
+    where: { id: ownerCompletesInactiveAssigneeJob.id, businessId: businessA.id },
+  });
+  check(
+    "OWNER can still complete a Job whose assigned MEMBER is inactive",
+    ownerCompletesInactive.ok === true && ownerCompletesInactiveAfter?.status === "COMPLETED",
+  );
+
+  const deactivateReportWorker = await createDeactivationWorker("report");
+  const deactivateReportJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateReportWorker.membership.id,
+    },
+  });
+  const deactivateReport = await simulateReportJobProblem(
+    deactivateReportJob.id,
+    businessA.id,
+    deactivateReportWorker.membership.id,
+    "Should never be stored after deactivation.",
+    { afterInitialRead: () => deactivateExactMembership(deactivateReportWorker.membership.id) },
+  );
+  const deactivateReportCount = await prisma.jobProblemReport.count({
+    where: { jobId: deactivateReportJob.id, businessId: businessA.id },
+  });
+  check(
+    "Report Problem after membership deactivation is refused",
+    deactivateReport.ok === false && deactivateReport.reason === "not-assigned",
+  );
+  check("Refused deactivated report writes no JobProblemReport", deactivateReportCount === 0);
+
+  const deactivateWorkWorker = await createDeactivationWorker("additional");
+  const deactivateWorkJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateWorkWorker.membership.id,
+    },
+  });
+  const deactivateWork = await simulateRequestAdditionalWorkFromField(
+    deactivateWorkJob.id,
+    businessA.id,
+    deactivateWorkWorker.membership.id,
+    "Should never be stored after deactivation.",
+    { afterInitialRead: () => deactivateExactMembership(deactivateWorkWorker.membership.id) },
+  );
+  const deactivateWorkCount = await prisma.additionalWorkRequest.count({
+    where: { jobId: deactivateWorkJob.id, businessId: businessA.id },
+  });
+  check(
+    "Additional-work request after membership deactivation is refused",
+    deactivateWork.ok === false && deactivateWork.reason === "not-assigned",
+  );
+  check("Refused deactivated additional-work writes no AdditionalWorkRequest", deactivateWorkCount === 0);
+
+  const deactivateClockWorker = await createDeactivationWorker("clock");
+  const deactivateClockJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateClockWorker.membership.id,
+    },
+  });
+  let deactivateClockInError = null;
+  try {
+    await clockInTime(
+      prisma,
+      deactivateClockWorker.access,
+      {
+        membershipId: deactivateClockWorker.membership.id,
+        activityType: "JOB",
+        jobId: deactivateClockJob.id,
+      },
+      { afterInitialRead: () => deactivateExactMembership(deactivateClockWorker.membership.id) },
+    );
+  } catch (error) {
+    deactivateClockInError = error;
+  }
+  const deactivateClockInCount = await prisma.timeEntry.count({
+    where: { jobId: deactivateClockJob.id, businessId: businessA.id },
+  });
+  check(
+    "MEMBER clock-in after membership deactivation is refused",
+    deactivateClockInError instanceof ForbiddenError && deactivateClockInCount === 0,
+  );
+
+  const deactivateClockOutWorker = await createDeactivationWorker("clock-out");
+  const deactivateClockOutJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateClockOutWorker.membership.id,
+    },
+  });
+  const deactivateClockOutTime = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: deactivateClockOutWorker.membership.id,
+      jobId: deactivateClockOutJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      source: "CLOCK",
+      startedAt: new Date(Date.now() - 60_000),
+      endedAt: null,
+    },
+  });
+  let deactivateClockOutError = null;
+  try {
+    await clockOutTime(
+      prisma,
+      deactivateClockOutWorker.access,
+      { membershipId: deactivateClockOutWorker.membership.id },
+      { afterInitialRead: () => deactivateExactMembership(deactivateClockOutWorker.membership.id) },
+    );
+  } catch (error) {
+    deactivateClockOutError = error;
+  }
+  const deactivateClockOutTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: deactivateClockOutTime.id, businessId: businessA.id },
+  });
+  check(
+    "MEMBER clock-out after membership deactivation is refused",
+    deactivateClockOutError instanceof ForbiddenError &&
+      deactivateClockOutTimeAfter?.status === "RUNNING" &&
+      deactivateClockOutTimeAfter?.endedAt === null,
   );
 
   console.log("\nTEST 22/23 — Job Photos: assignment-scoped, mirroring the existing private JobPhoto model");
