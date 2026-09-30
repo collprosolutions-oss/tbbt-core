@@ -46,11 +46,14 @@ import {
   recurrenceForecastActive,
 } from "@/lib/recurrence";
 import { formatISODateInTimeZone } from "@/lib/business-timezone";
+import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
   appointmentModeForPosition,
   appointmentPositionOnDay,
+  arrivalWindowMinutesForMode,
   parseBoundedInt,
   parseSkillList,
+  pickupMinutesForJob,
   requireOptionalWorkforceProgression,
   requireWorkforceSkillKey,
   serializeSkillList,
@@ -63,6 +66,7 @@ import {
   loadSchedulingPolicy,
   loadWorkforceMembers,
   loadWorkforceTimeZone,
+  persistLaneArrivalWindows,
 } from "@/lib/workforce-data";
 import {
   conflictAcknowledgement,
@@ -258,8 +262,13 @@ export async function scheduleJob(
   const evaluation = evaluateProposedSchedule({
     start,
     durationMinutes: duration.minutes,
+    pickupMinutes: pickupMinutesForJob(pickupDurationMinutes, policy).minutes,
     settings,
-    existing: others,
+    existing: others.map((row) => ({
+      ...row,
+      pickupDurationMinutes: pickupMinutesForJob(row.pickupDurationMinutes, policy)
+        .minutes,
+    })),
     timeZone,
   });
   const conflicts = detectScheduleConflicts({
@@ -356,36 +365,54 @@ export async function scheduleJob(
       )
     : job.nextOccurrenceAt;
 
-  await prisma.job.update({
-    where: { id: job.id },
-    data: {
-      scheduledAt: start,
-      scheduledDurationMinutes: duration.minutes,
-      pickupDurationMinutes: pickupDurationMinutes || null,
-      requiredSkills,
-      requiredProgression,
-      arrivalWindowMinutes: mode === "WINDOW" ? policy.defaultArrivalWindowMinutes : null,
-      nextOccurrenceAt,
-      ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
-      ...(materialChange
-        ? {
-            appointmentProposalId: proposalId,
-            appointmentConfirmationStatus: "AWAITING_CUSTOMER",
-            appointmentConfirmedAt: null,
-            appointmentConfirmationSource: null,
-            appointmentConfirmedByMembershipId: null,
-            appointmentChangeRequestNote: null,
-            startWithoutConfirmationAt: null,
-            startWithoutConfirmationReason: null,
-            startWithoutConfirmationByMembershipId: null,
-            appointmentNotificationStatus: null,
-            appointmentNotificationError: null,
-            appointmentNotifiedAt: null,
-            appointmentNotifiedForProposalId: null,
-          }
-        : {}),
+  await prisma.$transaction(
+    async (tx) => {
+      await lockBusinessScheduleReservation(tx, access.businessId);
+      await tx.job.update({
+        where: { id: job.id },
+        data: {
+          scheduledAt: start,
+          scheduledDurationMinutes: duration.minutes,
+          pickupDurationMinutes: pickupDurationMinutes || null,
+          requiredSkills,
+          requiredProgression,
+          arrivalWindowMinutes: arrivalWindowMinutesForMode(mode, policy),
+          nextOccurrenceAt,
+          ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
+          ...(materialChange
+            ? {
+                appointmentProposalId: proposalId,
+                appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+                appointmentConfirmedAt: null,
+                appointmentConfirmationSource: null,
+                appointmentConfirmedByMembershipId: null,
+                appointmentChangeRequestNote: null,
+                startWithoutConfirmationAt: null,
+                startWithoutConfirmationReason: null,
+                startWithoutConfirmationByMembershipId: null,
+                appointmentNotificationStatus: null,
+                appointmentNotificationError: null,
+                appointmentNotifiedAt: null,
+                appointmentNotifiedForProposalId: null,
+              }
+            : {}),
+        },
+      });
+      await persistLaneArrivalWindows(tx, {
+        businessId: access.businessId,
+        timeZone,
+        policy,
+        touchedJobIds: [job.id],
+        previousLanes: [
+          {
+            assignedMembershipId: job.assignedMembershipId,
+            scheduledAt: job.scheduledAt,
+          },
+        ],
+      });
     },
-  });
+    { maxWait: 10_000, timeout: 20_000 },
+  );
 
   await emitAndProcessBusinessEvent(prisma, {
     businessId: access.businessId,
@@ -738,10 +765,7 @@ export async function assignJobMember(
   );
 
   if (!membershipId) {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { assignedMembershipId: null },
-    });
+    await writeAssignedMembershipAndLaneWindows(access.businessId, job, null);
     revalidatePath(`/jobs/${job.id}`);
     revalidatePath("/jobs");
     revalidatePath("/field");
@@ -768,14 +792,64 @@ export async function assignJobMember(
     return { error: "Choose a team member from this business." };
   }
 
-  await prisma.job.update({
-    where: { id: job.id },
-    data: { assignedMembershipId: membership.id },
-  });
+  await writeAssignedMembershipAndLaneWindows(access.businessId, job, membership.id);
 
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath("/jobs");
   revalidatePath("/field");
   revalidatePath(`/field/jobs/${job.id}`);
   return {};
+}
+
+async function writeAssignedMembershipAndLaneWindows(
+  businessId: string,
+  job: {
+    id: string;
+    scheduledAt: Date | null;
+    assignedMembershipId: string | null;
+    status: string;
+  },
+  nextAssignedMembershipId: string | null,
+) {
+  await prisma.$transaction(
+    async (tx) => {
+      await lockBusinessScheduleReservation(tx, businessId);
+      await tx.job.update({
+        where: { id: job.id },
+        data: { assignedMembershipId: nextAssignedMembershipId },
+      });
+      await syncAssignedJobArrivalWindows(tx, businessId, job);
+    },
+    { maxWait: 10_000, timeout: 20_000 },
+  );
+}
+
+async function syncAssignedJobArrivalWindows(
+  db: Parameters<typeof persistLaneArrivalWindows>[0],
+  businessId: string,
+  previous: {
+    id: string;
+    scheduledAt: Date | null;
+    assignedMembershipId: string | null;
+  },
+) {
+  if (!previous.scheduledAt) {
+    return;
+  }
+  const [policy, timeZone] = await Promise.all([
+    loadSchedulingPolicy(db, businessId),
+    loadWorkforceTimeZone(db, businessId),
+  ]);
+  await persistLaneArrivalWindows(db, {
+    businessId,
+    timeZone,
+    policy,
+    touchedJobIds: [previous.id],
+    previousLanes: [
+      {
+        assignedMembershipId: previous.assignedMembershipId,
+        scheduledAt: previous.scheduledAt,
+      },
+    ],
+  });
 }

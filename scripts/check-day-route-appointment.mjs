@@ -685,12 +685,15 @@ try {
       ((raceWinnerIsA && raceBAfter?.scheduledAt?.toISOString() === raceAfternoon.toISOString()) ||
         (raceWinnerIsB && raceAAfter?.scheduledAt?.toISOString() === raceMorning.toISOString())),
   );
+  const raceLoserMessage =
+    raceLosses[0]?.status === "rejected"
+      ? dayRouteAppointmentErrorMessage(raceLosses[0].reason, "")
+      : "";
   check(
     "The losing two-job racer is rejected as a conflict and left unchanged",
     raceLosses[0]?.status === "rejected" &&
-      /overlap|conflict|buffer|pickup/i.test(
-        dayRouteAppointmentErrorMessage(raceLosses[0].reason, ""),
-      ) &&
+      (/overlap|conflict|buffer|pickup/i.test(raceLoserMessage) ||
+        raceLoserMessage === DAY_ROUTE_APPOINTMENT_STALE_MESSAGE) &&
       (raceWinnerIsA
         ? raceBAfter?.scheduledAt?.toISOString() === raceAfternoon.toISOString()
         : raceAAfter?.scheduledAt?.toISOString() === raceMorning.toISOString()),

@@ -5,12 +5,20 @@
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
-import { resolveBusinessTimeZone, startOfZonedDay, addZonedCalendarDays } from "@/lib/business-timezone";
+import {
+  addZonedCalendarDays,
+  formatISODateInTimeZone,
+  resolveBusinessTimeZone,
+  startOfZonedDay,
+} from "@/lib/business-timezone";
+import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
   isAssignableFieldMember,
   isWorkforceProgression,
+  laneArrivalWindowUpdates,
   parseSkillList,
   parseWorkforceProgression,
+  scheduleLaneKey,
   schedulingPolicyFromRow,
   type FillInBenchRecord,
   type SchedulingPolicy,
@@ -228,6 +236,147 @@ const CAPACITY_JOB_SELECT = {
   requiredProgression: true,
   customer: { select: { name: true } },
 } as const;
+
+export type ArrivalWindowLaneRef = {
+  assignedMembershipId?: string | null;
+  scheduledAt?: Date | null;
+};
+
+export type PersistLaneArrivalWindowsInput = {
+  businessId: string;
+  timeZone: string;
+  policy: SchedulingPolicy;
+  touchedJobIds: string[];
+  previousLanes?: ArrivalWindowLaneRef[];
+};
+
+const LANE_WINDOW_JOB_SELECT = {
+  id: true,
+  scheduledAt: true,
+  assignedMembershipId: true,
+  status: true,
+  arrivalWindowMinutes: true,
+} as const;
+
+function canOpenTransaction(db: WorkforceClient): db is PrismaClient {
+  return "$transaction" in db && typeof (db as PrismaClient).$transaction === "function";
+}
+
+function laneBoundFrom(
+  assignedMembershipId: string | null | undefined,
+  scheduledAt: Date | null | undefined,
+  timeZone: string,
+) {
+  if (!scheduledAt) {
+    return null;
+  }
+  const dayStart = startOfZonedDay(scheduledAt, timeZone);
+  const dayEnd = addZonedCalendarDays(dayStart, 1, timeZone);
+  return {
+    key: `${scheduleLaneKey(assignedMembershipId)}:${formatISODateInTimeZone(scheduledAt, timeZone)}`,
+    assignedMembershipId: assignedMembershipId ?? null,
+    dayStart,
+    dayEnd,
+  };
+}
+
+/**
+ * Persist first/later arrival windows for the worker-day lanes touched by a
+ * schedule or assignment change. Always re-reads business-scoped Job rows
+ * under the canonical schedule reservation lock. Caller snapshots are used
+ * only to name previous lanes, never as scheduledAt/assignment truth.
+ */
+export async function persistLaneArrivalWindows(
+  db: WorkforceClient,
+  input: PersistLaneArrivalWindowsInput,
+) {
+  if (canOpenTransaction(db)) {
+    return db.$transaction(
+      (tx) => persistLaneArrivalWindowsInTransaction(tx, input),
+      { maxWait: 10_000, timeout: 20_000 },
+    );
+  }
+  return persistLaneArrivalWindowsInTransaction(db, input);
+}
+
+async function persistLaneArrivalWindowsInTransaction(
+  tx: Prisma.TransactionClient,
+  input: PersistLaneArrivalWindowsInput,
+) {
+  await lockBusinessScheduleReservation(tx, input.businessId);
+  const dateKey = (date: Date) => formatISODateInTimeZone(date, input.timeZone);
+  const touchedIds = [...new Set(input.touchedJobIds.filter(Boolean))];
+  const affected = new Map<
+    string,
+    {
+      assignedMembershipId: string | null;
+      dayStart: Date;
+      dayEnd: Date;
+    }
+  >();
+
+  const addLane = (lane: ReturnType<typeof laneBoundFrom>) => {
+    if (!lane || affected.has(lane.key)) {
+      return;
+    }
+    affected.set(lane.key, {
+      assignedMembershipId: lane.assignedMembershipId,
+      dayStart: lane.dayStart,
+      dayEnd: lane.dayEnd,
+    });
+  };
+
+  for (const previous of input.previousLanes ?? []) {
+    addLane(
+      laneBoundFrom(previous.assignedMembershipId, previous.scheduledAt, input.timeZone),
+    );
+  }
+
+  if (touchedIds.length > 0) {
+    const touched = await tx.job.findMany({
+      where: {
+        businessId: input.businessId,
+        id: { in: touchedIds },
+      },
+      select: LANE_WINDOW_JOB_SELECT,
+    });
+    for (const job of touched) {
+      if (job.status === "COMPLETED" || job.status === "CANCELLED") {
+        continue;
+      }
+      addLane(laneBoundFrom(job.assignedMembershipId, job.scheduledAt, input.timeZone));
+    }
+  }
+
+  if (affected.size === 0) {
+    return [];
+  }
+
+  const fresh = await tx.job.findMany({
+    where: {
+      businessId: input.businessId,
+      status: { notIn: ["COMPLETED", "CANCELLED"] },
+      scheduledAt: { not: null },
+      OR: [...affected.values()].map((lane) => ({
+        assignedMembershipId: lane.assignedMembershipId,
+        scheduledAt: { gte: lane.dayStart, lt: lane.dayEnd },
+      })),
+    },
+    select: LANE_WINDOW_JOB_SELECT,
+  });
+  const laneJobs = fresh.filter(
+    (job) => job.scheduledAt && job.status !== "COMPLETED" && job.status !== "CANCELLED",
+  );
+  const updates = laneArrivalWindowUpdates(laneJobs, input.policy, dateKey);
+
+  for (const update of updates) {
+    await tx.job.updateMany({
+      where: { id: update.id, businessId: input.businessId },
+      data: { arrivalWindowMinutes: update.arrivalWindowMinutes },
+    });
+  }
+  return updates;
+}
 
 export async function loadCapacityJobs(
   db: WorkforceClient,

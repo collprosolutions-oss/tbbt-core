@@ -58,6 +58,7 @@ import {
   loadSchedulingPolicy,
   loadWorkforceMembers,
   loadWorkforceTimeZone,
+  persistLaneArrivalWindows,
 } from "@/lib/workforce-data";
 
 type DayRouteDb = PrismaClient | Prisma.TransactionClient;
@@ -354,6 +355,22 @@ export async function changeOwnerDayRouteAppointment(
           throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
         }
 
+        const laneUpdates = await persistLaneArrivalWindows(tx, {
+          businessId: access.businessId,
+          timeZone,
+          policy: evaluation.policy,
+          touchedJobIds: [fresh.id],
+          previousLanes: [
+            {
+              assignedMembershipId: fresh.assignedMembershipId,
+              scheduledAt: fresh.scheduledAt,
+            },
+          ],
+        });
+        const persistedArrivalWindowMinutes =
+          laneUpdates.find((row) => row.id === fresh.id)?.arrivalWindowMinutes ??
+          arrivalWindowMinutes;
+
         if (materialChange) {
           await recordAppointmentEvent(tx, {
             businessId: access.businessId,
@@ -374,7 +391,7 @@ export async function changeOwnerDayRouteAppointment(
           scheduledDurationMinutes: evaluation.durationMinutes,
           previousScheduledAt: fresh.scheduledAt,
           pickupDurationMinutes: evaluation.pickupDurationMinutes,
-          arrivalWindowMinutes,
+          arrivalWindowMinutes: persistedArrivalWindowMinutes,
         };
       },
       { maxWait: 10_000, timeout: 20_000 },

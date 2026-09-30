@@ -3,8 +3,9 @@
  *
  * Job remains the only scheduled-work record (scheduledAt +
  * scheduledDurationMinutes). This module adds working days, working hours,
- * unavailable dates, and the travel/material-pickup buffer on top of that
- * existing window math — it does not introduce a second calendar source.
+ * unavailable dates, the travel/material-pickup buffer, and known pickup
+ * minutes before the appointment on top of that existing window math — it
+ * does not introduce a second calendar source.
  *
  * Pure functions only. Database loading lives in availability-data.ts.
  */
@@ -57,6 +58,7 @@ export type OccupiedJob = {
   id?: string;
   scheduledAt: Date;
   scheduledDurationMinutes: number | null;
+  pickupDurationMinutes?: number | null;
   customerName?: string | null;
   assignedMembershipId?: string | null;
   assignedWorkerName?: string | null;
@@ -251,21 +253,50 @@ export function datesCoveredBySchedule(
   return days;
 }
 
+function occupancyForAvailability(input: {
+  scheduledAt: Date;
+  scheduledDurationMinutes: number | null;
+  pickupMinutes?: number | null;
+}) {
+  const pickup = Math.max(input.pickupMinutes ?? 0, 0);
+  if (pickup <= 0) {
+    return {
+      start: input.scheduledAt,
+      durationMinutes: input.scheduledDurationMinutes,
+    };
+  }
+  return {
+    start: new Date(input.scheduledAt.getTime() - pickup * 60 * 1000),
+    durationMinutes: Math.max(input.scheduledDurationMinutes ?? 0, 0) + pickup,
+  };
+}
+
 export function overlappingOccupiedJobs(input: {
   start: Date;
   durationMinutes: number | null;
   existing: OccupiedJob[];
   bufferMinutes: number;
+  pickupMinutes?: number | null;
 }): OccupiedJob[] {
-  return input.existing.filter((job) =>
-    schedulesOverlapWithBuffer(
-      input.start,
-      input.durationMinutes,
-      job.scheduledAt,
-      job.scheduledDurationMinutes,
+  const proposed = occupancyForAvailability({
+    scheduledAt: input.start,
+    scheduledDurationMinutes: input.durationMinutes,
+    pickupMinutes: input.pickupMinutes,
+  });
+  return input.existing.filter((job) => {
+    const occupied = occupancyForAvailability({
+      scheduledAt: job.scheduledAt,
+      scheduledDurationMinutes: job.scheduledDurationMinutes,
+      pickupMinutes: job.pickupDurationMinutes,
+    });
+    return schedulesOverlapWithBuffer(
+      proposed.start,
+      proposed.durationMinutes,
+      occupied.start,
+      occupied.durationMinutes,
       input.bufferMinutes,
-    ),
-  );
+    );
+  });
 }
 
 export function conflictingJobHref(jobId: string): string {
@@ -335,6 +366,7 @@ export function scheduleConflictFacts(
 export function evaluateProposedSchedule(input: {
   start: Date;
   durationMinutes: number | null;
+  pickupMinutes?: number | null;
   settings: AvailabilitySettings;
   existing: OccupiedJob[];
   timeZone: string;
@@ -345,6 +377,7 @@ export function evaluateProposedSchedule(input: {
     durationMinutes,
     existing,
     bufferMinutes: settings.schedulingBufferMinutes,
+    pickupMinutes: input.pickupMinutes,
   });
   const overlapJob = overlaps[0] ?? null;
   const covered = datesCoveredBySchedule(start, durationMinutes, timeZone);
@@ -524,14 +557,13 @@ function slotOverlapsExisting(
   settings: AvailabilitySettings,
   existing: OccupiedJob[],
 ): boolean {
-  return existing.some((job) =>
-    schedulesOverlapWithBuffer(
+  return (
+    overlappingOccupiedJobs({
       start,
       durationMinutes,
-      job.scheduledAt,
-      job.scheduledDurationMinutes,
-      settings.schedulingBufferMinutes,
-    ),
+      existing,
+      bufferMinutes: settings.schedulingBufferMinutes,
+    }).length > 0
   );
 }
 

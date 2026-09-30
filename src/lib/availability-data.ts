@@ -147,6 +147,7 @@ export async function loadOccupiedJobs(
       id: true,
       scheduledAt: true,
       scheduledDurationMinutes: true,
+      pickupDurationMinutes: true,
       customer: { select: { name: true } },
     },
     orderBy: { scheduledAt: "asc" },
@@ -158,6 +159,7 @@ export async function loadOccupiedJobs(
             id: job.id,
             scheduledAt: job.scheduledAt,
             scheduledDurationMinutes: job.scheduledDurationMinutes,
+            pickupDurationMinutes: job.pickupDurationMinutes,
             customerName: job.customer?.name ?? null,
           },
         ]
