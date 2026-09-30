@@ -42,6 +42,7 @@ export {
 } from "@/lib/customer-messaging/opt-in";
 export {
   applyInboundConsentEvent,
+  claimedAtFromCuid,
   inboundConsentTestHooks,
 } from "@/lib/customer-messaging/inbound";
 export {

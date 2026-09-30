@@ -27,6 +27,16 @@ function isPendingWebhookProcessedAt(value: Date | null | undefined) {
   return !value || value.getTime() === 0;
 }
 
+/** Prisma `@default(cuid())` encodes claim time in the first 8 base36 chars. */
+export function claimedAtFromCuid(id: string): Date | null {
+  if (typeof id !== "string" || id[0] !== "c" || id.length < 10) return null;
+  const ms = parseInt(id.slice(1, 9), 36);
+  if (!Number.isFinite(ms) || ms < 1_000_000_000_000 || ms > Date.now() + 120_000) {
+    return null;
+  }
+  return new Date(ms);
+}
+
 export type InboundConsentResult = {
   applied: boolean;
   reason: string;
@@ -76,23 +86,6 @@ export async function rememberCustomerMessagingWebhookEvent(
   return rememberWebhookEvent(db, input);
 }
 
-async function isCompletedWebhookEvent(
-  db: Db,
-  input: { provider: string; providerEventId: string; eventKind: "delivery" | "inbound" },
-) {
-  const row = await db.customerMessagingWebhookEvent.findUnique({
-    where: {
-      provider_providerEventId_eventKind: {
-        provider: input.provider,
-        providerEventId: input.providerEventId,
-        eventKind: input.eventKind,
-      },
-    },
-    select: { processedAt: true },
-  });
-  return Boolean(row && !isPendingWebhookProcessedAt(row.processedAt));
-}
-
 async function completeWebhookEvent(
   db: Db,
   input: { provider: string; providerEventId: string; eventKind: "delivery" | "inbound" },
@@ -135,12 +128,35 @@ async function applyOwnerStudioReminderInbound(
   return recordOwnerStudioReminderStop(db, input.businessId, input.fromDigits);
 }
 
+type LockedInboundOutcome =
+  | { type: "ok"; result: InboundConsentResult }
+  | { type: "fail"; error: unknown };
+
 export async function applyInboundConsentEvent(
   db: Db,
   inbound: InboundSmsEvent,
 ): Promise<InboundConsentResult> {
   await ensureCustomerMessagingSchema(db);
+  const lockKey = `tbbt-inbound:${inbound.provider}:${inbound.providerEventId}`;
+  const client = db as PrismaClient;
+  const outcome =
+    typeof client.$transaction === "function"
+      ? await client.$transaction(
+          async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+            return applyInboundConsentEventLocked(tx, inbound);
+          },
+          { timeout: 20_000, maxWait: 20_000 },
+        )
+      : await applyInboundConsentEventLocked(db, inbound);
+  if (outcome.type === "fail") throw outcome.error;
+  return outcome.result;
+}
 
+async function applyInboundConsentEventLocked(
+  db: Db,
+  inbound: InboundSmsEvent,
+): Promise<LockedInboundOutcome> {
   const claimIdentity = {
     provider: inbound.provider,
     providerEventId: inbound.providerEventId,
@@ -151,7 +167,7 @@ export async function applyInboundConsentEvent(
   if (!toDigits) {
     await rememberWebhookEvent(db, claimIdentity);
     await completeWebhookEvent(db, claimIdentity);
-    return { applied: false, reason: "unknown_tenant" };
+    return { type: "ok", result: { applied: false, reason: "unknown_tenant" } };
   }
 
   const business = await db.business.findFirst({
@@ -161,27 +177,37 @@ export async function applyInboundConsentEvent(
   if (!business) {
     await rememberWebhookEvent(db, claimIdentity);
     await completeWebhookEvent(db, claimIdentity);
-    return { applied: false, reason: "unknown_tenant" };
+    return { type: "ok", result: { applied: false, reason: "unknown_tenant" } };
   }
 
   // Claim is identity-only until processedAt leaves the pending sentinel.
+  // Look up first so a duplicate insert cannot abort this transaction.
   // A leftover pending row is not completion and must stay retryable.
   // A completed row must not re-apply (STOP replay after START).
-  const claim = await rememberWebhookEvent(db, {
-    ...claimIdentity,
-    businessId: business.id,
+  const existingClaim = await db.customerMessagingWebhookEvent.findUnique({
+    where: { provider_providerEventId_eventKind: claimIdentity },
+    select: { processedAt: true },
   });
-  if (claim === "duplicate" && (await isCompletedWebhookEvent(db, claimIdentity))) {
-    return { applied: true, reason: "idempotent", businessId: business.id };
+  if (existingClaim && !isPendingWebhookProcessedAt(existingClaim.processedAt)) {
+    return {
+      type: "ok",
+      result: { applied: true, reason: "idempotent", businessId: business.id },
+    };
+  }
+  if (!existingClaim) {
+    await rememberWebhookEvent(db, {
+      ...claimIdentity,
+      businessId: business.id,
+    });
   }
   if (inboundConsentTestHooks.afterClaim) {
     await inboundConsentTestHooks.afterClaim();
   }
 
   try {
-    const result = await applyRecordedInboundConsent(db, inbound, business.id);
+    const result = await applyRecordedInboundConsent(db, inbound, business.id, claimIdentity);
     await completeWebhookEvent(db, claimIdentity);
-    return result;
+    return { type: "ok", result };
   } catch (error) {
     await abandonRecordedInboundWebhook(db, {
       businessId: business.id,
@@ -189,14 +215,28 @@ export async function applyInboundConsentEvent(
       providerEventId: inbound.providerEventId,
       error,
     });
-    throw error;
+    return { type: "fail", error };
   }
+}
+
+async function inboundEventClaimedAt(
+  db: Db,
+  identity: { provider: string; providerEventId: string; eventKind: "inbound" },
+): Promise<Date | null> {
+  const row = await db.customerMessagingWebhookEvent.findUnique({
+    where: {
+      provider_providerEventId_eventKind: identity,
+    },
+    select: { id: true },
+  });
+  return row ? claimedAtFromCuid(row.id) : null;
 }
 
 async function applyRecordedInboundConsent(
   db: Db,
   inbound: InboundSmsEvent,
   businessId: string,
+  claimIdentity: { provider: string; providerEventId: string; eventKind: "inbound" },
 ): Promise<InboundConsentResult> {
   if (!inbound.optOutType) {
     return { applied: false, reason: "ignored_inbound", businessId };
@@ -222,7 +262,7 @@ async function applyRecordedInboundConsent(
 
   const candidates = await db.customer.findMany({
     where: { businessId, phone: { not: null } },
-    select: { id: true, phone: true, smsConsentStatus: true },
+    select: { id: true, phone: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
   });
   const matches = candidates.filter(
     (row) => normalizePhone(row.phone) === fromDigits,
@@ -235,7 +275,11 @@ async function applyRecordedInboundConsent(
     };
   }
 
-  let customer: { id: string; smsConsentStatus: string } | null = matches[0] ?? null;
+  let customer: {
+    id: string;
+    smsConsentStatus: string;
+    smsConsentUpdatedAt?: Date | null;
+  } | null = matches[0] ?? null;
   if (!customer && inbound.optOutType === "STOP") {
     const absorbed = await findUnambiguousSurvivorForAbsorbedPhone(
       db,
@@ -266,6 +310,10 @@ async function applyRecordedInboundConsent(
 
   if (inbound.optOutType === "STOP") {
     if (customer.smsConsentStatus === "REVOKED") {
+      await db.customer.updateMany({
+        where: { id: customer.id, businessId, smsConsentStatus: "REVOKED" },
+        data: { smsConsentUpdatedAt: new Date() },
+      });
       return {
         applied: true,
         reason: "idempotent",
@@ -291,6 +339,20 @@ async function applyRecordedInboundConsent(
       businessId,
       customerId: customer.id,
       consentStatus: customer.smsConsentStatus,
+    };
+  }
+  const claimedAt = await inboundEventClaimedAt(db, claimIdentity);
+  if (
+    claimedAt &&
+    customer.smsConsentUpdatedAt &&
+    customer.smsConsentUpdatedAt.getTime() >= claimedAt.getTime()
+  ) {
+    return {
+      applied: false,
+      reason: "stale_event",
+      businessId,
+      customerId: customer.id,
+      consentStatus: "REVOKED",
     };
   }
   return applyConsentStatus(db, {
@@ -324,9 +386,9 @@ async function abandonRecordedInboundWebhook(
     if (inboundConsentTestHooks.beforeCleanup) {
       await inboundConsentTestHooks.beforeCleanup();
     }
-    await db.customerMessagingWebhookEvent.deleteMany({
-      where: { provider: input.provider, providerEventId: input.providerEventId },
-    });
+    // Leave the pending claim in place so a retry keeps the original event
+    // identity. Deleting would mint a new claim time and let a stale START
+    // win over a newer STOP.
   } catch (cleanupError) {
     console.error("Failed to delete inbound webhook after consent write error", cleanupError);
   }

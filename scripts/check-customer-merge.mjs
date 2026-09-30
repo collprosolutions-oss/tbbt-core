@@ -404,7 +404,8 @@ try {
       inboundSrc.includes("INBOUND_WEBHOOK_PENDING_AT") &&
       inboundSrc.includes('smsConsentStatus: "REVOKED"') &&
       inboundSrc.includes("start_not_applicable") &&
-      inboundSrc.includes("customerMessagingWebhookEvent.deleteMany") &&
+      inboundSrc.includes("stale_event") &&
+      inboundSrc.includes("pg_advisory_xact_lock") &&
       inboundSrc.includes("console.error") &&
       inboundSrc.includes("error: input.error") &&
       inboundSrc.includes("applyRecordedInboundConsent") &&
@@ -1765,7 +1766,7 @@ try {
   );
   await assertNoOrphans(startAbsorb.id, "Merge vs START");
 
-  console.log("\nERROR — failed consent write deletes the webhook row");
+  console.log("\nERROR — failed consent write leaves a pending webhook row");
   const failPhone = "2395550184";
   await prisma.customer.create({
     data: {
@@ -1776,29 +1777,12 @@ try {
     },
   });
   const failEventId = `SM_consent_fail_${randomUUID()}`;
-  const failClient = createTestClient();
   const forcedWriteError = new Error("forced consent write failure");
-  const failDb = new Proxy(failClient, {
-    get(target, prop, receiver) {
-      if (prop === "customer") {
-        return new Proxy(target.customer, {
-          get(customer, key, customerReceiver) {
-            if (key === "updateMany") {
-              return async () => {
-                throw forcedWriteError;
-              };
-            }
-            const value = Reflect.get(customer, key, customerReceiver);
-            return typeof value === "function" ? value.bind(customer) : value;
-          },
-        });
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw forcedWriteError;
+  };
   const failSettled = await Promise.allSettled([
-    applyInboundConsentEvent(failDb, {
+    applyInboundConsentEvent(prisma, {
       provider: "twilio",
       providerEventId: failEventId,
       from: `+1${failPhone}`,
@@ -1807,16 +1791,16 @@ try {
       optOutType: "STOP",
     }),
   ]);
-  await disconnectClient(failClient);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
   check(
     "Failed consent write rejects applyInboundConsentEvent",
     failSettled[0].status === "rejected" && failSettled[0].reason === forcedWriteError,
   );
   check(
-    "Failed consent write deletes the webhook row",
+    "Failed consent write leaves the pending webhook row retryable",
     (await prisma.customerMessagingWebhookEvent.count({
       where: { provider: "twilio", providerEventId: failEventId },
-    })) === 0,
+    })) === 1,
   );
 
   console.log("\nPOST-MERGE — STOP from the absorbed customer's former phone");
@@ -2255,6 +2239,66 @@ try {
     leftoverThird.applied === true &&
       leftoverThird.reason === "idempotent" &&
       (await prisma.customer.findUnique({ where: { id: leftoverCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nERROR — stuck START cannot resurrect consent after a newer STOP");
+  const staleStartPhone = "2395550228";
+  const staleStartCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Stale Start Merge",
+      phone: staleStartPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const staleStartEventId = `SM_stale_start_${randomUUID()}`;
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw new Error("forced stale START write failure");
+  };
+  const staleStartFirst = await Promise.allSettled([
+    applyInboundConsentEvent(prisma, {
+      provider: "twilio",
+      providerEventId: staleStartEventId,
+      from: `+1${staleStartPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  check(
+    "Stuck START rejects and stays REVOKED",
+    staleStartFirst[0].status === "rejected" &&
+      (await prisma.customer.findUnique({ where: { id: staleStartCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+  const newerStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_newer_stop_${randomUUID()}`,
+    from: `+1${staleStartPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "Newer STOP after stuck START is applied",
+    newerStop.applied === true && newerStop.consentStatus === "REVOKED",
+  );
+  const staleStartRetry = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: staleStartEventId,
+    from: `+1${staleStartPhone}`,
+    to: `+1${formerTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  check(
+    "Older START retry after newer STOP stays REVOKED",
+    staleStartRetry.applied === false &&
+      staleStartRetry.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: staleStartCustomer.id } }))?.smsConsentStatus ===
         "REVOKED",
   );
 } catch (error) {
