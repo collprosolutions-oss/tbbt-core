@@ -16,7 +16,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
  */
 export const inboundConsentTestHooks: {
   afterClaim?: () => Promise<void> | void;
-  beforeConsentWrite?: () => Promise<void> | void;
+  afterCustomerLock?: () => Promise<void> | void;
+  beforeConsentWrite?: (ctx?: { db: Db }) => Promise<void> | void;
   beforeCleanup?: () => Promise<void> | void;
 } = {};
 
@@ -27,7 +28,11 @@ function isPendingWebhookProcessedAt(value: Date | null | undefined) {
   return !value || value.getTime() === 0;
 }
 
-/** Prisma `@default(cuid())` encodes claim time in the first 8 base36 chars. */
+/**
+ * Prisma `@default(cuid())` encodes insert time in the first 8 base36 chars.
+ * CustomerMessagingWebhookEvent has no createdAt; pending rows use
+ * processedAt=epoch, so the committed cuid is the durable claim age.
+ */
 export function claimedAtFromCuid(id: string): Date | null {
   if (typeof id !== "string" || id[0] !== "c" || id.length < 10) return null;
   const ms = parseInt(id.slice(1, 9), 36);
@@ -44,6 +49,30 @@ export type InboundConsentResult = {
   customerId?: string;
   consentStatus?: string;
 };
+
+type ClaimIdentity = {
+  provider: string;
+  providerEventId: string;
+  eventKind: "inbound";
+};
+
+function inboundEventLockKey(inbound: Pick<InboundSmsEvent, "provider" | "providerEventId">) {
+  return `tbbt-inbound:${inbound.provider}:${inbound.providerEventId}`;
+}
+
+function inboundConsentCustomerLockKey(businessId: string, customerId: string) {
+  return `tbbt-consent:${businessId}:${customerId}`;
+}
+
+async function lockInboundEvent(db: Db, inbound: Pick<InboundSmsEvent, "provider" | "providerEventId">) {
+  const lockKey = inboundEventLockKey(inbound);
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+}
+
+async function lockInboundConsentCustomer(db: Db, businessId: string, customerId: string) {
+  const lockKey = inboundConsentCustomerLockKey(businessId, customerId);
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+}
 
 async function rememberWebhookEvent(
   db: Db,
@@ -101,6 +130,16 @@ async function completeWebhookEvent(
   });
 }
 
+async function loadInboundClaim(
+  db: Db,
+  identity: ClaimIdentity,
+): Promise<{ id: string; processedAt: Date; businessId: string | null } | null> {
+  return db.customerMessagingWebhookEvent.findUnique({
+    where: { provider_providerEventId_eventKind: identity },
+    select: { id: true, processedAt: true, businessId: true },
+  });
+}
+
 function receivingNumberDigits(value: string) {
   return normalizePhone(value);
 }
@@ -128,46 +167,34 @@ async function applyOwnerStudioReminderInbound(
   return recordOwnerStudioReminderStop(db, input.businessId, input.fromDigits);
 }
 
-type LockedInboundOutcome =
-  | { type: "ok"; result: InboundConsentResult }
-  | { type: "fail"; error: unknown };
+type PreparedInbound =
+  | { status: "done"; result: InboundConsentResult }
+  | {
+      status: "pending";
+      businessId: string;
+      claimIdentity: ClaimIdentity;
+      claimedAt: Date | null;
+    };
 
-export async function applyInboundConsentEvent(
+/**
+ * Persist the pending claim in its own autocommit so a later consent
+ * transaction rollback cannot erase the original event age.
+ */
+async function prepareInboundConsentClaim(
   db: Db,
   inbound: InboundSmsEvent,
-): Promise<InboundConsentResult> {
-  await ensureCustomerMessagingSchema(db);
-  const lockKey = `tbbt-inbound:${inbound.provider}:${inbound.providerEventId}`;
-  const client = db as PrismaClient;
-  const outcome =
-    typeof client.$transaction === "function"
-      ? await client.$transaction(
-          async (tx) => {
-            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
-            return applyInboundConsentEventLocked(tx, inbound);
-          },
-          { timeout: 20_000, maxWait: 20_000 },
-        )
-      : await applyInboundConsentEventLocked(db, inbound);
-  if (outcome.type === "fail") throw outcome.error;
-  return outcome.result;
-}
-
-async function applyInboundConsentEventLocked(
-  db: Db,
-  inbound: InboundSmsEvent,
-): Promise<LockedInboundOutcome> {
-  const claimIdentity = {
+): Promise<PreparedInbound> {
+  const claimIdentity: ClaimIdentity = {
     provider: inbound.provider,
     providerEventId: inbound.providerEventId,
-    eventKind: "inbound" as const,
+    eventKind: "inbound",
   };
 
   const toDigits = receivingNumberDigits(inbound.to);
   if (!toDigits) {
     await rememberWebhookEvent(db, claimIdentity);
     await completeWebhookEvent(db, claimIdentity);
-    return { type: "ok", result: { applied: false, reason: "unknown_tenant" } };
+    return { status: "done", result: { applied: false, reason: "unknown_tenant" } };
   }
 
   const business = await db.business.findFirst({
@@ -177,20 +204,17 @@ async function applyInboundConsentEventLocked(
   if (!business) {
     await rememberWebhookEvent(db, claimIdentity);
     await completeWebhookEvent(db, claimIdentity);
-    return { type: "ok", result: { applied: false, reason: "unknown_tenant" } };
+    return { status: "done", result: { applied: false, reason: "unknown_tenant" } };
   }
 
   // Claim is identity-only until processedAt leaves the pending sentinel.
   // Look up first so a duplicate insert cannot abort this transaction.
   // A leftover pending row is not completion and must stay retryable.
   // A completed row must not re-apply (STOP replay after START).
-  const existingClaim = await db.customerMessagingWebhookEvent.findUnique({
-    where: { provider_providerEventId_eventKind: claimIdentity },
-    select: { processedAt: true },
-  });
+  const existingClaim = await loadInboundClaim(db, claimIdentity);
   if (existingClaim && !isPendingWebhookProcessedAt(existingClaim.processedAt)) {
     return {
-      type: "ok",
+      status: "done",
       result: { applied: true, reason: "idempotent", businessId: business.id },
     };
   }
@@ -200,43 +224,76 @@ async function applyInboundConsentEventLocked(
       businessId: business.id,
     });
   }
+  const claim = await loadInboundClaim(db, claimIdentity);
+  if (claim && !isPendingWebhookProcessedAt(claim.processedAt)) {
+    return {
+      status: "done",
+      result: { applied: true, reason: "idempotent", businessId: business.id },
+    };
+  }
+  return {
+    status: "pending",
+    businessId: business.id,
+    claimIdentity,
+    claimedAt: claim ? claimedAtFromCuid(claim.id) : null,
+  };
+}
+
+export async function applyInboundConsentEvent(
+  db: Db,
+  inbound: InboundSmsEvent,
+): Promise<InboundConsentResult> {
+  await ensureCustomerMessagingSchema(db);
+  const prepared = await prepareInboundConsentClaim(db, inbound);
+  if (prepared.status === "done") return prepared.result;
+
   if (inboundConsentTestHooks.afterClaim) {
     await inboundConsentTestHooks.afterClaim();
   }
 
+  const client = db as PrismaClient;
+  const runConsent = async (tx: Db): Promise<InboundConsentResult> => {
+    await lockInboundEvent(tx, inbound);
+    const claim = await loadInboundClaim(tx, prepared.claimIdentity);
+    if (claim && !isPendingWebhookProcessedAt(claim.processedAt)) {
+      return { applied: true, reason: "idempotent", businessId: prepared.businessId };
+    }
+    const result = await applyRecordedInboundConsent(
+      tx,
+      inbound,
+      prepared.businessId,
+      prepared.claimIdentity,
+      prepared.claimedAt ?? (claim ? claimedAtFromCuid(claim.id) : null),
+    );
+    await completeWebhookEvent(tx, prepared.claimIdentity);
+    return result;
+  };
+
   try {
-    const result = await applyRecordedInboundConsent(db, inbound, business.id, claimIdentity);
-    await completeWebhookEvent(db, claimIdentity);
-    return { type: "ok", result };
+    if (typeof client.$transaction === "function") {
+      return await client.$transaction((tx) => runConsent(tx), {
+        timeout: 20_000,
+        maxWait: 20_000,
+      });
+    }
+    return await runConsent(db);
   } catch (error) {
     await abandonRecordedInboundWebhook(db, {
-      businessId: business.id,
+      businessId: prepared.businessId,
       provider: inbound.provider,
       providerEventId: inbound.providerEventId,
       error,
     });
-    return { type: "fail", error };
+    throw error;
   }
-}
-
-async function inboundEventClaimedAt(
-  db: Db,
-  identity: { provider: string; providerEventId: string; eventKind: "inbound" },
-): Promise<Date | null> {
-  const row = await db.customerMessagingWebhookEvent.findUnique({
-    where: {
-      provider_providerEventId_eventKind: identity,
-    },
-    select: { id: true },
-  });
-  return row ? claimedAtFromCuid(row.id) : null;
 }
 
 async function applyRecordedInboundConsent(
   db: Db,
   inbound: InboundSmsEvent,
   businessId: string,
-  claimIdentity: { provider: string; providerEventId: string; eventKind: "inbound" },
+  claimIdentity: ClaimIdentity,
+  claimedAt: Date | null,
 ): Promise<InboundConsentResult> {
   if (!inbound.optOutType) {
     return { applied: false, reason: "ignored_inbound", businessId };
@@ -308,8 +365,31 @@ async function applyRecordedInboundConsent(
     };
   }
 
+  // Pause here so a newer STOP can commit before this event's consent write.
+  // The customer lock is taken after this hook; the GRANT write is still
+  // conditional on smsConsentUpdatedAt < claimedAt.
+  if (inboundConsentTestHooks.beforeConsentWrite) {
+    await inboundConsentTestHooks.beforeConsentWrite({ db });
+  }
+
+  await lockInboundConsentCustomer(db, businessId, customer.id);
+  if (inboundConsentTestHooks.afterCustomerLock) {
+    await inboundConsentTestHooks.afterCustomerLock();
+  }
+
+  const claimAfterLock = await loadInboundClaim(db, claimIdentity);
+  if (claimAfterLock && !isPendingWebhookProcessedAt(claimAfterLock.processedAt)) {
+    return { applied: true, reason: "idempotent", businessId, customerId: customer.id };
+  }
+
+  const live = await db.customer.findFirst({
+    where: { id: customer.id, businessId },
+    select: { id: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
+  });
+  if (live) customer = live;
+
   if (inbound.optOutType === "STOP") {
-    if (customer.smsConsentStatus === "REVOKED") {
+    if (customer && customer.smsConsentStatus === "REVOKED") {
       await db.customer.updateMany({
         where: { id: customer.id, businessId, smsConsentStatus: "REVOKED" },
         data: { smsConsentUpdatedAt: new Date() },
@@ -332,27 +412,13 @@ async function applyRecordedInboundConsent(
   }
 
   // START is recognized Twilio Advanced Opt-Out re-opt-in only from REVOKED.
-  if (customer.smsConsentStatus !== "REVOKED") {
+  if (!customer || customer.smsConsentStatus !== "REVOKED") {
     return {
       applied: false,
       reason: "start_not_applicable",
       businessId,
-      customerId: customer.id,
-      consentStatus: customer.smsConsentStatus,
-    };
-  }
-  const claimedAt = await inboundEventClaimedAt(db, claimIdentity);
-  if (
-    claimedAt &&
-    customer.smsConsentUpdatedAt &&
-    customer.smsConsentUpdatedAt.getTime() >= claimedAt.getTime()
-  ) {
-    return {
-      applied: false,
-      reason: "stale_event",
-      businessId,
-      customerId: customer.id,
-      consentStatus: "REVOKED",
+      customerId: customer?.id,
+      consentStatus: customer?.smsConsentStatus,
     };
   }
   return applyConsentStatus(db, {
@@ -361,7 +427,21 @@ async function applyRecordedInboundConsent(
     fromDigits,
     status: "GRANTED",
     reason: "granted",
+    claimedAt,
   });
+}
+
+function grantWhere(input: {
+  id: string;
+  businessId: string;
+  claimedAt: Date;
+}): Prisma.CustomerWhereInput {
+  return {
+    id: input.id,
+    businessId: input.businessId,
+    smsConsentStatus: "REVOKED",
+    OR: [{ smsConsentUpdatedAt: null }, { smsConsentUpdatedAt: { lt: input.claimedAt } }],
+  };
 }
 
 async function abandonRecordedInboundWebhook(
@@ -478,30 +558,69 @@ async function applyConsentStatus(
     fromDigits: string;
     status: "REVOKED" | "GRANTED";
     reason: "revoked" | "granted";
+    claimedAt?: Date | null;
   },
 ): Promise<InboundConsentResult> {
-  if (inboundConsentTestHooks.beforeConsentWrite) {
-    await inboundConsentTestHooks.beforeConsentWrite();
-  }
-  const firstWhere =
-    input.status === "GRANTED"
-      ? { id: input.customerId, businessId: input.businessId, smsConsentStatus: "REVOKED" }
-      : { id: input.customerId, businessId: input.businessId };
-  const first = await db.customer.updateMany({
-    where: firstWhere,
-    data: {
-      smsConsentStatus: input.status,
-      smsConsentUpdatedAt: new Date(),
-    },
-  });
-  if (first.count > 0) {
-    return {
-      applied: true,
-      reason: input.reason,
-      businessId: input.businessId,
-      customerId: input.customerId,
-      consentStatus: input.status,
-    };
+  if (input.status === "GRANTED") {
+    if (!input.claimedAt) {
+      return {
+        applied: false,
+        reason: "stale_event",
+        businessId: input.businessId,
+        customerId: input.customerId,
+        consentStatus: "REVOKED",
+      };
+    }
+    const first = await db.customer.updateMany({
+      where: grantWhere({
+        id: input.customerId,
+        businessId: input.businessId,
+        claimedAt: input.claimedAt,
+      }),
+      data: {
+        smsConsentStatus: "GRANTED",
+        smsConsentUpdatedAt: new Date(),
+      },
+    });
+    if (first.count > 0) {
+      return {
+        applied: true,
+        reason: "granted",
+        businessId: input.businessId,
+        customerId: input.customerId,
+        consentStatus: "GRANTED",
+      };
+    }
+    const stillRevoked = await db.customer.findFirst({
+      where: { id: input.customerId, businessId: input.businessId },
+      select: { smsConsentStatus: true },
+    });
+    if (stillRevoked?.smsConsentStatus === "REVOKED") {
+      return {
+        applied: false,
+        reason: "stale_event",
+        businessId: input.businessId,
+        customerId: input.customerId,
+        consentStatus: "REVOKED",
+      };
+    }
+  } else {
+    const first = await db.customer.updateMany({
+      where: { id: input.customerId, businessId: input.businessId },
+      data: {
+        smsConsentStatus: "REVOKED",
+        smsConsentUpdatedAt: new Date(),
+      },
+    });
+    if (first.count > 0) {
+      return {
+        applied: true,
+        reason: input.reason,
+        businessId: input.businessId,
+        customerId: input.customerId,
+        consentStatus: "REVOKED",
+      };
+    }
   }
 
   let currentId = input.customerId;
@@ -522,7 +641,7 @@ async function applyConsentStatus(
     if (input.status === "GRANTED") {
       const survivor = await db.customer.findFirst({
         where: { id: currentId, businessId: input.businessId },
-        select: { id: true, phone: true, smsConsentStatus: true },
+        select: { id: true, phone: true, smsConsentStatus: true, smsConsentUpdatedAt: true },
       });
       if (
         !survivor ||
@@ -537,8 +656,21 @@ async function applyConsentStatus(
           consentStatus: survivor?.smsConsentStatus,
         };
       }
+      if (!input.claimedAt) {
+        return {
+          applied: false,
+          reason: "stale_event",
+          businessId: input.businessId,
+          customerId: currentId,
+          consentStatus: "REVOKED",
+        };
+      }
       const startHop = await db.customer.updateMany({
-        where: { id: currentId, businessId: input.businessId, smsConsentStatus: "REVOKED" },
+        where: grantWhere({
+          id: currentId,
+          businessId: input.businessId,
+          claimedAt: input.claimedAt,
+        }),
         data: {
           smsConsentStatus: "GRANTED",
           smsConsentUpdatedAt: new Date(),
@@ -551,6 +683,15 @@ async function applyConsentStatus(
           businessId: input.businessId,
           customerId: currentId,
           consentStatus: "GRANTED",
+        };
+      }
+      if (survivor.smsConsentStatus === "REVOKED") {
+        return {
+          applied: false,
+          reason: "stale_event",
+          businessId: input.businessId,
+          customerId: currentId,
+          consentStatus: "REVOKED",
         };
       }
       continue;

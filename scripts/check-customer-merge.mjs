@@ -62,7 +62,7 @@ const {
 } = await import("@/lib/customer-merge-ops");
 const { authorizeManagedUpload } = await import("@/lib/business-storage/service");
 const { StorageAccessError } = await import("@/lib/business-storage/types");
-const { applyInboundConsentEvent, inboundConsentTestHooks } = await import(
+const { applyInboundConsentEvent, claimedAtFromCuid, inboundConsentTestHooks } = await import(
   "@/lib/customer-messaging/inbound"
 );
 
@@ -406,6 +406,9 @@ try {
       inboundSrc.includes("start_not_applicable") &&
       inboundSrc.includes("stale_event") &&
       inboundSrc.includes("pg_advisory_xact_lock") &&
+      inboundSrc.includes("tbbt-consent:") &&
+      inboundSrc.includes("prepareInboundConsentClaim") &&
+      inboundSrc.includes("smsConsentUpdatedAt: { lt:") &&
       inboundSrc.includes("console.error") &&
       inboundSrc.includes("error: input.error") &&
       inboundSrc.includes("applyRecordedInboundConsent") &&
@@ -2301,11 +2304,156 @@ try {
       (await prisma.customer.findUnique({ where: { id: staleStartCustomer.id } }))?.smsConsentStatus ===
         "REVOKED",
   );
+
+  console.log("\nERROR — overlapping newer STOP wins over in-flight START");
+  const overlapPhone = "2395550229";
+  const overlapCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Overlap Merge Start",
+      phone: overlapPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  let overlapWrites = 0;
+  let overlapStartAtWrite;
+  const overlapStartHeld = new Promise((resolve) => {
+    overlapStartAtWrite = resolve;
+  });
+  let releaseOverlapStart;
+  const overlapStartHold = new Promise((resolve) => {
+    releaseOverlapStart = resolve;
+  });
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    overlapWrites += 1;
+    if (overlapWrites === 1) {
+      overlapStartAtWrite();
+      await withTimeout(overlapStartHold, BARRIER_WAIT_MS, "merge overlap START hold");
+    }
+  };
+  const overlapStartClient = createTestClient();
+  const overlapStopClient = createTestClient();
+  const overlapStartSettled = Promise.allSettled([
+    applyInboundConsentEvent(overlapStartClient, {
+      provider: "twilio",
+      providerEventId: `SM_merge_overlap_start_${randomUUID()}`,
+      from: `+1${overlapPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  await withTimeout(overlapStartHeld, BARRIER_WAIT_MS, "merge overlap START reached write");
+  const overlapStop = await applyInboundConsentEvent(overlapStopClient, {
+    provider: "twilio",
+    providerEventId: `SM_merge_overlap_stop_${randomUUID()}`,
+    from: `+1${overlapPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  releaseOverlapStart();
+  const [overlapStartResult] = await withTimeout(overlapStartSettled, 25000, "merge overlap START");
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([disconnectClient(overlapStartClient), disconnectClient(overlapStopClient)]);
+  check(
+    "Merge overlap: newer STOP commits while START is in-flight",
+    overlapStop.applied === true && overlapStop.consentStatus === "REVOKED",
+  );
+  check(
+    "Merge overlap: in-flight START is stale_event and stays REVOKED",
+    overlapStartResult.status === "fulfilled" &&
+      overlapStartResult.value.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: overlapCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nERROR — consent transaction rollback keeps original START claim");
+  const rollbackPhone = "2395550230";
+  const rollbackCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Rollback Merge Start",
+      phone: rollbackPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const rollbackStartId = `SM_merge_rollback_start_${randomUUID()}`;
+  let rollbackClaimed;
+  const rollbackClaimReady = new Promise((resolve) => {
+    rollbackClaimed = resolve;
+  });
+  let releaseRollbackClaim;
+  const rollbackClaimHold = new Promise((resolve) => {
+    releaseRollbackClaim = resolve;
+  });
+  inboundConsentTestHooks.afterClaim = async () => {
+    rollbackClaimed();
+    await withTimeout(rollbackClaimHold, BARRIER_WAIT_MS, "merge rollback claim hold");
+  };
+  inboundConsentTestHooks.beforeConsentWrite = async (ctx) => {
+    if (!ctx?.db) throw new Error("consent write hook missing db");
+    await ctx.db.$executeRawUnsafe(`DO $$ BEGIN RAISE EXCEPTION 'consent_tx_killed'; END $$`);
+  };
+  const rollbackFirst = Promise.allSettled([
+    applyInboundConsentEvent(prisma, {
+      provider: "twilio",
+      providerEventId: rollbackStartId,
+      from: `+1${rollbackPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  await withTimeout(rollbackClaimReady, BARRIER_WAIT_MS, "merge rollback START claim committed");
+  const rollbackClaimDuring = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartId },
+  });
+  releaseRollbackClaim();
+  const [rollbackSettled] = await withTimeout(rollbackFirst, 25000, "merge rollback START");
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  const rollbackClaim = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartId },
+  });
+  check(
+    "Merge rollback: pending START claim survives the aborted consent transaction",
+    rollbackSettled.status === "rejected" &&
+      rollbackClaimDuring != null &&
+      rollbackClaim != null &&
+      rollbackClaim.id === rollbackClaimDuring.id &&
+      claimedAtFromCuid(rollbackClaim.id) instanceof Date,
+  );
+  await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_merge_rollback_stop_${randomUUID()}`,
+    from: `+1${rollbackPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const rollbackRetry = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: rollbackStartId,
+    from: `+1${rollbackPhone}`,
+    to: `+1${formerTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  check(
+    "Merge rollback: retry after newer STOP stays REVOKED",
+    rollbackRetry.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: rollbackCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
   inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.afterCustomerLock = undefined;
   inboundConsentTestHooks.beforeConsentWrite = undefined;
   inboundConsentTestHooks.beforeCleanup = undefined;
   for (const client of extraClients) {
