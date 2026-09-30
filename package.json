@@ -116,6 +116,7 @@
     "test:website-setup": "node --experimental-strip-types scripts/check-website-setup.mjs",
     "test:saas-billing": "node --experimental-strip-types scripts/check-saas-billing.mjs",
     "test:founder-trial": "node --experimental-strip-types scripts/check-founder-trial.mjs",
+    "test:founder-handyman-launch": "node --experimental-strip-types scripts/check-founder-handyman-launch.mjs",
     "test:saas-operating": "node --experimental-strip-types scripts/check-saas-operating-enforcement.mjs",
     "test:saas-lifecycle": "node --experimental-strip-types scripts/check-saas-subscription-lifecycle.mjs",
     "test:transactional-state-races": "node --experimental-strip-types scripts/check-transactional-state-races.mjs",
