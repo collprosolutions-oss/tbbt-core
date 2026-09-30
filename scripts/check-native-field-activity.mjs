@@ -40,6 +40,7 @@ const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
   "@/lib/saas-billing/messages"
 );
 const { weekRange } = await import("@/lib/time-cards");
+const NY = "America/New_York";
 const {
   MATERIAL_PICKUP_START_TIME_STARTED_REASON,
   MATERIAL_PICKUP_STOP_TIME_CLOSED_REASON,
@@ -1061,9 +1062,9 @@ try {
     customerName: "Open Current Week Canary",
   });
   const now = new Date();
-  const currentWeekStart = weekRange(now).start;
+  const currentWeekStart = weekRange(now, NY).start;
   const priorStartedAt = new Date(currentWeekStart.getTime() - 24 * 60 * 60 * 1000);
-  const priorWeekStart = weekRange(priorStartedAt).start;
+  const priorWeekStart = weekRange(priorStartedAt, NY).start;
   const priorWeekTime = await createRunningTime({
     businessId: businessA.id,
     membershipId: priorWeekMem.id,
@@ -1151,7 +1152,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: memberMem.id,
-      weekStartedAt: weekRange(rollbackStartedAt).start,
+      weekStartedAt: weekRange(rollbackStartedAt, NY).start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,

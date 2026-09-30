@@ -51,12 +51,12 @@ function parseView(raw: string | undefined): TimeCardView {
     : "today";
 }
 
-function toEntryDateInput(value: Date) {
-  return formatDateInput(value);
+function toEntryDateInput(value: Date, timeZone: string) {
+  return formatDateInput(value, timeZone);
 }
 
-function toEntryTimeInput(value: Date) {
-  return formatTimeInput(value);
+function toEntryTimeInput(value: Date, timeZone: string) {
+  return formatTimeInput(value, timeZone);
 }
 
 function jobLabel(job: {
@@ -246,10 +246,10 @@ export default async function TimeCardsPage({
       totalHours: hours,
       totalLabel: formatDurationClock(hours),
       note: entry.note,
-      startDate: toEntryDateInput(entry.startedAt),
-      startTime: toEntryTimeInput(entry.startedAt),
-      endDate: entry.endedAt ? toEntryDateInput(entry.endedAt) : "",
-      endTime: entry.endedAt ? toEntryTimeInput(entry.endedAt) : "",
+      startDate: toEntryDateInput(entry.startedAt, timeZone),
+      startTime: toEntryTimeInput(entry.startedAt, timeZone),
+      endDate: entry.endedAt ? toEntryDateInput(entry.endedAt, timeZone) : "",
+      endTime: entry.endedAt ? toEntryTimeInput(entry.endedAt, timeZone) : "",
       calendarDate: formatISODate(entry.startedAt, timeZone),
       canEdit: canEditTimeEntry(entry.status),
     };

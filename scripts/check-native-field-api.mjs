@@ -70,6 +70,7 @@ const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
   "@/lib/saas-billing/messages"
 );
 const { weekRange } = await import("@/lib/time-cards");
+const NY = "America/New_York";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -1262,7 +1263,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: memberMembership.id,
-      weekStartedAt: weekRange(rollbackStartedAt).start,
+      weekStartedAt: weekRange(rollbackStartedAt, NY).start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMembership.id,
@@ -2098,7 +2099,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: memberMembership.id,
-      weekStartedAt: weekRange(rollbackStopStartedAt).start,
+      weekStartedAt: weekRange(rollbackStopStartedAt, NY).start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMembership.id,

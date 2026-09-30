@@ -15,6 +15,13 @@
  * only; it never overwrites a value that is already present.
  */
 
+import {
+  formatISODateInTimeZone,
+  formatZonedTimeInput,
+  isValidIanaTimeZone,
+  zonedCivilToUtc,
+  zonedDateParts,
+} from "@/lib/business-timezone";
 import { addDays, startOfWeek } from "@/lib/schedule";
 
 export const TIME_ACTIVITY_TYPES = [
@@ -160,6 +167,71 @@ export function entryOverlapsWeek(
   return entry.startedAt < weekEnd && end > weekStart;
 }
 
+/**
+ * P1-08 founder policy B: reject.
+ *
+ * A crossing interval is loaded into every overlapping business-local week
+ * (`entryOverlapsWeek`). Approval must refuse until the entry is corrected
+ * into intervals that each occupy one Sunday-start business week.
+ * Do not auto-split and do not silently truncate hours. Already-APPROVED
+ * historical rows are left unchanged.
+ */
+export const WEEK_BOUNDARY_CROSSING_POLICY = "reject" as const;
+
+export const WEEK_BOUNDARY_CROSSING_ERROR =
+  "This time crosses the business week. Correct it into separate entries that each stay in one week before approving.";
+
+export const ALREADY_CREDITED_CROSSING_ERROR =
+  "An approved time entry already credited in another week crosses this week. Reopen and correct it into one-week entries before approving.";
+
+export const MISSING_APPROVAL_TIMEZONE_ERROR =
+  "canApproveWeek requires the business timezone.";
+
+function lastOccupiedBusinessWeekStart(startedAt: Date, endedAt: Date, timeZone: string): Date {
+  const endWeek = weekRange(endedAt, timeZone).start;
+  if (endedAt.getTime() > startedAt.getTime() && endedAt.getTime() === endWeek.getTime()) {
+    return addDays(endWeek, -7, timeZone);
+  }
+  return endWeek;
+}
+
+/**
+ * True when the interval has positive duration in more than one
+ * business-local Sunday week. Ending exactly at the next Sunday 00:00
+ * is a touch, not a crossing — weeks are half-open [start, end).
+ */
+export function entryCrossesBusinessWeekBoundary(
+  entry: { startedAt: Date; endedAt: Date | null },
+  timeZone: string,
+  now: Date = new Date(),
+): boolean {
+  const end = entry.endedAt ?? now;
+  if (end.getTime() <= entry.startedAt.getTime()) return false;
+  const first = weekRange(entry.startedAt, timeZone).start;
+  const last = lastOccupiedBusinessWeekStart(entry.startedAt, end, timeZone);
+  return first.getTime() !== last.getTime();
+}
+
+export function businessWeekStartsTouchedByEntry(
+  entry: { startedAt: Date; endedAt: Date | null },
+  timeZone: string,
+  now: Date = new Date(),
+): Date[] {
+  const end = entry.endedAt ?? now;
+  const first = weekRange(entry.startedAt, timeZone).start;
+  if (end.getTime() <= entry.startedAt.getTime()) return [first];
+  const last = lastOccupiedBusinessWeekStart(entry.startedAt, end, timeZone);
+  const starts: Date[] = [];
+  for (let cursor = first; cursor.getTime() <= last.getTime(); cursor = addDays(cursor, 7, timeZone)) {
+    starts.push(cursor);
+  }
+  return starts;
+}
+
+export function resolveWeekBoundaryCrossingPolicy(): "reject" {
+  return WEEK_BOUNDARY_CROSSING_POLICY;
+}
+
 export type Interval = { startedAt: Date; endedAt: Date | null };
 
 /**
@@ -295,15 +367,48 @@ export function canEditTimeEntry(status: string): boolean {
   return status !== "APPROVED";
 }
 
-export function canApproveWeek(entries: readonly { status: string; endedAt: Date | null }[]): {
+export function canApproveWeek(
+  entries: readonly { status: string; startedAt: Date; endedAt: Date | null }[],
+  timeZone: string,
+  options?: {
+    weekStartedAt?: Date;
+    alreadyApprovedWeekStarts?: readonly Date[];
+  },
+): {
   ok: boolean;
   error?: string;
 } {
+  if (!timeZone) {
+    throw new Error(MISSING_APPROVAL_TIMEZONE_ERROR);
+  }
   if (entries.length === 0) {
     return { ok: false, error: "There is no time to approve for this week." };
   }
   if (entries.some((entry) => entry.status === "RUNNING" || entry.endedAt == null)) {
     return { ok: false, error: "Stop every running clock before approving this week." };
+  }
+  if (resolveWeekBoundaryCrossingPolicy() === "reject") {
+    for (const entry of entries) {
+      if (entry.endedAt == null) continue;
+      const interval = { startedAt: entry.startedAt, endedAt: entry.endedAt };
+      if (!entryCrossesBusinessWeekBoundary(interval, timeZone)) {
+        continue;
+      }
+      if (entry.status === "APPROVED") {
+        const creditedElsewhere = options?.alreadyApprovedWeekStarts?.some((otherStart) => {
+          if (options.weekStartedAt && otherStart.getTime() === options.weekStartedAt.getTime()) {
+            return false;
+          }
+          const other = weekRange(otherStart, timeZone);
+          return entryOverlapsWeek(interval, other.start, other.end);
+        });
+        if (creditedElsewhere) {
+          return { ok: false, error: ALREADY_CREDITED_CROSSING_ERROR };
+        }
+        continue;
+      }
+      return { ok: false, error: WEEK_BOUNDARY_CROSSING_ERROR };
+    }
   }
   return { ok: true };
 }
@@ -449,23 +554,25 @@ export function parseHourlyWage(raw: string): number | null | { error: string } 
   return roundMoney(value);
 }
 
+export const INVALID_CIVIL_TIME_ERROR = "Enter a valid start and end time in this business timezone.";
+export const NONEXISTENT_CIVIL_TIME_ERROR =
+  "That local time does not exist in this business timezone.";
+
 /**
- * Manual Time Entry date+time from `<input type="date">` + `<input type="time">`.
+ * Manual / correction date+time from `<input type="date">` + `<input type="time">`.
  *
- * These values are civil wall-clock (the digits the owner typed), not an
- * instant in the server's timezone. `new Date(year, month, day, hour, minute)`
- * and `new Date("YYYY-MM-DD")` (UTC midnight) + local `setHours` both shift
- * 17:00 onto the next UTC calendar day in US timezones. Re-reading that
- * ISO date with local 17:00 stores 9:00 day-1 → 17:00 day-2 = 32 hours
- * for a 9 AM–5 PM shift.
- *
- * Date.UTC keeps 09:00–17:00 on the same calendar day at exactly 8 hours
- * regardless of process TZ. Browsers may send `HH:mm` or `HH:mm:ss`.
+ * These digits are civil wall-clock in the already-resolved business IANA
+ * timezone — never the host/process timezone and never UTC wall-clock.
+ * Callers must resolve Business.timezone before parsing. Conversion uses
+ * the same `zonedCivilToUtc` + `zonedDateParts` round-trip as schedule
+ * civil times. A DST spring-forward gap (for example America/New_York
+ * 2026-03-08 02:30) is rejected instead of being stored as a UTC instant
+ * or silently normalized. Browsers may send `HH:mm` or `HH:mm:ss`.
  */
-export function parseDateTimeInput(date: string, time: string): Date | null {
+export function parseDateTimeInput(date: string, time: string, timeZone: string): Date | null {
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
   const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(time.trim());
-  if (!dateMatch || !timeMatch) {
+  if (!dateMatch || !timeMatch || !isValidIanaTimeZone(timeZone)) {
     return null;
   }
   const year = Number(dateMatch[1]);
@@ -477,32 +584,101 @@ export function parseDateTimeInput(date: string, time: string): Date | null {
   if (hour > 23 || minute > 59 || second > 59) {
     return null;
   }
-  const value = new Date(Date.UTC(year, month - 1, day, hour, minute, second, 0));
+  const calendar = new Date(Date.UTC(year, month - 1, day));
   if (
-    value.getUTCFullYear() !== year ||
-    value.getUTCMonth() !== month - 1 ||
-    value.getUTCDate() !== day ||
-    value.getUTCHours() !== hour
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const value = zonedCivilToUtc(year, month, day, hour, minute, second, timeZone);
+  if (Number.isNaN(value.getTime())) {
+    return null;
+  }
+  const parts = zonedDateParts(value, timeZone);
+  if (
+    parts.year !== year ||
+    parts.month !== month ||
+    parts.day !== day ||
+    parts.hour !== hour ||
+    parts.minute !== minute ||
+    parts.second !== second
   ) {
     return null;
   }
   return value;
 }
 
-function pad2(value: number) {
-  return String(value).padStart(2, "0");
+function normalizeCivilTimeInput(time: string): string | null {
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(time.trim());
+  if (!timeMatch) return null;
+  return `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}`;
 }
 
-/** yyyy-mm-dd from the civil wall-clock stored by parseDateTimeInput. */
-export function formatDateInput(value: Date): string {
-  const instant = asInstant(value);
-  return `${instant.getUTCFullYear()}-${pad2(instant.getUTCMonth() + 1)}-${pad2(instant.getUTCDate())}`;
+/**
+ * Fall-back days have a repeated civil hour. `zonedCivilToUtc` always
+ * resolves that hour to the first occurrence. If the submitted civil
+ * strings are exactly the formatted value of an existing instant, keep
+ * that instant so an edit/resubmit cannot silently move it.
+ */
+export function civilInputMatchesExistingInstant(
+  date: string,
+  time: string,
+  existing: Date,
+  timeZone: string,
+): boolean {
+  const submittedTime = normalizeCivilTimeInput(time);
+  return (
+    submittedTime != null &&
+    date.trim() === formatDateInput(existing, timeZone) &&
+    submittedTime === formatTimeInput(existing, timeZone)
+  );
 }
 
-/** HH:mm from the civil wall-clock stored by parseDateTimeInput. */
-export function formatTimeInput(value: Date): string {
-  const instant = asInstant(value);
-  return `${pad2(instant.getUTCHours())}:${pad2(instant.getUTCMinutes())}`;
+export function parseBusinessDateTimeInput(
+  date: string,
+  time: string,
+  timeZone: string,
+  existing?: Date | null,
+): { ok: true; value: Date } | { ok: false; error: string } {
+  if (existing && civilInputMatchesExistingInstant(date, time, existing, timeZone)) {
+    return { ok: true, value: existing };
+  }
+  const value = parseDateTimeInput(date, time, timeZone);
+  if (value) return { ok: true, value };
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(time.trim());
+  if (dateMatch && timeMatch && isValidIanaTimeZone(timeZone)) {
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    const hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2]);
+    const second = Number(timeMatch[3] ?? "0");
+    const calendar = new Date(Date.UTC(year, month - 1, day));
+    const calendarOk =
+      calendar.getUTCFullYear() === year &&
+      calendar.getUTCMonth() === month - 1 &&
+      calendar.getUTCDate() === day &&
+      hour <= 23 &&
+      minute <= 59 &&
+      second <= 59;
+    if (calendarOk) {
+      return { ok: false, error: NONEXISTENT_CIVIL_TIME_ERROR };
+    }
+  }
+  return { ok: false, error: INVALID_CIVIL_TIME_ERROR };
+}
+
+/** yyyy-mm-dd in the same business timezone used by parseDateTimeInput. */
+export function formatDateInput(value: Date, timeZone: string): string {
+  return formatISODateInTimeZone(asInstant(value), timeZone);
+}
+
+/** HH:mm in the same business timezone used by parseDateTimeInput. */
+export function formatTimeInput(value: Date, timeZone: string): string {
+  return formatZonedTimeInput(asInstant(value), timeZone);
 }
 
 export function formatDurationClock(hours: number): string {

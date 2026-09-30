@@ -16,7 +16,7 @@ import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { prisma } from "@/lib/prisma";
 import { parseScheduleDate } from "@/lib/schedule";
-import { parseDateTimeInput } from "@/lib/time-cards";
+import { parseBusinessDateTimeInput } from "@/lib/time-cards";
 import {
   approveTimesheetWeek,
   clockInTime,
@@ -95,17 +95,26 @@ export async function createManualTimeEntryAction(
     const activityType = readString(formData, "activityType");
     const jobId = readString(formData, "jobId") || null;
     const note = readString(formData, "note") || null;
-    const startedAt = parseDateTimeInput(readString(formData, "startDate"), readString(formData, "startTime"));
-    const endedAt = parseDateTimeInput(readString(formData, "endDate"), readString(formData, "endTime"));
     if (!membershipId) return { error: "Choose a worker." };
-    if (!startedAt || !endedAt) return { error: "Enter a valid start and end time." };
     const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const startedAt = parseBusinessDateTimeInput(
+      readString(formData, "startDate"),
+      readString(formData, "startTime"),
+      timeZone,
+    );
+    const endedAt = parseBusinessDateTimeInput(
+      readString(formData, "endDate"),
+      readString(formData, "endTime"),
+      timeZone,
+    );
+    if (!startedAt.ok) return { error: startedAt.error };
+    if (!endedAt.ok) return { error: endedAt.error };
     await createManualTimeEntry(prisma, access, {
       membershipId,
       activityType,
       jobId,
-      startedAt,
-      endedAt,
+      startedAt: startedAt.value,
+      endedAt: endedAt.value,
       note,
       needsReview: readString(formData, "needsReview") === "1",
       timeZone,
@@ -133,19 +142,33 @@ export async function correctTimeEntryAction(
     const jobRaw = readString(formData, "jobId");
     const note = readString(formData, "note");
     if (!timeEntryId) return { error: "That time entry could not be found." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const existing = await prisma.timeEntry.findFirst({
+      where: { id: timeEntryId, businessId: access.businessId },
+      select: { startedAt: true, endedAt: true },
+    });
     let startedAt: Date | undefined;
     if (startDate || startTime) {
-      const parsedStart = parseDateTimeInput(startDate, startTime);
-      if (!parsedStart) return { error: "Enter a valid start time." };
-      startedAt = parsedStart;
+      const parsedStart = parseBusinessDateTimeInput(
+        startDate,
+        startTime,
+        timeZone,
+        existing?.startedAt,
+      );
+      if (!parsedStart.ok) return { error: parsedStart.error };
+      startedAt = parsedStart.value;
     }
     let endedAt: Date | undefined;
     if (endDate || endTime) {
-      const parsedEnd = parseDateTimeInput(endDate, endTime);
-      if (!parsedEnd) return { error: "Enter a valid end time." };
-      endedAt = parsedEnd;
+      const parsedEnd = parseBusinessDateTimeInput(
+        endDate,
+        endTime,
+        timeZone,
+        existing?.endedAt,
+      );
+      if (!parsedEnd.ok) return { error: parsedEnd.error };
+      endedAt = parsedEnd.value;
     }
-    const timeZone = resolveBusinessTimeZone(access.workspace.business);
     await correctTimeEntry(prisma, access, {
       timeEntryId,
       reason,
@@ -171,24 +194,31 @@ export async function requestTimeCorrectionAction(
     const access = await requireOperatingBusinessAccess();
     const timeEntryId = readString(formData, "timeEntryId");
     const reason = readString(formData, "reason");
-    const proposedStartedAt = parseDateTimeInput(
+    if (!timeEntryId) return { error: "That time entry could not be found." };
+    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    const existing = await prisma.timeEntry.findFirst({
+      where: { id: timeEntryId, businessId: access.businessId },
+      select: { startedAt: true, endedAt: true },
+    });
+    const proposedStartedAt = parseBusinessDateTimeInput(
       readString(formData, "proposedStartDate"),
       readString(formData, "proposedStartTime"),
+      timeZone,
+      existing?.startedAt,
     );
-    const proposedEndedAt = parseDateTimeInput(
+    const proposedEndedAt = parseBusinessDateTimeInput(
       readString(formData, "proposedEndDate"),
       readString(formData, "proposedEndTime"),
+      timeZone,
+      existing?.endedAt,
     );
-    if (!timeEntryId) return { error: "That time entry could not be found." };
-    if (!proposedStartedAt || !proposedEndedAt) {
-      return { error: "Enter the proposed start and end times." };
-    }
-    const timeZone = resolveBusinessTimeZone(access.workspace.business);
+    if (!proposedStartedAt.ok) return { error: proposedStartedAt.error };
+    if (!proposedEndedAt.ok) return { error: proposedEndedAt.error };
     const result = await requestTimeCorrection(prisma, access, {
       timeEntryId,
       reason,
-      proposedStartedAt,
-      proposedEndedAt,
+      proposedStartedAt: proposedStartedAt.value,
+      proposedEndedAt: proposedEndedAt.value,
       timeZone,
     });
     revalidateTimeCards(result.entry.jobId);
