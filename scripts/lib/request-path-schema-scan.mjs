@@ -109,12 +109,56 @@ function extractConstBindings(source) {
   return bindings;
 }
 
+function skipTypeArgs(source, start) {
+  if (source[start] !== "<") return start;
+  let depth = 0;
+  let i = start;
+  while (i < source.length) {
+    if (source[i] === "<") depth += 1;
+    else if (source[i] === ">") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+    i += 1;
+  }
+  return start;
+}
+
+function readTaggedTemplateArg(source, tickIndex) {
+  let i = tickIndex + 1;
+  let value = "";
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      value += source[i + 1] ?? "";
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      if (/^\s*[,);]/.test(source.slice(i + 1))) {
+        return { value, end: i + 1 };
+      }
+    }
+    value += c;
+    i += 1;
+  }
+  return null;
+}
+
 function readCallArg(source, start) {
   let i = start;
   while (i < source.length && /\s/.test(source[i])) i += 1;
   if (source[i] === "`" || source[i] === '"' || source[i] === "'") {
-    const quoted = readQuoted(source, i);
+    const quoted =
+      source[i] === "`"
+        ? readTaggedTemplateArg(source, i) ?? readQuoted(source, i)
+        : readQuoted(source, i);
     return { text: quoted?.value ?? "", ident: null };
+  }
+  const prismaSql = source.slice(i).match(/^Prisma\.sql\s*`/);
+  if (prismaSql) {
+    const quoted = readTaggedTemplateArg(source, i + prismaSql[0].length - 1);
+    return { text: quoted?.value ?? "", ident: "Prisma.sql" };
   }
   const ident = source.slice(i).match(/^([A-Za-z_][A-Za-z0-9_]*)/);
   if (ident) return { text: "", ident: ident[1] };
@@ -123,13 +167,14 @@ function readCallArg(source, start) {
 
 function findRawCalls(source) {
   const calls = [];
-  const re = /\$((?:execute|query)Raw(?:Unsafe)?)\s*(`|\()/g;
+  const re = /\$((?:execute|query)Raw(?:Unsafe)?)/g;
   let match;
   while ((match = re.exec(source))) {
     const method = `$${match[1]}`;
-    const opener = match[2];
-    if (opener === "`") {
-      const quoted = readQuoted(source, match.index + match[0].length - 1);
+    let cursor = skipTypeArgs(source, match.index + match[0].length);
+    while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+    if (source[cursor] === "`") {
+      const quoted = readQuoted(source, cursor);
       calls.push({
         method,
         style: "tagged",
@@ -137,8 +182,8 @@ function findRawCalls(source) {
         argName: null,
         index: match.index,
       });
-    } else {
-      const arg = readCallArg(source, match.index + match[0].length);
+    } else if (source[cursor] === "(") {
+      const arg = readCallArg(source, cursor + 1);
       calls.push({
         method,
         style: "call",
@@ -202,7 +247,7 @@ export function scanSourceText(relPath, source) {
       if (binding) {
         sql = binding.kind === "array" ? binding.items.join("\n;\n") : binding.text;
         resolvedFrom = name;
-      } else {
+      } else if (!sql.trim()) {
         sql = "";
         resolvedFrom = name;
       }

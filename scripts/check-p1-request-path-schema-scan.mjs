@@ -92,8 +92,13 @@ check(
 );
 check(
   "Application INSERT ON CONFLICT is classified as an upsert, not backfill",
-  groups["app-upsert"].every((row) => row.violation === false) &&
-    groups["app-upsert"].some((row) => row.file.includes("chief-of-staff/controlled-actions.ts")),
+  groups["app-upsert"].length > 0 &&
+    groups["app-upsert"].every((row) => row.violation === false) &&
+    groups["app-upsert"].some(
+      (row) =>
+        row.file.includes("chief-of-staff/controlled-actions.ts") ||
+        row.file.includes("native-session-limits.ts"),
+    ),
 );
 check(
   "Request-path presence probes stay reads",
@@ -142,18 +147,12 @@ check(
 );
 
 const repairSrc = readRel("src/lib/appointment-change-request.ts");
-const mutatedRepair = repairSrc.replace(
-  `export async function repairMisfiledChangeRequestAccessFields(
-  _db: AppointmentClient,
-): Promise<never> {
-  throw new RequestPathSchemaUnavailableError(
-    "misfiled change-request access-field repair is not a request-path operation",
+const mutatedRepair = repairSrc
+  .replace("_db: AppointmentClient", "db: AppointmentClient")
+  .replace(
+    "throw new RequestPathSchemaUnavailableError(",
+    "await db.$executeRawUnsafe(REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL);\n  throw new RequestPathSchemaUnavailableError(",
   );
-}`,
-  `export async function repairMisfiledChangeRequestAccessFields(db: AppointmentClient) {
-  await db.$executeRawUnsafe(REPAIR_MISFILED_CHANGE_REQUEST_ACCESS_SQL);
-}`,
-);
 const mutatedRepairScan = scanSourceText(
   "src/lib/appointment-change-request.ts",
   mutatedRepair,

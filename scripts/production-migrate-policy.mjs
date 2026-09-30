@@ -258,7 +258,7 @@ export function classifyRequestPathSql(sql) {
     /\bFROM\b/i.test(text) &&
     /\bWHERE\s+NOT\s+EXISTS\b/i.test(text);
   const founderAccessRepair =
-    /\bUPDATE\s+"Job"\b/i.test(text) && /propertyAccess/i.test(text);
+    /\bUPDATE\s+"Job"/i.test(text) && /propertyAccess/i.test(text);
   const onboardingSentinelBackfill =
     /\bUPDATE\b/i.test(text) &&
     /firstRunSetupCompletedAt|starterServicesSetupCompletedAt|websiteSetupCompletedAt|saasFounderTrialBackfilledAt|legacyExempt/i.test(
