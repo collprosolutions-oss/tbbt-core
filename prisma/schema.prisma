@@ -1520,6 +1520,11 @@ model Job {
   /// without an explicit assignment stay unassigned. Application code
   /// must never infer a location from timezone, Stripe, or service area.
   businessLocationId        String?
+  /// Source estimate for this Job. Multiple Jobs may share estimateId when
+  /// they are recurring occurrences, next bookings, or corrective cleans.
+  /// At most one root conversion Job per Estimate is enforced by the
+  /// Job_estimateId_conversion_unique partial index in
+  /// prisma/migrations/20260929161500_job_one_conversion_per_estimate.
   estimateId                String?
   /// The immutable EstimateVersion this Work Order was created from -- the
   /// exact scope/price a customer actually approved, independent of any

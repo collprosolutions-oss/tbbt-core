@@ -116,8 +116,9 @@ check(
 check(
   "createEstimate still copies request draft lines with access.scope",
   estimateAction.includes("export async function createEstimate") &&
-    estimateAction.includes("addRequestDraftLines") &&
-    estimateAction.includes("where: { id: serviceRequestId, ...access.scope }"),
+    estimateAction.includes("createEstimateFromServiceRequest") &&
+    estimateAction.includes("where: { id: serviceRequestId, ...access.scope }") &&
+    readRepo("src/lib/estimate-from-request.ts").includes("addRequestDraftLines"),
 );
 check(
   "Logged leads reuse createEstimate instead of a second estimate builder",

@@ -80,10 +80,8 @@ import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
-import {
-  addRequestDraftLines,
-  draftEstimateSendError,
-} from "@/lib/request-estimate-draft";
+import { draftEstimateSendError } from "@/lib/request-estimate-draft";
+import { createEstimateFromServiceRequest } from "@/lib/estimate-from-request";
 import {
   estimateEmailIdempotencyKey,
   getMailConfig,
@@ -243,19 +241,6 @@ export async function createEstimate(serviceRequestId: string) {
     }),
   );
 
-  const existing = await prisma.estimate.findFirst({
-    where: {
-      ...access.scope,
-      serviceRequestId: request.id,
-    },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
-
-  if (existing) {
-    redirect(`/estimates/${existing.id}`);
-  }
-
   const sourceItems =
     request.items.length > 0
       ? request.items
@@ -279,57 +264,24 @@ export async function createEstimate(serviceRequestId: string) {
     workspace.id,
   );
 
-  const estimate = await prisma.$transaction(async (tx) => {
-    const raced = await tx.estimate.findFirst({
-      where: {
-        businessId: access.businessId,
-        serviceRequestId: request.id,
-      },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
-    });
-    if (raced) {
-      return raced;
-    }
-
-    const created = await tx.estimate.create({
-      data: {
-        businessId: access.businessId,
-        serviceRequestId: request.id,
-        customerId: request.customerId,
-        propertyId: request.propertyId,
-        total: new Prisma.Decimal(0),
-        publicToken: randomUUID(),
-        leadSource: request.leadSource,
-        campaignId: request.campaignId,
-      },
-    });
-
-    await addRequestDraftLines(tx, {
-      businessId: access.businessId,
-      estimateId: created.id,
-      items: sourceItems,
-      workAreaIntake: parseWorkAreaIntake(request.description),
-      measurements: request.measurements.map((row) => toStoredIntakeMeasurement(row)),
-      businessDefaults,
-    });
-    await persistDraftEstimateTotal(tx, created.id, access.businessId);
-
-    // An OPEN request that has become an estimate is no longer waiting on
-    // the owner to act on it, so it should stop counting as "open".
-    if (request.status === "OPEN") {
-      await tx.serviceRequest.update({
-        where: { id: request.id },
-        data: { status: "CONVERTED" },
-      });
-    }
-
-    return created;
+  const estimate = await createEstimateFromServiceRequest(prisma, access, {
+    serviceRequestId: request.id,
+    customerId: request.customerId,
+    propertyId: request.propertyId,
+    status: request.status,
+    leadSource: request.leadSource,
+    campaignId: request.campaignId,
+    sourceItems,
+    workAreaIntake: parseWorkAreaIntake(request.description),
+    measurements: request.measurements.map((row) => toStoredIntakeMeasurement(row)),
+    businessDefaults,
   });
 
-  await seedDraftTakeoffFromBusinessDefaults(prisma, access, {
-    estimateId: estimate.id,
-  });
+  if (estimate.created) {
+    await seedDraftTakeoffFromBusinessDefaults(prisma, access, {
+      estimateId: estimate.id,
+    });
+  }
 
   revalidatePath("/requests");
   revalidatePath("/dashboard");
@@ -1200,13 +1152,18 @@ export async function setEstimateLaborMinimumWaived(
     return { error: "Only a draft estimate can be changed." };
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.estimate.update({
-      where: { id: estimate.id },
-      data: { laborMinimumWaived: waived },
+  try {
+    await prisma.$transaction(async (tx) => {
+      await claimDraftEstimate(tx, access, estimate.id, "Only a draft estimate can be changed.");
+      await tx.estimate.update({
+        where: { id: estimate.id },
+        data: { laborMinimumWaived: waived },
+      });
+      await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
     });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Only a draft estimate can be changed.") };
+  }
 
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
@@ -1267,10 +1224,13 @@ export async function updateEstimateTerms(
     if (estimate.status !== "DRAFT") {
       return { error: "Only a draft estimate can update terms." };
     }
-    await stampDraftEstimateTerms(prisma, {
-      estimateId: estimate.id,
-      businessId: access.businessId,
-      policies: normalizeCustomerPolicies(parsed),
+    await prisma.$transaction(async (tx) => {
+      await claimDraftEstimate(tx, access, estimate.id, "Only a draft estimate can update terms.");
+      await stampDraftEstimateTerms(tx, {
+        estimateId: estimate.id,
+        businessId: access.businessId,
+        policies: normalizeCustomerPolicies(parsed),
+      });
     });
     revalidatePath(`/estimates/${estimate.id}`);
     return { message: "Customer terms saved on this estimate." };
@@ -1346,7 +1306,9 @@ export async function removeEstimateLineItem(
     }),
   );
 
+  try {
   await prisma.$transaction(async (tx) => {
+    await claimDraftEstimate(tx, access, estimate.id, "Only a draft estimate can be changed.");
     const remaining = await tx.lineItem.findMany({
       where: {
         estimateId: estimate.id,
@@ -1376,6 +1338,9 @@ export async function removeEstimateLineItem(
     });
     await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
   });
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Only a draft estimate can be changed.") };
+  }
 
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
@@ -1405,19 +1370,28 @@ export async function clearDraftEstimate(
     return { error: "Only a draft estimate can be changed." };
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.lineItem.deleteMany({
-      where: {
-        estimateId: estimate.id,
-        businessId: access.businessId,
-      },
+  try {
+    await prisma.$transaction(async (tx) => {
+      await claimDraftEstimate(tx, access, estimate.id, "Only a draft estimate can be changed.");
+      await tx.lineItem.deleteMany({
+        where: {
+          estimateId: estimate.id,
+          businessId: access.businessId,
+        },
+      });
+      await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
     });
-    await persistDraftEstimateTotal(tx, estimate.id, access.businessId);
-  });
+  } catch (error) {
+    return { error: estimateLineErrorMessage(error, "Only a draft estimate can be changed.") };
+  }
 
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
 }
+
+export const estimateSendTestHooks: {
+  afterEstimateLock?: (input: { estimateId: string }) => Promise<void> | void;
+} = {};
 
 export async function sendEstimate(
   _prev: EstimateActionState,
@@ -1454,6 +1428,7 @@ export async function sendEstimate(
       WHERE id = ${estimate.id} AND "businessId" = ${access.businessId}
       FOR UPDATE
     `;
+    await estimateSendTestHooks.afterEstimateLock?.({ estimateId: estimate.id });
     const locked = await tx.estimate.findFirst({
       where: { id: estimate.id, businessId: access.businessId },
       include: {
@@ -1499,7 +1474,7 @@ export async function sendEstimate(
     });
 
     return {};
-  });
+  }, { timeout: 15_000 });
 
   if (result.error) {
     return result;

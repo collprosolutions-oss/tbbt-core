@@ -369,7 +369,7 @@ check("Internal request detail lists Requested Work",
 check("Estimate handoff keeps request context and prefills draft lines",
   estimatePageSrc.includes("RequestEstimateHandoff") &&
     estimatePageSrc.includes("EDIT_BUILD_ESTIMATE_LABEL") &&
-    estimateActionSrc.includes("addRequestDraftLines"));
+    readRepo("src/lib/estimate-from-request.ts").includes("addRequestDraftLines"));
 check("Public request photos use private Business Storage, not a public website path",
   readRepo("src/lib/business-storage/request-photos.ts").includes("CUSTOMER_PHOTO") &&
     readRepo("src/lib/business-storage/request-photos.ts").includes('visibility: "PRIVATE"') &&
@@ -509,9 +509,11 @@ const createEstimateFn = estimateActionSrc.slice(
   estimateActionSrc.indexOf("export async function createEstimate"),
   estimateActionSrc.indexOf("async function findReusableCustomer"),
 );
+const createEstimateFromRequestSrc = readRepo("src/lib/estimate-from-request.ts");
 check("Owner Create Estimate wires the request-draft helper",
-  createEstimateFn.includes("addRequestDraftLines") &&
-    createEstimateFn.includes("tx.estimate.create"));
+  createEstimateFn.includes("createEstimateFromServiceRequest") &&
+    createEstimateFromRequestSrc.includes("addRequestDraftLines") &&
+    createEstimateFromRequestSrc.includes("tx.estimate.create"));
 check("Owner estimate creation remains a draft handoff, not an auto-send",
   !createEstimateFn.includes('status: "SENT"') &&
     !createEstimateFn.includes('status: "APPROVED"') &&
@@ -1012,8 +1014,9 @@ try {
     qtyPrefill?.quantity.toString() === "3");
 
   check("createEstimate redirects to an existing request estimate instead of inserting again",
-    createEstimateFn.includes("if (existing)") &&
-      createEstimateFn.includes("if (raced)"));
+    createEstimateFn.includes("createEstimateFromServiceRequest") &&
+      createEstimateFromRequestSrc.includes("FOR UPDATE") &&
+      createEstimateFromRequestSrc.includes("if (existing)"));
   check("Existing request estimate is preserved rather than creating a second estimate",
     (await prisma.estimate.count({ where: { serviceRequestId: createdMany?.id } })) === 1);
 

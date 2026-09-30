@@ -14,6 +14,8 @@ export {
   applySaasBillingStripeEvent,
   loadSaasBillingSnapshot,
   requestSaasPlanChange,
+  saasBillingLockKey,
+  saasBillingTestHooks,
   startSaasBillingPortal,
   startSaasSubscriptionCheckout,
 } from "@/lib/saas-billing/ops";

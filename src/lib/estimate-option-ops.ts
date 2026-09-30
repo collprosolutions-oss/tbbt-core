@@ -64,11 +64,30 @@ async function requireDraftEstimate(
   return estimate;
 }
 
+/**
+ * Test-only barriers. Production never sets these.
+ * afterEstimateLock runs inside the write transaction after FOR UPDATE
+ * and before the DRAFT claim.
+ */
+export const estimateDraftClaimTestHooks: {
+  afterEstimateLock?: (input: { estimateId: string; kind: string }) => Promise<void> | void;
+} = {};
+
 export async function claimDraftEstimate(
   tx: Prisma.TransactionClient,
   access: BusinessAccess,
   estimateId: string,
+  draftOnlyMessage = DRAFT_ONLY_OPTIONS_MESSAGE,
 ) {
+  await tx.$queryRaw`
+    SELECT id FROM "Estimate"
+    WHERE id = ${estimateId} AND "businessId" = ${access.businessId}
+    FOR UPDATE
+  `;
+  await estimateDraftClaimTestHooks.afterEstimateLock?.({
+    estimateId,
+    kind: "claim",
+  });
   const claimed = await tx.estimate.updateMany({
     where: {
       id: estimateId,
@@ -78,7 +97,7 @@ export async function claimDraftEstimate(
     data: { updatedAt: new Date() },
   });
   if (claimed.count !== 1) {
-    throw new EstimateOptionError(DRAFT_ONLY_OPTIONS_MESSAGE);
+    throw new EstimateOptionError(draftOnlyMessage);
   }
 }
 
