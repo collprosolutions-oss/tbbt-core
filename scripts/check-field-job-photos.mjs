@@ -98,6 +98,20 @@ const ownerFormSrc = readRepo("src/components/jobs/add-job-photo-form.tsx");
 const ownerPhotoItemSrc = readRepo("src/components/jobs/job-photo-item.tsx");
 
 console.log("\nSTATIC — Field photos leave the 4 MB server-action body path");
+const finalizeAssignedFnSrc = fieldPhotoLibSrc.slice(
+  fieldPhotoLibSrc.indexOf("export async function finalizeAssignedFieldJobPhoto"),
+  fieldPhotoLibSrc.indexOf("export async function abortAssignedFieldJobPhoto"),
+);
+check(
+  "Assigned field photo finalize locks the Job and rechecks exact active membership before persist",
+  finalizeAssignedFnSrc.includes("afterInitialRead") &&
+    finalizeAssignedFnSrc.includes("lockTenantOwnedJob") &&
+    finalizeAssignedFnSrc.includes("exactActiveMembershipHeld") &&
+    finalizeAssignedFnSrc.indexOf("lockTenantOwnedJob") <
+      finalizeAssignedFnSrc.indexOf("exactActiveMembershipHeld") &&
+    finalizeAssignedFnSrc.indexOf("exactActiveMembershipHeld") <
+      finalizeAssignedFnSrc.indexOf("persistReadyJobPhoto"),
+);
 check(
   "Field photo actions never accept a File or Vercel Blob upload helper",
   !fieldActionSrc.includes("uploadJobPhoto") &&
@@ -575,6 +589,83 @@ try {
   check(
     "Failed upload does not create a broken photo record",
     photosAfterFail === photosBeforeFail && failedAsset.status === "FAILED",
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Photos",
+      email: `deactivate-fjp-${randomUUID()}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateMem.id,
+    },
+  });
+  const deactivateField = { businessId: businessA.id, membershipId: deactivateMem.id };
+  const deactivateAuth = await authorizeAssignedFieldJobPhoto(deps, deactivateField, {
+    jobId: deactivateJob.id,
+    originalFilename: "deactivate.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  await provider.putObject({
+    bucket: deactivateAuth.account.bucketName,
+    key: deactivateAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  const photosBeforeDeactivate = await prisma.jobPhoto.count({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  await expectThrow(
+    "Finalize after membership deactivation is refused",
+    () =>
+      finalizeAssignedFieldJobPhoto(
+        deps,
+        deactivateField,
+        {
+          jobId: deactivateJob.id,
+          assetId: deactivateAuth.asset.id,
+          stage: "BEFORE",
+        },
+        {
+          afterInitialRead: async () => {
+            const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+            try {
+              await otherClient.membership.update({
+                where: { id: deactivateMem.id },
+                data: { active: false },
+              });
+            } finally {
+              await otherClient.$disconnect();
+            }
+          },
+        },
+      ),
+    (error) => error instanceof StorageAccessError && error.message.includes("isn't assigned"),
+  );
+  const photosAfterDeactivate = await prisma.jobPhoto.count({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  check(
+    "Refused deactivated finalize writes no JobPhoto and leaves assignment intact",
+    photosAfterDeactivate === photosBeforeDeactivate &&
+      photosAfterDeactivate === 0 &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
   );
 
   const saved = await putAssignedFieldJobPhotoFromBytes(deps, assignedField, {

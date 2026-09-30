@@ -19,6 +19,8 @@ import {
   StorageAccessError,
   StorageError,
 } from "@/lib/business-storage/types";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
+import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export const FIELD_JOB_PHOTO_MAX_BYTES = REQUEST_PHOTO_MAX_BYTES;
 export const FIELD_JOB_PHOTO_PURPOSE = "field-job-photo";
@@ -112,10 +114,18 @@ export async function finalizeAssignedFieldJobPhoto(
     stage: "BEFORE" | "DURING" | "AFTER";
     caption?: string | null;
   },
+  options?: {
+    /** Proof hook: runs after the authorize read and before the Job lock. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   const job = await findAssignedJobForPhoto(deps.db, field, input.jobId);
   if (!job) {
     throw new StorageAccessError(NOT_ASSIGNED_ERROR);
+  }
+
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
   }
 
   const asset = await finalizeManagedUpload(deps, field.businessId, input.assetId);
@@ -127,7 +137,16 @@ export async function finalizeAssignedFieldJobPhoto(
     throw new StorageError("That photo is not a private field job photo.");
   }
 
-  return persistReadyJobPhoto(deps.db, field.businessId, job.id, asset, input.stage, input.caption);
+  return deps.db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, field.businessId, job.id);
+    if (!locked || locked.assignedMembershipId !== field.membershipId) {
+      throw new StorageAccessError(NOT_ASSIGNED_ERROR);
+    }
+    if (!(await exactActiveMembershipHeld(tx, field))) {
+      throw new StorageAccessError(NOT_ASSIGNED_ERROR);
+    }
+    return persistReadyJobPhoto(tx, field.businessId, locked.id, asset, input.stage, input.caption);
+  });
 }
 
 export async function abortAssignedFieldJobPhoto(

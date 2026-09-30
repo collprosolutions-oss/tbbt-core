@@ -20,6 +20,7 @@ import {
   type JobMaterialPickupRequirement,
   type PickupException,
 } from "@/lib/materials/types";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -303,6 +304,9 @@ export async function recordAssignedJobPickup(
   return db.$transaction(async (tx) => {
     const lockedJob = await lockTenantOwnedJob(tx, actor.businessId, job.id);
     if (!lockedJob || lockedJob.assignedMembershipId !== actor.membershipId) {
+      throw new MaterialsError(ASSIGNED_PICKUP_ONLY_MESSAGE);
+    }
+    if (!(await exactActiveMembershipHeld(tx, actor))) {
       throw new MaterialsError(ASSIGNED_PICKUP_ONLY_MESSAGE);
     }
 

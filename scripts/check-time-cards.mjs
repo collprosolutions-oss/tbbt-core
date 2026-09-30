@@ -442,6 +442,30 @@ try {
     timeCardOpsSrc.includes("COMPLETED_JOB_CLOCK_IN_ERROR") &&
       timeCardOpsSrc.includes('locked.status === "COMPLETED"'),
   );
+  const clockInFnSrc = timeCardOpsSrc.slice(
+    timeCardOpsSrc.indexOf("export async function clockInTime"),
+    timeCardOpsSrc.indexOf("export async function clockOutTime"),
+  );
+  const clockOutFnSrc = timeCardOpsSrc.slice(
+    timeCardOpsSrc.indexOf("export async function clockOutTime"),
+    timeCardOpsSrc.indexOf("export async function createManualTimeEntry") !== -1
+      ? timeCardOpsSrc.indexOf("export async function createManualTimeEntry")
+      : timeCardOpsSrc.length,
+  );
+  const completeInTxSrc = timeCardOpsSrc.slice(
+    timeCardOpsSrc.indexOf("export async function completeJobWithRunningTimeSafetyInTransaction"),
+    timeCardOpsSrc.indexOf("export async function completeJobWithRunningTimeSafety("),
+  );
+  check(
+    "Clock and completion writes recheck exact active membership in the write transaction",
+    clockInFnSrc.includes("afterInitialRead") &&
+      clockInFnSrc.includes("exactActiveMembershipHeld") &&
+      clockOutFnSrc.includes("afterInitialRead") &&
+      clockOutFnSrc.includes("exactActiveMembershipHeld") &&
+      completeInTxSrc.includes("exactActiveMembershipHeld") &&
+      completeInTxSrc.indexOf("lockTenantOwnedJob") <
+        completeInTxSrc.indexOf("exactActiveMembershipHeld"),
+  );
   check(
     "Clock-in transition checks every running entry's week before the automatic close",
     timeCardOpsSrc.includes("assertRunningEntriesEditable") &&
@@ -2656,6 +2680,147 @@ try {
       (await prisma.timeEntryAdjustment.count({ where: { timeEntryId: priorWeekRunning.id } })) === 0 &&
       (await prisma.job.findUnique({ where: { id: priorWeekJob.id } })).status === "IN_PROGRESS" &&
       (await prisma.job.findUnique({ where: { id: currentWeekJob.id } })).status === "SCHEDULED",
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Clock",
+      email: `deactivate-time-${randomUUID()}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: {
+      userId: deactivateUser.id,
+      businessId: businessA.id,
+      role: "MEMBER",
+      hourlyWage: new Prisma.Decimal(18),
+    },
+  });
+  const deactivateAccess = makeAccess(businessA.id, "MEMBER", deactivateMem.id);
+  const deactivateJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: deactivateMem.id,
+    },
+  });
+  async function deactivateExactMembership() {
+    const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+    try {
+      await otherClient.membership.update({
+        where: { id: deactivateMem.id },
+        data: { active: false },
+      });
+    } finally {
+      await otherClient.$disconnect();
+    }
+  }
+  await expectError(
+    "MEMBER clock-in after membership deactivation is refused",
+    () =>
+      clockInTime(
+        prisma,
+        deactivateAccess,
+        {
+          membershipId: deactivateMem.id,
+          activityType: "JOB",
+          jobId: deactivateJob.id,
+        },
+        { afterInitialRead: deactivateExactMembership },
+      ),
+    (error) => error instanceof ForbiddenError,
+  );
+  check(
+    "Refused deactivated clock-in writes no TimeEntry",
+    (await prisma.timeEntry.count({
+      where: { jobId: deactivateJob.id, businessId: businessA.id },
+    })) === 0,
+  );
+
+  await prisma.membership.update({
+    where: { id: deactivateMem.id },
+    data: { active: true },
+  });
+  const deactivateRunning = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: deactivateMem.id,
+      jobId: deactivateJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      source: "CLOCK",
+      startedAt: hoursAgo(1),
+      endedAt: null,
+    },
+  });
+  await expectError(
+    "MEMBER clock-out after membership deactivation is refused",
+    () =>
+      clockOutTime(
+        prisma,
+        deactivateAccess,
+        { membershipId: deactivateMem.id },
+        { afterInitialRead: deactivateExactMembership },
+      ),
+    (error) => error instanceof ForbiddenError,
+  );
+  const deactivateRunningAfter = await prisma.timeEntry.findFirst({
+    where: { id: deactivateRunning.id, businessId: businessA.id },
+  });
+  check(
+    "Refused deactivated clock-out leaves RUNNING time open",
+    deactivateRunningAfter?.status === "RUNNING" && deactivateRunningAfter?.endedAt === null,
+  );
+
+  await prisma.membership.update({
+    where: { id: deactivateMem.id },
+    data: { active: true },
+  });
+  const deactivateComplete = await completeJobWithRunningTimeSafety(
+    prisma,
+    {
+      businessId: businessA.id,
+      jobId: deactivateJob.id,
+      actorMembershipId: deactivateMem.id,
+    },
+    { afterInitialRead: deactivateExactMembership },
+  );
+  const deactivateJobAfterComplete = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateTimeAfterComplete = await prisma.timeEntry.findFirst({
+    where: { id: deactivateRunning.id, businessId: businessA.id },
+  });
+  check(
+    "MEMBER complete after membership deactivation is refused",
+    deactivateComplete.ok === false &&
+      deactivateComplete.error === "That job could not be completed." &&
+      deactivateJobAfterComplete?.status === "IN_PROGRESS" &&
+      deactivateTimeAfterComplete?.status === "RUNNING",
+  );
+
+  const ownerCompletesInactiveJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      status: "IN_PROGRESS",
+      projectToken: randomUUID(),
+      assignedMembershipId: deactivateMem.id,
+    },
+  });
+  const ownerCompletesInactive = await completeJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: ownerCompletesInactiveJob.id,
+    actorMembershipId: ownerMem.id,
+  });
+  check(
+    "OWNER can still complete a Job whose assigned MEMBER is inactive",
+    ownerCompletesInactive.ok === true &&
+      (await prisma.job.findFirst({ where: { id: ownerCompletesInactiveJob.id } }))?.status ===
+        "COMPLETED",
   );
 
   await clockOutTime(prisma, memberA, { membershipId: memberMem.id }).catch(() => null);

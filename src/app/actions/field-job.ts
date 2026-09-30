@@ -17,15 +17,19 @@
  */
 import { revalidatePath } from "next/cache";
 import { findAssignedJob } from "@/lib/field-access";
+import {
+  FIELD_JOB_NOT_ASSIGNED,
+  reportAssignedJobProblem,
+  requestAssignedJobAdditionalWork,
+  startAssignedFieldJob,
+} from "@/lib/field-job-ops";
 import { prisma } from "@/lib/prisma";
 import {
   requireSaasOperatingEntitlement,
   saasOperatingErrorMessage,
   SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE,
 } from "@/lib/saas-billing/entitlement";
-import { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT, startJobRequiresCustomerConfirmation } from "@/lib/appointment-confirmation";
 import { ensureAppointmentConfirmationSchema } from "@/lib/appointment-data";
-import { evaluateStartJob } from "@/lib/job-lifecycle";
 import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import {
@@ -49,7 +53,7 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-const NOT_ASSIGNED_ERROR = "That job isn't assigned to you.";
+const NOT_ASSIGNED_ERROR = FIELD_JOB_NOT_ASSIGNED;
 const MAX_TEXT_LENGTH = 2000;
 
 async function requireAssignedJobOperating(jobId: string) {
@@ -87,34 +91,29 @@ export async function startAssignedJob(
   if (!assigned.job) {
     return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
-  const { job } = assigned;
 
   await ensureAppointmentConfirmationSchema(prisma);
-  const result = evaluateStartJob(job.status);
-  if (!result.ok) {
-    return { error: result.error };
+  const started = await startAssignedFieldJob(
+    prisma,
+    { businessId: assigned.businessId, membershipId: assigned.membershipId },
+    assigned.job.id,
+  );
+  if (!started.ok) {
+    return { error: started.error };
   }
 
-  if (result.nextStatus && startJobRequiresCustomerConfirmation(job)) {
-    return { error: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
-  }
-
-  if (result.nextStatus) {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: result.nextStatus },
-    });
+  if (!started.alreadyStarted) {
     await emitAndProcessBusinessEvent(prisma, {
-      businessId: job.businessId,
+      businessId: started.businessId,
       type: "JOB_STARTED",
       subjectType: "JOB",
-      subjectId: job.id,
-      payload: { customerId: job.customerId },
-      idempotencyKey: `JOB_STARTED:${job.id}`,
+      subjectId: started.jobId,
+      payload: { customerId: started.customerId },
+      idempotencyKey: `JOB_STARTED:${started.jobId}`,
     });
   }
 
-  revalidateFieldJob(job.id);
+  revalidateFieldJob(started.jobId);
   return {};
 }
 
@@ -300,23 +299,22 @@ export async function reportJobProblem(
   if (!assigned.job) {
     return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
-  const { job, businessId, membershipId } = assigned;
 
   // membershipId is the caller's OWN membership, derived server-side from
   // the session (see requireFieldWorkspace() in src/lib/field-access.ts) --
   // never accepted as form input, so a report can never be attributed to
   // anyone else.
-  await prisma.jobProblemReport.create({
-    data: {
-      businessId,
-      jobId: job.id,
-      membershipId,
-      description,
-    },
-  });
+  const reported = await reportAssignedJobProblem(
+    prisma,
+    { businessId: assigned.businessId, membershipId: assigned.membershipId },
+    { jobId: assigned.job.id, description },
+  );
+  if (!reported.ok) {
+    return { error: reported.error };
+  }
 
-  revalidateFieldJob(job.id);
-  revalidatePath(`/jobs/${job.id}`);
+  revalidateFieldJob(assigned.job.id);
+  revalidatePath(`/jobs/${assigned.job.id}`);
   return { message: "Problem reported. The office has been notified." };
 }
 
@@ -339,7 +337,6 @@ export async function requestAdditionalWorkFromField(
   if (!assigned.job) {
     return { error: assigned.error ?? NOT_ASSIGNED_ERROR };
   }
-  const { job, businessId } = assigned;
 
   // This NEVER changes approved scope, project total, or the invoice, and
   // never creates or approves a Change Order by itself -- it only creates
@@ -347,17 +344,17 @@ export async function requestAdditionalWorkFromField(
   // the Customer Project Portal already uses), tagged source: "EMPLOYEE" so
   // owner/admin can see it came from the field. Owner/admin decides
   // separately whether to price it into a Change Order.
-  await prisma.additionalWorkRequest.create({
-    data: {
-      businessId,
-      jobId: job.id,
-      description,
-      source: "EMPLOYEE",
-    },
-  });
+  const requested = await requestAssignedJobAdditionalWork(
+    prisma,
+    { businessId: assigned.businessId, membershipId: assigned.membershipId },
+    { jobId: assigned.job.id, description },
+  );
+  if (!requested.ok) {
+    return { error: requested.error };
+  }
 
-  revalidateFieldJob(job.id);
-  revalidatePath(`/jobs/${job.id}`);
+  revalidateFieldJob(assigned.job.id);
+  revalidatePath(`/jobs/${assigned.job.id}`);
   return {
     message: "Sent to the office. They'll follow up on pricing and scope.",
   };

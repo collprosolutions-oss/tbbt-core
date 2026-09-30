@@ -26,6 +26,7 @@ import {
   nativeAssignedJobWhere,
   type NativeJobDetail,
 } from "@/lib/native-field";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { NATIVE_JOB_NOT_AVAILABLE } from "@/lib/native-field-ops";
 import type { NativeFieldAccess } from "@/lib/native-session";
 import { NATIVE_SESSION_TOO_LARGE } from "@/lib/native-session-limits";
@@ -398,6 +399,9 @@ export async function syncNativeAssignedChecklistDraft(
     alreadySynced = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
       if (!locked || locked.assignedMembershipId !== access.membershipId) {
+        throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
+      }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
         throw new CleaningVisitError(ASSIGNED_WORKER_ONLY_MESSAGE);
       }
 

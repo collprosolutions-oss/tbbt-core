@@ -17,10 +17,11 @@
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).
  * After that authorize read, the write locks the Job and rechecks
- * businessId, assignedMembershipId, and status — the same assignment-
- * change protection Cleaning `recordAssignedVisitOutcome` uses — then
- * reuses the canonical start/complete/stop time-safe writes. This is not a
- * second lifecycle and does not send invoices.
+ * businessId, assignedMembershipId, status, and the exact active
+ * Membership — the same assignment-change protection Cleaning
+ * `recordAssignedVisitOutcome` uses — then reuses the canonical
+ * start/complete/stop time-safe writes. This is not a second lifecycle
+ * and does not send invoices.
  */
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -29,6 +30,7 @@ import {
 } from "@/lib/appointment-confirmation";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import {
   loadNativeAssignedJob,
   nativeAssignedJobWhere,
@@ -138,6 +140,9 @@ export async function stopNativeAssignedJobRunningTime(
       if (!assignmentStillHeld(locked, access)) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
 
       const result = await stopRunningAssignedJobTimeInTransaction(tx, {
         businessId: locked.businessId,
@@ -215,6 +220,9 @@ export async function completeNativeAssignedJob(
     const written = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
       if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
 
@@ -309,6 +317,9 @@ export async function startNativeAssignedJob(
     const written = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, assigned.id);
       if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
 

@@ -92,7 +92,12 @@ function readRepo(path) {
 }
 
 const photoOpsSrc = readRepo("src/lib/native-field-photos.ts");
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const photoLibSrc = readRepo("src/lib/native-field.ts");
+const finalizeFnSrc = photoOpsSrc.slice(
+  photoOpsSrc.indexOf("export async function finalizeNativeAssignedJobPhoto"),
+  photoOpsSrc.indexOf("export async function abortNativeAssignedJobPhoto"),
+);
 const authorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/authorize/route.ts");
 const finalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
 const abortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
@@ -118,9 +123,17 @@ check(
   "Finalize locks the assigned Job, rechecks assignment, and recounts before persist",
   photoOpsSrc.includes("lockTenantOwnedJob") &&
     photoOpsSrc.includes("assignmentStillHeld") &&
+    photoOpsSrc.includes("exactActiveMembershipHeld") &&
     photoOpsSrc.includes("afterInitialRead") &&
     photoOpsSrc.includes("tx.jobPhoto.count") &&
-    photoOpsSrc.includes("NATIVE_JOB_PHOTO_LIMIT"),
+    photoOpsSrc.includes("NATIVE_JOB_PHOTO_LIMIT") &&
+    finalizeFnSrc.indexOf("lockTenantOwnedJob") <
+      finalizeFnSrc.indexOf("exactActiveMembershipHeld") &&
+    finalizeFnSrc.indexOf("exactActiveMembershipHeld") <
+      finalizeFnSrc.indexOf("persistReadyJobPhoto") &&
+    membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    !membershipGuardSrc.includes("userId"),
 );
 check(
   "Refused finalize discards only this job's unattached private field-job-photo",
@@ -920,6 +933,102 @@ try {
       afterReassign.used === beforeReassign.used &&
       afterReassign.reserved === beforeReassign.reserved &&
       afterReassign.used === Number(readyUsedAfterReassign),
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Photo Worker",
+      email: `deactivate-${randomUUID()}@native-photos.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation photo fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation photo fixture access failed.");
+  }
+  const deactivateJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: deactivateMem.id,
+    },
+  });
+  const beforeDeactivate = await storageAccounting(businessA.id);
+  const deactivateAuth = await authorizeAndStore(
+    deactivateAccess.access,
+    deactivateJob.id,
+    "deactivate.jpg",
+  );
+  check("Worker can authorize a photo before membership deactivation", deactivateAuth.ok === true);
+  if (!deactivateAuth.ok) {
+    throw new Error("Expected deactivation authorize to succeed.");
+  }
+  const photosBeforeDeactivate = await prisma.jobPhoto.count({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateFinalize = await finalizeNativeAssignedJobPhoto(
+    prisma,
+    deactivateAccess.access,
+    deactivateJob.id,
+    { assetId: deactivateAuth.assetId, stage: "BEFORE" },
+    storage,
+    {
+      afterInitialRead: async () => {
+        const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+        try {
+          await otherClient.membership.update({
+            where: { id: deactivateMem.id },
+            data: { active: false },
+          });
+        } finally {
+          await otherClient.$disconnect();
+        }
+      },
+    },
+  );
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  const photosAfterDeactivate = await prisma.jobPhoto.count({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivatePhoto = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: deactivateAuth.assetId, businessId: businessA.id },
+  });
+  const deactivateAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: deactivateAuth.assetId },
+  });
+  const afterDeactivate = await storageAccounting(businessA.id);
+  check(
+    "Deactivated membership after the initial read refuses finalize and creates no photo",
+    deactivateFinalize.ok === false &&
+      deactivateFinalize.status === 404 &&
+      deactivateFinalize.error === NATIVE_JOB_NOT_AVAILABLE &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id &&
+      photosAfterDeactivate === photosBeforeDeactivate &&
+      deactivatePhoto == null,
+  );
+  check(
+    "Deactivated finalize leaves no READY orphan or charged storage",
+    deactivateAsset.status === "FAILED" &&
+      afterDeactivate.used === beforeDeactivate.used &&
+      afterDeactivate.reserved === beforeDeactivate.reserved,
   );
 
   const gapJob = await prisma.job.create({

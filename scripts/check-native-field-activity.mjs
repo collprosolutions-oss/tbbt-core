@@ -97,7 +97,15 @@ function readRepo(path) {
 }
 
 const activityOpsSrc = readRepo("src/lib/native-field-activity.ts");
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
+const startNativeActivityFnSrc = activityOpsSrc.slice(
+  activityOpsSrc.indexOf("export async function startNativeAssignedActivityTime"),
+  activityOpsSrc.indexOf("export async function stopNativeAssignedActivityTime"),
+);
+const stopNativeActivityFnSrc = activityOpsSrc.slice(
+  activityOpsSrc.indexOf("export async function stopNativeAssignedActivityTime"),
+);
 const nativeFieldSrc = readRepo("src/lib/native-field.ts");
 const startRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/start-activity/route.ts");
 const stopRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/stop-activity/route.ts");
@@ -120,6 +128,7 @@ check(
     activityOpsSrc.includes("nativeAssignedJobWhere") &&
     activityOpsSrc.includes("lockTenantOwnedJob") &&
     activityOpsSrc.includes("assignmentStillHeld") &&
+    activityOpsSrc.includes("exactActiveMembershipHeld") &&
     activityOpsSrc.includes("afterInitialRead") &&
     activityOpsSrc.includes("requireSaasOperatingEntitlement") &&
     startRouteSrc.includes("startNativeAssignedActivityTime") &&
@@ -146,6 +155,26 @@ check(
     !stopActivityFnSrc.includes("evaluateCompleteJob") &&
     timeCardOpsSrc.includes("TRAVEL_STOP_TIME_CLOSED_REASON") &&
     timeCardOpsSrc.includes("MATERIAL_PICKUP_STOP_TIME_CLOSED_REASON"),
+);
+check(
+  "Exact active membership is rechecked after the Job lock on start and stop activity",
+  membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    !membershipGuardSrc.includes("userId") &&
+    startNativeActivityFnSrc.includes("exactActiveMembershipHeld") &&
+    stopNativeActivityFnSrc.includes("exactActiveMembershipHeld") &&
+    startNativeActivityFnSrc
+      .slice(startNativeActivityFnSrc.indexOf("$transaction"))
+      .indexOf("lockTenantOwnedJob") <
+      startNativeActivityFnSrc
+        .slice(startNativeActivityFnSrc.indexOf("$transaction"))
+        .indexOf("exactActiveMembershipHeld") &&
+    stopNativeActivityFnSrc
+      .slice(stopNativeActivityFnSrc.indexOf("$transaction"))
+      .indexOf("lockTenantOwnedJob") <
+      stopNativeActivityFnSrc
+        .slice(stopNativeActivityFnSrc.indexOf("$transaction"))
+        .indexOf("exactActiveMembershipHeld"),
 );
 check(
   "Native activity routes use Bearer helpers, cap JSON, and never use cookies()",
@@ -1025,6 +1054,117 @@ try {
     raceJobAfter?.status === "SCHEDULED" &&
       raceJobAfter?.assignedMembershipId === otherMem.id &&
       raceTimeAfter === 0,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Activity Worker",
+      email: `deactivate-${randomUUID()}@native-activity.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation activity fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation activity fixture access failed.");
+  }
+  const deactivateStartJob = await createActivityJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Start Activity",
+  });
+  const deactivateStopJob = await createActivityJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Stop Activity",
+  });
+  const deactivateStopTime = await createRunningTime({
+    businessId: businessA.id,
+    membershipId: deactivateMem.id,
+    jobId: deactivateStopJob.id,
+    activityType: "TRAVEL",
+  });
+  async function deactivateExactMembership() {
+    const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+    try {
+      await otherClient.membership.update({
+        where: { id: deactivateMem.id },
+        data: { active: false },
+      });
+    } finally {
+      await otherClient.$disconnect();
+    }
+  }
+  const deactivateStart = await startNativeAssignedActivityTime(
+    prisma,
+    deactivateAccess.access,
+    deactivateStartJob.id,
+    "TRAVEL",
+    { afterInitialRead: deactivateExactMembership },
+  );
+  const deactivateStartJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateStartJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateStartTimeAfter = await prisma.timeEntry.count({
+    where: { jobId: deactivateStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "Deactivated membership after the initial read refuses Start travel",
+    deactivateStart.ok === false &&
+      deactivateStart.status === 404 &&
+      deactivateStart.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated Start travel leaves Job and time unchanged",
+    deactivateStartJobAfter?.status === "SCHEDULED" &&
+      deactivateStartJobAfter?.assignedMembershipId === deactivateMem.id &&
+      deactivateStartTimeAfter === 0,
+  );
+
+  await prisma.membership.update({
+    where: { id: deactivateMem.id },
+    data: { active: true },
+  });
+  const deactivateStop = await stopNativeAssignedActivityTime(
+    prisma,
+    deactivateAccess.access,
+    deactivateStopJob.id,
+    "TRAVEL",
+    { afterInitialRead: deactivateExactMembership },
+  );
+  const deactivateStopJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateStopJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateStopTimeAfter = await prisma.timeEntry.findFirst({
+    where: { id: deactivateStopTime.id, businessId: businessA.id },
+    select: { status: true, endedAt: true, activityType: true },
+  });
+  check(
+    "Deactivated membership after the initial read refuses Stop travel",
+    deactivateStop.ok === false &&
+      deactivateStop.status === 404 &&
+      deactivateStop.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated Stop travel leaves Job and running TRAVEL unchanged",
+    deactivateStopJobAfter?.status === "SCHEDULED" &&
+      deactivateStopJobAfter?.assignedMembershipId === deactivateMem.id &&
+      deactivateStopTimeAfter?.status === "RUNNING" &&
+      deactivateStopTimeAfter?.endedAt === null &&
+      deactivateStopTimeAfter?.activityType === "TRAVEL",
   );
 
   const priorWeekUser = await prisma.user.create({

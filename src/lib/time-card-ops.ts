@@ -12,6 +12,7 @@ import { CAPABILITIES, ForbiddenError, requireBusinessCapability } from "@/lib/a
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   approvalSnapshot,
@@ -499,6 +500,10 @@ export async function clockInTime(
   db: PrismaClient,
   access: BusinessAccess,
   input: ClockInInput,
+  options?: {
+    /** Proof hook: runs after the authorize read and before the write transaction. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   const actorRole = access.workspace.role;
@@ -519,7 +524,19 @@ export async function clockInTime(
     requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   }
 
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+
   return db.$transaction(async (tx) => {
+    if (
+      !(await exactActiveMembershipHeld(tx, {
+        businessId: access.businessId,
+        membershipId: actorMembershipId,
+      }))
+    ) {
+      throw new ForbiddenError();
+    }
     await loadMembershipInBusiness(tx, access.businessId, workerMembershipId);
     await assertIntervalWeeksEditable(
       tx,
@@ -624,6 +641,10 @@ export async function clockOutTime(
   db: PrismaClient,
   access: BusinessAccess,
   input: { membershipId: string; endedAt?: Date; note?: string | null; timeZone?: string },
+  options?: {
+    /** Proof hook: runs after the authorize read and before the write transaction. */
+    afterInitialRead?: () => Promise<void>;
+  },
 ) {
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   const actorRole = access.workspace.role;
@@ -638,7 +659,19 @@ export async function clockOutTime(
     requireBusinessCapability(access, CAPABILITIES.MANAGE_TIME_CARDS);
   }
 
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+
   return db.$transaction(async (tx) => {
+    if (
+      !(await exactActiveMembershipHeld(tx, {
+        businessId: access.businessId,
+        membershipId: actorMembershipId,
+      }))
+    ) {
+      throw new ForbiddenError();
+    }
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
 
     const running = await tx.timeEntry.findFirst({
@@ -1707,6 +1740,15 @@ export async function completeJobWithRunningTimeSafetyInTransaction(
   if (options?.afterLock) {
     await options.afterLock();
   }
+  if (
+    input.actorMembershipId &&
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
+    return { ok: false, error: "That job could not be completed." };
+  }
 
   const lifecycle = evaluateCompleteJob(job.status);
   if (!lifecycle.ok) {
@@ -1978,6 +2020,15 @@ export async function startJobWithRunningTimeSafetyInTransaction(
   if (!job) {
     return { ok: false, error: MISSING_START_ACTOR_ERROR };
   }
+  if (
+    input.actorMembershipId &&
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
+    return { ok: false, error: MISSING_START_ACTOR_ERROR };
+  }
 
   const lifecycle = evaluateStartJob(job.status);
   if (!lifecycle.ok) {
@@ -2080,6 +2131,15 @@ export async function stopRunningAssignedJobTimeInTransaction(
 ): Promise<StopRunningAssignedJobTimeResult> {
   const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
   if (!job) {
+    return { ok: false, error: MISSING_STOP_ACTOR_ERROR };
+  }
+  if (
+    input.actorMembershipId &&
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
     return { ok: false, error: MISSING_STOP_ACTOR_ERROR };
   }
   if (!input.actorMembershipId) {
@@ -2199,6 +2259,15 @@ export async function startAssignedActivityTimeInTransaction(
   if (!job) {
     return { ok: false, error: MISSING_ACTIVITY_START_ACTOR_ERROR };
   }
+  if (
+    input.actorMembershipId &&
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
+    return { ok: false, error: MISSING_ACTIVITY_START_ACTOR_ERROR };
+  }
   if (!input.actorMembershipId) {
     throw new TimeCardError(MISSING_ACTIVITY_START_ACTOR_ERROR);
   }
@@ -2263,6 +2332,15 @@ export async function stopAssignedActivityTimeInTransaction(
   }
   const job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
   if (!job) {
+    return { ok: false, error: MISSING_ACTIVITY_STOP_ACTOR_ERROR };
+  }
+  if (
+    input.actorMembershipId &&
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
     return { ok: false, error: MISSING_ACTIVITY_STOP_ACTOR_ERROR };
   }
   if (!input.actorMembershipId) {

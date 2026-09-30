@@ -13,6 +13,7 @@ import {
   nativeAssignedJobWhere,
   type NativeJobDetail,
 } from "@/lib/native-field";
+import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import {
   assignmentStillHeld,
   NATIVE_JOB_NOT_AVAILABLE,
@@ -140,6 +141,9 @@ export async function startNativeAssignedActivityTime(
       if (!assignmentStillHeld(locked, access)) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
 
       const result = await startAssignedActivityTimeInTransaction(tx, {
         businessId: locked.businessId,
@@ -207,6 +211,9 @@ export async function stopNativeAssignedActivityTime(
     const written = await db.$transaction(async (tx) => {
       const locked = await lockTenantOwnedJob(tx, access.businessId, authorized.jobId);
       if (!assignmentStillHeld(locked, access)) {
+        return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
+      }
+      if (!(await exactActiveMembershipHeld(tx, access))) {
         return { ok: false as const, status: 404, error: NATIVE_JOB_NOT_AVAILABLE };
       }
 

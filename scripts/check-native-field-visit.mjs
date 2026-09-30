@@ -110,9 +110,10 @@ const jobScreenSrc = readRepo("apps/native/src/screens/JobScreen.tsx");
 const nativeApiSrc = readRepo("apps/native/src/api.ts");
 const nativeTypesSrc = readRepo("apps/native/src/types.ts");
 const docsSrc = readRepo("docs/NATIVE_FIELD.md");
-const recordOutcomeSrc = canonicalOpsSrc.slice(
+  const recordOutcomeSrc = canonicalOpsSrc.slice(
   canonicalOpsSrc.indexOf("export async function recordAssignedVisitOutcome"),
 );
+const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 
 console.log("\nSTATIC — Canonical visit write, lock recheck, and Job-screen reload");
 check(
@@ -131,10 +132,16 @@ check(
   recordOutcomeSrc.includes("lockTenantOwnedJob") &&
     recordOutcomeSrc.includes("completeJobWithRunningTimeSafetyInTransaction") &&
     recordOutcomeSrc.includes("assignedMembershipId") &&
+    recordOutcomeSrc.includes("exactActiveMembershipHeld") &&
     recordOutcomeSrc.indexOf("lockTenantOwnedJob") <
       recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
     recordOutcomeSrc.indexOf("locked.assignedMembershipId") <
-      recordOutcomeSrc.indexOf("jobCrewVisit.update"),
+      recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
+    recordOutcomeSrc.indexOf("exactActiveMembershipHeld") <
+      recordOutcomeSrc.indexOf("jobCrewVisit.update") &&
+    membershipGuardSrc.includes('FROM "Membership"') &&
+    membershipGuardSrc.includes("FOR UPDATE") &&
+    !membershipGuardSrc.includes("userId"),
 );
 check(
   "Native visit route uses Bearer helpers, caps JSON, and never uses cookies()",
@@ -719,6 +726,88 @@ try {
       raceVisit?.outcomeRecordedByMembershipId == null &&
       raceJobAfter?.status === "IN_PROGRESS" &&
       raceJobAfter?.assignedMembershipId === otherMem.id,
+  );
+
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Deactivate Visit Worker",
+      email: `deactivate-${randomUUID()}@native-visit.example`,
+      passwordHash,
+    },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
+  if (!deactivateSignIn.ok) {
+    throw new Error("Deactivation visit fixture sign-in failed.");
+  }
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
+  if (!deactivateAccess.ok) {
+    throw new Error("Deactivation visit fixture access failed.");
+  }
+  const deactivateJob = await createTradeJob({
+    businessId: businessA.id,
+    tradeCode: "CLEANING",
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Visit Canary",
+  });
+  await setCleaningVisitCadence(prisma, ownerA, { jobId: deactivateJob.id, cadence: "WEEKLY" });
+  const deactivateEventsBefore = await prisma.businessEvent.count({
+    where: { businessId: businessA.id, subjectId: deactivateJob.id },
+  });
+  const deactivate = await recordNativeAssignedVisitOutcome(
+    prisma,
+    deactivateAccess.access,
+    deactivateJob.id,
+    "VISIT_COMPLETED",
+    {
+      afterInitialRead: async () => {
+        const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+        try {
+          await otherClient.membership.update({
+            where: { id: deactivateMem.id },
+            data: { active: false },
+          });
+        } finally {
+          await otherClient.$disconnect();
+        }
+      },
+    },
+  );
+  const deactivateVisit = await prisma.jobCrewVisit.findFirst({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  const deactivateTimeAfter = await prisma.timeEntry.count({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateEventsAfter = await prisma.businessEvent.count({
+    where: { businessId: businessA.id, subjectId: deactivateJob.id },
+  });
+  check(
+    "Deactivated membership after the initial read refuses VISIT_COMPLETED",
+    deactivate.ok === false &&
+      deactivate.status === 404 &&
+      deactivate.error === NATIVE_JOB_NOT_AVAILABLE,
+  );
+  check(
+    "Deactivated VISIT_COMPLETED leaves no visit, Job, time, or event write",
+    deactivateVisit?.outcomeStatus === "NONE" &&
+      deactivateVisit?.outcomeRecordedAt == null &&
+      deactivateVisit?.outcomeRecordedByMembershipId == null &&
+      deactivateJobAfter?.status === "IN_PROGRESS" &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id &&
+      deactivateTimeAfter === 0 &&
+      deactivateEventsAfter === deactivateEventsBefore,
   );
 
   const rollbackStartedAt = new Date();
