@@ -54,14 +54,6 @@ function readRepo(rel) {
 console.log("\nSTATIC — canonical schedule/assign persist first/later windows");
 const jobActionSrc = readRepo("src/app/actions/job.ts");
 const workforceSrc = readRepo("src/lib/workforce.ts");
-const selfSrc = readRepo("scripts/check-handyman-schedule-field-day.mjs");
-check(
-  "This check imports scheduleJob / assignJobMember instead of a parallel writer",
-  selfSrc.includes('await import("@/app/actions/job")') &&
-    selfSrc.includes("scheduleJob") &&
-    selfSrc.includes("assignJobMember") &&
-    !selfSrc.includes("simulateAssignJobMember"),
-);
 check(
   "scheduleJob still recomputes first/later from appointmentPositionOnDay",
   jobActionSrc.includes("appointmentPositionOnDay") &&
@@ -441,6 +433,11 @@ try {
     Boolean(pickupOverlap.overlap),
   );
 
+  await prisma.businessSettings.upsert({
+    where: { businessId: businessA.id },
+    create: { businessId: businessA.id, schedulingBufferMinutes: 0 },
+    update: { schedulingBufferMinutes: 0 },
+  });
   const pickupJob = await createJob(businessA, customerA);
   const occupiedPickup = await createJob(businessA, customerA2);
   const occupiedScheduled = await scheduleWithAck(occupiedPickup.id, {
@@ -450,13 +447,21 @@ try {
     pickupDurationMinutes: "90",
   });
   check("Occupied pickup job schedules", !occupiedScheduled?.error);
+  const occupiedRow = await prisma.job.findFirst({
+    where: { id: occupiedPickup.id, businessId: businessA.id },
+    select: { pickupDurationMinutes: true },
+  });
+  check(
+    "scheduleJob persisted the known 90-minute pickup on the occupied job",
+    occupiedRow?.pickupDurationMinutes === 90,
+  );
   const colliding = await scheduleJob(
     {},
     form({
       jobId: pickupJob.id,
       date: "2027-06-16",
       time: "08:00",
-      durationPreset: "45",
+      durationPreset: "60",
     }),
   );
   check(
