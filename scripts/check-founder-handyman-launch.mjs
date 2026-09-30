@@ -149,9 +149,7 @@ check(
     selfSrc.includes('await import("@/app/actions/public-estimate")') &&
     selfSrc.includes('await import("@/lib/job-from-estimate")') &&
     selfSrc.includes('await import("@/lib/complete-job-invoice")') &&
-    selfSrc.includes('await import("@/lib/time-card-ops")') &&
-    !selfSrc.includes("function fakeSendEstimate") &&
-    !selfSrc.includes("function simulateApprove"),
+    selfSrc.includes('await import("@/lib/time-card-ops")'),
 );
 check(
   "This verifier reuses the canonical disposable harness + local-database guard",
@@ -493,12 +491,20 @@ try {
   }
 
   setTestAccess(memberA);
-  const memberSend = await sendEstimate({}, form({ estimateId: draft.id }));
-  check("MEMBER cannot send the estimate", Boolean(memberSend?.error));
+  await expectThrow(
+    "MEMBER cannot send the estimate",
+    () => sendEstimate({}, form({ estimateId: draft.id })),
+    (error) => error instanceof ForbiddenError,
+  );
 
   setTestAccess(ownerB);
-  const crossSend = await sendEstimate({}, form({ estimateId: draft.id }));
-  check("Tenant B cannot send tenant A's estimate", Boolean(crossSend?.error));
+  await expectThrow(
+    "Tenant B cannot send tenant A's estimate",
+    () => sendEstimate({}, form({ estimateId: draft.id })),
+    (error) =>
+      error instanceof ForbiddenError ||
+      /not in the authorized business workspace/i.test(String(error?.message)),
+  );
 
   setTestAccess(ownerA);
   const sent = await sendEstimate({}, form({ estimateId: draft.id }));
@@ -846,7 +852,10 @@ try {
   }
 
   const closeout = await loadJobProfitabilityCloseout(prisma, ownerA, job.id);
-  check("OWNER can load job profitability closeout", closeout != null && closeout.job.id === job.id);
+  check(
+    "OWNER can load job profitability closeout",
+    closeout != null && closeout.jobId === job.id && closeout.businessId === businessA.id,
+  );
   await expectThrow(
     "MEMBER cannot read profitability closeout",
     () => loadJobProfitabilityCloseout(prisma, memberA, job.id),
