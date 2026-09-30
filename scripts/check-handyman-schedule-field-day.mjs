@@ -63,7 +63,25 @@ check(
 check(
   "assignJobMember syncs persisted arrival windows after the assignment write",
   jobActionSrc.includes("syncAssignedJobArrivalWindows") &&
+    jobActionSrc.includes("writeAssignedMembershipAndLaneWindows") &&
+    jobActionSrc.includes("lockBusinessScheduleReservation") &&
     workforceSrc.includes("export function laneArrivalWindowUpdates"),
+);
+const persistSrc = readRepo("src/lib/workforce-data.ts");
+const persistSection = persistSrc.slice(
+  persistSrc.indexOf("export type ArrivalWindowLaneRef"),
+  persistSrc.indexOf("export async function loadCapacityJobs"),
+);
+check(
+  "persistLaneArrivalWindows locks, re-reads assignment/time, and writes inside one reservation",
+  persistSection.includes("lockBusinessScheduleReservation") &&
+    persistSection.includes("$transaction") &&
+    persistSection.includes("assignedMembershipId: true") &&
+    persistSection.includes("scheduledAt: true") &&
+    persistSection.includes("touchedJobIds") &&
+    persistSection.includes("previousLanes") &&
+    persistSection.includes("LANE_WINDOW_JOB_SELECT") &&
+    !persistSection.includes("jobs: Array<{"),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -82,11 +100,17 @@ const session = await openDisposableTestDatabase({
 try {
   const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
   const { ForbiddenError } = await import("@/lib/authorization");
+  const { PrismaClient } = await import("@prisma/client");
   const { scheduleJob, assignJobMember } = await import("@/app/actions/job");
   const { DEFAULT_SCHEDULING_POLICY } = await import("@/lib/workforce");
+  const { persistLaneArrivalWindows } = await import("@/lib/workforce-data");
   const { portalAppointmentWhenLabel } = await import("@/lib/portal-project-home");
   const { evaluateProposedSchedule } = await import("@/lib/availability");
   const { zonedCivilToUtc } = await import("@/lib/business-timezone");
+  const { changeOwnerDayRouteAppointment } = await import(
+    "@/lib/owner-day-route-appointment-ops"
+  );
+  const { scheduleSnapshotFromJob } = await import("@/lib/owner-day-route/snapshot");
   const { setTestAccess } = await import("./estimate-options-test-access.mjs");
   const { prisma } = await import("@/lib/prisma");
 
@@ -467,6 +491,241 @@ try {
   check(
     "scheduleJob warns when a later job's known pickup overlaps the proposed slot",
     Boolean(colliding?.warning) && Boolean(colliding?.conflictAck),
+  );
+
+  console.log("\nBEHAVIOR — lane persist reservation, rollback, concurrency, and day-route");
+  setTestAccess(ownerA);
+  const raceFirst = await createJob(businessA, customerA);
+  const raceLater = await createJob(businessA, customerA);
+  const raceOtherWorker = await createJob(businessA, customerA);
+  const raceOtherDay = await createJob(businessA, customerA);
+  await scheduleWithAck(raceFirst.id, {
+    date: "2027-06-22",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  await scheduleWithAck(raceLater.id, {
+    date: "2027-06-22",
+    time: "11:00",
+    durationPreset: "60",
+  });
+  await scheduleWithAck(raceOtherWorker.id, {
+    date: "2027-06-22",
+    time: "11:00",
+    durationPreset: "60",
+  });
+  await scheduleWithAck(raceOtherDay.id, {
+    date: "2027-06-23",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  await assignJobMember({}, form({ jobId: raceFirst.id, membershipId: memberMem.id }));
+  await assignJobMember({}, form({ jobId: raceLater.id, membershipId: memberMem.id }));
+  await assignJobMember({}, form({ jobId: raceOtherWorker.id, membershipId: otherMemberMem.id }));
+  await assignJobMember({}, form({ jobId: raceOtherDay.id, membershipId: memberMem.id }));
+
+  await prisma.job.update({
+    where: { id: raceOtherWorker.id },
+    data: { arrivalWindowMinutes: DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes },
+  });
+  await prisma.job.update({
+    where: { id: raceOtherDay.id },
+    data: { arrivalWindowMinutes: DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes },
+  });
+
+  const laterBeforeStale = await prisma.job.findFirst({
+    where: { id: raceLater.id, businessId: businessA.id },
+    select: { arrivalWindowMinutes: true, scheduledAt: true, assignedMembershipId: true },
+  });
+  check(
+    "Control: later worker-day job persisted a 120-minute window",
+    laterBeforeStale?.arrivalWindowMinutes === DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes,
+  );
+  const staleAttempt = await persistLaneArrivalWindows(prisma, {
+    businessId: businessA.id,
+    timeZone: NY,
+    policy: DEFAULT_SCHEDULING_POLICY,
+    touchedJobIds: [raceLater.id],
+    previousLanes: [
+      {
+        assignedMembershipId: null,
+        scheduledAt: laterBeforeStale?.scheduledAt ?? null,
+      },
+    ],
+  });
+  const laterAfterStale = await prisma.job.findFirst({
+    where: { id: raceLater.id, businessId: businessA.id },
+    select: { arrivalWindowMinutes: true, assignedMembershipId: true },
+  });
+  check(
+    "Stale caller snapshot cannot overwrite a correct 120-minute later window back to null",
+    laterAfterStale?.assignedMembershipId === memberMem.id &&
+      laterAfterStale?.arrivalWindowMinutes === DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes &&
+      !staleAttempt.some((row) => row.id === raceLater.id && row.arrivalWindowMinutes == null),
+  );
+
+  const [otherWorkerPoisoned, otherDayPoisoned] = await Promise.all([
+    prisma.job.findFirst({
+      where: { id: raceOtherWorker.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true },
+    }),
+    prisma.job.findFirst({
+      where: { id: raceOtherDay.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true },
+    }),
+  ]);
+  check(
+    "Unrelated worker/day lanes are not rewritten by a persist of another lane",
+    otherWorkerPoisoned?.arrivalWindowMinutes ===
+      DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes &&
+      otherDayPoisoned?.arrivalWindowMinutes ===
+        DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes,
+  );
+
+  await prisma.job.update({
+    where: { id: raceFirst.id },
+    data: { arrivalWindowMinutes: DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes },
+  });
+  await prisma.job.update({
+    where: { id: raceLater.id },
+    data: { arrivalWindowMinutes: null },
+  });
+  let injectedUpdates = 0;
+  const failing = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }).$extends({
+    query: {
+      job: {
+        async updateMany({ args, query }) {
+          const result = await query(args);
+          injectedUpdates += 1;
+          if (injectedUpdates >= 2) {
+            throw new Error("injected lane update failure");
+          }
+          return result;
+        },
+      },
+    },
+  });
+  let injectedError = null;
+  try {
+    await persistLaneArrivalWindows(failing, {
+      businessId: businessA.id,
+      timeZone: NY,
+      policy: DEFAULT_SCHEDULING_POLICY,
+      touchedJobIds: [raceFirst.id, raceLater.id],
+      previousLanes: [
+        {
+          assignedMembershipId: memberMem.id,
+          scheduledAt: laterBeforeStale?.scheduledAt ?? null,
+        },
+      ],
+    });
+  } catch (error) {
+    injectedError = error;
+  }
+  await failing.$disconnect();
+  const [firstAfterInject, laterAfterInject] = await Promise.all([
+    prisma.job.findFirst({
+      where: { id: raceFirst.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true },
+    }),
+    prisma.job.findFirst({
+      where: { id: raceLater.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true },
+    }),
+  ]);
+  check(
+    "Injected failure during multiple lane updates rolls the entire update back",
+    Boolean(injectedError) &&
+      /injected lane update failure/.test(String(injectedError?.message ?? injectedError)) &&
+      injectedUpdates >= 2 &&
+      firstAfterInject?.arrivalWindowMinutes ===
+        DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes &&
+      laterAfterInject?.arrivalWindowMinutes == null,
+  );
+
+  await prisma.job.update({
+    where: { id: raceFirst.id },
+    data: { arrivalWindowMinutes: null },
+  });
+  await prisma.job.update({
+    where: { id: raceLater.id },
+    data: { arrivalWindowMinutes: DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes },
+  });
+
+  const concFirst = await createJob(businessA, customerA);
+  const concLater = await createJob(businessA, customerA);
+  await scheduleWithAck(concFirst.id, {
+    date: "2027-06-24",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  await scheduleWithAck(concLater.id, {
+    date: "2027-06-24",
+    time: "11:00",
+    durationPreset: "60",
+  });
+  const [concAssignFirst, concAssignLater] = await Promise.all([
+    assignJobMember({}, form({ jobId: concFirst.id, membershipId: memberMem.id })),
+    assignJobMember({}, form({ jobId: concLater.id, membershipId: memberMem.id })),
+  ]);
+  const [concFirstRow, concLaterRow] = await Promise.all([
+    prisma.job.findFirst({
+      where: { id: concFirst.id, businessId: businessA.id },
+    }),
+    prisma.job.findFirst({
+      where: { id: concLater.id, businessId: businessA.id },
+    }),
+  ]);
+  check(
+    "Concurrent assign operations serialize and leave first exact / later windowed",
+    !concAssignFirst?.error &&
+      !concAssignLater?.error &&
+      concFirstRow?.assignedMembershipId === memberMem.id &&
+      concLaterRow?.assignedMembershipId === memberMem.id &&
+      concFirstRow?.arrivalWindowMinutes == null &&
+      concLaterRow?.arrivalWindowMinutes ===
+        DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes,
+  );
+
+  const routeFirst = await createJob(businessA, customerA);
+  const routeLater = await createJob(businessA, customerA);
+  await scheduleWithAck(routeFirst.id, {
+    date: "2027-06-25",
+    time: "10:00",
+    durationPreset: "60",
+  });
+  await assignJobMember({}, form({ jobId: routeFirst.id, membershipId: memberMem.id }));
+  await scheduleWithAck(routeLater.id, {
+    date: "2027-06-25",
+    time: "14:00",
+    durationPreset: "60",
+  });
+  await assignJobMember({}, form({ jobId: routeLater.id, membershipId: memberMem.id }));
+  const routeLaterRow = await prisma.job.findFirst({
+    where: { id: routeLater.id, businessId: businessA.id },
+  });
+  const routeChanged = await changeOwnerDayRouteAppointment(prisma, ownerA, {
+    jobId: routeLater.id,
+    date: "2027-06-25",
+    time: "08:00",
+    snapshot: scheduleSnapshotFromJob(routeLaterRow),
+  });
+  const [routeMoved, routeFormerFirst] = await Promise.all([
+    prisma.job.findFirst({
+      where: { id: routeLater.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true, scheduledAt: true },
+    }),
+    prisma.job.findFirst({
+      where: { id: routeFirst.id, businessId: businessA.id },
+      select: { arrivalWindowMinutes: true },
+    }),
+  ]);
+  check(
+    "Day-route reorder of an earlier stop persists a window on the former first job",
+    routeChanged.arrivalWindowMinutes == null &&
+      routeMoved?.arrivalWindowMinutes == null &&
+      routeFormerFirst?.arrivalWindowMinutes ===
+        DEFAULT_SCHEDULING_POLICY.defaultArrivalWindowMinutes,
   );
 
   if (failed > 0) {
