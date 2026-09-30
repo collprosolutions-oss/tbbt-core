@@ -31,8 +31,13 @@ const {
   sensitiveValuesFromEnv,
   snapshotPreflightEnv,
 } = await import("@/lib/founder-production-preflight");
-const { assertLocalDatabaseUrl } = await import("./lib/local-database-guard.mjs");
-const { withDisposableTestDatabase } = await import("./disposable-test-database.mjs");
+const {
+  RemoteDatabaseRefusedError,
+  assertLocalDatabaseUrl,
+  createRecordingOperations,
+  isLocalDatabaseUrl,
+  withDisposableTestDatabase,
+} = await import("./disposable-test-database.mjs");
 const { queryDuplicateRootConversionJobs, runProductionReadonlyProbe, withReadOnlyTransaction } =
   await import("./founder-production-preflight-db.mjs");
 
@@ -446,22 +451,54 @@ check("cli output omits secrets", true);
 check("cli keeps the production probe manual", cliOutput.includes("[MANUAL VERIFICATION REQUIRED] Production database read-only probe"));
 check("cli does not block duplicates from DATABASE_URL", !cliOutput.includes("[BLOCKED] Duplicate root conversion jobs"));
 
-console.log("\nDB — disposable 127.0.0.1 Postgres");
-const adminUrl = "postgresql://tbbt_preflight@127.0.0.1:5432/tbbt_preflight";
-const adminHost = new URL(adminUrl).hostname;
-check("admin url is 127.0.0.1", adminHost === "127.0.0.1");
-assertLocalDatabaseUrl(adminUrl, "founder preflight disposable database");
+console.log("\nDB — disposable local Postgres");
+const checkerSrc = read("scripts/check-founder-production-preflight.mjs");
+check(
+  "disposable admin URL is not a hardcoded tbbt_preflight role",
+  !checkerSrc.includes("postgresql://tbbt_preflight@127.0.0.1"),
+);
+{
+  const operations = createRecordingOperations();
+  let reachedRemoteWork = false;
+  let refusedRemote = false;
+  try {
+    await withDisposableTestDatabase(
+      {
+        databaseUrl: "postgresql://tbbt_preflight@db.example.com:5432/tbbt_preflight",
+        namePrefix: "founder_preflight_remote",
+        operations,
+        pushSchema: false,
+      },
+      async () => {
+        reachedRemoteWork = true;
+      },
+    );
+  } catch (error) {
+    refusedRemote = error instanceof RemoteDatabaseRefusedError;
+  }
+  check(
+    "MUTATION — remote fixture URL is refused before CREATE DATABASE",
+    refusedRemote === true && reachedRemoteWork === false && operations.log.length === 0,
+  );
+}
+
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error("DATABASE_URL must be set to run the disposable preflight database proofs.");
+  process.exit(1);
+}
+assertLocalDatabaseUrl(baseUrl, "founder preflight disposable database");
+check("disposable admin URL uses the local-database guard", isLocalDatabaseUrl(baseUrl));
 
 await withDisposableTestDatabase(
   {
-    databaseUrl: adminUrl,
+    databaseUrl: baseUrl,
     namePrefix: "founder_preflight",
     pushSchema: false,
   },
   async ({ prisma, testUrl }) => {
-    const host = new URL(testUrl).hostname;
-    if (host !== "127.0.0.1") {
-      throw new Error(`Refusing founder preflight test database host ${host}`);
+    if (!isLocalDatabaseUrl(testUrl)) {
+      throw new Error("Refusing founder preflight test database that is not a local Postgres URL.");
     }
     assertLocalDatabaseUrl(testUrl, "founder preflight duplicate query");
     await prisma.$executeRawUnsafe(`
