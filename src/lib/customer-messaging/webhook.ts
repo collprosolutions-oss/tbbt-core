@@ -7,6 +7,7 @@ import type { PrismaClient } from "@prisma/client";
 
 const GENERIC_NOT_FOUND = { error: "Not found." };
 const GENERIC_INVALID = { error: "Invalid signature." };
+const GENERIC_UNAVAILABLE = { error: "Unable to process." };
 const GENERIC_OK = { ok: true as const };
 
 export type CustomerMessagingWebhookRequest = {
@@ -53,8 +54,12 @@ export async function handleCustomerMessagingWebhookRequest(
     if (!parsed) {
       return { status: 400, body: GENERIC_INVALID };
     }
-    await handleParsedCustomerMessagingWebhook(db, parsed);
-    return { status: 200, body: GENERIC_OK };
+    try {
+      await handleParsedCustomerMessagingWebhook(db, parsed);
+      return { status: 200, body: GENERIC_OK };
+    } catch {
+      return { status: 500, body: GENERIC_UNAVAILABLE };
+    }
   }
 
   const secret = getCustomerMessagingWebhookSecret();
@@ -65,6 +70,10 @@ export async function handleCustomerMessagingWebhookRequest(
   if (!update) {
     return { status: 400, body: GENERIC_INVALID };
   }
-  await applyCustomerMessageDeliveryUpdate(db, update);
-  return { status: 200, body: GENERIC_OK };
+  try {
+    await applyCustomerMessageDeliveryUpdate(db, update);
+    return { status: 200, body: GENERIC_OK };
+  } catch {
+    return { status: 500, body: GENERIC_UNAVAILABLE };
+  }
 }

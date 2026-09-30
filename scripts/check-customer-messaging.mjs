@@ -15,16 +15,37 @@ import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
+const ALLOWED_TEST_HOSTS = new Set(["localhost", "127.0.0.1"]);
+function assertLocalDatabaseUrl(urlString, label) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    console.error(`${label} is not a valid URL.`);
+    process.exit(1);
+  }
+  const host = (parsedUrl.hostname || "").toLowerCase();
+  if (!ALLOWED_TEST_HOSTS.has(host)) {
+    console.error(
+      `Refusing customer-messaging test DB: ${label} host must be localhost or 127.0.0.1, got ${host || "(empty)"}.`,
+    );
+    process.exit(1);
+  }
+  return parsedUrl;
+}
+
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "DATABASE_URL");
 
 const testDbName = "tbbt_customer_messaging_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+assertLocalDatabaseUrl(testUrl, "customer-messaging test DATABASE_URL");
 process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://customer-messaging.test";
 delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
@@ -66,6 +87,8 @@ const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const {
   applyCustomerMessageDeliveryUpdate,
   applyInboundConsentEvent,
+  claimedAtFromCuid,
+  inboundConsentTestHooks,
   attemptAppointmentReminderSms,
   attemptCustomerSms,
   attemptPaymentReminderSms,
@@ -156,6 +179,75 @@ function uniqueSmsDigits(lead) {
   return `${lead}${rest}`.slice(0, 10);
 }
 
+const BARRIER_WAIT_MS = 10_000;
+const LOCK_POLL_MS = 10_000;
+
+function createCount2Barrier() {
+  let count = 0;
+  const waiters = [];
+  let firstArrived;
+  const first = new Promise((resolve) => {
+    firstArrived = resolve;
+  });
+  return {
+    arrive: async () => {
+      count += 1;
+      if (count === 1) firstArrived();
+      if (count >= 2) {
+        for (const release of waiters) release();
+        waiters.length = 0;
+        return;
+      }
+      await withTimeout(
+        new Promise((resolve) => {
+          waiters.push(resolve);
+        }),
+        BARRIER_WAIT_MS,
+        "barrier wait",
+      );
+    },
+    firstArrived: first,
+  };
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForTestDbLock(admin, label) {
+  const started = Date.now();
+  while (Date.now() - started < LOCK_POLL_MS) {
+    const rows = await admin.$queryRaw`
+      SELECT pid, wait_event_type, wait_event, state, left(query, 120) AS query
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+    `;
+    if (rows.length > 0) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const snapshot = await admin.$queryRaw`
+    SELECT pid, wait_event_type, wait_event, state, left(query, 160) AS query
+    FROM pg_stat_activity
+    WHERE datname = ${testDbName}
+      AND pid <> pg_backend_pid()
+  `;
+  throw new Error(
+    `${label}: timed out waiting for wait_event_type=Lock on ${testDbName}. activity=${JSON.stringify(snapshot)}`,
+  );
+}
+
 const opsSrc = readFileSync(new URL("../src/lib/customer-messaging/ops.ts", import.meta.url), "utf8");
 const configSrc = readFileSync(new URL("../src/lib/customer-messaging/config.ts", import.meta.url), "utf8");
 const twilioSrc = readFileSync(new URL("../src/lib/customer-messaging/twilio.ts", import.meta.url), "utf8");
@@ -176,6 +268,10 @@ const webhookRouteSrc = readFileSync(
 );
 const webhookHandlerSrc = readFileSync(
   new URL("../src/lib/customer-messaging/webhook.ts", import.meta.url),
+  "utf8",
+);
+const inboundSrc = readFileSync(
+  new URL("../src/lib/customer-messaging/inbound.ts", import.meta.url),
   "utf8",
 );
 const requestFlowSrc = readFileSync(
@@ -261,6 +357,26 @@ try {
       webhookRouteSrc.includes("handleCustomerMessagingWebhookRequest") &&
       webhookRouteSrc.includes("NextResponse.json") &&
       !webhookHandlerSrc.includes("businessId"),
+  );
+  check(
+    "Failed inbound apply returns a non-2xx so the provider retries",
+    webhookHandlerSrc.includes("status: 500") &&
+      webhookHandlerSrc.includes("Unable to process.") &&
+      webhookHandlerSrc.includes("GENERIC_UNAVAILABLE"),
+  );
+  check(
+    "Inbound STOP claim is not treated as consent completion",
+    inboundSrc.includes("Claim is identity-only until processedAt leaves the pending sentinel") &&
+      inboundSrc.includes("inboundConsentTestHooks") &&
+      inboundSrc.includes("INBOUND_WEBHOOK_PENDING_AT") &&
+      inboundSrc.includes("Look up first so a duplicate insert cannot abort this transaction") &&
+      inboundSrc.includes("isPendingWebhookProcessedAt") &&
+      inboundSrc.includes("claimedAtFromCuid") &&
+      inboundSrc.includes("pg_advisory_xact_lock") &&
+      inboundSrc.includes("tbbt-consent:") &&
+      inboundSrc.includes("prepareInboundConsentClaim") &&
+      inboundSrc.includes("smsConsentUpdatedAt: { lt:") &&
+      inboundSrc.includes("stale_event"),
   );
   check(
     "Public request opt-in checkbox starts unchecked",
@@ -1010,6 +1126,869 @@ try {
       (await prisma.customer.findFirst({ where: { id: revoked.id } })).smsConsentStatus === "REVOKED",
   );
 
+  console.log("\nTEST — Leftover inbound STOP claim stays retryable");
+  const leftoverPhone = uniqueSmsDigits("239");
+  const leftoverCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Leftover Signed Stop",
+      phone: leftoverPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const leftoverParams = {
+    MessageSid: `SM_http_leftover_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${leftoverPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const leftoverBody = new URLSearchParams(leftoverParams).toString();
+  const leftoverSig = twilioRequestSignature("twilio_test_token", webhookUrl, leftoverParams);
+  const leftoverWriteError = new Error("forced leftover consent write failure");
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw leftoverWriteError;
+  };
+  inboundConsentTestHooks.beforeCleanup = async () => {
+    throw new Error("forced leftover cleanup failure");
+  };
+  const leftoverFirst = await Promise.allSettled([
+    handleCustomerMessagingWebhookRequest(prisma, {
+      url: webhookUrl,
+      twilioSignature: leftoverSig,
+      tbbtSignature: null,
+      rawBody: leftoverBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+  ]);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
+  check(
+    "Signed leftover STOP returns non-2xx after consent and cleanup failure",
+    leftoverFirst[0].status === "fulfilled" &&
+      leftoverFirst[0].value.status === 500 &&
+      leftoverFirst[0].value.body.error === "Unable to process.",
+  );
+  check(
+    "Unsigned leftover retry is still rejected",
+    (await handleCustomerMessagingWebhookRequest(prisma, {
+      url: webhookUrl,
+      twilioSignature: "nope",
+      tbbtSignature: null,
+      rawBody: leftoverBody,
+      contentType: "application/x-www-form-urlencoded",
+    })).status === 400,
+  );
+  check(
+    "Leftover signed STOP left consent GRANTED",
+    (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "GRANTED",
+  );
+  check(
+    "Leftover webhook claim remains after cleanup failure",
+    (await prisma.customerMessagingWebhookEvent.count({
+      where: { provider: "twilio", providerEventId: leftoverParams.MessageSid },
+    })) === 1,
+  );
+  const leftoverRetry = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: leftoverSig,
+    tbbtSignature: null,
+    rawBody: leftoverBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Same signed leftover STOP retries and applies REVOKED",
+    leftoverRetry.status === 200 &&
+      leftoverRetry.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "REVOKED",
+  );
+  const leftoverThird = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: leftoverSig,
+    tbbtSignature: null,
+    rawBody: leftoverBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Third same signed leftover STOP stays REVOKED exactly once",
+    leftoverThird.status === 200 &&
+      leftoverThird.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: leftoverCustomer.id } })).smsConsentStatus === "REVOKED" &&
+      (await prisma.customerMessagingWebhookEvent.count({
+        where: { provider: "twilio", providerEventId: leftoverParams.MessageSid },
+      })) === 1,
+  );
+  check(
+    "Leftover STOP did not revoke the other-tenant same-phone customer",
+    (await prisma.customer.findFirst({ where: { id: samePhoneBeta.id } })).smsConsentStatus === "GRANTED",
+  );
+
+  console.log("\nTEST — Concurrent identical STOP and STOP-then-START replay");
+  const replayPhone = uniqueSmsDigits("239");
+  const replayCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Replay Consent",
+      phone: replayPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const concurrentPhone = uniqueSmsDigits("239");
+  const concurrentCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Concurrent Consent",
+      phone: concurrentPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const concurrentParams = {
+    MessageSid: `SM_http_concurrent_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${concurrentPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const concurrentBody = new URLSearchParams(concurrentParams).toString();
+  const concurrentSig = twilioRequestSignature("twilio_test_token", webhookUrl, concurrentParams);
+  const concurrentClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const concurrentClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const [concurrentA, concurrentB] = await Promise.all([
+    handleCustomerMessagingWebhookRequest(concurrentClientA, {
+      url: webhookUrl,
+      twilioSignature: concurrentSig,
+      tbbtSignature: null,
+      rawBody: concurrentBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+    handleCustomerMessagingWebhookRequest(concurrentClientB, {
+      url: webhookUrl,
+      twilioSignature: concurrentSig,
+      tbbtSignature: null,
+      rawBody: concurrentBody,
+      contentType: "application/x-www-form-urlencoded",
+    }),
+  ]);
+  await Promise.all([concurrentClientA.$disconnect(), concurrentClientB.$disconnect()]);
+  check(
+    "Two concurrent identical signed STOPs both acknowledge without error",
+    concurrentA.status === 200 &&
+      concurrentA.body.ok === true &&
+      concurrentB.status === 200 &&
+      concurrentB.body.ok === true,
+  );
+  check(
+    "Two concurrent identical STOPs apply REVOKED exactly once",
+    (await prisma.customer.findFirst({ where: { id: concurrentCustomer.id } })).smsConsentStatus ===
+      "REVOKED" &&
+      (await prisma.customerMessagingWebhookEvent.count({
+        where: { provider: "twilio", providerEventId: concurrentParams.MessageSid },
+      })) === 1,
+  );
+
+  const stopThenStartParams = {
+    MessageSid: `SM_http_stop_then_start_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${replayPhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const startAfterStopParams = {
+    MessageSid: `SM_http_start_after_stop_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${replayPhone}`,
+    To: alphaE164,
+    Body: "START",
+    OptOutType: "START",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const stopThenStartBody = new URLSearchParams(stopThenStartParams).toString();
+  const startAfterStopBody = new URLSearchParams(startAfterStopParams).toString();
+  const stopThenStart = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, stopThenStartParams),
+    tbbtSignature: null,
+    rawBody: stopThenStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "STOP then START first applies REVOKED",
+    stopThenStart.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const startAfterStop = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, startAfterStopParams),
+    tbbtSignature: null,
+    rawBody: startAfterStopBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "START after STOP restores GRANTED on the same live phone",
+    startAfterStop.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  const stopReplay = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, stopThenStartParams),
+    tbbtSignature: null,
+    rawBody: stopThenStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Replayed STOP after START does not resurrect REVOKED",
+    stopReplay.status === 200 &&
+      stopReplay.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  const startReplay = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, startAfterStopParams),
+    tbbtSignature: null,
+    rawBody: startAfterStopBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Replayed START after STOP stays GRANTED exactly once",
+    startReplay.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: replayCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  check(
+    "Replay claims stay tenant-scoped to the receiving business",
+    (await prisma.customerMessagingWebhookEvent.findFirst({
+      where: { provider: "twilio", providerEventId: stopThenStartParams.MessageSid },
+    }))?.businessId === alpha.business.id &&
+      (await prisma.customer.findFirst({ where: { id: samePhoneBeta.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+
+  console.log("\nTEST — Late START retry after newer STOP stays REVOKED");
+  const stalePhone = uniqueSmsDigits("239");
+  const staleCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Stale Start",
+      phone: stalePhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const staleStartParams = {
+    MessageSid: `SM_http_stale_start_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${stalePhone}`,
+    To: alphaE164,
+    Body: "START",
+    OptOutType: "START",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const staleStartBody = new URLSearchParams(staleStartParams).toString();
+  const staleStartSig = twilioRequestSignature("twilio_test_token", webhookUrl, staleStartParams);
+  const staleStartError = new Error("forced stale START write failure");
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw staleStartError;
+  };
+  const staleStartFirst = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: staleStartSig,
+    tbbtSignature: null,
+    rawBody: staleStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  const staleClaim = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: staleStartParams.MessageSid },
+  });
+  check(
+    "Stuck START returns non-2xx and leaves a pending claim",
+    staleStartFirst.status === 500 &&
+      staleClaim != null &&
+      claimedAtFromCuid(staleClaim.id) instanceof Date &&
+      (await prisma.customer.findFirst({ where: { id: staleCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const newerStopParams = {
+    MessageSid: `SM_http_newer_stop_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${stalePhone}`,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const newerStop = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, newerStopParams),
+    tbbtSignature: null,
+    rawBody: new URLSearchParams(newerStopParams).toString(),
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Newer STOP after stuck START stays REVOKED",
+    newerStop.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: staleCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const staleStartRetry = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: staleStartSig,
+    tbbtSignature: null,
+    rawBody: staleStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Older START retry after newer STOP does not restore GRANTED",
+    staleStartRetry.status === 200 &&
+      staleStartRetry.body.ok === true &&
+      (await prisma.customer.findFirst({ where: { id: staleCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const liveStartPhone = uniqueSmsDigits("239");
+  const liveStartCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Live Start Retry",
+      phone: liveStartPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const liveStartParams = {
+    MessageSid: `SM_http_live_start_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${liveStartPhone}`,
+    To: alphaE164,
+    Body: "START",
+    OptOutType: "START",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const liveStartBody = new URLSearchParams(liveStartParams).toString();
+  const liveStartSig = twilioRequestSignature("twilio_test_token", webhookUrl, liveStartParams);
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw new Error("forced live START write failure");
+  };
+  await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: liveStartSig,
+    tbbtSignature: null,
+    rawBody: liveStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  const liveStartRetry = await handleCustomerMessagingWebhookRequest(prisma, {
+    url: webhookUrl,
+    twilioSignature: liveStartSig,
+    tbbtSignature: null,
+    rawBody: liveStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  });
+  check(
+    "Failed START without a newer STOP remains retryable and grants once",
+    liveStartRetry.status === 200 &&
+      (await prisma.customer.findFirst({ where: { id: liveStartCustomer.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+
+  console.log("\nTEST — Concurrent duplicate START deliveries use an advisory lock");
+  const lockStartPhone = uniqueSmsDigits("239");
+  const lockStartCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Lock Start",
+      phone: lockStartPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const lockStartParams = {
+    MessageSid: `SM_http_lock_start_${randomUUID()}`,
+    SmsStatus: "received",
+    From: `+1${lockStartPhone}`,
+    To: alphaE164,
+    Body: "START",
+    OptOutType: "START",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const lockStartBody = new URLSearchParams(lockStartParams).toString();
+  const lockStartSig = twilioRequestSignature("twilio_test_token", webhookUrl, lockStartParams);
+  const lockStartRequest = {
+    url: webhookUrl,
+    twilioSignature: lockStartSig,
+    tbbtSignature: null,
+    rawBody: lockStartBody,
+    contentType: "application/x-www-form-urlencoded",
+  };
+  const startBarrier = createCount2Barrier();
+  let startWrites = 0;
+  inboundConsentTestHooks.beforeConsentWrite = () => {
+    startWrites += 1;
+    return startBarrier.arrive();
+  };
+  const lockStartClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const lockStartClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const lockAdmin = new PrismaClient({ datasourceUrl: testUrl });
+  const startASettled = Promise.allSettled([
+    handleCustomerMessagingWebhookRequest(lockStartClientA, lockStartRequest),
+  ]);
+  await withTimeout(startBarrier.firstArrived, BARRIER_WAIT_MS, "concurrent START first claim");
+  const startBSettled = Promise.allSettled([
+    handleCustomerMessagingWebhookRequest(lockStartClientB, lockStartRequest),
+  ]);
+  await waitForTestDbLock(lockAdmin, "concurrent duplicate START");
+  await startBarrier.arrive();
+  const [startAResult] = await withTimeout(startASettled, 25000, "concurrent START A");
+  const [startBResult] = await withTimeout(startBSettled, 25000, "concurrent START B");
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.afterCustomerLock = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([
+    lockStartClientA.$disconnect(),
+    lockStartClientB.$disconnect(),
+    lockAdmin.$disconnect(),
+  ]);
+  const lockStartAfter = await prisma.customer.findFirst({ where: { id: lockStartCustomer.id } });
+  const lockStartClaims = await prisma.customerMessagingWebhookEvent.count({
+    where: { provider: "twilio", providerEventId: lockStartParams.MessageSid },
+  });
+  check(
+    "Concurrent START deliveries both acknowledge after the lock",
+    startAResult.status === "fulfilled" &&
+      startAResult.value.status === 200 &&
+      startBResult.status === "fulfilled" &&
+      startBResult.value.status === 200,
+  );
+  check(
+    "Concurrent START writes GRANTED exactly once",
+    startWrites === 1 &&
+      lockStartAfter.smsConsentStatus === "GRANTED" &&
+      lockStartClaims === 1,
+  );
+
+  console.log("\nTEST — Overlapping newer STOP wins over in-flight START");
+  const overlapPhone = uniqueSmsDigits("239");
+  const overlapCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Overlap Start Stop",
+      phone: overlapPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const overlapStartEvent = {
+    provider: "twilio",
+    providerEventId: `SM_overlap_start_${randomUUID()}`,
+    from: `+1${overlapPhone}`,
+    to: alphaE164,
+    body: "START",
+    optOutType: "START",
+  };
+  const overlapStopEvent = {
+    provider: "twilio",
+    providerEventId: `SM_overlap_stop_${randomUUID()}`,
+    from: `+1${overlapPhone}`,
+    to: alphaE164,
+    body: "STOP",
+    optOutType: "STOP",
+  };
+  let overlapWrites = 0;
+  let overlapStartAtWrite;
+  const overlapStartHeld = new Promise((resolve) => {
+    overlapStartAtWrite = resolve;
+  });
+  let releaseOverlapStart;
+  const overlapStartHold = new Promise((resolve) => {
+    releaseOverlapStart = resolve;
+  });
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    overlapWrites += 1;
+    if (overlapWrites === 1) {
+      overlapStartAtWrite();
+      await withTimeout(overlapStartHold, BARRIER_WAIT_MS, "overlap START hold");
+    }
+  };
+  const overlapStartClient = new PrismaClient({ datasourceUrl: testUrl });
+  const overlapStopClient = new PrismaClient({ datasourceUrl: testUrl });
+  const overlapStartSettled = Promise.allSettled([
+    applyInboundConsentEvent(overlapStartClient, overlapStartEvent),
+  ]);
+  await withTimeout(overlapStartHeld, BARRIER_WAIT_MS, "overlap START reached write");
+  const overlapStop = await applyInboundConsentEvent(overlapStopClient, overlapStopEvent);
+  releaseOverlapStart();
+  const [overlapStartResult] = await withTimeout(overlapStartSettled, 25000, "overlap START");
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([overlapStartClient.$disconnect(), overlapStopClient.$disconnect()]);
+  check(
+    "Newer STOP commits while older START is in-flight",
+    overlapStop.applied === true && overlapStop.consentStatus === "REVOKED",
+  );
+  check(
+    "In-flight START returns stale_event and does not restore GRANTED",
+    overlapStartResult.status === "fulfilled" &&
+      overlapStartResult.value.applied === false &&
+      overlapStartResult.value.reason === "stale_event" &&
+      (await prisma.customer.findFirst({ where: { id: overlapCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nTEST — Consent transaction rollback keeps the original claim age");
+  const rollbackPhone = uniqueSmsDigits("239");
+  const rollbackCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Rollback Start",
+      phone: rollbackPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const rollbackStartEvent = {
+    provider: "twilio",
+    providerEventId: `SM_rollback_start_${randomUUID()}`,
+    from: `+1${rollbackPhone}`,
+    to: alphaE164,
+    body: "START",
+    optOutType: "START",
+  };
+  let rollbackClaimed;
+  const rollbackClaimReady = new Promise((resolve) => {
+    rollbackClaimed = resolve;
+  });
+  let releaseRollbackClaim;
+  const rollbackClaimHold = new Promise((resolve) => {
+    releaseRollbackClaim = resolve;
+  });
+  inboundConsentTestHooks.afterClaim = async () => {
+    rollbackClaimed();
+    await withTimeout(rollbackClaimHold, BARRIER_WAIT_MS, "rollback claim hold");
+  };
+  inboundConsentTestHooks.beforeConsentWrite = async (ctx) => {
+    if (!ctx?.db) throw new Error("consent write hook missing db");
+    await ctx.db.$executeRawUnsafe(`DO $$ BEGIN RAISE EXCEPTION 'consent_tx_killed'; END $$`);
+  };
+  const rollbackFirst = Promise.allSettled([
+    applyInboundConsentEvent(prisma, rollbackStartEvent),
+  ]);
+  await withTimeout(rollbackClaimReady, BARRIER_WAIT_MS, "rollback START claim committed");
+  const rollbackClaimDuring = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartEvent.providerEventId },
+  });
+  releaseRollbackClaim();
+  const [rollbackSettled] = await withTimeout(rollbackFirst, 25000, "rollback START");
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  const rollbackClaim = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartEvent.providerEventId },
+  });
+  check(
+    "Database error after claim commit leaves the pending claim",
+    rollbackSettled.status === "rejected" &&
+      rollbackClaimDuring != null &&
+      rollbackClaim != null &&
+      rollbackClaim.id === rollbackClaimDuring.id &&
+      claimedAtFromCuid(rollbackClaim.id) instanceof Date &&
+      (await prisma.customer.findFirst({ where: { id: rollbackCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+  const rollbackStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_rollback_stop_${randomUUID()}`,
+    from: `+1${rollbackPhone}`,
+    to: alphaE164,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const rollbackRetry = await applyInboundConsentEvent(prisma, rollbackStartEvent);
+  check(
+    "Retry after rolled-back START and newer STOP stays REVOKED",
+    rollbackStop.consentStatus === "REVOKED" &&
+      rollbackRetry.applied === false &&
+      rollbackRetry.reason === "stale_event" &&
+      (await prisma.customer.findFirst({ where: { id: rollbackCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nTEST — Killed consent backend leaves the committed claim");
+  const killPhone = uniqueSmsDigits("239");
+  const killCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Kill Start",
+      phone: killPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const killStartEvent = {
+    provider: "twilio",
+    providerEventId: `SM_kill_start_${randomUUID()}`,
+    from: `+1${killPhone}`,
+    to: alphaE164,
+    body: "START",
+    optOutType: "START",
+  };
+  const killAppName = `tbbt_kill_${randomUUID().slice(0, 8)}`;
+  const killUrl = new URL(testUrl);
+  killUrl.searchParams.set("application_name", killAppName);
+  const killClient = new PrismaClient({ datasourceUrl: killUrl.toString() });
+  const killAdmin = new PrismaClient({ datasourceUrl: testUrl });
+  let killClaimReady;
+  const killClaimed = new Promise((resolve) => {
+    killClaimReady = resolve;
+  });
+  inboundConsentTestHooks.afterClaim = () => {
+    killClaimReady();
+  };
+  inboundConsentTestHooks.beforeConsentWrite = async (ctx) => {
+    if (ctx?.db) {
+      await ctx.db.$executeRaw`SELECT pg_sleep(20)`;
+      return;
+    }
+    await withTimeout(new Promise(() => {}), 15_000, "killed START hold without db");
+  };
+  const killSettled = Promise.allSettled([applyInboundConsentEvent(killClient, killStartEvent)]);
+  await withTimeout(killClaimed, BARRIER_WAIT_MS, "killed START claim committed");
+  const killClaimBefore = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: killStartEvent.providerEventId },
+  });
+  const killWaitStarted = Date.now();
+  let killPids = [];
+  while (Date.now() - killWaitStarted < LOCK_POLL_MS) {
+    killPids = await killAdmin.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND application_name = ${killAppName}
+        AND pid <> pg_backend_pid()
+        AND query ILIKE '%pg_sleep%'
+    `;
+    if (killPids.length > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (killPids.length === 0) {
+    killPids = await killAdmin.$queryRaw`
+      SELECT pid
+      FROM pg_stat_activity
+      WHERE datname = ${testDbName}
+        AND application_name = ${killAppName}
+        AND pid <> pg_backend_pid()
+    `;
+  }
+  for (const row of killPids) {
+    await killAdmin.$executeRawUnsafe(`SELECT pg_terminate_backend(${Number(row.pid)})`);
+  }
+  const [killResult] = await withTimeout(killSettled, 25000, "killed START");
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([killClient.$disconnect(), killAdmin.$disconnect()]);
+  const killClaimAfter = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: killStartEvent.providerEventId },
+  });
+  check(
+    "Killed backend after claim commit keeps the original pending claim",
+    killResult.status === "rejected" &&
+      killClaimBefore != null &&
+      killClaimAfter != null &&
+      killClaimAfter.id === killClaimBefore.id,
+  );
+  await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_kill_stop_${randomUUID()}`,
+    from: `+1${killPhone}`,
+    to: alphaE164,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const killRetry = await applyInboundConsentEvent(prisma, killStartEvent);
+  check(
+    "Retry after killed START and newer STOP stays REVOKED",
+    killRetry.reason === "stale_event" &&
+      (await prisma.customer.findFirst({ where: { id: killCustomer.id } })).smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nTEST — Concurrent duplicate STOP uses the event lock");
+  const lockStopPhone = uniqueSmsDigits("239");
+  const lockStopCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Lock Stop",
+      phone: lockStopPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const lockStopEvent = {
+    provider: "twilio",
+    providerEventId: `SM_lock_stop_${randomUUID()}`,
+    from: `+1${lockStopPhone}`,
+    to: alphaE164,
+    body: "STOP",
+    optOutType: "STOP",
+  };
+  const stopBarrier = createCount2Barrier();
+  let stopWrites = 0;
+  inboundConsentTestHooks.beforeConsentWrite = () => {
+    stopWrites += 1;
+    return stopBarrier.arrive();
+  };
+  const lockStopClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const lockStopClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const lockStopAdmin = new PrismaClient({ datasourceUrl: testUrl });
+  const stopASettled = Promise.allSettled([
+    applyInboundConsentEvent(lockStopClientA, lockStopEvent),
+  ]);
+  await withTimeout(stopBarrier.firstArrived, BARRIER_WAIT_MS, "concurrent STOP first write");
+  const stopBSettled = Promise.allSettled([
+    applyInboundConsentEvent(lockStopClientB, lockStopEvent),
+  ]);
+  await waitForTestDbLock(lockStopAdmin, "concurrent duplicate STOP");
+  await stopBarrier.arrive();
+  const [stopAResult] = await withTimeout(stopASettled, 25000, "concurrent STOP A");
+  const [stopBResult] = await withTimeout(stopBSettled, 25000, "concurrent STOP B");
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([
+    lockStopClientA.$disconnect(),
+    lockStopClientB.$disconnect(),
+    lockStopAdmin.$disconnect(),
+  ]);
+  const lockStopReasons = [stopAResult, stopBResult].flatMap((result) =>
+    result.status === "fulfilled" ? [result.value.reason] : [],
+  );
+  check(
+    "Concurrent STOP deliveries both acknowledge after the lock",
+    stopAResult.status === "fulfilled" && stopBResult.status === "fulfilled",
+  );
+  check(
+    "Concurrent STOP revokes exactly once",
+    stopWrites === 1 &&
+      lockStopReasons.includes("revoked") &&
+      lockStopReasons.includes("idempotent") &&
+      (await prisma.customer.findFirst({ where: { id: lockStopCustomer.id } })).smsConsentStatus ===
+        "REVOKED" &&
+      (await prisma.customerMessagingWebhookEvent.count({
+        where: { provider: "twilio", providerEventId: lockStopEvent.providerEventId },
+      })) === 1,
+  );
+
+  console.log("\nTEST — Different businesses and customers are not serialized");
+  const isoPhoneA = uniqueSmsDigits("239");
+  const isoPhoneB = uniqueSmsDigits("239");
+  const isoPhoneC = uniqueSmsDigits("239");
+  const isoCustomerA = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Iso Alpha",
+      phone: isoPhoneA,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const isoCustomerB = await prisma.customer.create({
+    data: {
+      businessId: beta.business.id,
+      name: "Iso Beta",
+      phone: isoPhoneB,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const isoCustomerC = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Iso Alpha Other",
+      phone: isoPhoneC,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  let isoLockCount = 0;
+  let isoFirstLocked;
+  const isoHeld = new Promise((resolve) => {
+    isoFirstLocked = resolve;
+  });
+  let releaseIsoA;
+  const isoHold = new Promise((resolve) => {
+    releaseIsoA = resolve;
+  });
+  inboundConsentTestHooks.afterCustomerLock = async () => {
+    isoLockCount += 1;
+    if (isoLockCount === 1) {
+      isoFirstLocked();
+      await withTimeout(isoHold, BARRIER_WAIT_MS, "iso customer lock hold");
+    }
+  };
+  const isoClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const isoClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const isoClientC = new PrismaClient({ datasourceUrl: testUrl });
+  const isoASettled = Promise.allSettled([
+    applyInboundConsentEvent(isoClientA, {
+      provider: "twilio",
+      providerEventId: `SM_iso_a_${randomUUID()}`,
+      from: `+1${isoPhoneA}`,
+      to: alphaE164,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  await withTimeout(isoHeld, BARRIER_WAIT_MS, "iso START held customer lock");
+  const [isoB, isoC] = await withTimeout(
+    Promise.all([
+      applyInboundConsentEvent(isoClientB, {
+        provider: "twilio",
+        providerEventId: `SM_iso_b_${randomUUID()}`,
+        from: `+1${isoPhoneB}`,
+        to: `+1${betaSms}`,
+        body: "START",
+        optOutType: "START",
+      }),
+      applyInboundConsentEvent(isoClientC, {
+        provider: "twilio",
+        providerEventId: `SM_iso_c_${randomUUID()}`,
+        from: `+1${isoPhoneC}`,
+        to: alphaE164,
+        body: "START",
+        optOutType: "START",
+      }),
+    ]),
+    8000,
+    "cross-tenant START while other customer lock is held",
+  );
+  releaseIsoA();
+  const [isoAResult] = await withTimeout(isoASettled, 25000, "iso START A");
+  inboundConsentTestHooks.afterCustomerLock = undefined;
+  await Promise.all([isoClientA.$disconnect(), isoClientB.$disconnect(), isoClientC.$disconnect()]);
+  check(
+    "Other-business START completes while another customer lock is held",
+    isoB.applied === true &&
+      isoB.reason === "granted" &&
+      (await prisma.customer.findFirst({ where: { id: isoCustomerB.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  check(
+    "Same-business other-customer START is not blocked by a neighbor lock",
+    isoC.applied === true &&
+      isoC.reason === "granted" &&
+      (await prisma.customer.findFirst({ where: { id: isoCustomerC.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+  check(
+    "Held customer START still grants after neighbors finish",
+    isoAResult.status === "fulfilled" &&
+      isoAResult.value.reason === "granted" &&
+      (await prisma.customer.findFirst({ where: { id: isoCustomerA.id } })).smsConsentStatus ===
+        "GRANTED",
+  );
+
   console.log("\nTEST — Public opt-in capture and existing customer behavior");
   check("Unchecked opt-in is not affirmative", isAffirmativeSmsOptIn(false) === false && isAffirmativeSmsOptIn(undefined) === false);
   check("Explicit opt-in is affirmative", isAffirmativeSmsOptIn("true") === true && isAffirmativeSmsOptIn("on") === true);
@@ -1105,6 +2084,10 @@ try {
     }),
   );
 } finally {
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.afterCustomerLock = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
   resetCustomerMessagingProvider();
   await prisma.$disconnect();
 }

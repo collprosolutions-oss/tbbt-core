@@ -40,7 +40,11 @@ export {
   smsConsentAfterOwnerPhoneEdit,
   smsConsentFromPublicOptIn,
 } from "@/lib/customer-messaging/opt-in";
-export { applyInboundConsentEvent } from "@/lib/customer-messaging/inbound";
+export {
+  applyInboundConsentEvent,
+  claimedAtFromCuid,
+  inboundConsentTestHooks,
+} from "@/lib/customer-messaging/inbound";
 export {
   handleCustomerMessagingWebhookRequest,
   handleParsedCustomerMessagingWebhook,

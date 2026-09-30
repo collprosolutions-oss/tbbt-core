@@ -62,7 +62,9 @@ const {
 } = await import("@/lib/customer-merge-ops");
 const { authorizeManagedUpload } = await import("@/lib/business-storage/service");
 const { StorageAccessError } = await import("@/lib/business-storage/types");
-const { applyInboundConsentEvent } = await import("@/lib/customer-messaging/inbound");
+const { applyInboundConsentEvent, claimedAtFromCuid, inboundConsentTestHooks } = await import(
+  "@/lib/customer-messaging/inbound"
+);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -398,12 +400,22 @@ try {
       inboundSrc.includes("smsConsentUpdatedAt") &&
       inboundSrc.includes("CONSENT_MERGE_HOPS") &&
       inboundSrc.includes("fromDigits") &&
+      inboundSrc.includes("resolveLiveSurvivor") &&
+      inboundSrc.includes("INBOUND_WEBHOOK_PENDING_AT") &&
       inboundSrc.includes('smsConsentStatus: "REVOKED"') &&
       inboundSrc.includes("start_not_applicable") &&
-      inboundSrc.includes("customerMessagingWebhookEvent.deleteMany") &&
+      inboundSrc.includes("stale_event") &&
+      inboundSrc.includes("pg_advisory_xact_lock") &&
+      inboundSrc.includes("tbbt-consent:") &&
+      inboundSrc.includes("prepareInboundConsentClaim") &&
+      inboundSrc.includes("smsConsentUpdatedAt: { lt:") &&
       inboundSrc.includes("console.error") &&
       inboundSrc.includes("error: input.error") &&
       inboundSrc.includes("applyRecordedInboundConsent") &&
+      inboundSrc.includes("findUnambiguousSurvivorForAbsorbedPhone") &&
+      inboundSrc.includes("absorbedSnapshot") &&
+      inboundSrc.includes("inboundConsentTestHooks") &&
+      !inboundSrc.includes('if (duplicate === "duplicate")') &&
       !/customer\.update\(\s*\{/.test(inboundSrc) &&
       !/catch\s*\{/.test(inboundSrc),
   );
@@ -1757,7 +1769,7 @@ try {
   );
   await assertNoOrphans(startAbsorb.id, "Merge vs START");
 
-  console.log("\nERROR — failed consent write deletes the webhook row");
+  console.log("\nERROR — failed consent write leaves a pending webhook row");
   const failPhone = "2395550184";
   await prisma.customer.create({
     data: {
@@ -1768,29 +1780,12 @@ try {
     },
   });
   const failEventId = `SM_consent_fail_${randomUUID()}`;
-  const failClient = createTestClient();
   const forcedWriteError = new Error("forced consent write failure");
-  const failDb = new Proxy(failClient, {
-    get(target, prop, receiver) {
-      if (prop === "customer") {
-        return new Proxy(target.customer, {
-          get(customer, key, customerReceiver) {
-            if (key === "updateMany") {
-              return async () => {
-                throw forcedWriteError;
-              };
-            }
-            const value = Reflect.get(customer, key, customerReceiver);
-            return typeof value === "function" ? value.bind(customer) : value;
-          },
-        });
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw forcedWriteError;
+  };
   const failSettled = await Promise.allSettled([
-    applyInboundConsentEvent(failDb, {
+    applyInboundConsentEvent(prisma, {
       provider: "twilio",
       providerEventId: failEventId,
       from: `+1${failPhone}`,
@@ -1799,21 +1794,668 @@ try {
       optOutType: "STOP",
     }),
   ]);
-  await disconnectClient(failClient);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
   check(
     "Failed consent write rejects applyInboundConsentEvent",
     failSettled[0].status === "rejected" && failSettled[0].reason === forcedWriteError,
   );
   check(
-    "Failed consent write deletes the webhook row",
+    "Failed consent write leaves the pending webhook row retryable",
     (await prisma.customerMessagingWebhookEvent.count({
       where: { provider: "twilio", providerEventId: failEventId },
-    })) === 0,
+    })) === 1,
+  );
+
+  console.log("\nPOST-MERGE — STOP from the absorbed customer's former phone");
+  const formerEmail = `former-${randomUUID().slice(0, 8)}@example.com`;
+  const keepPhone = "2395550191";
+  const absorbPhone = "2395550192";
+  const formerTo = "2395550190";
+  const otherBizTo = "2395550193";
+  await prisma.business.update({
+    where: { id: alpha.business.id },
+    data: { operationalSmsNumber: formerTo },
+  });
+  await prisma.business.update({
+    where: { id: beta.business.id },
+    data: { operationalSmsNumber: otherBizTo },
+  });
+  const formerKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Former Keep",
+      email: formerEmail,
+      phone: keepPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const formerAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Former Absorb",
+      email: formerEmail,
+      phone: absorbPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const otherBizSamePhone = await prisma.customer.create({
+    data: {
+      businessId: beta.business.id,
+      name: "Other Biz Same Phone",
+      phone: absorbPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const mergeFormer = await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: formerKeep.id,
+    absorbCustomerId: formerAbsorb.id,
+    confirmedSameCustomer: true,
+  });
+  check("Post-merge of different phones keeps the survivor", mergeFormer.survivorId === formerKeep.id);
+  const survivorAfterMerge = await prisma.customer.findUnique({ where: { id: formerKeep.id } });
+  check(
+    "Survivor kept its own non-null phone",
+    survivorAfterMerge?.phone === keepPhone && survivorAfterMerge?.smsConsentStatus === "GRANTED",
+  );
+  check("Absorbed former phone is gone as a live customer", (await prisma.customer.findUnique({ where: { id: formerAbsorb.id } })) === null);
+
+  const postMergeStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_former_stop_${randomUUID()}`,
+    from: `+1${absorbPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const survivorAfterStop = await prisma.customer.findUnique({ where: { id: formerKeep.id } });
+  const otherBizAfterStop = await prisma.customer.findUnique({ where: { id: otherBizSamePhone.id } });
+  check(
+    "Post-merge STOP from the absorbed former phone revokes the survivor",
+    postMergeStop.applied === true &&
+      postMergeStop.reason === "revoked" &&
+      postMergeStop.consentStatus === "REVOKED" &&
+      postMergeStop.customerId === formerKeep.id &&
+      survivorAfterStop?.smsConsentStatus === "REVOKED",
+  );
+  check(
+    "Another business using the same former phone stays GRANTED",
+    otherBizAfterStop?.smsConsentStatus === "GRANTED",
+  );
+  const postMergeStart = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_former_start_${randomUUID()}`,
+    from: `+1${absorbPhone}`,
+    to: `+1${formerTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  check(
+    "START from a former absorbed phone stays conservative",
+    postMergeStart.applied === false &&
+      postMergeStart.reason === "unknown_customer" &&
+      (await prisma.customer.findUnique({ where: { id: formerKeep.id } }))?.smsConsentStatus === "REVOKED",
+  );
+
+  const ambiguousEmailA = `amb-a-${randomUUID().slice(0, 8)}@example.com`;
+  const ambiguousEmailB = `amb-b-${randomUUID().slice(0, 8)}@example.com`;
+  const ambiguousPhone = "2395550194";
+  const ambKeepA = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Ambiguous Keep A",
+      email: ambiguousEmailA,
+      phone: "2395550195",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const ambAbsorbA = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Ambiguous Absorb A",
+      email: ambiguousEmailA,
+      phone: ambiguousPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: ambKeepA.id,
+    absorbCustomerId: ambAbsorbA.id,
+    confirmedSameCustomer: true,
+  });
+  const ambKeepB = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Ambiguous Keep B",
+      email: ambiguousEmailB,
+      phone: "2395550196",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const ambAbsorbB = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Ambiguous Absorb B",
+      email: ambiguousEmailB,
+      phone: ambiguousPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: ambKeepB.id,
+    absorbCustomerId: ambAbsorbB.id,
+    confirmedSameCustomer: true,
+  });
+  const ambiguousStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_former_ambiguous_${randomUUID()}`,
+    from: `+1${ambiguousPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "Ambiguous absorbed former phone does not revoke either survivor",
+    ambiguousStop.applied === false &&
+      ambiguousStop.reason === "ambiguous_customer" &&
+      (await prisma.customer.findUnique({ where: { id: ambKeepA.id } }))?.smsConsentStatus === "GRANTED" &&
+      (await prisma.customer.findUnique({ where: { id: ambKeepB.id } }))?.smsConsentStatus === "GRANTED",
+  );
+
+  console.log("\nPOST-MERGE — chained hops, normalization, changed survivor phone, concurrent STOP");
+  const chainEmail = `chain-${randomUUID().slice(0, 8)}@example.com`;
+  const chainA = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Chain A",
+      email: chainEmail,
+      phone: "2395550210",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const chainB = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Chain B",
+      email: chainEmail,
+      phone: "2395550211",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: chainB.id,
+    absorbCustomerId: chainA.id,
+    confirmedSameCustomer: true,
+  });
+  const chainC = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Chain C",
+      email: chainEmail,
+      phone: "2395550212",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: chainC.id,
+    absorbCustomerId: chainB.id,
+    confirmedSameCustomer: true,
+  });
+  const beforeChainStop = await prisma.customer.findUnique({ where: { id: chainC.id } });
+  const chainStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_chain_stop_${randomUUID()}`,
+    from: "+1 (239) 555-0210",
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const chainAfterStop = await prisma.customer.findUnique({ where: { id: chainC.id } });
+  check(
+    "Chained A-into-B-into-C STOP from A's former phone revokes C",
+    chainStop.applied === true &&
+      chainStop.reason === "revoked" &&
+      chainStop.customerId === chainC.id &&
+      chainAfterStop?.smsConsentStatus === "REVOKED",
+  );
+  check(
+    "Chained STOP writes a tenant-scoped survivor consent timestamp",
+    chainAfterStop?.smsConsentUpdatedAt instanceof Date &&
+      (beforeChainStop?.smsConsentUpdatedAt == null ||
+        chainAfterStop.smsConsentUpdatedAt.getTime() >=
+          beforeChainStop.smsConsentUpdatedAt.getTime()),
+  );
+
+  const formattedAbsorbPhone = "(239) 555-0213";
+  const formattedEmail = `fmt-${randomUUID().slice(0, 8)}@example.com`;
+  const formattedKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Formatted Keep",
+      email: formattedEmail,
+      phone: "2395550214",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const formattedAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Formatted Absorb",
+      email: formattedEmail,
+      phone: formattedAbsorbPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: formattedKeep.id,
+    absorbCustomerId: formattedAbsorb.id,
+    confirmedSameCustomer: true,
+  });
+  const formattedStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_formatted_stop_${randomUUID()}`,
+    from: "+12395550213",
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "Normalized STOP from a formatted absorbed phone revokes the survivor",
+    formattedStop.applied === true &&
+      formattedStop.customerId === formattedKeep.id &&
+      (await prisma.customer.findUnique({ where: { id: formattedKeep.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  const changedEmail = `changed-${randomUUID().slice(0, 8)}@example.com`;
+  const changedKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Changed Keep",
+      email: changedEmail,
+      phone: "2395550215",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const changedAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Changed Absorb",
+      email: changedEmail,
+      phone: "2395550216",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  await mergeConfirmedCustomers(prisma, alpha.owner, {
+    keepCustomerId: changedKeep.id,
+    absorbCustomerId: changedAbsorb.id,
+    confirmedSameCustomer: true,
+  });
+  await prisma.customer.update({
+    where: { id: changedKeep.id },
+    data: { phone: "2395550217" },
+  });
+  const changedStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_changed_phone_stop_${randomUUID()}`,
+    from: "+12395550216",
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "STOP still revokes after the survivor's live phone later changed",
+    changedStop.applied === true &&
+      changedStop.customerId === changedKeep.id &&
+      (await prisma.customer.findUnique({ where: { id: changedKeep.id } }))?.phone === "2395550217" &&
+      (await prisma.customer.findUnique({ where: { id: changedKeep.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  const raceEmail = `race-${randomUUID().slice(0, 8)}@example.com`;
+  const raceKeepPhone = "2395550220";
+  const raceAbsorbPhone = "2395550221";
+  const raceKeep = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Race Keep",
+      email: raceEmail,
+      phone: raceKeepPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const raceAbsorb = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Race Absorb",
+      email: raceEmail,
+      phone: raceAbsorbPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const raceBarrier = createCount2Barrier();
+  const raceMergeClient = createTestClient();
+  const raceInboundClient = createTestClient();
+  const raceMergeP = mergeConfirmedCustomers(
+    raceMergeClient,
+    alpha.owner,
+    { keepCustomerId: raceKeep.id, absorbCustomerId: raceAbsorb.id, confirmedSameCustomer: true },
+    { afterLocked: raceBarrier.arrive },
+  );
+  const raceMergeSettled = Promise.allSettled([raceMergeP]);
+  await withTimeout(raceBarrier.firstArrived, BARRIER_WAIT_MS, "distinct-phone merge-versus-STOP entered write");
+  const raceInboundP = applyInboundConsentEvent(raceInboundClient, {
+    provider: "twilio",
+    providerEventId: `SM_race_former_stop_${randomUUID()}`,
+    from: `+1${raceAbsorbPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const raceInboundSettled = Promise.allSettled([raceInboundP]);
+  await releaseAfterLock(lockAdmin, raceBarrier, "distinct-phone merge vs inbound STOP");
+  const [raceMergeResult] = await withTimeout(raceMergeSettled, 25000, "distinct-phone merge vs STOP merge");
+  const [raceInboundResult] = await withTimeout(raceInboundSettled, 25000, "distinct-phone merge vs STOP inbound");
+  await Promise.all([disconnectClient(raceMergeClient), disconnectClient(raceInboundClient)]);
+  const raceSurvivor = await prisma.customer.findUnique({ where: { id: raceKeep.id } });
+  check("Distinct-phone merge vs STOP: merge succeeds", raceMergeResult.status === "fulfilled");
+  check(
+    "Distinct-phone merge vs STOP: survivor is REVOKED",
+    raceSurvivor?.smsConsentStatus === "REVOKED" && raceSurvivor?.phone === raceKeepPhone,
+  );
+  check(
+    "Distinct-phone merge vs STOP: absorbed customer is gone",
+    (await prisma.customer.findUnique({ where: { id: raceAbsorb.id } })) === null,
+  );
+
+  console.log("\nERROR — leftover webhook claim stays retryable after cleanup failure");
+  const leftoverPhone = "2395550197";
+  const leftoverCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Leftover Claim",
+      phone: leftoverPhone,
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const leftoverEventId = `SM_leftover_claim_${randomUUID()}`;
+  const leftoverWriteError = new Error("forced leftover consent write failure");
+  const leftoverCleanupError = new Error("forced leftover cleanup failure");
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw leftoverWriteError;
+  };
+  inboundConsentTestHooks.beforeCleanup = async () => {
+    throw leftoverCleanupError;
+  };
+  const leftoverFirst = await Promise.allSettled([
+    applyInboundConsentEvent(prisma, {
+      provider: "twilio",
+      providerEventId: leftoverEventId,
+      from: `+1${leftoverPhone}`,
+      to: `+1${formerTo}`,
+      body: "STOP",
+      optOutType: "STOP",
+    }),
+  ]);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
+  check(
+    "Consent write plus cleanup failure rejects the first STOP",
+    leftoverFirst[0].status === "rejected" && leftoverFirst[0].reason === leftoverWriteError,
+  );
+  check(
+    "Leftover webhook claim remains after cleanup failure",
+    (await prisma.customerMessagingWebhookEvent.count({
+      where: { provider: "twilio", providerEventId: leftoverEventId },
+    })) === 1,
+  );
+  check(
+    "Leftover claim did not revoke consent",
+    (await prisma.customer.findUnique({ where: { id: leftoverCustomer.id } }))?.smsConsentStatus === "GRANTED",
+  );
+  const leftoverRetry = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: leftoverEventId,
+    from: `+1${leftoverPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const leftoverAfterRetry = await prisma.customer.findUnique({ where: { id: leftoverCustomer.id } });
+  check(
+    "Retry of the leftover STOP applies REVOKED exactly once",
+    leftoverRetry.applied === true &&
+      leftoverRetry.reason === "revoked" &&
+      leftoverRetry.consentStatus === "REVOKED" &&
+      leftoverRetry.customerId === leftoverCustomer.id &&
+      leftoverAfterRetry?.smsConsentStatus === "REVOKED",
+  );
+  const leftoverThird = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: leftoverEventId,
+    from: `+1${leftoverPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "A third leftover STOP is idempotent and stays REVOKED",
+    leftoverThird.applied === true &&
+      leftoverThird.reason === "idempotent" &&
+      (await prisma.customer.findUnique({ where: { id: leftoverCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nERROR — stuck START cannot resurrect consent after a newer STOP");
+  const staleStartPhone = "2395550228";
+  const staleStartCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Stale Start Merge",
+      phone: staleStartPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const staleStartEventId = `SM_stale_start_${randomUUID()}`;
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    throw new Error("forced stale START write failure");
+  };
+  const staleStartFirst = await Promise.allSettled([
+    applyInboundConsentEvent(prisma, {
+      provider: "twilio",
+      providerEventId: staleStartEventId,
+      from: `+1${staleStartPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  check(
+    "Stuck START rejects and stays REVOKED",
+    staleStartFirst[0].status === "rejected" &&
+      (await prisma.customer.findUnique({ where: { id: staleStartCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+  const newerStop = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_newer_stop_${randomUUID()}`,
+    from: `+1${staleStartPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  check(
+    "Newer STOP after stuck START is applied",
+    newerStop.applied === true && newerStop.consentStatus === "REVOKED",
+  );
+  const staleStartRetry = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: staleStartEventId,
+    from: `+1${staleStartPhone}`,
+    to: `+1${formerTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  check(
+    "Older START retry after newer STOP stays REVOKED",
+    staleStartRetry.applied === false &&
+      staleStartRetry.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: staleStartCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nERROR — overlapping newer STOP wins over in-flight START");
+  const overlapPhone = "2395550229";
+  const overlapCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Overlap Merge Start",
+      phone: overlapPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  let overlapWrites = 0;
+  let overlapStartAtWrite;
+  const overlapStartHeld = new Promise((resolve) => {
+    overlapStartAtWrite = resolve;
+  });
+  let releaseOverlapStart;
+  const overlapStartHold = new Promise((resolve) => {
+    releaseOverlapStart = resolve;
+  });
+  inboundConsentTestHooks.beforeConsentWrite = async () => {
+    overlapWrites += 1;
+    if (overlapWrites === 1) {
+      overlapStartAtWrite();
+      await withTimeout(overlapStartHold, BARRIER_WAIT_MS, "merge overlap START hold");
+    }
+  };
+  const overlapStartClient = createTestClient();
+  const overlapStopClient = createTestClient();
+  const overlapStartSettled = Promise.allSettled([
+    applyInboundConsentEvent(overlapStartClient, {
+      provider: "twilio",
+      providerEventId: `SM_merge_overlap_start_${randomUUID()}`,
+      from: `+1${overlapPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  await withTimeout(overlapStartHeld, BARRIER_WAIT_MS, "merge overlap START reached write");
+  const overlapStop = await applyInboundConsentEvent(overlapStopClient, {
+    provider: "twilio",
+    providerEventId: `SM_merge_overlap_stop_${randomUUID()}`,
+    from: `+1${overlapPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  releaseOverlapStart();
+  const [overlapStartResult] = await withTimeout(overlapStartSettled, 25000, "merge overlap START");
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  await Promise.all([disconnectClient(overlapStartClient), disconnectClient(overlapStopClient)]);
+  check(
+    "Merge overlap: newer STOP commits while START is in-flight",
+    overlapStop.applied === true && overlapStop.consentStatus === "REVOKED",
+  );
+  check(
+    "Merge overlap: in-flight START is stale_event and stays REVOKED",
+    overlapStartResult.status === "fulfilled" &&
+      overlapStartResult.value.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: overlapCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
+  );
+
+  console.log("\nERROR — consent transaction rollback keeps original START claim");
+  const rollbackPhone = "2395550230";
+  const rollbackCustomer = await prisma.customer.create({
+    data: {
+      businessId: alpha.business.id,
+      name: "Rollback Merge Start",
+      phone: rollbackPhone,
+      smsConsentStatus: "REVOKED",
+      smsConsentUpdatedAt: new Date(Date.now() - 60 * 60 * 1000),
+    },
+  });
+  const rollbackStartId = `SM_merge_rollback_start_${randomUUID()}`;
+  let rollbackClaimed;
+  const rollbackClaimReady = new Promise((resolve) => {
+    rollbackClaimed = resolve;
+  });
+  let releaseRollbackClaim;
+  const rollbackClaimHold = new Promise((resolve) => {
+    releaseRollbackClaim = resolve;
+  });
+  inboundConsentTestHooks.afterClaim = async () => {
+    rollbackClaimed();
+    await withTimeout(rollbackClaimHold, BARRIER_WAIT_MS, "merge rollback claim hold");
+  };
+  inboundConsentTestHooks.beforeConsentWrite = async (ctx) => {
+    if (!ctx?.db) throw new Error("consent write hook missing db");
+    await ctx.db.$executeRawUnsafe(`DO $$ BEGIN RAISE EXCEPTION 'consent_tx_killed'; END $$`);
+  };
+  const rollbackFirst = Promise.allSettled([
+    applyInboundConsentEvent(prisma, {
+      provider: "twilio",
+      providerEventId: rollbackStartId,
+      from: `+1${rollbackPhone}`,
+      to: `+1${formerTo}`,
+      body: "START",
+      optOutType: "START",
+    }),
+  ]);
+  await withTimeout(rollbackClaimReady, BARRIER_WAIT_MS, "merge rollback START claim committed");
+  const rollbackClaimDuring = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartId },
+  });
+  releaseRollbackClaim();
+  const [rollbackSettled] = await withTimeout(rollbackFirst, 25000, "merge rollback START");
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  const rollbackClaim = await prisma.customerMessagingWebhookEvent.findFirst({
+    where: { provider: "twilio", providerEventId: rollbackStartId },
+  });
+  check(
+    "Merge rollback: pending START claim survives the aborted consent transaction",
+    rollbackSettled.status === "rejected" &&
+      rollbackClaimDuring != null &&
+      rollbackClaim != null &&
+      rollbackClaim.id === rollbackClaimDuring.id &&
+      claimedAtFromCuid(rollbackClaim.id) instanceof Date,
+  );
+  await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: `SM_merge_rollback_stop_${randomUUID()}`,
+    from: `+1${rollbackPhone}`,
+    to: `+1${formerTo}`,
+    body: "STOP",
+    optOutType: "STOP",
+  });
+  const rollbackRetry = await applyInboundConsentEvent(prisma, {
+    provider: "twilio",
+    providerEventId: rollbackStartId,
+    from: `+1${rollbackPhone}`,
+    to: `+1${formerTo}`,
+    body: "START",
+    optOutType: "START",
+  });
+  check(
+    "Merge rollback: retry after newer STOP stays REVOKED",
+    rollbackRetry.reason === "stale_event" &&
+      (await prisma.customer.findUnique({ where: { id: rollbackCustomer.id } }))?.smsConsentStatus ===
+        "REVOKED",
   );
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
+  inboundConsentTestHooks.afterClaim = undefined;
+  inboundConsentTestHooks.afterCustomerLock = undefined;
+  inboundConsentTestHooks.beforeConsentWrite = undefined;
+  inboundConsentTestHooks.beforeCleanup = undefined;
   for (const client of extraClients) {
     try {
       await client.$disconnect();
