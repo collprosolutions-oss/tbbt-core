@@ -200,7 +200,10 @@ function prefixHasLocalhostGuard(prefix) {
   const refuses =
     /process\.exit/.test(prefix) ||
     /refus/i.test(prefix);
-  return comparesHost && refuses;
+  const usesCanonicalHarness =
+    /from\s+["']\.\/disposable-test-database\.mjs["']/.test(prefix) &&
+    /\b(?:openDisposableTestDatabase|withDisposableTestDatabase)\s*\(/.test(prefix);
+  return usesCanonicalHarness || (comparesHost && refuses);
 }
 
 function analyzeDrops(masked) {

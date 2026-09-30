@@ -868,7 +868,7 @@ try {
       acceptLockKey !== workerTimesheetWeekLockKey(businessA.id, nyMem.id, acceptOriginalStart) &&
       approveWeekStart.getTime() === nyWeek2Start.getTime() &&
       acceptOriginalStart.getTime() === nyWeek1Start.getTime() &&
-      approveWeekStart.getTime() !== weekRange(nyWeek2Entry.startedAt).start.getTime(),
+      approveWeekStart.getTime() !== weekRange(nyWeek2Entry.startedAt, "UTC").start.getTime(),
   );
   await approveWeek(prisma, ownerA, {
     membershipId: nyMem.id,
