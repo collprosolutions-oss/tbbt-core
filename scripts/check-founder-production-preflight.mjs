@@ -453,9 +453,10 @@ check("cli does not block duplicates from DATABASE_URL", !cliOutput.includes("[B
 
 console.log("\nDB — disposable local Postgres");
 const checkerSrc = read("scripts/check-founder-production-preflight.mjs");
+const hardcodedLocalAdmin = `postgresql://${"tbbt_preflight"}@127.0.0.1`;
 check(
   "disposable admin URL is not a hardcoded tbbt_preflight role",
-  !checkerSrc.includes("postgresql://tbbt_preflight@127.0.0.1"),
+  !checkerSrc.includes(hardcodedLocalAdmin),
 );
 {
   const operations = createRecordingOperations();
