@@ -172,7 +172,12 @@
     "test:day-route-appointment": "node --experimental-strip-types scripts/check-day-route-appointment.mjs",
     "test:job-callback": "node --experimental-strip-types scripts/check-job-callback.mjs",
     "test:request-source-report": "node --experimental-strip-types scripts/check-request-source-report.mjs",
-    "test:collections-worklist": "node --experimental-strip-types scripts/check-collections-worklist.mjs"
+    "test:collections-worklist": "node --experimental-strip-types scripts/check-collections-worklist.mjs",
+    "test:p1-migration-and-db-safety": "node scripts/run-p1-gate.mjs migration-and-db-safety",
+    "test:p1-customer-boundaries": "node scripts/run-p1-gate.mjs customer-boundaries",
+    "test:p1-transaction-races": "node scripts/run-p1-gate.mjs transaction-races",
+    "test:p1-timekeeping": "node scripts/run-p1-gate.mjs timekeeping",
+    "test:p1-native-active-membership": "node scripts/run-p1-gate.mjs native-active-membership"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
