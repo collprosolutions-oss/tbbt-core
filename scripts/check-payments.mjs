@@ -19,7 +19,9 @@ const { ForbiddenError, requireBusinessCapability, CAPABILITIES } =
 const { isPaymentMethodValue, paymentMethodLabel, PAYMENT_METHODS } =
   await import("@/lib/invoice-payment");
 const { invoiceAmountDue } = await import("@/lib/invoice-document");
-const { createFakePaymentProvider } = await import("@/lib/payments/fake");
+const { createFakePaymentProvider, FAKE_PAYMENT_READY_ACCOUNTS_ENV } = await import(
+  "@/lib/payments/fake"
+);
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
 const { dispatchStripeWebhookEvent } = await import("@/lib/stripe-webhook-dispatch");
 const { SAAS_CHECKOUT_PURPOSE } = await import("@/lib/saas-billing");
@@ -684,12 +686,127 @@ try {
       !settingsSrc.includes("charges_enabled") &&
       !settingsSrc.includes("stripeAccountId"),
   );
+  const fakeSrc = readFileSync(new URL("../src/lib/payments/fake.ts", import.meta.url), "utf8");
   check(
     "Fake provider does not treat unknown accounts as ready",
-    !readFileSync(new URL("../src/lib/payments/fake.ts", import.meta.url), "utf8").includes(
-      "TBBT_PAYMENTS_FAKE_READY",
-    ),
+    !fakeSrc.includes("TBBT_PAYMENTS_FAKE_READY"),
   );
+  check(
+    "Stripe adapter does not honor the local fake ready-account allowlist",
+    !adapterSrc.includes(FAKE_PAYMENT_READY_ACCOUNTS_ENV) &&
+      !adapterSrc.includes("TBBT_FAKE_PAYMENT_READY_ACCOUNTS"),
+  );
+
+  console.log("\nTEST — Unknown accounts stay not-ready; only an explicit allowlist is charges-enabled");
+  const savedFakeReady = process.env.TBBT_PAYMENTS_FAKE_READY;
+  const savedReadyAccounts = process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV];
+  const savedVercelEnv = process.env.VERCEL_ENV;
+  const checkoutInput = {
+    businessId: "biz_portal_ready",
+    amountCents: 30000,
+    currency: "usd",
+    description: "Portal invoice",
+    successUrl: "http://payments.test/success",
+    cancelUrl: "http://payments.test/cancel",
+  };
+  try {
+    process.env.TBBT_PAYMENTS_FAKE_READY = "1";
+    delete process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV];
+    delete process.env.VERCEL_ENV;
+    const globalFlagProvider = createFakePaymentProvider();
+    let globalFlagThrew = false;
+    try {
+      await globalFlagProvider.getAccountReadiness("acct_unknown_not_allowlisted");
+    } catch (error) {
+      globalFlagThrew =
+        error instanceof Error && error.message === "Unknown connected account.";
+    }
+    check(
+      "TBBT_PAYMENTS_FAKE_READY does not make an unknown account charges-enabled",
+      globalFlagThrew,
+    );
+    let globalCheckoutThrew = false;
+    try {
+      await globalFlagProvider.createInvoiceCheckoutSession({
+        ...checkoutInput,
+        connectedAccountId: "acct_unknown_not_allowlisted",
+        invoiceId: "inv_unknown",
+      });
+    } catch (error) {
+      globalCheckoutThrew =
+        error instanceof Error && error.message === "Connected account is not payment-ready.";
+    }
+    check(
+      "TBBT_PAYMENTS_FAKE_READY does not open checkout for an unknown account",
+      globalCheckoutThrew,
+    );
+
+    process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV] =
+      " acct_test_portal_ready , acct_other_listed ";
+    const allowProvider = createFakePaymentProvider();
+    const listed = await allowProvider.getAccountReadiness("acct_test_portal_ready");
+    check(
+      "explicit allowlisted fake account is charges-enabled",
+      listed.chargesEnabled === true && listed.accountId === "acct_test_portal_ready",
+    );
+    const otherListed = await allowProvider.getAccountReadiness("acct_other_listed");
+    check(
+      "comma-separated allowlist entries are trimmed and honored",
+      otherListed.chargesEnabled === true,
+    );
+    let unlistedThrew = false;
+    try {
+      await allowProvider.getAccountReadiness("acct_not_on_the_list");
+    } catch (error) {
+      unlistedThrew = error instanceof Error && error.message === "Unknown connected account.";
+    }
+    check(
+      "allowlist does not make a different unknown account ready",
+      unlistedThrew,
+    );
+    const listedCheckout = await allowProvider.createInvoiceCheckoutSession({
+      ...checkoutInput,
+      connectedAccountId: "acct_test_portal_ready",
+      invoiceId: "inv_listed",
+    });
+    check(
+      "allowlisted account can open checkout without a prior in-memory setChargesEnabled",
+      listedCheckout.connectedAccountId === "acct_test_portal_ready" &&
+        listedCheckout.amountCents === 30000,
+    );
+    const created = await allowProvider.createConnectedAccount({
+      businessId: "biz_disabled",
+      displayName: "Disabled until Stripe says so",
+    });
+    process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV] = created.accountId;
+    const disabled = await allowProvider.getAccountReadiness(created.accountId);
+    check(
+      "an in-memory charges-disabled account stays disabled even if its id is allowlisted",
+      disabled.chargesEnabled === false,
+    );
+
+    process.env.VERCEL_ENV = "production";
+    process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV] = "acct_test_portal_ready";
+    const productionProvider = createFakePaymentProvider();
+    let productionThrew = false;
+    try {
+      await productionProvider.getAccountReadiness("acct_test_portal_ready");
+    } catch (error) {
+      productionThrew =
+        error instanceof Error && error.message === "Unknown connected account.";
+    }
+    check(
+      "VERCEL_ENV=production ignores the fake ready-account allowlist",
+      productionThrew,
+    );
+  } finally {
+    if (savedFakeReady === undefined) delete process.env.TBBT_PAYMENTS_FAKE_READY;
+    else process.env.TBBT_PAYMENTS_FAKE_READY = savedFakeReady;
+    if (savedReadyAccounts === undefined) delete process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV];
+    else process.env[FAKE_PAYMENT_READY_ACCOUNTS_ENV] = savedReadyAccounts;
+    if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = savedVercelEnv;
+  }
 
   const businessA = await seedBusiness("Alpha Payments");
   const businessB = await seedBusiness("Beta Payments");
