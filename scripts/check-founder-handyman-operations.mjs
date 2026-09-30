@@ -219,8 +219,8 @@ check(
   selfSrc.includes("const PINNED_ESTIMATE_TOTAL = 185") &&
     selfSrc.includes("const PINNED_ORIGINAL_INVOICE_TOTAL = 225") &&
     selfSrc.includes("const PINNED_BILLED_TOTAL = 300") &&
-    !selfSrc.includes("money(approvedEstimate.total) + money(fieldChangeOrder.total)") &&
-    !selfSrc.includes("money(original.total) + money(supplemental.total)"),
+    !selfSrc.includes(`money(${"approvedEstimate"}.total) + money(${"fieldChangeOrder"}.total)`) &&
+    !selfSrc.includes(`money(${"original"}.total) + money(${"supplemental"}.total)`),
 );
 check(
   "Pinned labor is 1.5 hours at $45 = $67.50",
