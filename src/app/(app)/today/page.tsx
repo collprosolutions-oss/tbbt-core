@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
+import { OwnerDailyAttentionList } from "@/components/today/owner-daily-attention-list";
 import { OwnerTodayAppointmentAttention } from "@/components/today/owner-today-appointment-attention";
 import { OwnerTodayFieldProblemAttention } from "@/components/today/owner-today-field-problem-attention";
 import { OwnerTodayHandoffCard } from "@/components/today/owner-today-handoff-card";
@@ -15,8 +16,28 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
-import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import {
+  addZonedCalendarDays,
+  resolveBusinessTimeZone,
+  startOfZonedDay,
+} from "@/lib/business-timezone";
 import { formatDate } from "@/lib/format";
+import { JOB_CALLBACK_OPEN_STATUSES } from "@/lib/job-callback";
+import {
+  OWNER_DAILY_ADDITIONAL_WORK_SELECT,
+  OWNER_DAILY_ATTENTION_TAKE,
+  OWNER_DAILY_CALLBACK_SELECT,
+  OWNER_DAILY_CHANGE_ORDER_SELECT,
+  OWNER_DAILY_GROUP_TITLES,
+  OWNER_DAILY_RUNNING_TIME_SELECT,
+  buildOwnerDailyAdditionalWorkAttention,
+  buildOwnerDailyCallbackAttention,
+  buildOwnerDailyChangeOrderAttention,
+  buildOwnerDailyRunningTimeAttention,
+  ownerDailyConflictTruncationLabel,
+  ownerDailyTodayNothingWaiting,
+} from "@/lib/owner-daily-attention";
+import { loadOwnerDailyActionableAttention } from "@/lib/owner-daily-attention-data";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_FIELD_COMPLETION_COPY,
@@ -49,12 +70,21 @@ export default async function OwnerTodayPage() {
   const todayIso = formatISODate(today, timeZone);
   const viewerMembershipId = access.workspace.membership.id;
 
+  const conflictRange = {
+    start: todayRange.start,
+    end: addZonedCalendarDays(startOfZonedDay(today, timeZone), 21, timeZone),
+  };
   const [
     todayJobs,
     appointmentJobs,
     completedJobsForBilling,
     openFieldProblemReports,
     eligibleMemberRows,
+    additionalWorkRows,
+    changeOrderRows,
+    callbackRows,
+    runningTimeRows,
+    dailyAttention,
   ] = await Promise.all([
     prisma.job.findMany({
       where: {
@@ -94,6 +124,45 @@ export default async function OwnerTodayPage() {
       select: { id: true, user: { select: { name: true, email: true } } },
       orderBy: { createdAt: "asc" },
     }),
+    prisma.additionalWorkRequest.findMany({
+      where: { ...access.scope, status: "OPEN" },
+      select: OWNER_DAILY_ADDITIONAL_WORK_SELECT,
+      orderBy: { createdAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.changeOrder.findMany({
+      where: { ...access.scope, status: { in: ["DRAFT", "SENT"] } },
+      select: OWNER_DAILY_CHANGE_ORDER_SELECT,
+      orderBy: { updatedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.jobCallback.findMany({
+      where: {
+        ...access.scope,
+        status: { in: [...JOB_CALLBACK_OPEN_STATUSES] },
+      },
+      select: OWNER_DAILY_CALLBACK_SELECT,
+      orderBy: { recordedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.timeEntry.findMany({
+      where: {
+        ...access.scope,
+        status: "RUNNING",
+        endedAt: null,
+      },
+      select: OWNER_DAILY_RUNNING_TIME_SELECT,
+      orderBy: { startedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    loadOwnerDailyActionableAttention(prisma, {
+      businessId: access.businessId,
+      scope: access.scope,
+      todayStart: todayRange.start,
+      conflictRange,
+      timeZone,
+      includeFirstAwaiting: false,
+    }),
   ]);
 
   const jobs = buildOwnerTodayJobs(todayJobs, {
@@ -115,6 +184,25 @@ export default async function OwnerTodayPage() {
     openFieldProblemReports,
     { businessId: access.businessId, timeZone },
   );
+  const additionalWorkAttention = buildOwnerDailyAdditionalWorkAttention(
+    additionalWorkRows,
+    access.businessId,
+  );
+  const changeOrderAttention = buildOwnerDailyChangeOrderAttention(
+    changeOrderRows,
+    access.businessId,
+  );
+  const callbackAttention = buildOwnerDailyCallbackAttention(
+    callbackRows,
+    access.businessId,
+  );
+  const runningTimeAttention = buildOwnerDailyRunningTimeAttention(
+    runningTimeRows,
+    access.businessId,
+    timeZone,
+  );
+  const materialDepositAttention = dailyAttention.materialDeposits;
+  const scheduleConflictAttention = dailyAttention.scheduleConflicts;
   const unassignedToday = jobs.filter((job) => job.assignment.kind === "UNASSIGNED");
   const eligibleMembers = eligibleMemberRows.map((member) => ({
     id: member.id,
@@ -152,15 +240,25 @@ export default async function OwnerTodayPage() {
           <CardTitle>Needs attention</CardTitle>
           <CardDescription>
             Unconfirmed appointments, unassigned today work, open field reports,
-            and completed jobs that still need an invoice.{" "}
+            additional-work and change orders, running time, unpaid material
+            deposits, scheduling conflicts, callbacks, and completed jobs that
+            still need an invoice.{" "}
             {OWNER_TODAY_FIELD_COMPLETION_COPY}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {appointmentAttention.length === 0 &&
-          unassignedToday.length === 0 &&
-          fieldProblemAttention.length === 0 &&
-          handoffItems.length === 0 ? (
+          {ownerDailyTodayNothingWaiting({
+            appointmentAttention,
+            unassignedToday,
+            fieldProblemAttention,
+            additionalWorkAttention,
+            changeOrderAttention,
+            callbackAttention,
+            runningTimeAttention,
+            materialDepositAttention,
+            scheduleConflictAttention,
+            handoffItems,
+          }) ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
 
@@ -189,6 +287,41 @@ export default async function OwnerTodayPage() {
           ) : null}
 
           <OwnerTodayFieldProblemAttention items={fieldProblemAttention} />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.additionalWork}
+            items={additionalWorkAttention}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.changeOrders}
+            items={changeOrderAttention}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.callbacks}
+            items={callbackAttention}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.runningTime}
+            items={runningTimeAttention}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.materialDeposits}
+            items={materialDepositAttention.items}
+            count={materialDepositAttention.count}
+            moreNotShown={materialDepositAttention.truncated}
+            scanLimited={materialDepositAttention.scanLimited}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.scheduleConflicts}
+            items={scheduleConflictAttention.items}
+            count={scheduleConflictAttention.count}
+            moreNotShown={scheduleConflictAttention.truncated}
+            scanLimited={scheduleConflictAttention.scanLimited}
+            truncationLabel={ownerDailyConflictTruncationLabel(
+              scheduleConflictAttention.count,
+              scheduleConflictAttention.items.length,
+              scheduleConflictAttention.scanLimited,
+            )}
+          />
 
           {handoffItems.length > 0 ? (
             <div className="space-y-2">
