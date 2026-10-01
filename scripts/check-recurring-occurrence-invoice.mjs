@@ -206,6 +206,11 @@ session = await openDisposableTestDatabase({
   setProcessEnv: true,
 });
 prisma = session.prisma;
+await prisma.$executeRawUnsafe(`
+CREATE UNIQUE INDEX IF NOT EXISTS "Invoice_jobId_original_unique"
+  ON "Invoice"("jobId")
+  WHERE "jobId" IS NOT NULL AND "kind" = 'ORIGINAL'
+`);
 
 try {
   const suffix = randomUUID().slice(0, 8);
