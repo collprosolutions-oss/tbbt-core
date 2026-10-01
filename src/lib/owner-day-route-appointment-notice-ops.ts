@@ -559,7 +559,8 @@ export async function sendOwnerDayRouteAppointmentNotice(
           (preview ? DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE : DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE),
       );
     }
-    if (input.reviewedChannel && input.reviewedChannel !== preview.channel) {
+    const channel = preview.channel;
+    if (input.reviewedChannel && input.reviewedChannel !== channel) {
       throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE);
     }
     if (
@@ -603,7 +604,7 @@ export async function sendOwnerDayRouteAppointmentNotice(
         customerId: review.customerId,
         jobId: fresh.id,
         proposalId,
-        channel: preview.channel,
+        channel,
         destinationFingerprint: review.destinationFingerprint,
         initiatedByMembershipId: access.workspace.membership.id,
       });
@@ -626,7 +627,7 @@ export async function sendOwnerDayRouteAppointmentNotice(
     try {
       result = await composeCustomerCommunication(db, access, {
         customerId: review.customerId,
-        channel: preview.channel,
+        channel,
         purpose: "SCHEDULE_CHANGE",
         subject: buildDayRouteAppointmentNoticeSubject(
           access.workspace.business.name || business.name,
@@ -690,7 +691,7 @@ export async function sendOwnerDayRouteAppointmentNotice(
     return {
       jobId: claimed.job.id,
       businessId: access.businessId,
-      channel: preview.channel,
+      channel,
       appointmentWindowLabel: preview.appointmentWindowLabel,
       recipientLabel: preview.recipientLabel,
       communicationId: result.communicationId,
