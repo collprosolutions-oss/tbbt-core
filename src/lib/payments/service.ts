@@ -444,8 +444,8 @@ async function maybeMarkInvoicePaid(
 /**
  * Customer checkout uses remaining due after payments and recorded
  * credits. The expected cents are stored on the Checkout session
- * metadata and in InvoiceCheckoutSession. Open Checkout sessions do
- * not block OWNER credits. A later webhook is accepted when it equals
+ * metadata and in InvoiceCheckoutSession. Open Checkout sessions do not block OWNER credits.
+ * A later webhook is accepted when it equals
  * that stored session amount, or — for sessions created before the
  * store existed — a historical remaining-due amount (total minus
  * payments that existed then minus the first k credits). Excess over

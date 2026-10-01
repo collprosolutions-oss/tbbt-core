@@ -209,7 +209,7 @@ if (!MUTATION_KIND) {
     "owner review surfaces a Stripe credit-mismatch on the invoice page and dashboard",
     invoicePageSrc.includes("paymentsNeedingStripeCreditMismatchReview") &&
       invoicePageSrc.includes("STRIPE_CREDIT_MISMATCH_OWNER_TITLE") &&
-      invoicePageSrc.includes("resolveInvoiceStripeCreditMismatch") &&
+      invoicePageSrc.includes("ResolveStripeCreditMismatchForm") &&
       dashboardSrc.includes("STRIPE_CREDIT_MISMATCH_OWNER_TITLE") &&
       dashboardSrc.includes("listOpenStripeCreditMismatchReviews"),
   );
