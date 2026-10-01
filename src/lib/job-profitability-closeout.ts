@@ -420,6 +420,7 @@ export function assessCloseoutCoverage(input: {
     jobId: billed[0]?.jobId ?? input.invoices[0]?.jobId ?? "",
     invoices: input.invoices,
     payments: input.payments,
+    credits: input.invoiceCredits,
   });
   const outstanding = roundMoney(
     input.invoices

@@ -179,6 +179,7 @@ export function calculateJobProfitability(
     jobId,
     invoices: source.invoices,
     payments: source.payments,
+    credits: source.invoiceCredits ?? [],
   });
 
   let laborHours = 0;

@@ -60,7 +60,7 @@ export async function loadMonthlyGoalFactSource(
   const scope = { businessId } as const;
   const range = { gte: period.start, lt: period.end };
 
-  const [jobCompletions, completedJobs, paidInvoices, payments] = await Promise.all([
+  const [jobCompletions, completedJobs, paidInvoices, payments, invoiceCredits] = await Promise.all([
     prisma.businessEvent.findMany({
       where: { ...scope, type: "JOB_COMPLETED", subjectType: "JOB", occurredAt: range },
       select: { businessId: true, subjectId: true, occurredAt: true },
@@ -75,7 +75,15 @@ export async function loadMonthlyGoalFactSource(
     }),
     prisma.invoice.findMany({
       where: { ...scope, status: "PAID", paidAt: range },
-      select: { id: true, businessId: true, status: true, total: true, paidAt: true },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        total: true,
+        paidAt: true,
+        paymentMethod: true,
+        paymentReference: true,
+      },
       take: takeBound(),
       orderBy: { paidAt: "asc" },
     }),
@@ -84,6 +92,12 @@ export async function loadMonthlyGoalFactSource(
       select: { id: true, businessId: true, amount: true, invoiceId: true, receivedAt: true },
       take: takeBound(),
       orderBy: { receivedAt: "asc" },
+    }),
+    prisma.invoiceCredit.findMany({
+      where: scope,
+      select: { businessId: true, invoiceId: true, amount: true },
+      take: takeBound(),
+      orderBy: { id: "asc" },
     }),
   ]);
 
@@ -131,6 +145,11 @@ export async function loadMonthlyGoalFactSource(
     payments: payments.map((payment) => ({
       ...payment,
       amount: Number(toMonthlyGoalMoney(payment.amount).toFixed(2)),
+    })),
+    invoiceCredits: invoiceCredits.map((credit) => ({
+      businessId: credit.businessId,
+      invoiceId: credit.invoiceId,
+      amount: Number(toMonthlyGoalMoney(credit.amount).toFixed(2)),
     })),
     paymentsOnPaidInvoices: paymentsOnPaidInvoices.flatMap((row) =>
       row.invoiceId ? [{ businessId, invoiceId: row.invoiceId }] : [],

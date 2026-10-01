@@ -51,6 +51,7 @@ export async function loadFinancialSource(
         amount: true,
         method: true,
         receivedAt: true,
+        note: true,
       },
     }),
     prisma.changeOrder.findMany({

@@ -12,6 +12,7 @@ export type FinancialPayment = {
   amount: number;
   method: string;
   receivedAt: Date;
+  note?: string | null;
 };
 
 export type FinancialChangeOrder = {

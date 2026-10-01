@@ -629,7 +629,7 @@ try {
   });
   const recon = reconcileCollectedRevenue(reconSource);
   check("Global collected cash reconciles to job-attributed plus unattributed", recon.reconciles && recon.totalCollected === 215 && recon.attributedToJobs === 175 && recon.unattributedCollected === 40);
-  check("Invoice-set collected matches the same 215", collectedRevenueForInvoices(reconSource.invoices, reconSource.payments) === 215);
+  check("Invoice-set collected matches the same 215", collectedRevenueForInvoices(reconSource.invoices, reconSource.payments, reconSource.invoiceCredits ?? []) === 215);
   const sentJob = calculateJobProfitability("job-sent", financeSource({
     jobs: [{ id: "job-sent", status: "COMPLETED", createdAt: new Date(), customerId: "c1", estimateId: null }],
     invoices: [{ id: "inv-sent-1000", businessId: "biz-a", status: "SENT", total: 1000, paidAt: null, createdAt: new Date(), customerId: "c1", jobId: "job-sent", paymentMethod: null, paymentReference: null }],

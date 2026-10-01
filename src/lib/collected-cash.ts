@@ -2,13 +2,15 @@
  * Canonical collected-cash resolver for TBBT.
  *
  * Payment rows are modern collected-cash truth. A PAID invoice total is a
- * legacy fallback only when that invoice has no Payment rows. SENT invoice
- * totals are never collected. Each Payment is counted once.
+ * legacy fallback only when that invoice has no Payment rows and was not
+ * closed by OWNER credits. SENT invoice totals are never collected. Each
+ * Payment is counted once.
  *
  * Growth uses this now. Financial #102 can later share or reconcile it.
  * This module does not rebuild Financial intelligence.
  */
 
+import { invoiceHasRecordedCredits } from "@/lib/financial-intelligence/collected-revenue";
 import { asNumber } from "@/lib/reports";
 
 export type CollectedCashMoney = { toString(): string } | number | string | null | undefined;
@@ -19,6 +21,13 @@ export type CollectedCashInvoice = {
   total: CollectedCashMoney;
   jobId?: string | null;
   customerId?: string | null;
+  paymentMethod?: string | null;
+  paymentReference?: string | null;
+};
+
+export type CollectedCashCredit = {
+  invoiceId: string;
+  amount?: CollectedCashMoney;
 };
 
 export type CollectedCashPayment = {
@@ -32,7 +41,7 @@ export type CollectedCashPayment = {
 export type CollectedCashSource = "payments" | "legacy_paid";
 
 export const COLLECTED_CASH_MESSAGE =
-  "Collected uses recorded Payment rows. A PAID invoice total is used only when that invoice has no Payment rows. SENT is never collected.";
+  "Collected uses recorded Payment rows. A PAID invoice total is used only when that invoice has no Payment rows and was not closed by recorded credits. SENT is never collected.";
 
 function money(value: CollectedCashMoney): number {
   return asNumber(value as { toString(): string } | number | null | undefined);
@@ -55,6 +64,7 @@ export function paymentsForInvoice(
 export function resolveInvoiceCollected(
   invoice: CollectedCashInvoice,
   payments: readonly CollectedCashPayment[],
+  credits: readonly CollectedCashCredit[] = [],
 ): { amount: number; source: CollectedCashSource | null; paymentIds: string[] } {
   const rows = paymentsForInvoice(invoice.id, payments);
   if (rows.length > 0) {
@@ -64,7 +74,8 @@ export function resolveInvoiceCollected(
       paymentIds: rows.map((row) => row.id),
     };
   }
-  if (invoice.status === "PAID") {
+  // CREDIT_CLOSED_NOT_LEGACY_CASH
+  if (invoice.status === "PAID" && !invoiceHasRecordedCredits(invoice, credits)) {
     return { amount: money(invoice.total), source: "legacy_paid", paymentIds: [] };
   }
   return { amount: 0, source: null, paymentIds: [] };
@@ -73,6 +84,7 @@ export function resolveInvoiceCollected(
 export function resolveCollectedCash(input: {
   invoices: readonly CollectedCashInvoice[];
   payments: readonly CollectedCashPayment[];
+  credits?: readonly CollectedCashCredit[];
 }) {
   const countedPaymentIds = new Set<string>();
   const byInvoiceId = new Map<string, { amount: number; source: CollectedCashSource }>();
@@ -80,7 +92,7 @@ export function resolveCollectedCash(input: {
   let collectionCount = 0;
 
   for (const invoice of input.invoices) {
-    const resolved = resolveInvoiceCollected(invoice, input.payments);
+    const resolved = resolveInvoiceCollected(invoice, input.payments, input.credits);
     for (const paymentId of resolved.paymentIds) countedPaymentIds.add(paymentId);
     if (resolved.source) {
       byInvoiceId.set(invoice.id, { amount: resolved.amount, source: resolved.source });
@@ -121,6 +133,7 @@ export function collectedForJob(input: {
   jobId: string;
   invoices: readonly CollectedCashInvoice[];
   payments: readonly CollectedCashPayment[];
+  credits?: readonly CollectedCashCredit[];
 }): { invoiced: number; collected: number } {
   const invoices = input.invoices.filter((invoice) => invoice.jobId === input.jobId);
   const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
@@ -134,7 +147,11 @@ export function collectedForJob(input: {
     seen.add(payment.id);
     jobPayments.push(payment);
   }
-  const cash = resolveCollectedCash({ invoices, payments: jobPayments });
+  const cash = resolveCollectedCash({
+    invoices,
+    payments: jobPayments,
+    credits: input.credits,
+  });
   return {
     invoiced: invoicedAmount(invoices),
     collected: cash.totalCollected,

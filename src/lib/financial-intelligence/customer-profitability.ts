@@ -44,6 +44,7 @@ export function buildCustomerProfitability(
         customerId: customer.id,
         invoices: source.invoices,
         payments: source.payments,
+        credits: source.invoiceCredits ?? [],
       });
       const outstandingReceivables = roundMoney(
         receivables.filter((row) => row.customerId === customer.id).reduce((sum, row) => sum + row.balanceDue, 0),
@@ -80,9 +81,17 @@ export function buildCustomerProfitability(
 
 export function buildCustomerLifetime(
   customers: readonly { id: string; name: string; createdAt: Date }[],
-  invoices: readonly { id?: string; customerId: string | null; status: string; total: number }[],
+  invoices: readonly {
+    id?: string;
+    customerId: string | null;
+    status: string;
+    total: number;
+    paymentMethod?: string | null;
+    paymentReference?: string | null;
+  }[],
   jobs: readonly { customerId: string | null; status: string }[],
   payments: readonly { id: string; amount: number; invoiceId: string | null; customerId: string | null; jobId: string | null }[] = [],
+  credits: readonly { invoiceId: string; amount: number }[] = [],
 ): CustomerLifetimeRow[] {
   return customers
     .map((customer) => {
@@ -98,11 +107,14 @@ export function buildCustomerLifetime(
           total: invoice.total,
           customerId: invoice.customerId,
           jobId: null,
+          paymentMethod: invoice.paymentMethod ?? null,
+          paymentReference: invoice.paymentReference ?? null,
         })),
         payments: payments.map((payment) => ({
           ...payment,
           receivedAt: new Date(0),
         })),
+        credits,
       });
       return {
         customerId: customer.id,

@@ -25,9 +25,13 @@ import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   getBusinessPaymentStatus,
+  paymentsNeedingStripeCreditMismatchReview,
   reconcileStripeCheckoutPayment,
+  STRIPE_CREDIT_MISMATCH_OWNER_DETAIL,
+  STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
 } from "@/lib/payments";
 import {
   explainPaymentsGoLiveFromStatus,
@@ -118,6 +122,7 @@ export default async function InvoicePage({
   const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
   const showCollectionHelp = isSent && !dueIsZero;
+  const stripeCreditMismatchReviews = paymentsNeedingStripeCreditMismatchReview(payments);
 
   return (
     <PageContainer>
@@ -169,6 +174,15 @@ export default async function InvoicePage({
           />
         </div>
       </PageHeader>
+
+      {stripeCreditMismatchReviews.length > 0 ? (
+        <Alert>
+          <AlertTitle>{STRIPE_CREDIT_MISMATCH_OWNER_TITLE}</AlertTitle>
+          <AlertDescription>
+            {STRIPE_CREDIT_MISMATCH_OWNER_DETAIL}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardHeader>

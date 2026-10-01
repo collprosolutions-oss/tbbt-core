@@ -27,6 +27,8 @@ export {
   collectedRevenueForInvoices,
   collectedRevenueForJob,
   invoiceBalanceDue,
+  invoiceHasRecordedCredits,
+  legacyCollectedForInvoice,
   outstandingReceivableAmount,
   paymentsAppliedToInvoice,
   reconcileCollectedRevenue,

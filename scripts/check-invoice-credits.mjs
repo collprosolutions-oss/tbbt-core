@@ -132,6 +132,7 @@ function makeAccess(businessId, role, membershipId) {
 const creditLibSrc = readRepo("src/lib/invoice-credits.ts");
 const invoiceActionSrc = readRepo("src/app/actions/invoice.ts");
 const invoicePageSrc = readRepo("src/app/(app)/invoices/[invoiceId]/page.tsx");
+const dashboardSrc = readRepo("src/app/(app)/dashboard/page.tsx");
 const formSrc = readRepo("src/components/invoices/record-invoice-credit-form.tsx");
 const schemaSrc = readRepo("prisma/schema.prisma");
 const authSrc = readRepo("src/lib/authorization.ts");
@@ -204,6 +205,13 @@ if (!MUTATION_KIND) {
     creditLibSrc.includes("CREDIT_AMOUNT_PATTERN = /^\\d+(\\.\\d{1,2})?$/"),
   );
   check(
+    "owner review surfaces a Stripe credit-mismatch on the invoice page and dashboard",
+    invoicePageSrc.includes("paymentsNeedingStripeCreditMismatchReview") &&
+      invoicePageSrc.includes("STRIPE_CREDIT_MISMATCH_OWNER_TITLE") &&
+      dashboardSrc.includes("STRIPE_CREDIT_MISMATCH_OWNER_TITLE") &&
+      dashboardSrc.includes("STRIPE_CREDIT_MISMATCH_REVIEW_NOTE"),
+  );
+  check(
     "this verifier uses the shared disposable harness",
     selfSrc.includes('from "./disposable-test-database.mjs"') &&
       selfSrc.includes("openDisposableTestDatabase") &&
@@ -273,6 +281,7 @@ const {
 const {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   ProjectPaymentError,
+  closingTruthFromRecordedPayments,
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
   recordOwnerInvoiceBalancePayment,
@@ -282,11 +291,21 @@ const {
 } = await import("@/lib/project-payments");
 const {
   applyVerifiedCheckoutPayment,
+  STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
   STRIPE_CREDIT_MISMATCH_REASON,
   STRIPE_CREDIT_MISMATCH_REVIEW_NOTE,
+  paymentsNeedingStripeCreditMismatchReview,
 } = await import("@/lib/payments");
-const { invoiceBalanceDue, outstandingReceivableAmount } =
-  await import("@/lib/financial-intelligence/collected-revenue");
+const {
+  collectedRevenueForCustomer,
+  collectedRevenueForInvoices,
+  collectedRevenueForJob,
+  invoiceBalanceDue,
+  outstandingReceivableAmount,
+} = await import("@/lib/financial-intelligence/collected-revenue");
+const { resolveCollectedCash } = await import("@/lib/collected-cash");
+const { buildKnownCashFlowFromSource } = await import("@/lib/financial-intelligence/cash-flow");
+const { collectedRevenueInPeriod, resolveMonthlyGoalPeriod } = await import("@/lib/monthly-goals");
 
 async function seedBusiness(name) {
   const ownerUser = await prisma.user.create({
@@ -437,6 +456,177 @@ function webhookPayment(input) {
   };
 }
 
+function asCollected(invoice, payments, credits) {
+  return {
+    invoices: [
+      {
+        id: invoice.id,
+        status: invoice.status,
+        total: Number(invoice.total.toString()),
+        jobId: invoice.jobId,
+        customerId: invoice.customerId,
+        paidAt: invoice.paidAt,
+        paymentMethod: invoice.paymentMethod,
+        paymentReference: invoice.paymentReference,
+      },
+    ],
+    payments: payments.map((payment) => ({
+      id: payment.id,
+      amount: Number(payment.amount.toString()),
+      invoiceId: payment.invoiceId,
+      jobId: payment.jobId,
+      customerId: payment.customerId,
+      receivedAt: payment.receivedAt,
+    })),
+    credits: credits.map((credit) => ({
+      invoiceId: credit.invoiceId,
+      amount: Number(credit.amount.toString()),
+    })),
+  };
+}
+
+async function seedCreditCashScenario(owner, tenant) {
+  const creditOnly = await seedSentInvoice({
+    businessId: tenant.business.id,
+    customerId: tenant.customer.id,
+    propertyId: tenant.property.id,
+    total: "100.00",
+  });
+  await recordOwnerInvoiceCredit(prisma, owner, {
+    invoiceId: creditOnly.invoice.id,
+    amount: "100.00",
+    reason: "full write-off",
+    idempotencyKey: `cash-credit-only-${randomUUID()}`,
+  });
+  const mixed = await seedSentInvoice({
+    businessId: tenant.business.id,
+    customerId: tenant.customer.id,
+    propertyId: tenant.property.id,
+    total: "200.00",
+  });
+  await recordOwnerInvoiceBalancePayment(prisma, owner, {
+    invoiceId: mixed.invoice.id,
+    amount: "150.00",
+    method: "CASH",
+  });
+  await recordOwnerInvoiceCredit(prisma, owner, {
+    invoiceId: mixed.invoice.id,
+    amount: "50.00",
+    reason: "remaining write-off",
+    idempotencyKey: `cash-mixed-${randomUUID()}`,
+  });
+  const first = await invoiceTruth(tenant.business.id, creditOnly.invoice.id);
+  const second = await invoiceTruth(tenant.business.id, mixed.invoice.id);
+  const invoices = [
+    ...asCollected(first.invoice, first.payments, first.credits).invoices,
+    ...asCollected(second.invoice, second.payments, second.credits).invoices,
+  ];
+  const payments = [
+    ...asCollected(first.invoice, first.payments, first.credits).payments,
+    ...asCollected(second.invoice, second.payments, second.credits).payments,
+  ];
+  const credits = [
+    ...asCollected(first.invoice, first.payments, first.credits).credits,
+    ...asCollected(second.invoice, second.payments, second.credits).credits,
+  ];
+  return { first, second, invoices, payments, credits };
+}
+
+function collectedCashIs150(invoices, payments, credits, firstJobId, mixedJobId, customerId) {
+  const forInvoices = collectedRevenueForInvoices(invoices, payments, credits);
+  const forCustomer = collectedRevenueForCustomer({
+    customerId,
+    invoices,
+    payments,
+    credits,
+  });
+  const forFirstJob = collectedRevenueForJob({
+    jobId: firstJobId,
+    invoices,
+    payments,
+    credits,
+  });
+  const forJob = collectedRevenueForJob({
+    jobId: mixedJobId,
+    invoices,
+    payments,
+    credits,
+  });
+  const resolved = resolveCollectedCash({ invoices, payments, credits });
+  const reportsCash = buildKnownCashFlowFromSource(
+    {
+      invoices,
+      payments: payments.map((payment) => ({
+        ...payment,
+        businessId: invoices[0] ? "local" : "local",
+        purpose: "INVOICE_BALANCE",
+        method: "CASH",
+      })),
+      invoiceCredits: credits,
+      expenses: [],
+      payrollRuns: [],
+    },
+    { start: null, end: null },
+  );
+  const period = resolveMonthlyGoalPeriod(new Date(), { timezone: "America/New_York" });
+  const monthly = collectedRevenueInPeriod(
+    {
+      businessId: "cash-tenant",
+      timeZone: period.timeZone,
+      jobCompletions: [],
+      completedJobs: [],
+      completionEventsForCompletedJobs: [],
+      paidInvoices: invoices.map((invoice) => ({
+        businessId: "cash-tenant",
+        id: invoice.id,
+        status: invoice.status,
+        total: invoice.total,
+        paidAt: invoice.paidAt ?? new Date(),
+        paymentMethod: invoice.paymentMethod,
+        paymentReference: invoice.paymentReference,
+      })),
+      payments: payments.map((payment) => ({
+        businessId: "cash-tenant",
+        id: payment.id,
+        amount: payment.amount,
+        invoiceId: payment.invoiceId,
+        receivedAt: payment.receivedAt,
+      })),
+      invoiceCredits: credits.map((credit) => ({
+        businessId: "cash-tenant",
+        invoiceId: credit.invoiceId,
+        amount: credit.amount,
+      })),
+      paymentsOnPaidInvoices: payments
+        .filter((payment) => payment.invoiceId)
+        .map((payment) => ({ businessId: "cash-tenant", invoiceId: payment.invoiceId })),
+      jobCompletionsTruncated: false,
+      completedJobsTruncated: false,
+      paidInvoicesTruncated: false,
+      paymentsTruncated: false,
+      paymentsOnPaidInvoicesTruncated: false,
+    },
+    period,
+  );
+  return {
+    forInvoices,
+    forCustomer,
+    forFirstJob,
+    forJob,
+    resolved: resolved.totalCollected,
+    reports: reportsCash.collectedCustomerPayments,
+    monthly: monthly.actual,
+    ok:
+      forInvoices === 150 &&
+      forCustomer === 150 &&
+      forFirstJob === 0 &&
+      forJob === 150 &&
+      resolved.totalCollected === 150 &&
+      reportsCash.collectedCustomerPayments === 150 &&
+      monthly.actual === 150,
+  };
+}
+
 function createExtraClient() {
   if (session) return session.createClient();
   const { PrismaClient } = require("@prisma/client");
@@ -541,13 +731,19 @@ try {
       reason: "first",
       idempotencyKey: "mutation-idem",
     });
-    const replay = await recordOwnerInvoiceCredit(prisma, ownerA, {
-      invoiceId: invoice.invoice.id,
-      amount: "10.00",
-      reason: "first",
-      idempotencyKey: "mutation-idem",
-    });
-    check("idempotent replay uses the pre-insert lookup", replay.replayedViaLookup === true);
+    let replayedViaLookup = false;
+    try {
+      const replay = await recordOwnerInvoiceCredit(prisma, ownerA, {
+        invoiceId: invoice.invoice.id,
+        amount: "10.00",
+        reason: "first",
+        idempotencyKey: "mutation-idem",
+      });
+      replayedViaLookup = replay.replayedViaLookup === true;
+    } catch {
+      replayedViaLookup = false;
+    }
+    check("idempotent replay uses the pre-insert lookup", replayedViaLookup === true);
   } else if (MUTATION_KIND === "credit-for-update") {
     const invoice = await seedSentInvoice({
       businessId: tenantA.business.id,
@@ -656,6 +852,105 @@ try {
     check(
       "webhook and credit together cannot exceed the invoice total",
       applied.toString() === "100" && after.breakdown.amountDue.toString() === "0",
+    );
+  } else if (MUTATION_KIND === "credit-closed-cash") {
+    const scenario = await seedCreditCashScenario(ownerA, tenantA);
+    const cash = collectedCashIs150(
+      scenario.invoices,
+      scenario.payments,
+      scenario.credits,
+      scenario.first.invoice.jobId,
+      scenario.second.invoice.jobId,
+      tenantA.customer.id,
+    );
+    check("credit-closed invoices contribute $0 collected cash", cash.ok);
+  } else if (MUTATION_KIND === "stale-checkout-bound") {
+    const invoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: invoice.invoice.id,
+      amount: "30.00",
+      reason: "bound",
+      idempotencyKey: "mutation-bound-credit",
+    });
+    const huge = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: invoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 99999999,
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    check(
+      "unbounded stale webhook is amount_mismatch with nothing recorded",
+      huge.reason === "amount_mismatch" && after.payments.length === 0,
+    );
+  } else if (MUTATION_KIND === "stale-checkout-owner-review") {
+    const invoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: invoice.invoice.id,
+      amount: "30.00",
+      reason: "review",
+      idempotencyKey: "mutation-review-credit",
+    });
+    await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: invoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 10000,
+        checkoutSessionId: "cs_mutation_review",
+        paymentReference: "pi_mutation_review",
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    const reviews = paymentsNeedingStripeCreditMismatchReview(after.payments);
+    check(
+      "accepted stale checkout is visible for owner review",
+      reviews.length === 1 && readRepo("src/app/(app)/dashboard/page.tsx").includes(STRIPE_CREDIT_MISMATCH_OWNER_TITLE),
+    );
+  } else if (MUTATION_KIND === "stale-checkout-after-full-credit") {
+    const invoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: invoice.invoice.id,
+      amount: "100.00",
+      reason: "full",
+      idempotencyKey: "mutation-full-credit",
+    });
+    const applied = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: invoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 10000,
+        checkoutSessionId: "cs_mutation_full",
+        paymentReference: "pi_mutation_full",
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    check(
+      "webhook after a full credit records the charge for owner refund review",
+      applied.applied === true &&
+        applied.reason === STRIPE_CREDIT_MISMATCH_REASON &&
+        after.payments.length === 1,
     );
   } else {
     console.log("\nTEST — Accounting arithmetic: payment plus credit");
@@ -767,6 +1062,7 @@ try {
     const afterDuplicate = await invoiceTruth(tenantA.business.id, invoice500.invoice.id);
     check("same idempotency key does not create a second credit", duplicate.alreadyRecorded === true && duplicate.created === false);
     check("idempotent replay uses the pre-insert lookup", duplicate.replayedViaLookup === true);
+    check("idempotent replay did not throw a transaction abort", duplicate.alreadyRecorded === true);
     check("duplicate submit leaves one $50 credit and $250 due", afterDuplicate.credits.length === 1 && afterDuplicate.breakdown.amountDue.toString() === "250");
     check("duplicate submit does not add a payment", afterDuplicate.payments.length === 1);
 
@@ -980,6 +1276,13 @@ try {
         afterFullCredit.invoice.paymentMethod === "OTHER" &&
         afterFullCredit.invoice.paymentReference === invoiceClosedByCreditReference(fullCredit.creditId),
     );
+    const closing = closingTruthFromRecordedPayments([], afterFullCredit.credits);
+    check(
+      "credit-based closingTruth sets OTHER / Recorded credit / paidAt",
+      closing.paymentMethod === "OTHER" &&
+        closing.paymentReference === invoiceClosedByCreditReference(fullCredit.creditId) &&
+        closing.paidAt instanceof Date,
+    );
     const markPaidCovered = await recordOwnerInvoiceBalancePayment(prisma, ownerA, {
       invoiceId: fullCreditInvoice.invoice.id,
     });
@@ -992,6 +1295,25 @@ try {
         afterMarkPaidCovered.invoice.status === "PAID" &&
         Boolean(afterMarkPaidCovered.invoice.paidAt) &&
         Boolean(afterMarkPaidCovered.invoice.paymentMethod),
+    );
+
+    console.log("\nTEST — Credit-closed invoices are not collected cash");
+    const cashScenario = await seedCreditCashScenario(ownerA, tenantA);
+    const cash = collectedCashIs150(
+      cashScenario.invoices,
+      cashScenario.payments,
+      cashScenario.credits,
+      cashScenario.first.invoice.jobId,
+      cashScenario.second.invoice.jobId,
+      tenantA.customer.id,
+    );
+    check(
+      "collected = 150 through invoices, customer, job, resolveCollectedCash, reports, and monthly goals",
+      cash.ok,
+    );
+    check(
+      "credit-closed $100 invoice is $0 cash and mixed invoice collects only the $150 payment",
+      cash.forFirstJob === 0 && cash.forJob === 150 && cash.resolved === 150,
     );
 
     console.log("\nTEST — Concurrent remaining-balance credits cannot over-credit");
@@ -1187,6 +1509,82 @@ try {
     );
     check("non-credit amount mismatch is still rejected without recording", wrongAmount.reason === "amount_mismatch");
 
+    const hugeStale = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: staleInvoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 99999999,
+        checkoutSessionId: "cs_stale_huge",
+        paymentReference: "pi_stale_huge",
+      }),
+    );
+    const afterHuge = await invoiceTruth(tenantA.business.id, staleInvoice.invoice.id);
+    check(
+      "unbounded stale webhook is amount_mismatch with nothing recorded",
+      hugeStale.reason === "amount_mismatch" && afterHuge.payments.length === 1,
+    );
+    check(
+      "accepted stale checkout is visible for owner review",
+      paymentsNeedingStripeCreditMismatchReview(afterStale.payments).length === 1 &&
+        invoicePageSrc.includes("paymentsNeedingStripeCreditMismatchReview") &&
+        dashboardSrc.includes(STRIPE_CREDIT_MISMATCH_OWNER_TITLE),
+    );
+
+    console.log("\nTEST — Webhook after a fully credited invoice is recorded for refund review");
+    const fullThenCharge = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: fullThenCharge.invoice.id,
+      amount: "100.00",
+      reason: "close before webhook",
+      idempotencyKey: "full-then-charge",
+    });
+    const afterClose = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
+    const closedThenCharge = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: fullThenCharge.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 10000,
+        checkoutSessionId: "cs_full_then_100",
+        paymentReference: "pi_full_then_100",
+      }),
+    );
+    const afterClosedCharge = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
+    check(
+      "webhook after a full credit records the charge for owner refund review",
+      afterClose.invoice.status === "PAID" &&
+        afterClose.payments.length === 0 &&
+        closedThenCharge.applied === true &&
+        closedThenCharge.reason === STRIPE_CREDIT_MISMATCH_REASON &&
+        afterClosedCharge.payments.length === 1 &&
+        afterClosedCharge.payments[0].amount.toString() === "100" &&
+        paymentsNeedingStripeCreditMismatchReview(afterClosedCharge.payments).length === 1,
+    );
+    const closedHuge = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: fullThenCharge.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 99999999,
+        checkoutSessionId: "cs_full_then_huge",
+        paymentReference: "pi_full_then_huge",
+      }),
+    );
+    const afterClosedHuge = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
+    check(
+      "unbounded webhook after a full credit is amount_mismatch with the bound charge still recorded",
+      closedHuge.reason === "amount_mismatch" && afterClosedHuge.payments.length === 1,
+    );
+
     console.log("\nTEST — Credit and webhook writers wait on the same Invoice lock");
     const lockInvoice = await seedSentInvoice({
       businessId: tenantA.business.id,
@@ -1297,6 +1695,30 @@ try {
         file: "src/lib/invoice-credits.ts",
         find: "if (!CREDIT_AMOUNT_PATTERN.test(trimmed))",
         replace: "if (false && !CREDIT_AMOUNT_PATTERN.test(trimmed))",
+      },
+      {
+        kind: "credit-closed-cash",
+        file: "src/lib/financial-intelligence/collected-revenue.ts",
+        find: "  // CREDIT_CLOSED_NOT_LEGACY_CASH\n  if (invoiceHasRecordedCredits(invoice, credits)) return 0;",
+        replace: "  // MUTATED_CREDIT_CLOSED_CASH",
+      },
+      {
+        kind: "stale-checkout-bound",
+        file: "src/lib/payments/service.ts",
+        find: "    // STALE_CHECKOUT_AMOUNT_BOUND\n    const staleCreditMatch =\n      credits.length > 0 &&\n      payment.amountCents === staleBoundCents &&\n      payment.amountCents > expectedCents;",
+        replace: "    const staleCreditMatch =\n      credits.length > 0 &&\n      payment.amountCents > expectedCents;",
+      },
+      {
+        kind: "stale-checkout-owner-review",
+        file: "src/lib/payments/service.ts",
+        find: "  // STRIPE_CREDIT_MISMATCH_OWNER_REVIEW\n  return payments.filter((payment) => isStripeCreditMismatchReviewNote(payment.note));",
+        replace: "  return [];",
+      },
+      {
+        kind: "stale-checkout-after-full-credit",
+        file: "src/lib/payments/service.ts",
+        find: "    // STALE_CHECKOUT_AFTER_FULL_CREDIT\n    if (!exactMatch && !staleCreditMatch) {",
+        replace: "    if (invoice.status === \"PAID\" || breakdown.amountDue.lte(0)) {\n      return { applied: false, reason: \"already_paid\" };\n    }\n    if (!exactMatch && !staleCreditMatch) {",
       },
     ];
 

@@ -763,7 +763,7 @@ function parseOwnerInvoicePaymentAmount(raw: string | null | undefined) {
   }
 }
 
-function closingTruthFromRecordedPayments(
+export function closingTruthFromRecordedPayments(
   payments: Array<{ method: string; note: string | null; receivedAt: Date }>,
   credits: Array<{ id?: string; createdAt?: Date }> = [],
 ) {

@@ -629,7 +629,11 @@ export function buildOwnerScenarioPlan(
   const billedRevenue = sumTotals(
     isolated.invoices.filter((invoice) => invoice.status === "SENT" || invoice.status === "PAID"),
   );
-  const collectedRevenue = collectedRevenueForInvoices(isolated.invoices, isolated.payments);
+  const collectedRevenue = collectedRevenueForInvoices(
+    isolated.invoices,
+    isolated.payments,
+    isolated.invoiceCredits,
+  );
   const unpaid = outstandingReceivableAmount(
     isolated.invoices,
     isolated.payments,

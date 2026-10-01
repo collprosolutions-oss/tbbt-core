@@ -9,6 +9,7 @@ import { buildReceivables, type ReceivablesAging } from "@/lib/financial-intelli
 import { detectRecurringExpensePatterns, type RecurringExpenseSuggestion } from "@/lib/financial-intelligence/recurring-expenses";
 import { buildServiceProfitability, type ServiceProfitRow } from "@/lib/financial-intelligence/service-profitability";
 import type { FinancialSource } from "@/lib/financial-intelligence/source";
+import { paymentsNeedingStripeCreditMismatchReview } from "@/lib/payments";
 
 export const BANK_NOT_CONNECTED_MESSAGE = BANKING_NOT_CONNECTED_MESSAGE;
 
@@ -112,8 +113,24 @@ function financialAttention(input: {
   jobs: readonly JobProfitability[];
   pricing: readonly PricingRecommendation[];
   cashFlow: KnownCashFlow;
+  creditMismatchReviews?: readonly { invoiceId: string | null; id: string }[];
 }): FinancialAttentionItem[] {
   const items: FinancialAttentionItem[] = [];
+  const reviews = (input.creditMismatchReviews ?? []).filter((row) => row.invoiceId);
+  if (reviews.length > 0) {
+    const firstInvoiceId = reviews[0]?.invoiceId as string;
+    items.push({
+      key: "stripe-credit-mismatch-review",
+      kind: "fact",
+      label:
+        reviews.length === 1
+          ? "Stripe charge after recorded credit needs review"
+          : `${reviews.length} Stripe charges after recorded credits need review`,
+      detail:
+        "A succeeded card charge no longer matches remaining due. Refund in Stripe if needed. TBBT does not refund automatically.",
+      href: `/invoices/${firstInvoiceId}`,
+    });
+  }
   const aged = input.receivables.rows.filter((row) => row.ageDays > 30);
   if (aged.length > 0) {
     items.push({
@@ -235,11 +252,23 @@ export function buildFinancialIntelligence(
       count: receivables.count,
     },
     receivables,
-    customerLifetime: buildCustomerLifetime(source.customers, source.invoices, source.jobs, source.payments),
+    customerLifetime: buildCustomerLifetime(
+      source.customers,
+      source.invoices,
+      source.jobs,
+      source.payments,
+      source.invoiceCredits ?? [],
+    ),
     cashFlow,
     pricingRecommendations,
     laborBurden,
-    attention: financialAttention({ receivables, jobs, pricing: pricingRecommendations, cashFlow }),
+    attention: financialAttention({
+      receivables,
+      jobs,
+      pricing: pricingRecommendations,
+      cashFlow,
+      creditMismatchReviews: paymentsNeedingStripeCreditMismatchReview(source.payments),
+    }),
     bankConnected: false,
     accountingConnected: false,
     messages: {

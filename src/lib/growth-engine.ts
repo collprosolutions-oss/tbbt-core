@@ -78,6 +78,13 @@ export type GrowthInvoiceRow = {
   total: GrowthMoney;
   paidAt: Date | null;
   createdAt: Date;
+  paymentMethod?: string | null;
+  paymentReference?: string | null;
+};
+
+export type GrowthInvoiceCreditRow = {
+  invoiceId: string;
+  amount: GrowthMoney;
 };
 
 export type GrowthPaymentRow = {
@@ -188,6 +195,7 @@ export type GrowthSource = {
   jobs: GrowthJobRow[];
   invoices: GrowthInvoiceRow[];
   payments?: GrowthPaymentRow[];
+  invoiceCredits?: GrowthInvoiceCreditRow[];
   jobCompletions?: GrowthJobCompletionRow[];
   pipeline: GrowthPipelineRow[];
   customers: GrowthCustomerRow[];
@@ -442,6 +450,7 @@ function jobMoney(source: GrowthSource, jobId: string) {
     jobId,
     invoices: source.invoices,
     payments: source.payments ?? [],
+    credits: source.invoiceCredits ?? [],
   });
 }
 
@@ -488,6 +497,7 @@ export function buildGrowthFunnel(source: GrowthSource): GrowthFunnel {
   const cash = resolveCollectedCash({
     invoices: source.invoices,
     payments: source.payments ?? [],
+    credits: source.invoiceCredits ?? [],
   });
   const referralOrReactivation =
     source.referrals.filter((row) => row.status !== "CANCELLED").length +

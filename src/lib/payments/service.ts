@@ -39,6 +39,28 @@ type PaymentsClient = PrismaClient | Prisma.TransactionClient;
 
 export const STRIPE_CREDIT_MISMATCH_REVIEW_NOTE = "STRIPE_CREDIT_MISMATCH_REVIEW";
 export const STRIPE_CREDIT_MISMATCH_REASON = "credit_amount_mismatch_review";
+export const STRIPE_CREDIT_MISMATCH_OWNER_TITLE = "Stripe charge after recorded credit";
+export const STRIPE_CREDIT_MISMATCH_OWNER_DETAIL =
+  "A customer card charge no longer matches remaining due because a credit was recorded. Review this invoice and refund in Stripe if needed. TBBT does not refund automatically and does not message the customer.";
+
+export function isStripeCreditMismatchReviewNote(note: string | null | undefined) {
+  return Boolean(note?.startsWith(STRIPE_CREDIT_MISMATCH_REVIEW_NOTE));
+}
+
+export function paymentsNeedingStripeCreditMismatchReview<T extends { note?: string | null }>(
+  payments: readonly T[],
+): T[] {
+  // STRIPE_CREDIT_MISMATCH_OWNER_REVIEW
+  return payments.filter((payment) => isStripeCreditMismatchReviewNote(payment.note));
+}
+
+/** Checkout could have been created for remaining due before later credits: total − payments. */
+export function staleCheckoutBoundCents(
+  invoiceTotal: Prisma.Decimal | number | string,
+  amountPaid: Prisma.Decimal | number | string,
+) {
+  return invoiceAmountToCents(new Prisma.Decimal(invoiceTotal.toString()).sub(amountPaid.toString()));
+}
 
 type InvoiceBalanceTarget = {
   id: string;
@@ -353,7 +375,9 @@ async function maybeMarkInvoicePaid(
  * credits. Open Checkout sessions do not block OWNER credits. If a
  * later webhook amount no longer matches remaining because a credit
  * landed first, applyVerifiedInvoicePayment records the succeeded
- * charge and flags owner review instead of dropping it or refunding.
+ * charge only when it equals the pre-credit remaining (what checkout
+ * could have been created for) and flags owner review instead of
+ * dropping it or refunding. Unbounded amounts are amount_mismatch.
  */
 export async function createCustomerInvoiceCheckout(
   db: PaymentsClient,
@@ -495,25 +519,33 @@ async function applyVerifiedInvoicePayment(
     }
 
     const { breakdown, credits } = await loadInvoicePaymentBreakdown(tx, invoice);
-    if (invoice.status === "PAID" || breakdown.amountDue.lte(0)) {
-      return { applied: false, reason: "already_paid" };
-    }
-    if (invoice.status !== "SENT") {
-      return { applied: false, reason: "not_sent" };
-    }
-    const expectedCents = invoiceAmountToCents(breakdown.amountDue);
-    const mismatch = payment.amountCents !== expectedCents;
-    const creditCausedMismatch =
-      mismatch &&
+    const expectedCents =
+      breakdown.amountDue.gt(0) && invoice.status === "SENT"
+        ? invoiceAmountToCents(breakdown.amountDue)
+        : 0;
+    const staleBoundCents = staleCheckoutBoundCents(invoice.total, breakdown.amountPaid);
+    const exactMatch =
+      invoice.status === "SENT" &&
+      expectedCents > 0 &&
+      payment.amountCents === expectedCents;
+    // STALE_CHECKOUT_AMOUNT_BOUND
+    const staleCreditMatch =
       credits.length > 0 &&
+      payment.amountCents === staleBoundCents &&
       payment.amountCents > expectedCents;
-
-    if (mismatch && !creditCausedMismatch) {
+    // STALE_CHECKOUT_AFTER_FULL_CREDIT
+    if (!exactMatch && !staleCreditMatch) {
+      if ((invoice.status === "PAID" || breakdown.amountDue.lte(0)) && !credits.length) {
+        return { applied: false, reason: "already_paid" };
+      }
+      if (invoice.status !== "SENT" && invoice.status !== "PAID") {
+        return { applied: false, reason: "not_sent" };
+      }
       return { applied: false, reason: "amount_mismatch" };
     }
     await invoiceRemainingReadTestHooks.afterRead();
 
-    const reviewNote = creditCausedMismatch
+    const reviewNote = staleCreditMatch
       ? `${STRIPE_CREDIT_MISMATCH_REVIEW_NOTE}: charged ${payment.amountCents} cents after recorded credit; remaining was ${breakdown.amountDue.toFixed(2)}`
       : null;
     const recorded = await recordSucceededPayment(tx, {
@@ -535,7 +567,7 @@ async function applyVerifiedInvoicePayment(
       return { applied: false, reason: "already_paid" };
     }
 
-    if (creditCausedMismatch) {
+    if (staleCreditMatch) {
       const actor = credits[credits.length - 1]?.recordedByMembershipId;
       if (actor) {
         await writeSettingsAuditLog(tx, {
@@ -563,7 +595,7 @@ async function applyVerifiedInvoicePayment(
     await maybeMarkInvoicePaid(tx, invoice, payment.paymentReference);
     return {
       applied: true,
-      reason: creditCausedMismatch ? STRIPE_CREDIT_MISMATCH_REASON : "paid",
+      reason: staleCreditMatch ? STRIPE_CREDIT_MISMATCH_REASON : "paid",
     };
   };
 
