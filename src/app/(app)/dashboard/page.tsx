@@ -61,12 +61,14 @@ import {
   OWNER_DAILY_CHANGE_ORDER_SELECT,
   OWNER_DAILY_GROUP_TITLES,
   OWNER_DAILY_MORE_NOT_SHOWN,
+  OWNER_DAILY_SCAN_LIMIT_REACHED,
   OWNER_DAILY_RUNNING_TIME_SELECT,
   buildOwnerDailyAdditionalWorkAttention,
   buildOwnerDailyCallbackAttention,
   buildOwnerDailyChangeOrderAttention,
   buildOwnerDailyRunningTimeAttention,
   ownerDailyConflictTruncationLabel,
+  ownerDailyTruncationLabel,
   ownerDailyUnpaidInvoiceWhere,
   ownerDailyUnscheduledApprovedWhere,
 } from "@/lib/owner-daily-attention";
@@ -491,15 +493,23 @@ export default async function DashboardPage() {
       count: materialDepositAttention.count,
       items: materialDepositAttention.items,
       moreNotShown: materialDepositAttention.truncated,
+      scanLimited: materialDepositAttention.scanLimited,
+      truncationLabel: ownerDailyTruncationLabel(
+        materialDepositAttention.count,
+        materialDepositAttention.items.length,
+        materialDepositAttention.truncated,
+      ),
     },
     {
       title: OWNER_DAILY_GROUP_TITLES.scheduleConflicts,
       count: scheduleConflictAttention.count,
       items: scheduleConflictAttention.items,
       moreNotShown: scheduleConflictAttention.truncated,
+      scanLimited: scheduleConflictAttention.scanLimited,
       truncationLabel: ownerDailyConflictTruncationLabel(
         scheduleConflictAttention.count,
         scheduleConflictAttention.items.length,
+        scheduleConflictAttention.scanLimited,
       ),
     },
     {
@@ -513,7 +523,7 @@ export default async function DashboardPage() {
         action: "Open",
       })),
     },
-  ].filter((group) => group.count > 0);
+  ].filter((group) => group.count > 0 || group.moreNotShown);
 
   const recentGroups: AttentionGroupData[] = [
     {
@@ -560,7 +570,11 @@ export default async function DashboardPage() {
   const attentionTotal =
     appointmentAttention.length +
     firstAwaitingAttention.length +
-    attentionGroups.reduce((sum, group) => sum + group.count, 0);
+    attentionGroups.reduce(
+      (sum, group) =>
+        sum + Math.max(group.count, group.moreNotShown ? 1 : 0),
+      0,
+    );
 
   return (
     <PageContainer width="xl">
@@ -801,16 +815,23 @@ type AttentionGroupData = {
   count: number;
   items: AttentionItem[];
   moreNotShown?: boolean;
+  scanLimited?: boolean;
   truncationLabel?: string | null;
 };
 
 function AttentionGroup({ group }: { group: AttentionGroupData }) {
   const truncated =
-    Boolean(group.moreNotShown) || group.count > group.items.length;
+    Boolean(group.moreNotShown) ||
+    Boolean(group.scanLimited) ||
+    group.count > group.items.length;
   const truncationLabel =
     group.truncationLabel ??
-    (truncated && group.count > group.items.length
-      ? `${group.count} total, showing ${group.items.length}`
+    (truncated
+      ? group.count > group.items.length
+        ? `at least ${group.count}, showing ${group.items.length}`
+        : group.count > 0
+          ? `at least ${group.count}`
+          : null
       : null);
   return (
     <div className="space-y-2">
@@ -818,10 +839,11 @@ function AttentionGroup({ group }: { group: AttentionGroupData }) {
         {group.title}
         {truncationLabel ? (
           <span className="ml-1.5 text-muted-foreground">({truncationLabel})</span>
-        ) : group.count > group.items.length ? (
-          <span className="ml-1.5 text-muted-foreground">({group.count})</span>
         ) : null}
       </p>
+      {group.scanLimited || (truncated && group.items.length === 0) ? (
+        <p className="text-xs text-muted-foreground">{OWNER_DAILY_SCAN_LIMIT_REACHED}</p>
+      ) : null}
       {truncated ? (
         <p className="text-xs text-muted-foreground">{OWNER_DAILY_MORE_NOT_SHOWN}</p>
       ) : null}

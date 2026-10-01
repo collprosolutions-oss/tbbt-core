@@ -95,12 +95,40 @@ export type OwnerDailyLoadedList<T> = {
   items: T[];
   count: number;
   truncated: boolean;
+  scanLimited: boolean;
 };
 
 export type OwnerDailyConflictAttention = OwnerDailyLoadedList<OwnerDailyAttentionItem> & {
   jobScanTruncated: boolean;
   scannedJobCount: number;
 };
+
+export function ownerDailyConflictWindowWhere(range: { start: Date; end: Date }) {
+  return {
+    OR: [
+      { scheduledAt: { gte: range.start, lt: range.end } },
+      {
+        serviceIntent: "RECURRING" as const,
+        recurrenceStatus: "ACTIVE" as const,
+        nextOccurrenceAt: { gte: range.start, lt: range.end },
+      },
+    ],
+  };
+}
+
+function conflictScanAt(
+  row: { scheduledAt: Date | null; nextOccurrenceAt?: Date | null },
+  range: { start: Date; end: Date },
+) {
+  if (
+    row.scheduledAt &&
+    row.scheduledAt >= range.start &&
+    row.scheduledAt < range.end
+  ) {
+    return row.scheduledAt;
+  }
+  return row.nextOccurrenceAt ?? row.scheduledAt ?? range.end;
+}
 
 export async function loadOwnerDailyMaterialDepositAttention(
   db: DailyDb,
@@ -117,7 +145,7 @@ export async function loadOwnerDailyMaterialDepositAttention(
     const batch = (await db.estimate.findMany({
       where: { businessId, status: "APPROVED" },
       select: OWNER_DAILY_DEPOSIT_ESTIMATE_SELECT,
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       skip: page * OWNER_DAILY_DEPOSIT_PAGE_SIZE,
       take: OWNER_DAILY_DEPOSIT_PAGE_SIZE,
     })) as OwnerDailyDepositEstimateRecord[];
@@ -141,12 +169,16 @@ export async function loadOwnerDailyMaterialDepositAttention(
   }
   // OWNER_DAILY_DEPOSIT_WINDOW_END
 
+  // OWNER_DAILY_DEPOSIT_RESULT_BEGIN
   const truncated = unpaid.length > take || !done;
+  const scanLimited = !done && unpaid.length <= take;
   return {
     items: unpaid.slice(0, take),
     count: unpaid.length,
     truncated,
+    scanLimited,
   };
+  // OWNER_DAILY_DEPOSIT_RESULT_END
 }
 
 export async function loadOwnerDailyFirstAwaitingJobs(
@@ -180,28 +212,45 @@ export async function loadOwnerDailyConflictJobs(
   businessId: string,
   range: { start: Date; end: Date },
 ) {
-  const rows = await db.job.findMany({
-    where: {
-      businessId,
-      OR: [
-        { scheduledAt: { gte: range.start, lt: range.end } },
-        {
-          serviceIntent: "RECURRING",
-          recurrenceStatus: "ACTIVE",
-          scheduledAt: { not: null },
-        },
-      ],
-    },
-    select: OWNER_DAILY_CONFLICT_JOB_SELECT,
-    orderBy: { scheduledAt: "asc" },
-    // OWNER_DAILY_CONFLICT_JOB_TAKE_BEGIN
-    take: OWNER_DAILY_CONFLICT_JOBS_TAKE + 1,
-    // OWNER_DAILY_CONFLICT_JOB_TAKE_END
+  // OWNER_DAILY_CONFLICT_JOB_TAKE_BEGIN
+  const queryTake = OWNER_DAILY_CONFLICT_JOBS_TAKE + 1;
+  // OWNER_DAILY_CONFLICT_JOB_TAKE_END
+  const [windowRows, recurringRows] = await Promise.all([
+    db.job.findMany({
+      where: {
+        businessId,
+        scheduledAt: { gte: range.start, lt: range.end },
+      },
+      select: OWNER_DAILY_CONFLICT_JOB_SELECT,
+      orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+      take: queryTake,
+    }),
+    db.job.findMany({
+      where: {
+        businessId,
+        serviceIntent: "RECURRING",
+        recurrenceStatus: "ACTIVE",
+        nextOccurrenceAt: { gte: range.start, lt: range.end },
+        NOT: { scheduledAt: { gte: range.start, lt: range.end } },
+      },
+      select: OWNER_DAILY_CONFLICT_JOB_SELECT,
+      orderBy: [{ nextOccurrenceAt: "asc" }, { id: "asc" }],
+      take: queryTake,
+    }),
+  ]);
+  const merged = [...windowRows, ...recurringRows].sort((left, right) => {
+    const delta =
+      conflictScanAt(left, range).getTime() - conflictScanAt(right, range).getTime();
+    if (delta !== 0) return delta;
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
-  const jobScanTruncated = rows.length > OWNER_DAILY_CONFLICT_JOBS_TAKE;
+  const jobScanTruncated =
+    windowRows.length > OWNER_DAILY_CONFLICT_JOBS_TAKE ||
+    recurringRows.length > OWNER_DAILY_CONFLICT_JOBS_TAKE ||
+    merged.length > OWNER_DAILY_CONFLICT_JOBS_TAKE;
   const scanned = jobScanTruncated
-    ? rows.slice(0, OWNER_DAILY_CONFLICT_JOBS_TAKE)
-    : rows;
+    ? merged.slice(0, OWNER_DAILY_CONFLICT_JOBS_TAKE)
+    : merged;
   return {
     jobs: capacityJobsFromRows(scanned),
     jobScanTruncated,
@@ -249,6 +298,7 @@ export async function loadOwnerDailyScheduleConflictAttention(
     items,
     count: allItems.length,
     truncated: allItems.length > items.length || jobScanTruncated,
+    scanLimited: jobScanTruncated,
     jobScanTruncated,
     scannedJobCount,
   };

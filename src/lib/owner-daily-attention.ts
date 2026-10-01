@@ -25,6 +25,8 @@ export const OWNER_DAILY_DEPOSIT_PAGE_SIZE = 50;
 export const OWNER_DAILY_DEPOSIT_MAX_PAGES = 20;
 export const OWNER_DAILY_CONFLICT_JOBS_TAKE = 200;
 export const OWNER_DAILY_MORE_NOT_SHOWN = "more not shown";
+export const OWNER_DAILY_SCAN_LIMIT_REACHED =
+  "scan limit reached, more not checked";
 
 export const OWNER_DAILY_UNPAID_INVOICE_STATUSES = ["SENT"] as const;
 export const OWNER_DAILY_CHANGE_ORDER_ATTENTION_STATUSES = ["DRAFT", "SENT"] as const;
@@ -511,38 +513,81 @@ export type OwnerDailyAttentionGroup = {
   count: number;
   items: OwnerDailyAttentionItem[];
   truncated?: boolean;
+  scanLimited?: boolean;
   truncationLabel?: string | null;
 };
 
-export function ownerDailyTruncationLabel(count: number, shown: number) {
-  if (count <= shown) return null;
-  return `${count} total, showing ${shown}`;
+export type OwnerDailyWaitingList = {
+  items: readonly unknown[];
+  count?: number;
+  truncated?: boolean;
+};
+
+export function ownerDailyHasWaitingAttention(list: OwnerDailyWaitingList) {
+  return (
+    list.items.length > 0 ||
+    (list.count ?? 0) > 0 ||
+    Boolean(list.truncated)
+  );
 }
 
-export function ownerDailyConflictTruncationLabel(count: number, shown: number) {
-  if (count <= shown) return null;
-  return `${count} conflicts, showing ${shown}`;
+export function ownerDailyTruncationLabel(
+  count: number,
+  shown: number,
+  scanIncomplete = false,
+) {
+  if (scanIncomplete) {
+    if (count > shown) return `at least ${count}, showing ${shown}`;
+    if (shown === OWNER_DAILY_ATTENTION_TAKE) return `${shown}+`;
+    if (count > 0) return `at least ${count}`;
+    return null;
+  }
+  if (count > shown) return `${count} total, showing ${shown}`;
+  return null;
+}
+
+export function ownerDailyConflictTruncationLabel(
+  count: number,
+  shown: number,
+  scanIncomplete = false,
+) {
+  if (scanIncomplete) {
+    if (count > shown) return `at least ${count} conflicts, showing ${shown}`;
+    if (count > 0) return `at least ${count} conflicts`;
+    return null;
+  }
+  if (count > shown) return `${count} conflicts, showing ${shown}`;
+  return null;
 }
 
 export function ownerDailyAttentionGroup(
   title: string,
   items: readonly OwnerDailyAttentionItem[],
   count = items.length,
-  extra?: { truncated?: boolean; truncationLabel?: string | null },
+  extra?: {
+    truncated?: boolean;
+    scanLimited?: boolean;
+    truncationLabel?: string | null;
+  },
 ): OwnerDailyAttentionGroup | null {
-  if (count <= 0 && items.length === 0) return null;
   const sliced = items.slice(0, OWNER_DAILY_ATTENTION_TAKE);
-  const truncated = Boolean(extra?.truncated) || count > sliced.length;
+  const truncated =
+    Boolean(extra?.truncated) ||
+    Boolean(extra?.scanLimited) ||
+    count > sliced.length;
+  if (!truncated && count <= 0 && items.length === 0) return null;
+  const scanIncomplete = Boolean(extra?.truncated || extra?.scanLimited);
   return {
     title,
     count,
     items: sliced,
     truncated,
+    scanLimited: Boolean(extra?.scanLimited),
     truncationLabel:
       extra?.truncationLabel ??
       (title === OWNER_DAILY_GROUP_TITLES.scheduleConflicts
-        ? ownerDailyConflictTruncationLabel(count, sliced.length)
-        : ownerDailyTruncationLabel(count, sliced.length)),
+        ? ownerDailyConflictTruncationLabel(count, sliced.length, scanIncomplete)
+        : ownerDailyTruncationLabel(count, sliced.length, scanIncomplete)),
   };
 }
 

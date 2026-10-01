@@ -33,8 +33,11 @@ const { roleHasCapability, CAPABILITIES } = await import("@/lib/authorization");
 const {
   OWNER_DAILY_ATTENTION_TAKE,
   OWNER_DAILY_CONFLICT_JOBS_TAKE,
+  OWNER_DAILY_DEPOSIT_MAX_PAGES,
+  OWNER_DAILY_DEPOSIT_PAGE_SIZE,
   OWNER_DAILY_GROUP_TITLES,
   OWNER_DAILY_MORE_NOT_SHOWN,
+  OWNER_DAILY_SCAN_LIMIT_REACHED,
   buildOwnerDailyAdditionalWorkAttention,
   buildOwnerDailyCallbackAttention,
   buildOwnerDailyChangeOrderAttention,
@@ -42,8 +45,11 @@ const {
   buildOwnerDailyRunningTimeAttention,
   buildOwnerDailyScheduleConflictAttention,
   isUnscheduledApprovedWork,
+  ownerDailyAttentionGroup,
   ownerDailyAttentionItemHolds,
   ownerDailyConflictTruncationLabel,
+  ownerDailyHasWaitingAttention,
+  ownerDailyTruncationLabel,
   ownerDailyUnpaidInvoiceWhere,
   ownerDailyUnscheduledApprovedWhere,
   scheduleConflictNeedsOwnerAttention,
@@ -137,7 +143,10 @@ if (!MUTATION_CHILD) {
       dashboardSrc.includes("OWNER_DAILY_ATTENTION_TAKE") &&
       todaySrc.includes("OWNER_DAILY_ATTENTION_TAKE") &&
       helperSrc.includes("if (row.businessId !== businessId) return null") &&
-      dataSrc.includes("OWNER_DAILY_CONFLICT_JOBS_TAKE + 1"),
+      dataSrc.includes("OWNER_DAILY_CONFLICT_JOBS_TAKE + 1") &&
+      dataSrc.includes('orderBy: [{ updatedAt: "desc" }, { id: "desc" }]') &&
+      dataSrc.includes("nextOccurrenceAt: { gte: range.start, lt: range.end }") &&
+      !dataSrc.includes("scheduledAt: { not: null }"),
   );
   check(
     "Dashboard first-time awaiting uses the tight first-awaiting where, not the wide candidate OR",
@@ -156,6 +165,10 @@ if (!MUTATION_CHILD) {
       helperSrc.includes("href: `/estimates/${estimate.id}`") &&
       helperSrc.includes("href: `/jobs/${job.id}/change-orders/${row.id}`") &&
       dashboardSrc.includes("OWNER_DAILY_MORE_NOT_SHOWN") &&
+      dashboardSrc.includes("OWNER_DAILY_SCAN_LIMIT_REACHED") &&
+      listSrc.includes("OWNER_DAILY_SCAN_LIMIT_REACHED") &&
+      todaySrc.includes("ownerDailyHasWaitingAttention") &&
+      dashboardSrc.includes("group.moreNotShown") &&
       !helperSrc.includes("Chief of Staff") &&
       !helperSrc.includes("recommend") &&
       !dashboardSrc.includes("new dashboard"),
@@ -612,9 +625,28 @@ if (!MUTATION_CHILD) {
     "Conflict truncation label is honest",
     ownerDailyConflictTruncationLabel(30, 25) === "30 conflicts, showing 25" &&
       ownerDailyConflictTruncationLabel(25, 25) === null &&
+      ownerDailyConflictTruncationLabel(0, 0, true) === null &&
+      ownerDailyConflictTruncationLabel(3, 3, true) === "at least 3 conflicts" &&
+      ownerDailyConflictTruncationLabel(30, 25, true) ===
+        "at least 30 conflicts, showing 25" &&
+      ownerDailyTruncationLabel(50, 25, true) === "at least 50, showing 25" &&
+      ownerDailyTruncationLabel(25, 25, true) === "25+" &&
       OWNER_DAILY_MORE_NOT_SHOWN === "more not shown" &&
+      OWNER_DAILY_SCAN_LIMIT_REACHED === "scan limit reached, more not checked" &&
       OWNER_DAILY_CONFLICT_JOBS_TAKE === 200 &&
       OWNER_DAILY_ATTENTION_TAKE === 25,
+  );
+  check(
+    "Truncated empty groups stay visible and block the all-clear",
+    ownerDailyAttentionGroup(
+      OWNER_DAILY_GROUP_TITLES.scheduleConflicts,
+      [],
+      0,
+      { truncated: true, scanLimited: true },
+    ) != null &&
+      ownerDailyHasWaitingAttention({ items: [], count: 0, truncated: true }) &&
+      ownerDailyAttentionGroup(OWNER_DAILY_GROUP_TITLES.materialDeposits, [], 0) ==
+        null,
   );
 
   console.log("\nMUTATION — each inclusion rule fails when its fact is wrong");
@@ -1498,6 +1530,207 @@ try {
       );
     }
 
+    if (
+      run("deposit-ties") ||
+      run("deposit-one-page") ||
+      run("deposit-first-batch")
+    ) {
+      console.log("\nDB — Deposit paging uses a stable updatedAt+id tiebreak");
+      const business = await makeBusiness(`dep-ties-${randomUUID()}`);
+      const customer = await makeCustomer(business.id, "Tie Pat");
+      const tiedAt = new Date("2026-09-15T12:00:00.000Z");
+      await prisma.estimate.createMany({
+        data: Array.from({ length: 260 }, () => ({
+          businessId: business.id,
+          customerId: customer.id,
+          publicToken: randomUUID(),
+          status: "APPROVED",
+          total: 80,
+        })),
+      });
+      const created = await prisma.estimate.findMany({
+        where: { businessId: business.id },
+        select: { id: true },
+      });
+      await prisma.lineItem.createMany({
+        data: created.map((row) => ({
+          businessId: business.id,
+          estimateId: row.id,
+          type: "MATERIAL",
+          description: "Lumber",
+          quantity: 1,
+          unitPrice: 50,
+          total: 50,
+        })),
+      });
+      await prisma.$executeRaw`
+        UPDATE "Estimate"
+        SET "updatedAt" = ${tiedAt}
+        WHERE "businessId" = ${business.id}
+      `;
+      const loaded = await loadOwnerDailyMaterialDepositAttention(
+        prisma,
+        business.id,
+        { take: 200 },
+      );
+      const keys = loaded.items.map((item) => item.key);
+      check(
+        "Tied updatedAt pages return unique deposit keys without skip/dup",
+        keys.length === 200 &&
+          new Set(keys).size === 200 &&
+          loaded.truncated &&
+          loaded.count >= 200,
+      );
+    }
+
+    if (run("deposit-truncated-empty") || run("deposit-truncated-false")) {
+      console.log("\nDB — Deposit scan limit stays visible when no unpaid row is reached");
+      const business = await makeBusiness(`dep-empty-${randomUUID()}`);
+      const customer = await makeCustomer(business.id, "Empty Scan");
+      const older = await makeApprovedEstimate(business.id, customer.id, {
+        total: 300,
+        lineItems: [
+          {
+            type: "MATERIAL",
+            description: "Lumber",
+            quantity: 1,
+            unitPrice: 300,
+            total: 300,
+          },
+        ],
+      });
+      await prisma.$executeRaw`
+        UPDATE "Estimate"
+        SET "updatedAt" = ${new Date("2026-08-01T12:00:00.000Z")}
+        WHERE id = ${older.id}
+      `;
+      const newerCount =
+        OWNER_DAILY_DEPOSIT_MAX_PAGES * OWNER_DAILY_DEPOSIT_PAGE_SIZE + 1;
+      await prisma.estimate.createMany({
+        data: Array.from({ length: newerCount }, () => ({
+          businessId: business.id,
+          customerId: customer.id,
+          publicToken: randomUUID(),
+          status: "APPROVED",
+          total: 80,
+        })),
+      });
+      const loaded = await loadOwnerDailyMaterialDepositAttention(
+        prisma,
+        business.id,
+      );
+      const group = ownerDailyAttentionGroup(
+        OWNER_DAILY_GROUP_TITLES.materialDeposits,
+        loaded.items,
+        loaded.count,
+        { truncated: loaded.truncated, scanLimited: loaded.scanLimited },
+      );
+      check(
+        "Truncated empty deposit scan stays visible and is not an all-clear",
+        loaded.items.length === 0 &&
+          loaded.count === 0 &&
+          loaded.truncated &&
+          loaded.scanLimited &&
+          group != null &&
+          group.truncated &&
+          ownerDailyHasWaitingAttention(loaded) &&
+          ownerDailyTruncationLabel(loaded.count, loaded.items.length, true) ===
+            null,
+      );
+    }
+
+    if (run("conflict-repro-a")) {
+      console.log("\nDB — Past recurring jobs do not hide a nearer DOUBLE_BOOKING");
+      const business = await makeBusiness(`repro-a-${randomUUID()}`);
+      const worker = await makeMember(business.id, "Lane");
+      const customer = await makeCustomer(business.id, "Recurring");
+      const range = {
+        start: new Date("2026-10-01T00:00:00.000Z"),
+        end: new Date("2026-10-22T00:00:00.000Z"),
+      };
+      await prisma.job.createMany({
+        data: Array.from({ length: 205 }, (_, i) => ({
+          businessId: business.id,
+          customerId: customer.id,
+          projectToken: randomUUID(),
+          status: "SCHEDULED",
+          scheduledAt: new Date(Date.UTC(2025, 0, 1 + (i % 28), 14, 0, 0)),
+          scheduledDurationMinutes: 30,
+          serviceIntent: "RECURRING",
+          recurrenceStatus: "ACTIVE",
+          recurrenceCadence: "WEEKLY",
+        })),
+      });
+      const bookA = await makeJob(business.id, {
+        customerName: "Tomorrow A",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-02T13:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const bookB = await makeJob(business.id, {
+        customerName: "Tomorrow B",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-02T14:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const loaded = await loadOwnerDailyScheduleConflictAttention(
+        prisma,
+        business.id,
+        { range, timeZone: "America/New_York" },
+      );
+      check(
+        "205 past RECURRING jobs do not hide tomorrow's DOUBLE_BOOKING",
+        loaded.items.length >= 1 &&
+          loaded.count >= 1 &&
+          loaded.items.some(
+            (item) =>
+              item.href === `/jobs/${bookA.id}` || item.href === `/jobs/${bookB.id}`,
+          ) &&
+          !loaded.jobScanTruncated,
+      );
+    }
+
+    if (run("conflict-repro-b")) {
+      console.log("\nDB — Truncated empty conflict scan is not an all-clear");
+      const business = await makeBusiness(`repro-b-${randomUUID()}`);
+      const customer = await makeCustomer(business.id, "Quiet");
+      const range = {
+        start: new Date("2026-10-01T00:00:00.000Z"),
+        end: new Date("2026-10-22T00:00:00.000Z"),
+      };
+      await prisma.job.createMany({
+        data: Array.from({ length: 250 }, (_, i) => ({
+          businessId: business.id,
+          customerId: customer.id,
+          projectToken: randomUUID(),
+          status: "SCHEDULED",
+          scheduledAt: new Date(range.start.getTime() + i * 60 * 60 * 1000),
+          scheduledDurationMinutes: 15,
+        })),
+      });
+      const loaded = await loadOwnerDailyScheduleConflictAttention(
+        prisma,
+        business.id,
+        { range, timeZone: "America/New_York" },
+      );
+      const group = ownerDailyAttentionGroup(
+        OWNER_DAILY_GROUP_TITLES.scheduleConflicts,
+        loaded.items,
+        loaded.count,
+        { truncated: loaded.truncated, scanLimited: loaded.scanLimited },
+      );
+      check(
+        "250 in-window non-conflicts stay truncated and visible, not all-clear",
+        loaded.items.length === 0 &&
+          loaded.count === 0 &&
+          loaded.truncated &&
+          loaded.jobScanTruncated &&
+          loaded.scanLimited &&
+          group != null &&
+          ownerDailyHasWaitingAttention(loaded),
+      );
+    }
+
     if (run("conflict-filter")) {
       console.log("\nDB — WARNING turnaround / outside-hours conflicts stay off the list");
       const business = await makeBusiness(`cfilter-${randomUUID()}`);
@@ -1626,9 +1859,48 @@ if (!MUTATION_CHILD) {
       end: "// OWNER_DAILY_CONFLICT_FILTER_END",
       body: "  return true;",
     },
+    {
+      id: "deposit-one-page",
+      file: dataPath,
+      apply(src) {
+        return src.replace(
+          "page < OWNER_DAILY_DEPOSIT_MAX_PAGES",
+          "page < 1",
+        );
+      },
+    },
+    {
+      id: "deposit-truncated-false",
+      file: dataPath,
+      begin: "// OWNER_DAILY_DEPOSIT_RESULT_BEGIN",
+      end: "// OWNER_DAILY_DEPOSIT_RESULT_END",
+      body: `  const truncated = false;
+  const scanLimited = false;
+  return {
+    items: unpaid.slice(0, take),
+    count: unpaid.length,
+    truncated,
+    scanLimited,
+  };`,
+    },
+    {
+      id: "deposit-first-batch",
+      file: dataPath,
+      apply(src) {
+        return src.replace(
+          `    if (batch.length < OWNER_DAILY_DEPOSIT_PAGE_SIZE) {
+      done = true;
+      break;
+    }`,
+          `    done = true;
+    break;`,
+        );
+      },
+    },
   ];
 
   const scriptPath = fileURLToPath(import.meta.url);
+  let mutationChildFailures = 0;
   for (const revert of reverts) {
     try {
       writeFileSync(attentionPath, originals[attentionPath]);
@@ -1654,6 +1926,7 @@ if (!MUTATION_CHILD) {
           encoding: "utf8",
         },
       );
+      if (child.status !== 0) mutationChildFailures += 1;
       check(
         `mutation-revert ${revert.id} fails its real-loader test`,
         child.status !== 0,
@@ -1667,6 +1940,9 @@ if (!MUTATION_CHILD) {
       writeFileSync(dataPath, originals[dataPath]);
     }
   }
+  console.log(
+    `Mutation-revert children failed (expected): ${mutationChildFailures}/${reverts.length}`,
+  );
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

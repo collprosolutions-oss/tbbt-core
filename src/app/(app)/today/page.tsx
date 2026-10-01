@@ -35,6 +35,7 @@ import {
   buildOwnerDailyChangeOrderAttention,
   buildOwnerDailyRunningTimeAttention,
   ownerDailyConflictTruncationLabel,
+  ownerDailyHasWaitingAttention,
 } from "@/lib/owner-daily-attention";
 import { loadOwnerDailyActionableAttention } from "@/lib/owner-daily-attention-data";
 import {
@@ -253,8 +254,8 @@ export default async function OwnerTodayPage() {
           changeOrderAttention.length === 0 &&
           callbackAttention.length === 0 &&
           runningTimeAttention.length === 0 &&
-          materialDepositAttention.items.length === 0 &&
-          scheduleConflictAttention.items.length === 0 &&
+          !ownerDailyHasWaitingAttention(materialDepositAttention) &&
+          !ownerDailyHasWaitingAttention(scheduleConflictAttention) &&
           handoffItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
@@ -305,15 +306,18 @@ export default async function OwnerTodayPage() {
             items={materialDepositAttention.items}
             count={materialDepositAttention.count}
             moreNotShown={materialDepositAttention.truncated}
+            scanLimited={materialDepositAttention.scanLimited}
           />
           <OwnerDailyAttentionList
             title={OWNER_DAILY_GROUP_TITLES.scheduleConflicts}
             items={scheduleConflictAttention.items}
             count={scheduleConflictAttention.count}
             moreNotShown={scheduleConflictAttention.truncated}
+            scanLimited={scheduleConflictAttention.scanLimited}
             truncationLabel={ownerDailyConflictTruncationLabel(
               scheduleConflictAttention.count,
               scheduleConflictAttention.items.length,
+              scheduleConflictAttention.scanLimited,
             )}
           />
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   OWNER_DAILY_MORE_NOT_SHOWN,
+  OWNER_DAILY_SCAN_LIMIT_REACHED,
   ownerDailyTruncationLabel,
   type OwnerDailyAttentionItem,
 } from "@/lib/owner-daily-attention";
@@ -11,20 +12,23 @@ export function OwnerDailyAttentionList({
   items,
   count,
   moreNotShown,
+  scanLimited,
   truncationLabel,
 }: {
   title: string;
   items: readonly OwnerDailyAttentionItem[];
   count?: number;
   moreNotShown?: boolean;
+  scanLimited?: boolean;
   truncationLabel?: string | null;
 }) {
   const shown = items.length;
   const total = count ?? shown;
-  if (total <= 0 && shown === 0) return null;
-  const truncated = Boolean(moreNotShown) || total > shown;
+  const truncated = Boolean(moreNotShown) || Boolean(scanLimited) || total > shown;
+  if (total <= 0 && shown === 0 && !truncated) return null;
   const label =
-    truncationLabel ?? ownerDailyTruncationLabel(total, shown);
+    truncationLabel ??
+    ownerDailyTruncationLabel(total, shown, truncated);
 
   return (
     <div className="space-y-2">
@@ -34,6 +38,11 @@ export function OwnerDailyAttentionList({
           <span className="ml-1.5 text-muted-foreground">({label})</span>
         ) : null}
       </p>
+      {scanLimited || (truncated && shown === 0) ? (
+        <p className="text-xs text-muted-foreground">
+          {OWNER_DAILY_SCAN_LIMIT_REACHED}
+        </p>
+      ) : null}
       {truncated ? (
         <p className="text-xs text-muted-foreground">{OWNER_DAILY_MORE_NOT_SHOWN}</p>
       ) : null}
