@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS "Payment" (
     "note" TEXT,
     "stripeCheckoutSessionId" TEXT,
     "stripePaymentIntentId" TEXT,
+    "stripeCreditMismatchResolvedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     CONSTRAINT "Payment_pkey" PRIMARY KEY ("id")

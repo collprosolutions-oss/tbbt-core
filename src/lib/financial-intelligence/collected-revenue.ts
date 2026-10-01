@@ -122,6 +122,7 @@ export function invoiceHasExactRecordedCreditReference(
   if (invoice.paymentMethod !== "OTHER") return false;
   const reference = invoice.paymentReference ?? "";
   return creditsOnInvoice(credits, invoice.id).some(
+    // CREDIT_CLOSED_EXACT_ID_EQUALITY
     (credit) => credit.id && reference === recordedCreditReferenceFor(credit.id),
   );
 }
@@ -143,6 +144,7 @@ export function invoiceIsCreditClosed(
   const rows = creditsOnInvoice(credits, invoice.id);
   if (!invoiceHasExactRecordedCreditReference(invoice, rows)) return false;
   const covered = roundMoney(rows.reduce((sum, credit) => sum + credit.amount, 0));
+  // CREDIT_CLOSED_COVERS_TOTAL
   return covered + 1e-9 >= invoice.total;
 }
 

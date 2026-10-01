@@ -45,6 +45,7 @@ export {
   stripeCreditMismatchDashboardWhere,
   listOpenStripeCreditMismatchReviews,
   resolveStripeCreditMismatchReview,
+  stripeCreditMismatchResolveWhere,
   historicalRemainingDueCents,
   staleCheckoutBoundCents,
   reconcileEstimateDepositCheckout,

@@ -607,8 +607,10 @@ async function applyVerifiedInvoicePayment(
     const storedSession = await findInvoiceCheckoutSession(tx, payment.checkoutSessionId);
     const storedMatch = Boolean(
       storedSession &&
+        // STORED_SESSION_INVOICE_MATCH
         storedSession.invoiceId === invoice.id &&
         storedSession.businessId === invoice.businessId &&
+        // STORED_SESSION_AMOUNT_MATCH
         storedSession.amountCents === payment.amountCents,
     );
     const historicalAmounts = historicalRemainingDueCents({
@@ -698,6 +700,14 @@ async function applyVerifiedInvoicePayment(
   return isPrismaClient(db) ? db.$transaction(applyLocked) : applyLocked(db);
 }
 
+export function stripeCreditMismatchResolveWhere(
+  access: { scope: { businessId: string } },
+  paymentId: string,
+) {
+  // RESOLVE_MISMATCH_TENANT_SCOPE
+  return { id: paymentId, ...access.scope };
+}
+
 export async function resolveStripeCreditMismatchReview(
   db: PaymentsClient,
   access: BusinessAccess,
@@ -706,7 +716,7 @@ export async function resolveStripeCreditMismatchReview(
   requireBusinessCapability(access, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
   const payment = access.assertOwned(
     await db.payment.findFirst({
-      where: { id: paymentId, ...access.scope },
+      where: stripeCreditMismatchResolveWhere(access, paymentId),
       select: {
         id: true,
         businessId: true,

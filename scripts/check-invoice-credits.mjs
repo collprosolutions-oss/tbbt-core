@@ -219,6 +219,10 @@ if (!MUTATION_KIND) {
       paymentServiceSrc.includes("stripeCreditMismatchResolvedAt: null"),
   );
   check(
+    "CREATE_PAYMENT_TABLE_SQL includes stripeCreditMismatchResolvedAt for preview restore",
+    projectPaymentsSrc.includes('"stripeCreditMismatchResolvedAt" TIMESTAMP(3)'),
+  );
+  check(
     "credit-closed detection requires OTHER plus an exact Recorded credit <id>",
     collectedRevenueSrc.includes("CREDIT_CLOSED_EXACT_REFERENCE") &&
       collectedRevenueSrc.includes("invoiceHasExactRecordedCreditReference") &&
@@ -312,6 +316,7 @@ const {
   paymentsNeedingStripeCreditMismatchReview,
   recordInvoiceCheckoutSession,
   resolveStripeCreditMismatchReview,
+  stripeCreditMismatchResolveWhere,
 } = await import("@/lib/payments");
 const {
   collectedRevenueForCustomer,
@@ -320,6 +325,7 @@ const {
   invoiceBalanceDue,
   invoiceIsCreditClosed,
   outstandingReceivableAmount,
+  recordedCreditReferenceFor,
 } = await import("@/lib/financial-intelligence/collected-revenue");
 const { resolveCollectedCash } = await import("@/lib/collected-cash");
 const { buildKnownCashFlowFromSource } = await import("@/lib/financial-intelligence/cash-flow");
@@ -501,6 +507,45 @@ function asCollected(invoice, payments, credits) {
       invoiceId: credit.invoiceId,
       amount: Number(credit.amount.toString()),
     })),
+  };
+}
+
+async function seedPaidOtherInvoiceWithCredit(tenant, input) {
+  const seeded = await seedSentInvoice({
+    businessId: tenant.business.id,
+    customerId: tenant.customer.id,
+    propertyId: tenant.property.id,
+    total: input.total,
+  });
+  const credit = await prisma.invoiceCredit.create({
+    data: {
+      businessId: tenant.business.id,
+      invoiceId: seeded.invoice.id,
+      customerId: tenant.customer.id,
+      amount: new Prisma.Decimal(input.creditAmount),
+      reason: input.reason,
+      recordedByMembershipId: tenant.membership.id,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  await prisma.invoice.update({
+    where: { id: seeded.invoice.id },
+    data: {
+      status: "PAID",
+      paidAt: new Date(),
+      paymentMethod: "OTHER",
+      paymentReference:
+        typeof input.paymentReference === "function"
+          ? input.paymentReference(credit)
+          : input.paymentReference,
+    },
+  });
+  const truth = await invoiceTruth(tenant.business.id, seeded.invoice.id);
+  const collected = asCollected(truth.invoice, truth.payments, truth.credits);
+  return {
+    ...collected,
+    cash: collectedRevenueForInvoices(collected.invoices, collected.payments, collected.credits),
+    closed: invoiceIsCreditClosed(collected.invoices[0], collected.credits),
   };
 }
 
@@ -1129,6 +1174,147 @@ try {
       open.length === 0 &&
         paymentsNeedingStripeCreditMismatchReview(refreshed.payments).length === 0,
     );
+  } else if (MUTATION_KIND === "stored-session-invoice-match") {
+    const ownerInvoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: ownerInvoice.invoice.id,
+      amount: "30.00",
+      reason: "owner",
+      idempotencyKey: "mutation-session-owner",
+    });
+    await recordInvoiceCheckoutSession(prisma, {
+      businessId: tenantA.business.id,
+      invoiceId: ownerInvoice.invoice.id,
+      stripeSessionId: "cs_mutation_owned_by_x",
+      amountCents: 7000,
+    });
+    const other = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: other.invoice.id,
+      amount: "30.00",
+      reason: "other first",
+      idempotencyKey: "mutation-session-other-first",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: other.invoice.id,
+      amount: "20.00",
+      reason: "other second",
+      idempotencyKey: "mutation-session-other-second",
+    });
+    const crossed = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: other.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 7000,
+        checkoutSessionId: "cs_mutation_owned_by_x",
+        paymentReference: "pi_mutation_crossed",
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, other.invoice.id);
+    check(
+      "webhook for invoice Y using invoice X's stored session is rejected",
+      crossed.reason === "amount_mismatch" && after.payments.length === 0,
+    );
+  } else if (MUTATION_KIND === "stored-session-amount-match") {
+    const invoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: invoice.invoice.id,
+      amount: "30.00",
+      reason: "stored amount",
+      idempotencyKey: "mutation-stored-amount",
+    });
+    await recordInvoiceCheckoutSession(prisma, {
+      businessId: tenantA.business.id,
+      invoiceId: invoice.invoice.id,
+      stripeSessionId: "cs_mutation_stored_amount",
+      amountCents: 7000,
+    });
+    const huge = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: invoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 99999999,
+        checkoutSessionId: "cs_mutation_stored_amount",
+        paymentReference: "pi_mutation_stored_huge",
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    check(
+      "arbitrary 99999999 against a stored session is amount_mismatch",
+      huge.reason === "amount_mismatch" && after.payments.length === 0,
+    );
+  } else if (MUTATION_KIND === "credit-closed-exact-id") {
+    const missing = await seedPaidOtherInvoiceWithCredit(tenantA, {
+      total: "30.00",
+      creditAmount: "30.00",
+      paymentReference: recordedCreditReferenceFor("missing-credit-id"),
+      reason: "covering credit with a different id",
+      idempotencyKey: "mutation-missing-credit-id",
+    });
+    check(
+      "OTHER reference to a nonexistent credit id stays legacy cash",
+      missing.cash === 30 && !missing.closed,
+    );
+  } else if (MUTATION_KIND === "credit-closed-covers-total") {
+    const partial = await seedPaidOtherInvoiceWithCredit(tenantA, {
+      total: "100.00",
+      creditAmount: "40.00",
+      paymentReference: (credit) => recordedCreditReferenceFor(credit.id),
+      reason: "partial cover",
+      idempotencyKey: "mutation-partial-cover",
+    });
+    check(
+      "OTHER with an exact Recorded credit id but partial credits stays legacy cash",
+      partial.cash === 100 && !partial.closed,
+    );
+  } else if (MUTATION_KIND === "resolve-tenant-scope") {
+    const invoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: invoice.invoice.id,
+      amount: "30.00",
+      reason: "scope",
+      idempotencyKey: "mutation-resolve-scope",
+    });
+    await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: invoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 10000,
+        checkoutSessionId: "cs_mutation_scope",
+        paymentReference: "pi_mutation_scope",
+      }),
+    );
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    const found = await prisma.payment.findFirst({
+      where: stripeCreditMismatchResolveWhere(ownerB, after.payments[0].id),
+    });
+    check("resolve payment lookup is tenant-scoped", found === null);
   } else {
     console.log("\nTEST — Accounting arithmetic: payment plus credit");
     const invoice500 = await seedSentInvoice({
@@ -1560,6 +1746,28 @@ try {
     check(
       "legacy CASH invoice plus a credit row still counts its cash",
       cashPlusCreditCollected === 40,
+    );
+    const missingCreditIdInvoice = await seedPaidOtherInvoiceWithCredit(tenantA, {
+      total: "30.00",
+      creditAmount: "30.00",
+      paymentReference: recordedCreditReferenceFor("missing-credit-id"),
+      reason: "covering credit with a different id",
+      idempotencyKey: `legacy-missing-credit-id-${randomUUID()}`,
+    });
+    check(
+      "OTHER reference to a nonexistent credit id stays legacy cash",
+      missingCreditIdInvoice.cash === 30 && !missingCreditIdInvoice.closed,
+    );
+    const partialCoverInvoice = await seedPaidOtherInvoiceWithCredit(tenantA, {
+      total: "100.00",
+      creditAmount: "40.00",
+      paymentReference: (credit) => recordedCreditReferenceFor(credit.id),
+      reason: "partial cover",
+      idempotencyKey: `legacy-partial-cover-${randomUUID()}`,
+    });
+    check(
+      "OTHER with an exact Recorded credit id but partial credits stays legacy cash",
+      partialCoverInvoice.cash === 100 && !partialCoverInvoice.closed,
     );
 
     console.log("\nTEST — Concurrent remaining-balance credits cannot over-credit");
@@ -2013,6 +2221,75 @@ try {
         payThenHistory.reason === STRIPE_CREDIT_MISMATCH_REASON,
     );
 
+    const sessionOwnerInvoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: sessionOwnerInvoice.invoice.id,
+      amount: "30.00",
+      reason: "session owner credit",
+      idempotencyKey: "session-owner-credit",
+    });
+    await recordInvoiceCheckoutSession(prisma, {
+      businessId: tenantA.business.id,
+      invoiceId: sessionOwnerInvoice.invoice.id,
+      stripeSessionId: "cs_owned_by_x",
+      amountCents: 7000,
+    });
+    const otherInvoice = await seedSentInvoice({
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      propertyId: tenantA.property.id,
+      total: "100.00",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: otherInvoice.invoice.id,
+      amount: "30.00",
+      reason: "other invoice first",
+      idempotencyKey: "session-other-first",
+    });
+    await recordOwnerInvoiceCredit(prisma, ownerA, {
+      invoiceId: otherInvoice.invoice.id,
+      amount: "20.00",
+      reason: "other invoice second",
+      idempotencyKey: "session-other-second",
+    });
+    const crossed = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: otherInvoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 7000,
+        checkoutSessionId: "cs_owned_by_x",
+        paymentReference: "pi_crossed_session",
+      }),
+    );
+    const afterCrossed = await invoiceTruth(tenantA.business.id, otherInvoice.invoice.id);
+    check(
+      "webhook for invoice Y using invoice X's stored session is rejected",
+      crossed.reason === "amount_mismatch" && afterCrossed.payments.length === 0,
+    );
+    const hugeAgainstStored = await applyVerifiedCheckoutPayment(
+      prisma,
+      webhookPayment({
+        invoiceId: sessionOwnerInvoice.invoice.id,
+        businessId: tenantA.business.id,
+        connectedAccountId: tenantA.stripeAccountId,
+        amountCents: 99999999,
+        checkoutSessionId: "cs_owned_by_x",
+        paymentReference: "pi_huge_stored",
+      }),
+    );
+    const afterHugeStored = await invoiceTruth(tenantA.business.id, sessionOwnerInvoice.invoice.id);
+    check(
+      "arbitrary 99999999 against a stored session is amount_mismatch",
+      hugeAgainstStored.reason === "amount_mismatch" && afterHugeStored.payments.length === 0,
+    );
+
     console.log("\nTEST — VOID invoice keeps VOID and flags a matching charge");
     const voidInvoice = await seedSentInvoice({
       businessId: tenantA.business.id,
@@ -2124,6 +2401,10 @@ try {
         openForA.every((row) => row.id !== reviewPayment.id) &&
         openForB.length === 0,
     );
+    const scopedLookup = await prisma.payment.findFirst({
+      where: stripeCreditMismatchResolveWhere(ownerB, reviewPayment.id),
+    });
+    check("resolve payment lookup is tenant-scoped", scopedLookup === null);
 
     console.log("\nTEST — Credit and webhook writers wait on the same Invoice lock");
     const lockInvoice = await seedSentInvoice({
@@ -2289,6 +2570,36 @@ try {
         file: "src/lib/payments/service.ts",
         find: "    // STALE_CHECKOUT_AFTER_FULL_CREDIT\n    if (!exactMatch && !staleCreditMatch) {",
         replace: "    if (invoice.status === \"PAID\" || breakdown.amountDue.lte(0)) {\n      return { applied: false, reason: \"already_paid\" };\n    }\n    if (!exactMatch && !staleCreditMatch) {",
+      },
+      {
+        kind: "stored-session-invoice-match",
+        file: "src/lib/payments/service.ts",
+        find: "        // STORED_SESSION_INVOICE_MATCH\n        storedSession.invoiceId === invoice.id &&",
+        replace: "        true &&",
+      },
+      {
+        kind: "stored-session-amount-match",
+        file: "src/lib/payments/service.ts",
+        find: "        // STORED_SESSION_AMOUNT_MATCH\n        storedSession.amountCents === payment.amountCents,",
+        replace: "        true,",
+      },
+      {
+        kind: "credit-closed-exact-id",
+        file: "src/lib/financial-intelligence/collected-revenue.ts",
+        find: "    // CREDIT_CLOSED_EXACT_ID_EQUALITY\n    (credit) => credit.id && reference === recordedCreditReferenceFor(credit.id),",
+        replace: "    (credit) => credit.id && reference.startsWith(RECORDED_CREDIT_REFERENCE_PREFIX),",
+      },
+      {
+        kind: "credit-closed-covers-total",
+        file: "src/lib/financial-intelligence/collected-revenue.ts",
+        find: "  // CREDIT_CLOSED_COVERS_TOTAL\n  return covered + 1e-9 >= invoice.total;",
+        replace: "  return true;",
+      },
+      {
+        kind: "resolve-tenant-scope",
+        file: "src/lib/payments/service.ts",
+        find: "  // RESOLVE_MISMATCH_TENANT_SCOPE\n  return { id: paymentId, ...access.scope };",
+        replace: "  return { id: paymentId };",
       },
     ];
 
