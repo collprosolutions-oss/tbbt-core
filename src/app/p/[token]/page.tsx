@@ -14,6 +14,7 @@ import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
+import { RequestJobCallbackForm } from "@/components/portal/request-job-callback-form";
 import { ProjectDocumentUpload } from "@/components/portal/project-document-upload";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import {
@@ -65,6 +66,11 @@ import {
 import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
+import { loadPortalJobCallbackView } from "@/lib/portal-job-callback-data";
+import {
+  JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
+  JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
+} from "@/lib/job-callback";
 import { prisma } from "@/lib/prisma";
 import {
   customerAppointmentStatusLabel,
@@ -395,6 +401,7 @@ export default async function CustomerProjectPortalPage({
     prisma,
     token,
   );
+  const callbackView = await loadPortalJobCallbackView(prisma, token);
   const repeatVisit = await loadCleaningRepeatVisitPublicView(prisma, token);
   const portalMessages = await loadPortalCustomerCommunications(prisma, token);
   const currentRequest = portalRequestSummary(job.estimate?.serviceRequest ?? null);
@@ -654,6 +661,22 @@ export default async function CustomerProjectPortalPage({
               projectToken={token}
               alreadyRequested={repeatVisit.alreadyRequested}
             />
+          ) : null}
+
+          {callbackView.status !== "hidden" ? (
+            <Card id="callback-request">
+              <CardHeader>
+                <CardTitle>Callback request</CardTitle>
+                <CardDescription>{JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {callbackView.status === "already_requested" ? (
+                  <p className="text-sm">{JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE}</p>
+                ) : (
+                  <RequestJobCallbackForm projectToken={token} />
+                )}
+              </CardContent>
+            </Card>
           ) : null}
 
           {isBusinessStorageConfigured() &&

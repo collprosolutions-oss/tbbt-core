@@ -231,14 +231,15 @@ check(
     !/\.(create|update|delete|upsert|createMany|updateMany|deleteMany)\(/.test(dataSrc),
 );
 check(
-  "Work Order hosts the OWNER panel; portal and additional-work stay separate",
+  "Work Order hosts the OWNER panel; portal customer request stays off that panel",
   pageSrc.includes("JobCallbackPanel") &&
     pageSrc.includes("Customer-reported callback") &&
     pageSrc.includes("Does not invent coverage") &&
     formSrc.includes("Recorded warranty terms") &&
     formSrc.includes("Status history") &&
-    !portalSrc.includes("job-callback") &&
+    portalSrc.includes("RequestJobCallbackForm") &&
     !portalSrc.includes("JobCallbackPanel") &&
+    !portalSrc.includes("recordJobCallbackAction") &&
     !additionalWorkSrc.includes("jobCallback") &&
     !additionalWorkSrc.includes("JobCallback"),
 );

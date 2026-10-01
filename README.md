@@ -133,6 +133,7 @@ npm run test:live-public-website
 npm run test:workforce-capacity
 npm run test:business-protection
 npm run test:job-callback
+npm run test:portal-job-callback
 ```
 
 Business Protection (`/business-protection`) is a private vault and agreement-organization workspace. It is not a separately advertised purchasable plan feature, not a licensing authority, and not a live e-sign provider.
