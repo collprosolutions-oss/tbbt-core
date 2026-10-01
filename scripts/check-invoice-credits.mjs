@@ -2263,8 +2263,8 @@ try {
       {
         kind: "credit-closed-exact-reference",
         file: "src/lib/financial-intelligence/collected-revenue.ts",
-        find: "  // CREDIT_CLOSED_EXACT_REFERENCE\n  if (invoice.paymentMethod !== \"OTHER\") return false;\n  const reference = invoice.paymentReference ?? \"\";\n  return creditsOnInvoice(credits, invoice.id).some(\n    (credit) => credit.id && reference === recordedCreditReferenceFor(credit.id),\n  );",
-        replace: "  return invoice.paymentMethod === \"OTHER\" && Boolean(invoice.paymentReference?.startsWith(RECORDED_CREDIT_REFERENCE_PREFIX));",
+        find: "  if (!invoiceHasExactRecordedCreditReference(invoice, rows)) return false;",
+        replace: "  if (invoice.paymentMethod === \"OTHER\" && Boolean(invoice.paymentReference?.startsWith(RECORDED_CREDIT_REFERENCE_PREFIX))) return true;\n  if (!invoiceHasExactRecordedCreditReference(invoice, rows)) return false;",
       },
       {
         kind: "dashboard-unresolved-filter",
@@ -2281,7 +2281,7 @@ try {
       {
         kind: "stale-checkout-owner-review",
         file: "src/lib/payments/service.ts",
-        find: "  // STRIPE_CREDIT_MISMATCH_OWNER_REVIEW\n  return payments.filter((payment) => isStripeCreditMismatchReviewNote(payment.note));",
+        find: "  // STRIPE_CREDIT_MISMATCH_OWNER_REVIEW\n  return payments.filter(\n    (payment) =>\n      isStripeCreditMismatchReviewNote(payment.note) && !payment.stripeCreditMismatchResolvedAt,\n  );",
         replace: "  return [];",
       },
       {
