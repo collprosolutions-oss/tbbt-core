@@ -26,9 +26,11 @@ import {
   JOB_REASSIGNMENT_REQUEST_RECENT_LIST_LIMIT,
   JOB_REASSIGNMENT_REQUEST_SELF_LIST_LIMIT,
   JOB_REASSIGNMENT_REQUEST_STALE_MESSAGE,
+  JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
   JobReassignmentRequestError,
   isRequestableUpcomingAssignedJob,
   jobReassignmentRefusalMessage,
+  missingJobReassignmentRequestSchema,
   requireJobReassignmentRequestDecision,
   requireJobReassignmentRequestReason,
   type JobReassignmentRequestDecision,
@@ -74,6 +76,9 @@ function isPendingJobConflict(error: unknown): boolean {
 function asRequestWriteError(error: unknown): never {
   if (error instanceof JobReassignmentRequestError) throw error;
   if (error instanceof ForbiddenError) throw error;
+  if (missingJobReassignmentRequestSchema(error)) {
+    throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE);
+  }
   if (isPendingJobConflict(error)) {
     throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE);
   }
@@ -83,6 +88,9 @@ function asRequestWriteError(error: unknown): never {
 function asDecideWriteError(error: unknown): never {
   if (error instanceof JobReassignmentRequestError) throw error;
   if (error instanceof ForbiddenError) throw error;
+  if (missingJobReassignmentRequestSchema(error)) {
+    throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE);
+  }
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_DECIDE_CONFLICT_MESSAGE);
   }
@@ -150,6 +158,9 @@ export function jobReassignmentRequestErrorMessage(error: unknown, fallback: str
   if (error instanceof JobReassignmentRequestError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (missingJobReassignmentRequestSchema(error)) {
+    return JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE;
+  }
   return fallback;
 }
 
@@ -158,16 +169,21 @@ export async function loadSelfJobReassignmentRequests(
   input: { businessId: string; membershipId: string },
 ): Promise<JobReassignmentRequestRecord[]> {
   await requireProductCapability(db, input.businessId, PRODUCT_CAPABILITIES.JOBS_TASKS);
-  const rows = await db.jobReassignmentRequest.findMany({
-    where: {
-      businessId: input.businessId,
-      membershipId: input.membershipId,
-    },
-    select: REQUEST_SELECT,
-    orderBy: [{ requestedAt: "desc" }],
-    take: JOB_REASSIGNMENT_REQUEST_SELF_LIST_LIMIT,
-  });
-  return rows.map((row) => toRequestRecord(row));
+  try {
+    const rows = await db.jobReassignmentRequest.findMany({
+      where: {
+        businessId: input.businessId,
+        membershipId: input.membershipId,
+      },
+      select: REQUEST_SELECT,
+      orderBy: [{ requestedAt: "desc" }],
+      take: JOB_REASSIGNMENT_REQUEST_SELF_LIST_LIMIT,
+    });
+    return rows.map((row) => toRequestRecord(row));
+  } catch (error) {
+    if (missingJobReassignmentRequestSchema(error)) return [];
+    throw error;
+  }
 }
 
 export async function loadOwnedJobReassignmentRequests(
@@ -185,26 +201,38 @@ export async function loadOwnedJobReassignmentRequests(
     where: { id: access.businessId },
     select: { timezone: true },
   });
-  const [pendingRows, recentRows] = await Promise.all([
-    db.jobReassignmentRequest.findMany({
-      where: { businessId: access.businessId, status: "PENDING" },
-      select: REQUEST_SELECT,
-      orderBy: [{ requestedAt: "asc" }],
-      take: JOB_REASSIGNMENT_REQUEST_PENDING_LIST_LIMIT,
-    }),
-    db.jobReassignmentRequest.findMany({
-      where: { businessId: access.businessId, status: { in: ["ACCEPTED", "DECLINED"] } },
-      select: REQUEST_SELECT,
-      orderBy: [{ decidedAt: "desc" }, { requestedAt: "desc" }],
-      take: JOB_REASSIGNMENT_REQUEST_RECENT_LIST_LIMIT,
-    }),
-  ]);
-  return {
-    pending: pendingRows.map((row) => toRequestRecord(row)),
-    recent: recentRows.map((row) => toRequestRecord(row)),
-    canDecide: access.workspace.role === "OWNER",
-    timeZone: resolveBusinessTimeZone(business),
-  };
+  try {
+    const [pendingRows, recentRows] = await Promise.all([
+      db.jobReassignmentRequest.findMany({
+        where: { businessId: access.businessId, status: "PENDING" },
+        select: REQUEST_SELECT,
+        orderBy: [{ requestedAt: "asc" }],
+        take: JOB_REASSIGNMENT_REQUEST_PENDING_LIST_LIMIT,
+      }),
+      db.jobReassignmentRequest.findMany({
+        where: { businessId: access.businessId, status: { in: ["ACCEPTED", "DECLINED"] } },
+        select: REQUEST_SELECT,
+        orderBy: [{ decidedAt: "desc" }, { requestedAt: "desc" }],
+        take: JOB_REASSIGNMENT_REQUEST_RECENT_LIST_LIMIT,
+      }),
+    ]);
+    return {
+      pending: pendingRows.map((row) => toRequestRecord(row)),
+      recent: recentRows.map((row) => toRequestRecord(row)),
+      canDecide: access.workspace.role === "OWNER",
+      timeZone: resolveBusinessTimeZone(business),
+    };
+  } catch (error) {
+    if (missingJobReassignmentRequestSchema(error)) {
+      return {
+        pending: [],
+        recent: [],
+        canDecide: access.workspace.role === "OWNER",
+        timeZone: resolveBusinessTimeZone(business),
+      };
+    }
+    throw error;
+  }
 }
 
 export async function requestJobReassignmentOp(
@@ -272,19 +300,19 @@ export async function requestJobReassignmentOp(
 
   const reason = requireJobReassignmentRequestReason(input.reason);
 
-  const pending = await db.jobReassignmentRequest.findFirst({
-    where: {
-      businessId: access.businessId,
-      jobId: job.id,
-      status: "PENDING",
-    },
-    select: { id: true },
-  });
-  if (pending) {
-    throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE);
-  }
-
   try {
+    const pending = await db.jobReassignmentRequest.findFirst({
+      where: {
+        businessId: access.businessId,
+        jobId: job.id,
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+    if (pending) {
+      throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE);
+    }
+
     await jobReassignmentRequestTestHooks.beforeRequestCreate?.({
       membershipId: membership.id,
       jobId: job.id,
@@ -324,27 +352,32 @@ export async function decideJobReassignmentRequestOp(
     throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_STALE_MESSAGE);
   }
 
-  const request = await db.jobReassignmentRequest.findFirst({
-    where: { id: input.requestId, businessId: access.businessId },
-    select: {
-      id: true,
-      businessId: true,
-      jobId: true,
-      membershipId: true,
-      reason: true,
-      status: true,
-      updatedAt: true,
-      job: {
-        select: {
-          id: true,
-          businessId: true,
-          scheduledAt: true,
-          assignedMembershipId: true,
-          status: true,
+  let request;
+  try {
+    request = await db.jobReassignmentRequest.findFirst({
+      where: { id: input.requestId, businessId: access.businessId },
+      select: {
+        id: true,
+        businessId: true,
+        jobId: true,
+        membershipId: true,
+        reason: true,
+        status: true,
+        updatedAt: true,
+        job: {
+          select: {
+            id: true,
+            businessId: true,
+            scheduledAt: true,
+            assignedMembershipId: true,
+            status: true,
+          },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    asDecideWriteError(error);
+  }
   if (!request) throw new ForbiddenError();
   access.assertOwned(request);
   if (request.status !== "PENDING") {
@@ -417,6 +450,24 @@ export async function decideJobReassignmentRequestOp(
         );
         if (refusal) {
           throw new JobReassignmentRequestError(refusal);
+        }
+        const fresh = await tx.job.findFirst({
+          where: { id: lockedJob.id, businessId: access.businessId },
+          select: { id: true, status: true, scheduledAt: true },
+        });
+        if (!fresh) throw new ForbiddenError();
+        const business = await tx.business.findUnique({
+          where: { id: access.businessId },
+          select: { timezone: true },
+        });
+        if (
+          !isRequestableUpcomingAssignedJob(
+            fresh,
+            input.now ?? new Date(),
+            resolveBusinessTimeZone(business),
+          )
+        ) {
+          throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE);
         }
         await jobReassignmentRequestTestHooks.beforeDecideClaims?.({
           requestId: request.id,

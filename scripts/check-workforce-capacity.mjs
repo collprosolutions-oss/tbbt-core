@@ -73,6 +73,7 @@ function readRepo(rel) {
 }
 
 const jobAction = readRepo("src/app/actions/job.ts");
+const assignOps = readRepo("src/lib/job-assignment-ops.ts");
 const agent = readRepo("src/lib/workforce-agent.ts");
 const capacity = readRepo("src/lib/workforce-capacity.ts");
 const conflicts = readRepo("src/lib/workforce-conflicts.ts");
@@ -179,7 +180,7 @@ check(
   "scheduleJob and assignJobMember persist first/later arrival windows from the day lane",
   jobAction.includes("persistLaneArrivalWindows") &&
     jobAction.includes("arrivalWindowMinutesForMode") &&
-    jobAction.includes("syncAssignedJobArrivalWindows"),
+    assignOps.includes("syncAssignedJobArrivalWindows"),
 );
 check(
   "Preferred/allowed job types stay non-authoritative metadata",

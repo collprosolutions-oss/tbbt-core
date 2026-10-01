@@ -41,6 +41,9 @@ export const JOB_REASSIGNMENT_REQUEST_REASON_MESSAGE =
 export const JOB_REASSIGNMENT_REQUEST_DECIDE_CONFLICT_MESSAGE =
   "That decision could not be recorded. Refresh and decide again. TBBT did not change the job assignment or schedule.";
 
+export const JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE =
+  "Job reassignment requests are not available yet. TBBT did not change the job assignment or schedule.";
+
 export const JOB_REASSIGNMENT_REQUEST_REASON_MAX = 240;
 export const JOB_REASSIGNMENT_REQUEST_SELF_LIST_LIMIT = 50;
 export const JOB_REASSIGNMENT_REQUEST_PENDING_LIST_LIMIT = 100;
@@ -103,4 +106,12 @@ export function jobReassignmentRefusalMessage(status: string, assignedMembership
     return JOB_REASSIGNMENT_REQUEST_ALREADY_REASSIGNED_MESSAGE;
   }
   return null;
+}
+
+export function missingJobReassignmentRequestSchema(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  return code === "P2021" || code === "P2022";
 }

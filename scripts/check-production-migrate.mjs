@@ -1961,7 +1961,11 @@ check(
   "Job reassignment-request ops do not run request-time DDL",
   !jobReassignmentRequestOps.includes("$executeRawUnsafe") &&
     !jobReassignmentRequestOps.includes("CREATE TABLE") &&
-    !jobReassignmentRequestOps.includes("ALTER TABLE"),
+    !jobReassignmentRequestOps.includes("ALTER TABLE") &&
+    jobReassignmentRequestOps.includes("missingJobReassignmentRequestSchema") &&
+    jobReassignmentRequestOps.includes(
+      "if (missingJobReassignmentRequestSchema(error)) return []",
+    ),
 );
 
 const jobMilestonesMigration = readFileSync(

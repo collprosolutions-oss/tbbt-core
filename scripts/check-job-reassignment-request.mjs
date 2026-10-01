@@ -39,6 +39,7 @@ const {
   JOB_REASSIGNMENT_REQUEST_COMPLETED_MESSAGE,
   JOB_REASSIGNMENT_REQUEST_INACTIVE_MESSAGE,
   JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE,
+  JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
   JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE,
   JOB_REASSIGNMENT_REQUEST_PENDING_LIST_LIMIT,
   JOB_REASSIGNMENT_REQUEST_REASON_MESSAGE,
@@ -46,9 +47,11 @@ const {
   JOB_REASSIGNMENT_REQUEST_SELF_LIST_LIMIT,
   JOB_REASSIGNMENT_REQUEST_STALE_MESSAGE,
   JobReassignmentRequestError,
+  missingJobReassignmentRequestSchema,
 } = await import("@/lib/job-reassignment-request");
 const {
   decideJobReassignmentRequestOp,
+  jobReassignmentRequestErrorMessage,
   jobReassignmentRequestTestHooks,
   loadOwnedJobReassignmentRequests,
   loadSelfJobReassignmentRequests,
@@ -167,6 +170,30 @@ check(
     !requestFnSrc.includes("notifyCustomer") &&
     !requestFnSrc.includes("emitAndProcessBusinessEvent") &&
     requestFnSrc.includes("jobReassignmentRequest.create"),
+);
+check(
+  "Accept rechecks the upcoming window after Job lock before claiming",
+  acceptFnSrc.includes("afterJobLocked") &&
+    acceptFnSrc.includes("isRequestableUpcomingAssignedJob") &&
+    acceptFnSrc.includes("JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE") &&
+    acceptFnSrc.includes("scheduledAt: true") &&
+    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") >
+      acceptFnSrc.indexOf("jobReassignmentRefusalMessage") &&
+    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") <
+      acceptFnSrc.indexOf("beforeDecideClaims") &&
+    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") <
+      acceptFnSrc.indexOf("jobReassignmentRequest.updateMany"),
+);
+check(
+  "Loaders degrade on missing JobReassignmentRequest schema; writes fail closed",
+  opsSrc.includes("missingJobReassignmentRequestSchema") &&
+    opsSrc.includes("if (missingJobReassignmentRequestSchema(error)) return []") &&
+    opsSrc.includes("JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE") &&
+    missingJobReassignmentRequestSchema({ code: "P2021" }) &&
+    missingJobReassignmentRequestSchema({ code: "P2022" }) &&
+    !missingJobReassignmentRequestSchema({ code: "P2002" }) &&
+    jobReassignmentRequestErrorMessage({ code: "P2021" }, "fallback") ===
+      JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
 );
 check(
   "OWNER accept uses canonical assignment under reservation then Job lock",
@@ -827,6 +854,170 @@ try {
     where: { businessId: { in: [businessA.id, businessB.id] } },
   });
   check("No automatic customer appointment message was written", messageCount === 0);
+
+  const inProgressJob = await createAssignedJob({
+    businessId: businessA.id,
+    customerId: customer.id,
+    assignedMembershipId: memberMem.id,
+  });
+  const inProgressRequest = await requestJobReassignmentOp(prisma, memberA, {
+    jobId: inProgressJob.id,
+    reason: "Started after I asked",
+    now: NOW,
+  });
+  await prisma.job.update({
+    where: { id: inProgressJob.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  const runningEntry = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMem.id,
+      jobId: inProgressJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      startedAt: NOW,
+      source: "CLOCK",
+    },
+  });
+  await expectError(
+    "Accept refuses after the worker starts and clocks in",
+    () =>
+      decideJobReassignmentRequestOp(prisma, ownerA, {
+        requestId: inProgressRequest.id,
+        decision: "ACCEPT",
+        expectedUpdatedAt: inProgressRequest.updatedAt,
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof JobReassignmentRequestError &&
+      error.message === JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE,
+  );
+  const inProgressAfter = await prisma.job.findFirst({
+    where: { id: inProgressJob.id, businessId: businessA.id },
+  });
+  const runningAfter = await prisma.timeEntry.findFirst({
+    where: { id: runningEntry.id, businessId: businessA.id },
+  });
+  check(
+    "IN_PROGRESS accept refusal leaves assignment and running time untouched",
+    inProgressAfter?.assignedMembershipId === memberMem.id &&
+      inProgressAfter?.status === "IN_PROGRESS" &&
+      runningAfter?.status === "RUNNING" &&
+      runningAfter?.endedAt == null,
+  );
+
+  const todayMovedJob = await createAssignedJob({
+    businessId: businessA.id,
+    customerId: customer.id,
+    assignedMembershipId: memberMem.id,
+  });
+  const todayMovedRequest = await requestJobReassignmentOp(prisma, memberA, {
+    jobId: todayMovedJob.id,
+    reason: "Moved to today",
+    now: NOW,
+  });
+  await prisma.job.update({
+    where: { id: todayMovedJob.id },
+    data: { scheduledAt: new Date("2026-10-01T18:00:00.000Z") },
+  });
+  await expectError(
+    "Accept refuses after the job is rescheduled to later today",
+    () =>
+      decideJobReassignmentRequestOp(prisma, ownerA, {
+        requestId: todayMovedRequest.id,
+        decision: "ACCEPT",
+        expectedUpdatedAt: todayMovedRequest.updatedAt,
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof JobReassignmentRequestError &&
+      error.message === JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE,
+  );
+  const todayMovedAfter = await prisma.job.findFirst({
+    where: { id: todayMovedJob.id, businessId: businessA.id },
+  });
+  check(
+    "Today-reschedule accept refusal leaves assignment and schedule untouched",
+    todayMovedAfter?.assignedMembershipId === memberMem.id &&
+      todayMovedAfter?.scheduledAt?.getTime() === new Date("2026-10-01T18:00:00.000Z").getTime() &&
+      todayMovedAfter?.status === "SCHEDULED",
+  );
+
+  console.log("\nMISSING SCHEMA — loaders degrade; writes fail closed");
+  const missingWriteJob = await createAssignedJob({
+    businessId: businessA.id,
+    customerId: customer.id,
+    assignedMembershipId: memberMem.id,
+  });
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobReassignmentRequest" CASCADE`);
+  const missingTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename = 'JobReassignmentRequest'
+  `;
+  check("JobReassignmentRequest is absent after the drop", missingTables.length === 0);
+
+  let selfMissingError = null;
+  let selfMissing = "threw";
+  try {
+    selfMissing = await loadSelfJobReassignmentRequests(prisma, {
+      businessId: businessA.id,
+      membershipId: memberMem.id,
+    });
+  } catch (error) {
+    selfMissingError = error;
+  }
+  let ownedMissingError = null;
+  let ownedMissing = "threw";
+  try {
+    ownedMissing = await loadOwnedJobReassignmentRequests(prisma, ownerA);
+  } catch (error) {
+    ownedMissingError = error;
+  }
+  check(
+    "Self loader returns an empty list when the table is missing",
+    Array.isArray(selfMissing) && selfMissing.length === 0 && selfMissingError === null,
+  );
+  check(
+    "Owner loader returns empty queues when the table is missing",
+    ownedMissing !== "threw" &&
+      ownedMissing.pending.length === 0 &&
+      ownedMissing.recent.length === 0 &&
+      ownedMissingError === null,
+  );
+  await expectError(
+    "Request write fail-closes with a clean unavailable message when the table is missing",
+    () =>
+      requestJobReassignmentOp(prisma, memberA, {
+        jobId: missingWriteJob.id,
+        reason: "Table is gone",
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof JobReassignmentRequestError &&
+      error.message === JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
+  );
+  await expectError(
+    "Decide write fail-closes with a clean unavailable message when the table is missing",
+    () =>
+      decideJobReassignmentRequestOp(prisma, ownerA, {
+        requestId: requested.id,
+        decision: "ACCEPT",
+        expectedUpdatedAt: requested.updatedAt,
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof JobReassignmentRequestError &&
+      error.message === JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
+  );
+  const missingWriteJobAfterDrop = await prisma.job.findFirst({
+    where: { id: missingWriteJob.id, businessId: businessA.id },
+  });
+  check(
+    "Missing-table write refusals do not change assignment",
+    missingWriteJobAfterDrop?.assignedMembershipId === memberMem.id &&
+      missingWriteJobAfterDrop?.scheduledAt?.getTime() === upcomingAt.getTime(),
+  );
 } catch (error) {
   failed += 1;
   console.error("FAIL - job-reassignment-request Prisma harness threw", error);
