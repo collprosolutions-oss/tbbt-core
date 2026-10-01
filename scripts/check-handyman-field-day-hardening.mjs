@@ -62,6 +62,60 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
+function createHoldRelease() {
+  let release;
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  let signalAcquired;
+  const acquired = new Promise((resolve) => {
+    signalAcquired = resolve;
+  });
+  return {
+    release() {
+      release();
+    },
+    released,
+    signalAcquired,
+    acquired,
+  };
+}
+
+async function waitForBlockedContenders(observer, minCount, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await observer.$queryRaw`
+      SELECT DISTINCT a.pid
+      FROM pg_stat_activity a
+      JOIN pg_locks l ON l.pid = a.pid
+      WHERE a.datname = current_database()
+        AND NOT l.granted
+        AND a.pid <> pg_backend_pid()
+    `;
+    if (rows.length >= minCount) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${minCount} blocked contenders`);
+}
+
+async function waitForUngrantedAdvisoryLocks(observer, lockKey, expected, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await observer.$queryRaw`
+      SELECT COUNT(*)::int AS n
+      FROM pg_locks
+      WHERE locktype = 'advisory'
+        AND granted = false
+        AND objsubid = 1
+        AND classid = CASE WHEN hashtext(${lockKey}) < 0 THEN -1 ELSE 0 END
+        AND objid = hashtext(${lockKey})
+    `;
+    if (Number(rows[0]?.n ?? 0) >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${expected} ungranted advisory locks on ${lockKey}`);
+}
+
 async function followRedirect(fn) {
   try {
     const result = await fn();
@@ -96,6 +150,11 @@ function fieldDayHardeningHolds(state) {
   if (state.startJobResurrectedCompleted !== false) return false;
   if (state.scheduleJobMovedCompleted !== false) return false;
   if (state.staleOwnerConfirmBoundOldProposal !== false) return false;
+  if (state.deactivateRaceRunningCount !== 0) return false;
+  if (state.deactivateRaceMembershipActive !== false) return false;
+  if (state.reassignRaceNonAssigneeRunning !== 0) return false;
+  if (state.scheduleRaceScheduledAtUnchanged !== true) return false;
+  if (state.scheduleRaceReturnedCompletedError !== true) return false;
   if (state.fieldCompleteInvoiceKind !== "ORIGINAL") return false;
   if (state.fieldCompleteInvoiceCount !== 1) return false;
   if (state.fieldCompleteInvoiceStatus !== "SENT") return false;
@@ -135,9 +194,46 @@ check(
     jobActionSrc.includes("appointmentProposalId: job.appointmentProposalId") &&
     jobActionSrc.includes("A completed job cannot be rescheduled."),
 );
+const scheduleFnSrc = jobActionSrc.slice(
+  jobActionSrc.indexOf("export async function scheduleJob"),
+  jobActionSrc.indexOf("export async function assignJobMember"),
+);
+const scheduleTxSrc = scheduleFnSrc.slice(
+  scheduleFnSrc.indexOf("await prisma.$transaction"),
+  scheduleFnSrc.indexOf("if (completedDuringWrite)"),
+);
+const writeAssignSrc = jobActionSrc.slice(
+  jobActionSrc.indexOf("async function writeAssignedMembershipAndLaneWindows"),
+);
 check(
-  "Deactivation closes leftover RUNNING time before flipping active",
-  teamSrc.includes("closeRunningTimeForMembershipInTransaction") &&
+  "scheduleJob locks the Job row after the schedule-reservation advisory lock",
+  scheduleTxSrc.includes("lockBusinessScheduleReservation") &&
+    scheduleTxSrc.includes("lockTenantOwnedJob") &&
+    scheduleTxSrc.indexOf("lockBusinessScheduleReservation") <
+      scheduleTxSrc.indexOf("lockTenantOwnedJob") &&
+    scheduleTxSrc.includes("current.status === \"COMPLETED\"") &&
+    !scheduleTxSrc.includes("tx.job.findFirst"),
+);
+check(
+  "assignJobMember locks the Job after the advisory lock and closes the locked assignee",
+  writeAssignSrc.indexOf("lockBusinessScheduleReservation") >= 0 &&
+    writeAssignSrc.indexOf("lockTenantOwnedJob") >
+      writeAssignSrc.indexOf("lockBusinessScheduleReservation") &&
+    writeAssignSrc.includes("previousAssignee = lockedJob.assignedMembershipId") &&
+    writeAssignSrc.includes("membershipId: previousAssignee") &&
+    !writeAssignSrc.includes("membershipId: job.assignedMembershipId"),
+);
+const deactivateFnSrc = teamSrc.slice(
+  teamSrc.indexOf("export async function setTeamMemberActive"),
+);
+check(
+  "Deactivation locks the Membership row before closing time or flipping active",
+  deactivateFnSrc.includes('SELECT id FROM "Membership"') &&
+    deactivateFnSrc.includes("FOR UPDATE") &&
+    deactivateFnSrc.indexOf("FOR UPDATE") <
+      deactivateFnSrc.indexOf("closeRunningTimeForMembershipInTransaction") &&
+    deactivateFnSrc.indexOf("closeRunningTimeForMembershipInTransaction") <
+      deactivateFnSrc.indexOf("data: { active }") &&
     teamSrc.includes("MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON"),
 );
 check(
@@ -147,6 +243,14 @@ check(
     selfSrc.includes('await import("@/app/actions/team")') &&
     selfSrc.includes('await import("@/lib/native-field-ops")') &&
     selfSrc.includes('await import("@/app/actions/invoice")'),
+);
+check(
+  "Barrier proofs hold the lock on a second connection, queue the writers, then release",
+  selfSrc.includes("waitForBlockedContenders") &&
+    selfSrc.includes("waitForUngrantedAdvisoryLocks") &&
+    selfSrc.includes("pg_advisory_xact_lock") &&
+    selfSrc.includes('SELECT id FROM "Membership"') &&
+    selfSrc.includes('SELECT id FROM "Job"'),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -161,6 +265,11 @@ const session = await openDisposableTestDatabase({
   namePrefix: "tbbt_handyman_field_day_hard",
   setProcessEnv: true,
 });
+
+/** @type {import("@prisma/client").PrismaClient | undefined} */
+let locker;
+/** @type {import("@prisma/client").PrismaClient | undefined} */
+let observer;
 
 try {
   const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
@@ -187,7 +296,12 @@ try {
   const { jobWriteTestHooks } = await import("@/lib/job-write-test-hooks");
   const { setTestAccess } = await import("./estimate-options-test-access.mjs");
   const { prisma } = await import("@/lib/prisma");
-  const { Prisma } = await import("@prisma/client");
+  const { Prisma, PrismaClient } = await import("@prisma/client");
+  const { businessScheduleReservationLockKey } = await import(
+    "@/lib/schedule-reservation"
+  );
+  locker = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+  observer = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
   function makeAccess(business, role, membership) {
     return {
@@ -300,6 +414,20 @@ try {
       passwordHash: "x",
     },
   });
+  const raceDeactivateUser = await prisma.user.create({
+    data: {
+      name: "Race Deactivate A",
+      email: `race-deactivate-a-hard-${suffix}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const assignCUser = await prisma.user.create({
+    data: {
+      name: "Assign C",
+      email: `assign-c-hard-${suffix}@example.com`,
+      passwordHash: "x",
+    },
+  });
   const betaOwnerUser = await prisma.user.create({
     data: { name: "Owner B", email: `owner-b-hard-${suffix}@example.com`, passwordHash: "x" },
   });
@@ -315,6 +443,12 @@ try {
   });
   const deactivateMem = await prisma.membership.create({
     data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const raceDeactivateMem = await prisma.membership.create({
+    data: { userId: raceDeactivateUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const assignCMem = await prisma.membership.create({
+    data: { userId: assignCUser.id, businessId: businessA.id, role: "MEMBER" },
   });
   const betaOwnerMem = await prisma.membership.create({
     data: { userId: betaOwnerUser.id, businessId: businessB.id, role: "OWNER" },
@@ -699,6 +833,198 @@ try {
         beforeReschedule?.appointmentProposalId,
   );
 
+  console.log("\nBEHAVIOR — concurrent lock barriers (hold, queue, release)");
+
+  setTestAccess(ownerA);
+  const deactivateRaceJob = await createJob(businessA, customerA);
+  const deactivateRaceScheduled = await scheduleWithAck(deactivateRaceJob.id, {
+    date: "2027-07-12",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  demand("Deactivate-race job schedules", !deactivateRaceScheduled?.error);
+  const deactivateRaceAssigned = await assignJobMember(
+    {},
+    form({ jobId: deactivateRaceJob.id, membershipId: raceDeactivateMem.id }),
+  );
+  demand("Deactivate-race job assigns the MEMBER", !deactivateRaceAssigned?.error);
+  const deactivateRaceConfirmed = await confirmCurrentAppointment(deactivateRaceJob.id);
+  demand(
+    "Customer confirmed the deactivate-race appointment",
+    deactivateRaceConfirmed.status === "CONFIRMED",
+  );
+  const deactivateHold = createHoldRelease();
+  const deactivateHoldTx = locker.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "Membership"
+        WHERE id = ${raceDeactivateMem.id}
+          AND "businessId" = ${businessA.id}
+        FOR UPDATE
+      `;
+      deactivateHold.signalAcquired();
+      await deactivateHold.released;
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
+  await deactivateHold.acquired;
+  const queuedDeactivateStart = startAssignedFieldJob(
+    prisma,
+    { businessId: businessA.id, membershipId: raceDeactivateMem.id },
+    deactivateRaceJob.id,
+  );
+  const queuedDeactivate = setTeamMemberActive(
+    {},
+    form({ membershipId: raceDeactivateMem.id, active: "0" }),
+  );
+  await waitForBlockedContenders(observer, 2);
+  deactivateHold.release();
+  await Promise.all([queuedDeactivateStart, queuedDeactivate]);
+  await deactivateHoldTx;
+  const deactivateRaceRunning = await prisma.timeEntry.count({
+    where: {
+      businessId: businessA.id,
+      membershipId: raceDeactivateMem.id,
+      status: "RUNNING",
+    },
+  });
+  const deactivateRaceRow = await prisma.membership.findFirst({
+    where: { id: raceDeactivateMem.id, businessId: businessA.id },
+    select: { active: true },
+  });
+  check(
+    "Membership lock barrier leaves no RUNNING time for an inactive member",
+    deactivateRaceRow?.active === false && deactivateRaceRunning === 0,
+  );
+  void deactivateRaceStart;
+  void deactivateRaceResult;
+
+  const reassignRaceJob = await createJob(businessA, customerA);
+  const reassignRaceScheduled = await scheduleWithAck(reassignRaceJob.id, {
+    date: "2027-07-13",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  demand("Reassign-race job schedules", !reassignRaceScheduled?.error);
+  const reassignRaceAssigned = await assignJobMember(
+    {},
+    form({ jobId: reassignRaceJob.id, membershipId: memberMem.id }),
+  );
+  demand("Reassign-race job assigns worker A", !reassignRaceAssigned?.error);
+  const reassignRaceConfirmed = await confirmCurrentAppointment(reassignRaceJob.id);
+  demand(
+    "Customer confirmed the reassign-race appointment",
+    reassignRaceConfirmed.status === "CONFIRMED",
+  );
+  const scheduleLockKey = businessScheduleReservationLockKey(businessA.id);
+  const reassignHold = createHoldRelease();
+  const reassignHoldTx = locker.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${scheduleLockKey}))`;
+      reassignHold.signalAcquired();
+      await reassignHold.released;
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
+  await reassignHold.acquired;
+  const queuedAssignC = assignJobMember(
+    {},
+    form({ jobId: reassignRaceJob.id, membershipId: assignCMem.id }),
+  );
+  await waitForUngrantedAdvisoryLocks(observer, scheduleLockKey, 1);
+  await prisma.job.update({
+    where: { id: reassignRaceJob.id },
+    data: { assignedMembershipId: otherMemberMem.id },
+  });
+  const midflightBStart = await startNativeAssignedJob(
+    prisma,
+    otherAccess.access,
+    reassignRaceJob.id,
+  );
+  demand("Worker B native-started while assign-to-C waited on the advisory lock", midflightBStart.ok === true);
+  const bRunningBeforeRelease = await runningJobTime(
+    businessA.id,
+    reassignRaceJob.id,
+    otherMemberMem.id,
+  );
+  demand("Worker B has RUNNING JOB time before the assign lock releases", bRunningBeforeRelease.length === 1);
+  reassignHold.release();
+  const assignCResult = await queuedAssignC;
+  await reassignHoldTx;
+  demand("OWNER assign-to-C finished after the advisory lock released", !assignCResult?.error);
+  const reassignRaceJobRow = await prisma.job.findFirst({
+    where: { id: reassignRaceJob.id, businessId: businessA.id },
+    select: { assignedMembershipId: true },
+  });
+  const nonAssigneeRunning = await prisma.timeEntry.count({
+    where: {
+      businessId: businessA.id,
+      jobId: reassignRaceJob.id,
+      activityType: "JOB",
+      status: "RUNNING",
+      membershipId: { not: assignCMem.id },
+    },
+  });
+  check(
+    "Reassign lock barrier leaves no RUNNING JOB time for any non-assignee",
+    reassignRaceJobRow?.assignedMembershipId === assignCMem.id &&
+      nonAssigneeRunning === 0,
+  );
+
+  const scheduleRaceJob = await createJob(businessA, customerA);
+  const scheduleRaceFirst = await scheduleWithAck(scheduleRaceJob.id, {
+    date: "2027-07-14",
+    time: "08:00",
+    durationPreset: "60",
+  });
+  demand("Schedule-race job schedules", !scheduleRaceFirst?.error);
+  const scheduledAtBeforeRace = (
+    await prisma.job.findFirst({
+      where: { id: scheduleRaceJob.id, businessId: businessA.id },
+      select: { scheduledAt: true, status: true },
+    })
+  )?.scheduledAt;
+  demand("Schedule-race job has a scheduledAt before the barrier", Boolean(scheduledAtBeforeRace));
+  const scheduleHold = createHoldRelease();
+  const scheduleHoldTx = locker.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM "Job"
+        WHERE id = ${scheduleRaceJob.id}
+          AND "businessId" = ${businessA.id}
+        FOR UPDATE
+      `;
+      scheduleHold.signalAcquired();
+      await scheduleHold.released;
+      await tx.job.update({
+        where: { id: scheduleRaceJob.id },
+        data: { status: "COMPLETED" },
+      });
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
+  await scheduleHold.acquired;
+  const queuedSchedule = scheduleWithAck(scheduleRaceJob.id, {
+    date: "2027-07-15",
+    time: "09:00",
+    durationPreset: "60",
+  });
+  await waitForBlockedContenders(observer, 1);
+  scheduleHold.release();
+  const scheduleRaceResult = await queuedSchedule;
+  await scheduleHoldTx;
+  const scheduleRaceRow = await prisma.job.findFirst({
+    where: { id: scheduleRaceJob.id, businessId: businessA.id },
+    select: { status: true, scheduledAt: true },
+  });
+  check(
+    "Job lock barrier refuses scheduleJob after concurrent completion and keeps scheduledAt",
+    Boolean(scheduleRaceResult?.error) &&
+      /completed job cannot be rescheduled/i.test(String(scheduleRaceResult.error)) &&
+      scheduleRaceRow?.status === "COMPLETED" &&
+      scheduleRaceRow.scheduledAt?.getTime() === scheduledAtBeforeRace?.getTime(),
+  );
+
   console.log("\nBEHAVIOR — field complete then owner invoice creates one ORIGINAL");
 
   const invoiceEstimate = await prisma.estimate.create({
@@ -803,6 +1129,15 @@ try {
     staleOwnerConfirmBoundOldProposal:
       afterStaleConfirm?.appointmentConfirmedForProposalId ===
       beforeReschedule?.appointmentProposalId,
+    deactivateRaceRunningCount: deactivateRaceRunning,
+    deactivateRaceMembershipActive: deactivateRaceRow?.active,
+    reassignRaceNonAssigneeRunning: nonAssigneeRunning,
+    scheduleRaceScheduledAtUnchanged:
+      scheduleRaceRow?.scheduledAt?.getTime() === scheduledAtBeforeRace?.getTime(),
+    scheduleRaceReturnedCompletedError: Boolean(
+      scheduleRaceResult?.error &&
+        /completed job cannot be rescheduled/i.test(String(scheduleRaceResult.error)),
+    ),
     fieldCompleteInvoiceKind: invoices[0]?.kind,
     fieldCompleteInvoiceCount: invoicesAfterReplay.length,
     fieldCompleteInvoiceStatus: invoices[0]?.status,
@@ -823,6 +1158,11 @@ try {
     ["stale start resurrected COMPLETED", { startJobResurrectedCompleted: true }],
     ["stale schedule moved a completed job", { scheduleJobMovedCompleted: true }],
     ["stale owner confirm bound the old proposal", { staleOwnerConfirmBoundOldProposal: true }],
+    ["deactivate race left RUNNING time", { deactivateRaceRunningCount: 1 }],
+    ["deactivate race left membership active", { deactivateRaceMembershipActive: true }],
+    ["reassign race left non-assignee RUNNING", { reassignRaceNonAssigneeRunning: 1 }],
+    ["schedule race rewrote scheduledAt", { scheduleRaceScheduledAtUnchanged: false }],
+    ["schedule race missed completed error", { scheduleRaceReturnedCompletedError: false }],
     ["field complete created no invoice", { fieldCompleteInvoiceCount: 0 }],
     ["field complete invoice stayed DRAFT", { fieldCompleteInvoiceStatus: "DRAFT" }],
     ["other tenant received a job", { otherBusinessJobCount: 1 }],
@@ -843,6 +1183,8 @@ try {
   console.error("FAIL - handyman field-day hardening proofs crashed");
   console.error(error);
 } finally {
+  await locker?.$disconnect();
+  await observer?.$disconnect();
   await session.cleanup();
 }
 

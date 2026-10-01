@@ -78,6 +78,7 @@ import {
   JOB_REASSIGNMENT_TIME_CLOSED_REASON,
   TimeCardError,
   isTimeCardError,
+  lockTenantOwnedJob,
   stopRunningAssignedJobTimeInTransaction,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
@@ -379,11 +380,8 @@ export async function scheduleJob(
   await prisma.$transaction(
     async (tx) => {
       await lockBusinessScheduleReservation(tx, access.businessId);
-      const current = await tx.job.findFirst({
-        where: { id: job.id, businessId: access.businessId },
-        select: { status: true },
-      });
-      if (current?.status === "COMPLETED") {
+      const current = await lockTenantOwnedJob(tx, access.businessId, job.id);
+      if (!current || current.status === "COMPLETED") {
         completedDuringWrite = true;
         return;
       }
@@ -907,19 +905,24 @@ async function writeAssignedMembershipAndLaneWindows(
     await prisma.$transaction(
       async (tx) => {
         await lockBusinessScheduleReservation(tx, businessId);
+        const lockedJob = await lockTenantOwnedJob(tx, businessId, job.id);
+        if (!lockedJob) {
+          throw new TimeCardError("That job could not be found.");
+        }
+        const previousAssignee = lockedJob.assignedMembershipId;
         await tx.job.update({
           where: { id: job.id },
           data: { assignedMembershipId: nextAssignedMembershipId },
         });
         if (
-          job.assignedMembershipId &&
-          job.assignedMembershipId !== nextAssignedMembershipId
+          previousAssignee &&
+          previousAssignee !== nextAssignedMembershipId
         ) {
           const stopped = await stopRunningAssignedJobTimeInTransaction(tx, {
             businessId,
             jobId: job.id,
             actorMembershipId,
-            membershipId: job.assignedMembershipId,
+            membershipId: previousAssignee,
             reason: JOB_REASSIGNMENT_TIME_CLOSED_REASON,
           });
           if (!stopped.ok) {

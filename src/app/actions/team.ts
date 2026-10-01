@@ -255,6 +255,15 @@ export async function setTeamMemberActive(
 
   try {
     await prisma.$transaction(async (tx) => {
+      // Same Membership row exactActiveMembershipHeld locks. Take it
+      // first so a worker start cannot open RUNNING time after this
+      // read and before active=false commits.
+      await tx.$queryRaw`
+        SELECT id FROM "Membership"
+        WHERE id = ${membership.id}
+          AND "businessId" = ${access.businessId}
+        FOR UPDATE
+      `;
       if (!active) {
         await closeRunningTimeForMembershipInTransaction(tx, {
           businessId: access.businessId,
