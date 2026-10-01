@@ -20,7 +20,7 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 import {
   assertLocalDatabaseUrl,
-  withDisposableTestDatabase,
+  openDisposableTestDatabase,
 } from "./disposable-test-database.mjs";
 
 const { Prisma } = await import("@prisma/client");
@@ -178,9 +178,10 @@ if (!MUTATION_CHILD) {
   check(
     "This verifier uses the disposable harness and asserts localhost first",
     selfSrc.includes('from "./disposable-test-database.mjs"') &&
-      selfSrc.includes("withDisposableTestDatabase") &&
+      selfSrc.includes("openDisposableTestDatabase") &&
+      selfSrc.includes("session.cleanup()") &&
       selfSrc.includes("assertLocalDatabaseUrl") &&
-      selfSrc.indexOf("assertLocalDatabaseUrl(") < selfSrc.indexOf("withDisposableTestDatabase("),
+      selfSrc.indexOf("assertLocalDatabaseUrl(") < selfSrc.indexOf("openDisposableTestDatabase("),
   );
 
   console.log("\nPURE — Inclusion, tenant fail-closed, and actionable hrefs");
@@ -752,14 +753,14 @@ if (!baseUrl) {
 
 assertLocalDatabaseUrl(baseUrl, "owner-daily-ops disposable database");
 
-await withDisposableTestDatabase(
-  {
-    databaseUrl: baseUrl,
-    namePrefix: "tbbt_owner_daily_ops",
-    setProcessEnv: true,
-  },
-  async ({ prisma, testUrl }) => {
-    assertLocalDatabaseUrl(testUrl, "owner-daily-ops disposable test URL");
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_owner_daily_ops",
+  setProcessEnv: true,
+});
+try {
+  const { prisma, testUrl } = session;
+  assertLocalDatabaseUrl(testUrl, "owner-daily-ops disposable test URL");
 
     async function makeBusiness(slug) {
       return prisma.business.create({
@@ -1531,8 +1532,9 @@ await withDisposableTestDatabase(
         loaded.items.length === 0 && loaded.count === 0,
       );
     }
-  },
-);
+} finally {
+  await session.cleanup();
+}
 
 if (!MUTATION_CHILD) {
   console.log("\nMUTATION-REVERT — each fix fails its real-loader test when reverted");
