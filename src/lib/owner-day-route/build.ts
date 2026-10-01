@@ -1,4 +1,3 @@
-import { formatAddress } from "@/lib/format";
 import {
   OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
@@ -10,7 +9,11 @@ import {
   OWNER_DAY_ROUTE_ORDER_NOTE,
   OWNER_DAY_ROUTE_READ_ONLY_MESSAGE,
 } from "@/lib/owner-day-route/constants";
-import { completeStructuredRouteAddress, sameBusinessJob } from "@/lib/owner-day-route/address";
+import {
+  completeStructuredRouteAddress,
+  ownedRouteDisplayAddress,
+  sameBusinessJob,
+} from "@/lib/owner-day-route/address";
 import {
   buildOwnerDayRouteMapsHandoff,
   eligibleOwnerDayRouteMapsQueries,
@@ -38,10 +41,7 @@ function ownedDisplayAddress(
   job: OwnerDayRouteJobRecord,
   businessId: string,
 ): string | null {
-  const property = job.property;
-  if (!property || property.businessId !== businessId) return null;
-  const formatted = formatAddress(property);
-  return formatted.trim() ? formatted : null;
+  return ownedRouteDisplayAddress(job.property, businessId);
 }
 
 export function buildOwnerDayRouteStop(

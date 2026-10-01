@@ -415,6 +415,14 @@ check(
     nativeAppSrc.includes("Review photo") &&
     nativeAppSrc.includes("Upload photo"),
 );
+check(
+  "Assigned job detail opens maps only from the server maps handoff",
+  nativeAppSrc.includes("job.maps?.href") &&
+    nativeAppSrc.includes("job.maps.label") &&
+    nativeAppSrc.includes("job.maps.unavailableReason") &&
+    nativeAppSrc.includes("job.maps.disclaimer") &&
+    !nativeAppSrc.includes("Directions"),
+);
 
 try {
   const onboardingDone = new Date();
@@ -905,6 +913,16 @@ try {
   check("Assigned job detail loads", Boolean(detail));
   const detailJson = jsonBlob(detail);
   check("Detail includes the customer name and address", Boolean(detail?.customerName === "Cara Canary Native Q9x" && detail?.address?.includes("42 Canary Way")));
+  check(
+    "Assigned complete same-business address produces an Open in maps href",
+    detail?.maps?.available === true &&
+      typeof detail?.maps?.href === "string" &&
+      detail.maps.href.includes("destination=") &&
+      detail.maps.href.includes(encodeURIComponent("42 Canary Way")) &&
+      detail.maps.label === "Open in maps" &&
+      detail.directionsHref === detail.maps.href &&
+      !/traffic optimization|optimized route|geocod/i.test(detail.maps.disclaimer),
+  );
   check(
     "Detail includes approved scope description without money",
     Boolean(detail?.scope.items.some((item) => item.description === "Canary Approved Scope Line Q9x")),
@@ -2572,6 +2590,8 @@ try {
         scheduledDurationMinutes: 60,
         customer: { name: "Cara Canary Native Q9x" },
         property: {
+          id: propertyA.id,
+          businessId: businessA.id,
           addressLine1: "42 Canary Way",
           addressLine2: null,
           city: "Springfield",

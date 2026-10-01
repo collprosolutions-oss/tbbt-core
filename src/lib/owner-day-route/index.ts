@@ -25,6 +25,7 @@ export {
 
 export {
   completeStructuredRouteAddress,
+  ownedRouteDisplayAddress,
   sameBusinessJob,
 } from "@/lib/owner-day-route/address";
 

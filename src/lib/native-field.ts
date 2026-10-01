@@ -24,9 +24,16 @@ import {
   type AppointmentJobFields,
 } from "@/lib/appointment-confirmation";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { directionsUrl, telHref } from "@/lib/directions";
+import { telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
-import { formatAddress, formatDateTime } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
+import {
+  NATIVE_JOB_PROPERTY_SELECT,
+  buildNativeAssignedJobMaps,
+  nativeAssignedJobDisplayAddress,
+  type NativeAssignedJobMaps,
+  type NativeAssignedJobPropertyRecord,
+} from "@/lib/native-assigned-job-maps";
 import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { parseChecklistJson, START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
@@ -54,7 +61,10 @@ export const NATIVE_ASSIGNED_JOB_WHERE = {
   assignedMembershipId: true,
 } as const;
 
-export const NATIVE_FIELD_JOB_LIST_SELECT = FIELD_JOB_SELECT;
+export const NATIVE_FIELD_JOB_LIST_SELECT = {
+  ...FIELD_JOB_SELECT,
+  property: { select: NATIVE_JOB_PROPERTY_SELECT },
+} as const;
 
 /** Hard cap on the native Today list. Detail stays one assigned job by id. */
 export const NATIVE_TODAY_JOB_LIMIT = 20;
@@ -92,13 +102,7 @@ const NATIVE_FIELD_JOB_DETAIL_SELECT = {
   propertyAccessNote: true,
   customer: { select: { name: true, phone: true } },
   property: {
-    select: {
-      addressLine1: true,
-      addressLine2: true,
-      city: true,
-      region: true,
-      postalCode: true,
-    },
+    select: NATIVE_JOB_PROPERTY_SELECT,
   },
   estimate: {
     select: {
@@ -238,10 +242,15 @@ export type NativeJobPickupItem = {
   pickupRecorded: boolean;
 };
 
+export type NativeListJob = Omit<FieldJob, "property"> & {
+  property: NativeAssignedJobPropertyRecord | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
   directionsHref: string | null;
+  maps: NativeAssignedJobMaps;
   confirmationLabel: string;
   accessLines: string[];
   scope: {
@@ -512,7 +521,7 @@ export function isNativeFieldActivityType(value: string): value is AssignedField
 }
 
 export type NativeAssignedJobPage = {
-  jobs: FieldJob[];
+  jobs: NativeListJob[];
   truncated: boolean;
   limit: number;
 };
@@ -540,7 +549,11 @@ export function nativeAssignedJobWhere(
   } as const;
 }
 
-export function toNativeJobSummary(job: FieldJob, timeZone: string): NativeJobSummary {
+export function toNativeJobSummary(
+  job: NativeListJob,
+  timeZone: string,
+  businessId: string,
+): NativeJobSummary {
   return {
     id: job.id,
     status: job.status,
@@ -548,7 +561,7 @@ export function toNativeJobSummary(job: FieldJob, timeZone: string): NativeJobSu
     scheduledDurationMinutes: job.scheduledDurationMinutes,
     whenLabel: job.scheduledAt ? formatDateTime(job.scheduledAt, timeZone) : null,
     customerName: job.customer?.name ?? null,
-    address: job.property ? formatAddress(job.property) : null,
+    address: nativeAssignedJobDisplayAddress(job.property, businessId),
   };
 }
 
@@ -575,7 +588,7 @@ export async function listNativeAssignedJobs(
 }
 
 export function buildNativeTodayPayload(
-  jobs: FieldJob[],
+  jobs: NativeListJob[],
   input: {
     access: NativeFieldAccess;
     now?: Date;
@@ -588,13 +601,14 @@ export function buildNativeTodayPayload(
   const groups = groupFieldJobs(jobs, startOfDay(input.now ?? new Date(), timeZone), timeZone);
   const truncated = Boolean(input.truncated);
   const limit = input.limit ?? NATIVE_TODAY_JOB_LIMIT;
+  const businessId = input.access.businessId;
   return {
     viewer: input.access.viewer,
     workspace: input.access.workspace,
     timeZone,
-    today: groups.today.map((job) => toNativeJobSummary(job, timeZone)),
-    upcoming: groups.upcoming.map((job) => toNativeJobSummary(job, timeZone)),
-    completed: groups.completed.map((job) => toNativeJobSummary(job, timeZone)),
+    today: groups.today.map((job) => toNativeJobSummary(job, timeZone, businessId)),
+    upcoming: groups.upcoming.map((job) => toNativeJobSummary(job, timeZone, businessId)),
+    completed: groups.completed.map((job) => toNativeJobSummary(job, timeZone, businessId)),
     truncated,
     limit,
     truncatedNotice: truncated ? nativeTodayTruncatedNotice(limit) : null,
@@ -650,12 +664,17 @@ export async function loadNativeAssignedJob(
     job.id,
     timeZone,
   );
+  const maps = buildNativeAssignedJobMaps({
+    businessId: access.businessId,
+    property: job.property,
+  });
 
   return {
-    ...toNativeJobSummary(job, timeZone),
+    ...toNativeJobSummary(job, timeZone, access.businessId),
     customerPhone: job.customer?.phone ?? null,
     callHref: telHref(job.customer?.phone),
-    directionsHref: directionsUrl(job.property),
+    directionsHref: maps.href,
+    maps,
     confirmationLabel,
     accessLines: ownerAccessSummaryLines(job),
     scope: fieldSafeScope(job),

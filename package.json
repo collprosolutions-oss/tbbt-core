@@ -168,6 +168,7 @@
     "test:external-lead-import": "node --experimental-strip-types scripts/check-external-lead-import.mjs",
     "test:service-catalog-import": "node --experimental-strip-types scripts/check-service-catalog-import.mjs",
     "test:native-field": "node --experimental-strip-types scripts/check-native-field-api.mjs",
+    "test:native-assigned-job-maps": "node --experimental-strip-types scripts/check-native-assigned-job-maps.mjs",
     "test:native-field-photos": "node --experimental-strip-types scripts/check-native-field-photos.mjs",
     "test:native-field-visit": "node --experimental-strip-types scripts/check-native-field-visit.mjs",
     "test:native-field-checklist": "node --experimental-strip-types scripts/check-native-field-checklist.mjs",

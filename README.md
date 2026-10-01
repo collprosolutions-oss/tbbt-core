@@ -106,6 +106,7 @@ npm run test:plan-entitlements
 npm run test:materials-suppliers
 npm run test:communications-department
 npm run test:native-field
+npm run test:native-assigned-job-maps
 npm run test:native-field-photos
 npm run test:native-field-visit
 npm run test:native-field-checklist

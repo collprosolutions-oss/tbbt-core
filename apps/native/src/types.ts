@@ -140,10 +140,20 @@ export type NativeJobPickupItem = {
   pickupRecorded: boolean;
 };
 
+export type NativeAssignedJobMaps = {
+  href: string | null;
+  available: boolean;
+  address: string | null;
+  unavailableReason: string | null;
+  label: string;
+  disclaimer: string;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
   directionsHref: string | null;
+  maps: NativeAssignedJobMaps;
   confirmationLabel: string;
   accessLines: string[];
   scope: {

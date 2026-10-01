@@ -238,11 +238,15 @@ export function JobScreen({
                 : "No material pickup time"}
           </Text>
           {job.address ? <Text style={styles.body}>{job.address}</Text> : null}
+          {job.maps?.unavailableReason && !job.maps.href ? (
+            <Text style={styles.notice}>{job.maps.unavailableReason}</Text>
+          ) : null}
+          {job.maps?.disclaimer ? <Text style={styles.meta}>{job.maps.disclaimer}</Text> : null}
           {job.customerPhone ? <Text style={styles.body}>{job.customerPhone}</Text> : null}
           <View style={styles.actions}>
-            {job.directionsHref ? (
-              <Pressable onPress={() => Linking.openURL(job.directionsHref!)} style={styles.action}>
-                <Text style={styles.actionLabel}>Directions</Text>
+            {job.maps?.href ? (
+              <Pressable onPress={() => Linking.openURL(job.maps.href!)} style={styles.action}>
+                <Text style={styles.actionLabel}>{job.maps.label}</Text>
               </Pressable>
             ) : null}
             {job.callHref ? (

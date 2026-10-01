@@ -1,3 +1,4 @@
+import { formatAddress } from "@/lib/format";
 import { formatStructuredAddress, validateStructuredAddress } from "@/lib/service-address";
 import type { OwnerDayRouteProperty } from "@/lib/owner-day-route/types";
 
@@ -52,4 +53,17 @@ export function completeStructuredRouteAddress(
 
 export function sameBusinessJob(job: { businessId: string }, businessId: string) {
   return job.businessId === businessId;
+}
+
+/**
+ * Same-business recorded address text only. Foreign property fields stay hidden.
+ * Incomplete street-only rows can still be shown; they are not maps-eligible.
+ */
+export function ownedRouteDisplayAddress(
+  property: OwnerDayRouteProperty | null | undefined,
+  businessId: string,
+): string | null {
+  if (!property || property.businessId !== businessId) return null;
+  const formatted = formatAddress(property);
+  return formatted.trim() ? formatted : null;
 }
