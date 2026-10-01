@@ -4,15 +4,16 @@
  * Reads stay on the caller's own recorded TimeEntry rows
  * (businessId + membershipId). The write reuses
  * `requestTimeCorrection` in `src/lib/time-card-ops.ts` and the same
- * `canRequestTimeCorrection` gate as Field Home. It does not accept or
- * decline requests, rewrite approved time, or touch payroll.
+ * `canRequestTimeCorrection` gate as Field Home. Active membership is
+ * re-checked with FOR UPDATE inside that write transaction; the
+ * `active: true` pre-read here is only a fast fail. It does not accept
+ * or decline requests, rewrite approved time, or touch payroll.
  */
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { assertBusinessRecord, businessScope } from "@/lib/access-scope";
 import { ForbiddenError } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { formatTime } from "@/lib/format";
 import { NATIVE_SESSION_TOO_LARGE } from "@/lib/native-session-limits";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
@@ -225,7 +226,12 @@ function mapTimeCardError(error: unknown): { status: number; error: string } {
   if (isTimeCardError(error) && /could not be found/i.test(message)) {
     return { status: 404, error: NATIVE_TIME_ENTRY_NOT_AVAILABLE };
   }
-  if (isTimeCardError(error) && /describe the correction|must be after|enter the proposed|invalid|does not exist/i.test(message)) {
+  if (
+    isTimeCardError(error) &&
+    /describe the correction|must be after|enter the proposed|invalid|does not exist|cannot be in the future|longer than 24|too far in the past/i.test(
+      message,
+    )
+  ) {
     return { status: 400, error: message };
   }
   return { status: 409, error: message };
@@ -330,12 +336,10 @@ export async function requestNativeTimeCorrection(
   db: PrismaClient,
   access: NativeFieldAccess,
   input: NativeTimeCorrectionInput,
+  options?: { afterInitialRead?: () => Promise<void> },
 ): Promise<NativeRequestTimeCorrectionResult> {
   const businessAccess = await nativeTimeCardBusinessAccess(db, access);
   if (!businessAccess) {
-    return { ok: false, status: 404, error: NATIVE_TIME_ENTRY_NOT_AVAILABLE };
-  }
-  if (!(await exactActiveMembershipHeld(db, access))) {
     return { ok: false, status: 404, error: NATIVE_TIME_ENTRY_NOT_AVAILABLE };
   }
 
@@ -379,13 +383,18 @@ export async function requestNativeTimeCorrection(
   }
 
   try {
-    const result = await requestTimeCorrection(db, businessAccess, {
-      timeEntryId: owned.id,
-      reason: input.reason,
-      proposedStartedAt: proposedStartedAt.value,
-      proposedEndedAt: proposedEndedAt.value,
-      timeZone,
-    });
+    const result = await requestTimeCorrection(
+      db,
+      businessAccess,
+      {
+        timeEntryId: owned.id,
+        reason: input.reason,
+        proposedStartedAt: proposedStartedAt.value,
+        proposedEndedAt: proposedEndedAt.value,
+        timeZone,
+      },
+      { afterInitialRead: options?.afterInitialRead },
+    );
     const timeCards = await loadNativeTimeCards(db, access);
     const status = isTimeCorrectionRequestStatus(result.request.status)
       ? result.request.status

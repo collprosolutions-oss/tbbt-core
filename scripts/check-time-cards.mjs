@@ -1220,13 +1220,20 @@ try {
     note: "Week A only before spanning accept",
     timeZone: NY,
   });
-  const pendingSpanRequest = await requestTimeCorrection(prisma, spanAccess, {
-    timeEntryId: weekAOnlyDecide.id,
-    reason: "Move the end into week C",
-    proposedStartedAt: spanStart,
-    proposedEndedAt: spanEnd,
-    timeZone: NY,
+  const pendingSpanRequestRow = await prisma.timeCorrectionRequest.create({
+    data: {
+      businessId: businessA.id,
+      timeEntryId: weekAOnlyDecide.id,
+      requestedByMembershipId: spanMem.id,
+      status: "PENDING",
+      reason: "Move the end into week C",
+      originalStartedAt: weekAOnlyDecide.startedAt,
+      originalEndedAt: weekAOnlyDecide.endedAt,
+      proposedStartedAt: spanStart,
+      proposedEndedAt: spanEnd,
+    },
   });
+  const pendingSpanRequest = { request: pendingSpanRequestRow };
   await prisma.timesheetWeek.create({
     data: {
       businessId: businessA.id,
@@ -1331,8 +1338,8 @@ try {
     () => requestTimeCorrection(prisma, spanAccess, {
       timeEntryId: weekAOnlyRequest.id,
       reason: "Would cross approved week B",
-      proposedStartedAt: spanStart,
-      proposedEndedAt: spanEnd,
+      proposedStartedAt: civil("2026-09-12", "18:00"),
+      proposedEndedAt: civil("2026-09-13", "10:00"),
       timeZone: NY,
     }),
     (error) => error instanceof TimeCardError && /approved/i.test(error.message),
