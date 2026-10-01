@@ -13,7 +13,7 @@
 import { register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -39,6 +39,7 @@ const {
   PROJECT_DOCUMENT_MAX_COUNT,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   authorizePrivateStoredAssetDownload,
+  authorizeProjectTokenDocument,
   countActiveProjectDocuments,
   listProjectDocumentsForOwnerReview,
   listProjectDocumentsForPortal,
@@ -230,7 +231,10 @@ check(
     missingProjectDocumentReviewSchema({ code: "P2022" }) &&
     !missingProjectDocumentReviewSchema({ code: "P2002" }) &&
     projectDocumentReviewErrorMessage({ code: "P2021" }, "fallback") ===
-      PROJECT_DOCUMENT_REVIEW_UNAVAILABLE_MESSAGE,
+      PROJECT_DOCUMENT_REVIEW_UNAVAILABLE_MESSAGE &&
+    read("src/lib/business-storage/project-documents.ts").includes(
+      "to_regclass('\"ProjectDocumentReview\"')",
+    ),
 );
 check(
   "Work Order hosts the OWNER form; portal shows recorded status; no global nav change",
@@ -776,6 +780,23 @@ try {
     degradedPortal.every((row) => row.reviewStatus === null) &&
       degradedCount === PROJECT_DOCUMENT_MAX_COUNT + 1,
   );
+  const authorizedWithoutTable = await authorizeProjectTokenDocument(
+    deps,
+    siblingJob.projectToken,
+    {
+      originalFilename: "preview-missing-table.pdf",
+      mimeType: "application/pdf",
+      fileSizeBytes: pdfBytes.byteLength,
+    },
+  );
+  check(
+    "Authorize beforeCreate still authorizes when ProjectDocumentReview is absent",
+    authorizedWithoutTable.asset.status === "PENDING" &&
+      authorizedWithoutTable.asset.visibility === "PRIVATE" &&
+      authorizedWithoutTable.asset.jobId === siblingJob.id &&
+      authorizedWithoutTable.asset.publicPath == null &&
+      authorizedWithoutTable.upload.method === "PUT",
+  );
   await expectThrow(
     "Write fails closed when the review table is missing",
     () =>
@@ -792,6 +813,40 @@ try {
   failed += 1;
 } finally {
   if (session) await session.cleanup();
+}
+
+const mutationChild = process.argv.includes("--mutation");
+if (!mutationChild) {
+  console.log("\nMUTATION — disable the to_regclass probe and require authorize to fail");
+  const target = join(root, "src/lib/business-storage/project-documents.ts");
+  const original = readFileSync(target, "utf8");
+  const find = "  if (!probe[0]?.present) return [];";
+  if (!original.includes(find) || !original.includes("to_regclass")) {
+    check("mutation missing-table-probe found its target", false);
+  } else {
+    writeFileSync(target, original.replace(find, "  if (false && !probe[0]?.present) return [];"));
+    try {
+      const child = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", fileURLToPath(import.meta.url), "--mutation"],
+        {
+          encoding: "utf8",
+          env: { ...process.env },
+          timeout: 180_000,
+        },
+      );
+      check(
+        "mutation missing-table-probe makes dropped-table authorize fail",
+        child.status !== 0,
+      );
+      if (child.status === 0) {
+        console.error(child.stdout.slice(-3000));
+        console.error(child.stderr.slice(-2000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
+  }
 }
 
 if (failed > 0) {

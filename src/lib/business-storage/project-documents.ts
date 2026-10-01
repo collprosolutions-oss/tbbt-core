@@ -156,6 +156,10 @@ async function projectDocumentIdsNeedingReplacement(
   db: Db,
   input: { businessId: string; jobId: string },
 ) {
+  // Presence probe only. A Prisma findMany P2021 aborts an open Postgres
+  // transaction (25P02), so authorize's beforeCreate cannot recover.
+  const probe = await db.$queryRaw<Array<{ present: boolean }>>`SELECT to_regclass('"ProjectDocumentReview"') IS NOT NULL AS present`;
+  if (!probe[0]?.present) return [];
   try {
     const rows = await db.projectDocumentReview.findMany({
       where: {

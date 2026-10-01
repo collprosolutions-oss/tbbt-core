@@ -311,6 +311,7 @@ check(
     projectDocumentReviewDataSrc.includes(
       "if (missingProjectDocumentReviewSchema(error)) {",
     ) &&
+    projectDocumentReviewDataSrc.includes("to_regclass('\"ProjectDocumentReview\"')") &&
     !projectDocumentReviewDataSrc.includes("$executeRaw") &&
     !projectDocumentReviewDataSrc.includes("CREATE TABLE") &&
     !projectDocumentReviewOpsSrc.includes("$executeRaw") &&
