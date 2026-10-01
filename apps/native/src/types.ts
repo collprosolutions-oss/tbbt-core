@@ -209,6 +209,32 @@ export type NativeTodayPayload = {
   assignedStops: NativeAssignedStopsMaps;
 };
 
+export type NativeTimeCorrectionStatus = "PENDING" | "ACCEPTED" | "DECLINED";
+
+export type NativeTimeCardEntry = {
+  id: string;
+  activityLabel: string;
+  jobLabel: string | null;
+  clockLabel: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  canRequest: boolean;
+  blockedReason: string | null;
+  requestStatus: NativeTimeCorrectionStatus | null;
+  requestStatusLabel: string | null;
+  requestReason: string | null;
+  proposedClockLabel: string | null;
+};
+
+export type NativeTimeCardsPayload = {
+  viewer: NativeViewer;
+  workspace: NativeWorkspace;
+  timeZone: string;
+  entries: NativeTimeCardEntry[];
+};
+
 export type NativeSessionPayload = {
   session: { token: string; expiresAt: string };
   viewer: NativeViewer;

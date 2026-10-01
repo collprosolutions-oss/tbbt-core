@@ -6,6 +6,7 @@ import type {
   NativeJobPhotoStage,
   NativePickupException,
   NativeSessionPayload,
+  NativeTimeCardsPayload,
   NativeTodayPayload,
   NativeViewer,
   NativeVisitOutcomeStatus,
@@ -102,6 +103,54 @@ export async function loadNativeToday(token: string): Promise<NativeTodayPayload
     return { error: typeof body.error === "string" ? body.error : "Today is not available." };
   }
   return body as unknown as NativeTodayPayload;
+}
+
+export async function loadNativeTimeCards(
+  token: string,
+): Promise<NativeTimeCardsPayload | NativeApiError> {
+  const response = await fetch(nativeApiUrl("/api/native/v1/time-cards"), {
+    headers: authHeaders(token),
+  });
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return { error: typeof body.error === "string" ? body.error : "Time cards are not available." };
+  }
+  return body as unknown as NativeTimeCardsPayload;
+}
+
+export async function requestNativeTimeCorrection(
+  token: string,
+  input: {
+    timeEntryId: string;
+    reason: string;
+    proposedStartDate: string;
+    proposedStartTime: string;
+    proposedEndDate: string;
+    proposedEndTime: string;
+  },
+): Promise<
+  | { timeCards: NativeTimeCardsPayload; request: { id: string; status: string; timeEntryId: string }; message: string }
+  | NativeApiError
+> {
+  const response = await fetch(nativeApiUrl("/api/native/v1/time-cards/corrections"), {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error: typeof body.error === "string" ? body.error : "That correction could not be requested.",
+    };
+  }
+  return body as unknown as {
+    timeCards: NativeTimeCardsPayload;
+    request: { id: string; status: string; timeEntryId: string };
+    message: string;
+  };
 }
 
 export async function loadNativeJob(

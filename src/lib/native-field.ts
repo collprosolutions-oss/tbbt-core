@@ -13,7 +13,8 @@
  * query. There is no fetch-then-compare step. Assigned-worker writes
  * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-activity.ts`,
  * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`,
- * `src/lib/native-field-checklist.ts`, and `src/lib/native-field-pickup.ts`.
+ * `src/lib/native-field-checklist.ts`, `src/lib/native-field-pickup.ts`,
+ * and `src/lib/native-time-cards.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {

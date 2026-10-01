@@ -98,12 +98,14 @@ export function TodayScreen({
   viewer,
   workspace,
   onOpenJob,
+  onOpenTimeCards,
   onSignOut,
 }: {
   token: string;
   viewer: NativeViewer;
   workspace: NativeWorkspace;
   onOpenJob: (jobId: string) => void;
+  onOpenTimeCards: () => void;
   onSignOut: () => void;
 }) {
   const [payload, setPayload] = useState<NativeTodayPayload | null>(null);
@@ -145,6 +147,9 @@ export function TodayScreen({
       {payload?.truncated ? (
         <Text style={styles.truncated}>{payload.truncatedNotice ?? "This list is capped."}</Text>
       ) : null}
+      <Pressable onPress={onOpenTimeCards} style={styles.timeCards}>
+        <Text style={styles.timeCardsLabel}>Time cards</Text>
+      </Pressable>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload ? (
@@ -260,6 +265,17 @@ const styles = StyleSheet.create({
   excluded: {
     gap: 4,
     marginTop: 4,
+  },
+  timeCards: {
+    alignSelf: "flex-start",
+    backgroundColor: "#1f2937",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  timeCardsLabel: {
+    color: "#f9fafb",
+    fontWeight: "700",
   },
   signOut: {
     alignSelf: "flex-start",
