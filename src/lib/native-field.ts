@@ -26,7 +26,7 @@ import {
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { directionsUrl, telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
-import { formatAddress, formatDateTime } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { parseChecklistJson, START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
@@ -34,6 +34,7 @@ import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { dayRange, startOfDay, type DateRange } from "@/lib/schedule";
 import {
   buildNativeAssignedStopsMaps,
+  nativeAssignedJobDisplayAddress,
   type NativeAssignedStopJob,
   type NativeAssignedStopsMaps,
 } from "@/lib/native-assigned-stops";
@@ -117,6 +118,8 @@ const NATIVE_FIELD_JOB_DETAIL_SELECT = {
   customer: { select: { name: true, phone: true } },
   property: {
     select: {
+      id: true,
+      businessId: true,
       addressLine1: true,
       addressLine2: true,
       city: true,
@@ -565,7 +568,11 @@ export function nativeAssignedJobWhere(
   } as const;
 }
 
-export function toNativeJobSummary(job: FieldJob, timeZone: string): NativeJobSummary {
+export function toNativeJobSummary(
+  job: FieldJob,
+  timeZone: string,
+  businessId: string,
+): NativeJobSummary {
   return {
     id: job.id,
     status: job.status,
@@ -573,7 +580,7 @@ export function toNativeJobSummary(job: FieldJob, timeZone: string): NativeJobSu
     scheduledDurationMinutes: job.scheduledDurationMinutes,
     whenLabel: job.scheduledAt ? formatDateTime(job.scheduledAt, timeZone) : null,
     customerName: job.customer?.name ?? null,
-    address: job.property ? formatAddress(job.property) : null,
+    address: nativeAssignedJobDisplayAddress(job.property, businessId),
   };
 }
 
@@ -636,9 +643,9 @@ export function buildNativeTodayPayload(
     viewer: input.access.viewer,
     workspace: input.access.workspace,
     timeZone,
-    today: groups.today.map((job) => toNativeJobSummary(job, timeZone)),
-    upcoming: groups.upcoming.map((job) => toNativeJobSummary(job, timeZone)),
-    completed: groups.completed.map((job) => toNativeJobSummary(job, timeZone)),
+    today: groups.today.map((job) => toNativeJobSummary(job, timeZone, input.access.businessId)),
+    upcoming: groups.upcoming.map((job) => toNativeJobSummary(job, timeZone, input.access.businessId)),
+    completed: groups.completed.map((job) => toNativeJobSummary(job, timeZone, input.access.businessId)),
     truncated,
     limit,
     truncatedNotice: truncated ? nativeTodayTruncatedNotice(limit) : null,
@@ -707,7 +714,7 @@ export async function loadNativeAssignedJob(
   );
 
   return {
-    ...toNativeJobSummary(job, timeZone),
+    ...toNativeJobSummary(job, timeZone, access.businessId),
     customerPhone: job.customer?.phone ?? null,
     callHref: telHref(job.customer?.phone),
     directionsHref: directionsUrl(job.property),

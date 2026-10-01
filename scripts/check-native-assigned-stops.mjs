@@ -1,7 +1,7 @@
 /**
  * Native Today assigned-stop maps handoff — assignment + tenant isolation,
- * recorded appointment order, complete-address eligibility, and the
- * maps stop cap.
+ * recorded appointment order, complete-address eligibility, the maps
+ * stop cap, same-business display addresses, and waypoint sanitization.
  *
  * Reuses completeStructuredRouteAddress and buildOwnerDayRouteMapsHandoff.
  * Does not invent a second Job-detail directionsHref.
@@ -13,8 +13,9 @@
  */
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -22,15 +23,18 @@ const { hashPassword } = await import("@/lib/auth-crypto");
 const { resolveNativeFieldAccess, signInNativeField } = await import(
   "@/lib/native-session"
 );
-const { loadNativeToday } = await import("@/lib/native-field");
+const { loadNativeAssignedJob, loadNativeToday } = await import("@/lib/native-field");
 const {
   NATIVE_ASSIGNED_STOPS_CAP_LABEL,
   NATIVE_ASSIGNED_STOPS_DISCLAIMER,
   NATIVE_ASSIGNED_STOPS_MAPS_LINK_LABEL,
   buildNativeAssignedStopsMaps,
+  nativeAssignedJobDisplayAddress,
   nativeAssignedStopsMapsFollowsAppointmentOrder,
+  sanitizeNativeAssignedStopMapsAddress,
 } = await import("@/lib/native-assigned-stops");
 const {
+  OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
   OWNER_DAY_ROUTE_INCOMPLETE_LABEL,
   OWNER_DAY_ROUTE_MAPS_STOP_LIMIT,
   OWNER_DAY_ROUTE_NO_PROPERTY_LABEL,
@@ -40,6 +44,8 @@ const {
 } = await import("@/lib/owner-day-route");
 const { formatStructuredAddress } = await import("@/lib/service-address");
 const { dayRange } = await import("@/lib/schedule");
+
+const mutationChild = Boolean(process.env.NATIVE_ASSIGNED_STOPS_MUTATION_CHILD);
 
 const NY = "America/New_York";
 const baseUrl = process.env.DATABASE_URL;
@@ -62,21 +68,23 @@ const testUrl = parsed.toString();
 
 const adminUrl = new URL(baseUrl);
 adminUrl.search = "";
-const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
-  encoding: "utf8",
-});
-if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
-  console.warn(createDb.stderr || createDb.stdout);
-}
+if (!mutationChild) {
+  const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+    encoding: "utf8",
+  });
+  if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+    console.warn(createDb.stderr || createDb.stdout);
+  }
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for native assigned-stops test database.");
-  process.exit(push.status ?? 1);
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for native assigned-stops test database.");
+    process.exit(push.status ?? 1);
+  }
 }
 
 const require = createRequire(import.meta.url);
@@ -162,6 +170,30 @@ check(
     assignedStopsSrc.includes("does not rearrange") &&
     docsSrc.includes("Open assigned stops in maps") &&
     docsSrc.includes("test:native-assigned-stops"),
+);
+check(
+  "Job address display reuses completeStructuredRouteAddress and hides foreign or missing properties",
+  assignedStopsSrc.includes("export function nativeAssignedJobDisplayAddress") &&
+    assignedStopsSrc.includes('structured.reason === "FOREIGN_PROPERTY"') &&
+    assignedStopsSrc.includes("return null") &&
+    nativeFieldSrc.includes("toNativeJobSummary(") &&
+    nativeFieldSrc.includes("nativeAssignedJobDisplayAddress(job.property, businessId)") &&
+    nativeFieldSrc.includes("toNativeJobSummary(job, timeZone, input.access.businessId)") &&
+    nativeFieldSrc.includes("toNativeJobSummary(job, timeZone, access.businessId)") &&
+    !nativeFieldSrc.includes("buildNativeAssignedJobMaps") &&
+    !nativeFieldSrc.includes("maps.href"),
+);
+check(
+  "Job-detail property select includes id and businessId for the display guard",
+  /NATIVE_FIELD_JOB_DETAIL_SELECT[\s\S]*property: \{[\s\S]*id: true,[\s\S]*businessId: true,/.test(
+    nativeFieldSrc,
+  ),
+);
+check(
+  "Maps address parts strip literal pipes before waypoints are joined",
+  assignedStopsSrc.includes("export function sanitizeNativeAssignedStopMapsAddress") &&
+    assignedStopsSrc.includes('replaceAll("|", " ")') &&
+    assignedStopsSrc.includes("sanitizeNativeAssignedStopMapsAddress(structured.address.formatted)"),
 );
 
 const day = new Date("2026-10-01T16:00:00.000Z");
@@ -320,6 +352,69 @@ check(
         stop.label === NATIVE_ASSIGNED_STOPS_CAP_LABEL,
     ) &&
     !mapsHasStreet(overflow.href, "112 Cap St"),
+);
+
+const pipeStreet = "100 Pipe | Extra Way";
+const pipeOrigin = "1 Origin St";
+const pipeDest = "3 Dest Rd";
+const pipeMaps = buildNativeAssignedStopsMaps(
+  [
+    jobFixture({
+      id: "job-pipe-origin",
+      name: "Pipe Origin",
+      scheduledAt: early,
+      property: { id: "p-pipe-o", businessId: "biz-a", ...completeAddress(pipeOrigin) },
+    }),
+    jobFixture({
+      id: "job-pipe-mid",
+      name: "Pipe Mid",
+      scheduledAt: new Date("2026-10-01T14:00:00.000Z"),
+      property: { id: "p-pipe-m", businessId: "biz-a", ...completeAddress(pipeStreet) },
+    }),
+    jobFixture({
+      id: "job-pipe-dest",
+      name: "Pipe Dest",
+      scheduledAt: late,
+      property: { id: "p-pipe-d", businessId: "biz-a", ...completeAddress(pipeDest) },
+    }),
+  ],
+  { businessId: "biz-a", membershipId: "mem-a", range },
+);
+const pipeAddresses = extractOwnerDayRouteMapsAddresses(pipeMaps.href);
+const sanitizedPipe = sanitizeNativeAssignedStopMapsAddress(formatted(pipeStreet));
+check(
+  "Literal pipes in address parts do not become extra waypoints",
+  pipeAddresses.length === 3 &&
+    pipeAddresses[1] === sanitizedPipe &&
+    !pipeAddresses.includes("100 Pipe") &&
+    !pipeAddresses.some((address) => address.includes("|")) &&
+    sanitizedPipe.includes("100 Pipe Extra Way") &&
+    sanitizedPipe.includes("Fort Myers"),
+);
+
+check(
+  "Display address hides foreign or missing properties and shows street-only when incomplete",
+  nativeAssignedJobDisplayAddress(null, "biz-a") === null &&
+    nativeAssignedJobDisplayAddress(
+      { id: "p-beta", businessId: "biz-b", ...completeAddress(betaStreet) },
+      "biz-a",
+    ) === null &&
+    nativeAssignedJobDisplayAddress(
+      {
+        id: "p-incomplete",
+        businessId: "biz-a",
+        addressLine1: incompleteStreet,
+        addressLine2: null,
+        city: null,
+        region: null,
+        postalCode: null,
+      },
+      "biz-a",
+    ) === incompleteStreet &&
+    nativeAssignedJobDisplayAddress(
+      { id: "p-early", businessId: "biz-a", ...completeAddress(earlyStreet) },
+      "biz-a",
+    ) === formatted(earlyStreet),
 );
 
 try {
@@ -483,6 +578,49 @@ try {
     scheduledAt: new Date("2026-10-01T19:00:00.000Z"),
     property: { ...completeAddress("199 Live Cap Overflow St") },
   });
+  const liveForeign = await createJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Live Foreign Property",
+    scheduledAt: new Date("2026-10-01T13:05:00.000Z"),
+    property: { ...completeAddress("88 Foreign Leak Ave") },
+  });
+  if (!liveForeign.propertyId) {
+    throw new Error("Foreign-property fixture is missing propertyId.");
+  }
+  await prisma.property.update({
+    where: { id: liveForeign.propertyId },
+    data: { businessId: businessB.id },
+  });
+
+  const deactivatedUser = await prisma.user.create({
+    data: {
+      name: "Dee Deactivated",
+      email: `dee-${randomUUID()}@native-stops.example`,
+      passwordHash,
+    },
+  });
+  const deactivatedMem = await prisma.membership.create({
+    data: { userId: deactivatedUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  await createJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivatedMem.id,
+    customerName: "Live Deactivated",
+    scheduledAt: new Date("2026-10-01T13:20:00.000Z"),
+    property: { ...completeAddress("9 Deactivated Hidden St") },
+  });
+  const deactivatedSignIn = await signInNativeField(prisma, {
+    email: deactivatedUser.email,
+    password,
+  });
+  if (!deactivatedSignIn.ok) {
+    throw new Error("Deactivated-membership fixture sign-in failed.");
+  }
+  await prisma.membership.update({
+    where: { id: deactivatedMem.id },
+    data: { active: false },
+  });
 
   const memberSignIn = await signInNativeField(prisma, {
     email: memberUser.email,
@@ -584,11 +722,153 @@ try {
       !mapsHasStreet(betaToday.assignedStops.href, "10 Live Early St") &&
       betaToday.assignedStops.excluded.every((stop) => stop.jobId !== liveEarly.id && stop.jobId !== liveLate.id),
   );
+
+  const scheduleSnapshot = (rows) =>
+    JSON.stringify(
+      rows.map((row) => [
+        row.id,
+        row.scheduledAt?.toISOString() ?? null,
+        row.assignedMembershipId,
+        row.status,
+      ]),
+    );
+  const jobsBeforeDetail = await prisma.job.findMany({
+    where: { businessId: { in: [businessA.id, businessB.id] } },
+    select: { id: true, scheduledAt: true, assignedMembershipId: true, status: true },
+    orderBy: { id: "asc" },
+  });
+  const foreignDetail = await loadNativeAssignedJob(prisma, memberAccess.access, liveForeign.id);
+  const incompleteToday = memberToday.today.find((job) => job.customerName === "Live Incomplete");
+  const foreignToday = memberToday.today.find((job) => job.customerName === "Live Foreign Property");
+  const jobsAfterDetail = await prisma.job.findMany({
+    where: { businessId: { in: [businessA.id, businessB.id] } },
+    select: { id: true, scheduledAt: true, assignedMembershipId: true, status: true },
+    orderBy: { id: "asc" },
+  });
+
+  check(
+    "Foreign-property address is not exposed on job detail",
+    foreignDetail != null &&
+      foreignDetail.id === liveForeign.id &&
+      foreignDetail.address === null &&
+      !String(foreignDetail.address ?? "").includes("Foreign Leak") &&
+      memberToday.assignedStops.excluded.some(
+        (stop) =>
+          stop.jobId === liveForeign.id &&
+          stop.reason === "FOREIGN_PROPERTY" &&
+          stop.label === OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
+      ),
+  );
+  check(
+    "Today does not leak a foreign-property address",
+    foreignToday != null &&
+      foreignToday.address === null &&
+      !memberToday.today.some((job) => String(job.address ?? "").includes("Foreign Leak")) &&
+      !mapsHasStreet(memberHref, "88 Foreign Leak Ave"),
+  );
+  check(
+    "Loading job detail does not mutate schedule or assignment",
+    scheduleSnapshot(jobsBeforeDetail) === scheduleSnapshot(jobsAfterDetail),
+  );
+  check(
+    "Street-only addresses are shown but are not maps-eligible",
+    incompleteToday != null &&
+      incompleteToday.address === "12 Live Partial Row" &&
+      !mapsHasStreet(memberHref, "12 Live Partial Row") &&
+      memberToday.assignedStops.excluded.some(
+        (stop) =>
+          stop.customerName === "Live Incomplete" &&
+          stop.reason === "INCOMPLETE_ADDRESS",
+      ),
+  );
+
+  const deactivatedAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivatedSignIn.token,
+  });
+  check(
+    "Deactivated membership gets 403 from resolveNativeFieldAccess on Today",
+    deactivatedAccess.ok === false && deactivatedAccess.status === 403,
+  );
+  if (deactivatedAccess.ok) {
+    const deactivatedToday = await loadNativeToday(prisma, deactivatedAccess.access, { now });
+    check(
+      "Deactivated membership has no assignedStops",
+      deactivatedToday.assignedStops == null,
+    );
+  } else {
+    check(
+      "Deactivated membership has no assignedStops",
+      !("assignedStops" in deactivatedAccess) && !("access" in deactivatedAccess),
+    );
+  }
 } catch (error) {
   console.error(error);
   failures += 1;
 } finally {
   await prisma.$disconnect();
+}
+
+if (failures > 0) {
+  console.error(`\n${failures} native assigned-stops check(s) failed.`);
+  process.exit(1);
+}
+
+if (!mutationChild) {
+  console.log("\nMUTATION — Revert each guard and require a failing child run");
+  const childScript = fileURLToPath(new URL("./check-native-assigned-stops.mjs", import.meta.url));
+  const mutations = [
+    {
+      label: "display guard",
+      file: "src/lib/native-assigned-stops.ts",
+      search:
+        '  if (structured.reason === "FOREIGN_PROPERTY" || structured.reason === "NO_PROPERTY") {\n    return null;\n  }',
+      replace:
+        '  if (structured.reason === "FOREIGN_PROPERTY" || structured.reason === "NO_PROPERTY") {\n    return owned ? formatAddress(owned) : null;\n  }',
+    },
+    {
+      label: "businessId scope",
+      file: "src/lib/native-field.ts",
+      search: "address: nativeAssignedJobDisplayAddress(job.property, businessId),",
+      replace: "address: nativeAssignedJobDisplayAddress(job.property, job.property?.businessId ?? businessId),",
+    },
+    {
+      label: "deactivated check",
+      file: "src/lib/business-contact.ts",
+      search: "    where: { userId, active: true },",
+      replace: "    where: { userId },",
+    },
+    {
+      label: "pipe sanitization",
+      file: "src/lib/native-assigned-stops.ts",
+      search: '  return address.replaceAll("|", " ").replace(/\\s+/g, " ").trim();',
+      replace: "  return address.trim();",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const target = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(target, "utf8");
+    if (!original.includes(mutation.search)) {
+      check(`mutation setup finds ${mutation.label}`, false);
+      continue;
+    }
+    writeFileSync(target, original.replace(mutation.search, mutation.replace));
+    try {
+      const child = spawnSync(process.execPath, ["--experimental-strip-types", childScript], {
+        env: { ...process.env, NATIVE_ASSIGNED_STOPS_MUTATION_CHILD: "1" },
+        encoding: "utf8",
+        timeout: 180_000,
+      });
+      const failed = child.status !== 0;
+      check(`Mutation ${mutation.label} fails a test`, failed);
+      if (!failed) {
+        console.error(child.stdout.slice(-2500));
+        console.error(child.stderr.slice(-1000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
+  }
 }
 
 if (failures > 0) {

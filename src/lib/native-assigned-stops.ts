@@ -9,6 +9,7 @@
  * `directionsUrl` / `directionsHref`.
  */
 import type { FieldJob } from "@/lib/field-jobs";
+import { formatAddress } from "@/lib/format";
 import {
   OWNER_DAY_ROUTE_EXCLUDED_HEADING,
   OWNER_DAY_ROUTE_FOREIGN_PROPERTY_LABEL,
@@ -102,6 +103,56 @@ function compareAppointmentOrder(left: NativeAssignedStopJob, right: NativeAssig
   return left.id.localeCompare(right.id);
 }
 
+export type NativeAssignedJobDisplayProperty = {
+  id?: string | null;
+  businessId?: string | null;
+  addressLine1: string;
+  addressLine2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+};
+
+function routeProperty(
+  property: NativeAssignedJobDisplayProperty | null | undefined,
+) {
+  if (!property) return null;
+  return {
+    id: property.id ?? "",
+    businessId: property.businessId ?? "",
+    addressLine1: property.addressLine1,
+    addressLine2: property.addressLine2 ?? null,
+    city: property.city ?? null,
+    region: property.region ?? null,
+    postalCode: property.postalCode ?? null,
+  };
+}
+
+/**
+ * Same-business display text for an assigned job. Foreign or missing
+ * properties stay hidden. Incomplete street-only rows can still be
+ * shown; they are not maps-eligible.
+ */
+export function nativeAssignedJobDisplayAddress(
+  property: NativeAssignedJobDisplayProperty | null | undefined,
+  businessId: string,
+): string | null {
+  const owned = routeProperty(property);
+  const structured = completeStructuredRouteAddress(owned, businessId);
+  if (structured.ok) return structured.address.formatted;
+  if (structured.reason === "FOREIGN_PROPERTY" || structured.reason === "NO_PROPERTY") {
+    return null;
+  }
+  if (!owned) return null;
+  const formatted = formatAddress(owned);
+  return formatted.trim() ? formatted : null;
+}
+
+/** Maps waypoints are joined with `|`; a literal pipe would become an extra stop. */
+export function sanitizeNativeAssignedStopMapsAddress(address: string) {
+  return address.replaceAll("|", " ").replace(/\s+/g, " ").trim();
+}
+
 export function buildNativeAssignedStopsMaps(
   jobs: readonly NativeAssignedStopJob[],
   input: {
@@ -150,7 +201,7 @@ export function buildNativeAssignedStopsMaps(
       });
       continue;
     }
-    completeAddresses.push(structured.address.formatted);
+    completeAddresses.push(sanitizeNativeAssignedStopMapsAddress(structured.address.formatted));
   }
 
   const maps = buildOwnerDayRouteMapsHandoff(completeAddresses);
