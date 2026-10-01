@@ -1,7 +1,10 @@
 "use client";
 
 import { useActionState } from "react";
-import { recordProjectDocumentReviewAction } from "@/app/actions/project-document-review";
+import {
+  recordProjectDocumentReviewAction,
+  type ProjectDocumentReviewActionState,
+} from "@/app/actions/project-document-review";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,7 +14,7 @@ import {
   PROJECT_DOCUMENT_REVIEW_REVIEWED_LABEL,
 } from "@/lib/project-document-review";
 
-const initialState = {};
+const initialState: ProjectDocumentReviewActionState = {};
 
 export function ProjectDocumentReviewForm({
   jobId,

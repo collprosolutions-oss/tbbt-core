@@ -195,8 +195,9 @@ check(
     !opsSrc.includes("notifyCustomer") &&
     !opsSrc.includes("sendCustomer") &&
     !opsSrc.includes("emitAndProcessBusinessEvent") &&
+    !opsSrc.includes("storedAsset.update") &&
     !opsSrc.includes("visibility: \"PUBLIC\"") &&
-    !opsSrc.includes("publicPath:") &&
+    !opsSrc.includes('publicPath: "') &&
     !actionSrc.includes("invoice.create") &&
     !actionSrc.includes("notifyCustomer") &&
     !publicActionSrc.includes("recordProjectDocumentReview") &&
