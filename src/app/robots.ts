@@ -13,6 +13,7 @@ const APP_DISALLOW = [
   "/field",
   "/access-restricted",
   "/api/",
+  "/calendar/feed/",
 ];
 
 export default async function robots(): Promise<MetadataRoute.Robots> {

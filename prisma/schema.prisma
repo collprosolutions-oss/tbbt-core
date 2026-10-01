@@ -316,6 +316,9 @@ model Business {
   /// columns stay untouched. Concurrent Job-column chats do not collide.
   jobAftercareInstructions    JobAftercareInstruction[]
   jobAftercareEvents          JobAftercareEvent[]
+  /// Optional revocable calendar feed. Separate table so Job columns and
+  /// Chat 4 assignment work stay untouched. Stores only sha256(token).
+  scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
   timeCorrectionRequests   TimeCorrectionRequest[]
@@ -735,6 +738,7 @@ model Membership {
   createdInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemCreator")
   updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
   recordedInvoiceCredits InvoiceCredit[] @relation("InvoiceCreditRecorder")
+  scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -2568,6 +2572,37 @@ model JobAftercareEvent {
   @@index([businessId])
   @@index([jobId])
   @@index([aftercareId, createdAt])
+}
+
+/// Optional, revocable calendar subscription for one membership + scope.
+/// OWNER may hold a business-schedule feed; an active worker may hold an
+/// assigned-schedule feed. Stores only sha256(tokenHash). The raw token
+/// is shown once on create/rotate and is the only identifier in the
+/// public /calendar/feed/[token] URL. Every feed read rechecks current
+/// membership, business, and assignment — deactivation or reassignment
+/// removes access immediately. Distinct from the authenticated one-time
+/// .ics download (schedule-calendar-export). No Job columns.
+///
+/// Chat 4 (worker job reassignment) may add a separate assignment
+/// migration; this table is independent and additive.
+model ScheduleCalendarSubscription {
+  id           String    @id @default(cuid())
+  businessId   String
+  membershipId String
+  /// business | assigned
+  scope        String
+  /// sha256 hex of the raw feed token. Never the raw token.
+  tokenHash    String    @unique
+  createdAt    DateTime  @default(now())
+  rotatedAt    DateTime?
+  revokedAt    DateTime?
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, scope])
+  @@index([businessId])
+  @@index([membershipId])
 }
 
 /// One clocked or manually-entered interval of labor time. This is the

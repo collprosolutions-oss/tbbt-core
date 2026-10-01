@@ -9,6 +9,9 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
 import { requireFieldWorkspace } from "@/lib/field-access";
+import { requireBusinessAccess } from "@/lib/access";
+import { ScheduleCalendarSubscriptionPanel } from "@/components/schedule/schedule-calendar-subscription-panel";
+import { loadScheduleCalendarSubscriptionStatus } from "@/lib/schedule-calendar-subscription";
 import { prisma } from "@/lib/prisma";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
@@ -41,6 +44,12 @@ export const metadata: Metadata = {
  */
 export default async function FieldHomePage() {
   const field = await requireFieldWorkspace();
+  const access = await requireBusinessAccess();
+  const calendarSubscription = await loadScheduleCalendarSubscriptionStatus(
+    prisma,
+    access,
+    "assigned",
+  );
   const timeZone = resolveBusinessTimeZone(field.workspace.business);
 
   const jobs = await prisma.job.findMany({
@@ -169,6 +178,13 @@ export default async function FieldHomePage() {
             Download my assigned calendar
           </a>
         </p>
+        <div className="mt-3">
+          <ScheduleCalendarSubscriptionPanel
+            status={calendarSubscription}
+            title="Assigned calendar subscription"
+            description="Optional private feed of jobs currently assigned to you. Only job IDs, statuses, and recorded windows. Reassignment or deactivation stops the feed immediately. Rotate or revoke if the URL leaks."
+          />
+        </div>
       </div>
 
       {canRequestAvailability ? (
