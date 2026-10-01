@@ -440,7 +440,8 @@ async function applyVerifiedInvoicePayment(
   db: PaymentsClient,
   payment: VerifiedCheckoutPayment,
 ): Promise<{ applied: boolean; reason: string }> {
-  if (!payment.invoiceId) {
+  const invoiceId = payment.invoiceId;
+  if (!invoiceId) {
     return { applied: false, reason: "invoice_not_found" };
   }
 
@@ -448,7 +449,7 @@ async function applyVerifiedInvoicePayment(
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM "Invoice"
-      WHERE id = ${payment.invoiceId} AND "businessId" = ${payment.businessId}
+      WHERE id = ${invoiceId} AND "businessId" = ${payment.businessId}
       FOR UPDATE
     `;
     if (locked.length === 0) {
@@ -456,7 +457,7 @@ async function applyVerifiedInvoicePayment(
     }
 
     const invoice = await tx.invoice.findFirst({
-      where: { id: payment.invoiceId, businessId: payment.businessId },
+      where: { id: invoiceId, businessId: payment.businessId },
       select: {
         id: true,
         businessId: true,
