@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AddFieldJobPhotoForm } from "@/components/field/add-field-job-photo-form";
+import { JobReassignmentRequestForm } from "@/components/field/job-reassignment-request-form";
 import { CompleteAssignedJobButton } from "@/components/field/complete-assigned-job-button";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { ReportProblemForm } from "@/components/field/report-problem-form";
@@ -34,6 +35,10 @@ import { CleaningCrewChecklist } from "@/components/field/cleaning-crew-checklis
 import { listAssignedJobPickupView } from "@/lib/materials/pickup";
 import { buildMaterialPickupVisibility } from "@/lib/owner-today";
 import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
+import { isUpcomingFieldJob } from "@/lib/field-jobs";
+import { loadSelfJobReassignmentRequests } from "@/lib/job-reassignment-request-ops";
+import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
+import { hasProductCapability } from "@/lib/product-entitlements";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -180,6 +185,20 @@ export default async function FieldJobPage({
     timeZone,
   );
 
+  const canRequestReassignment =
+    field.workspace.role === "MEMBER" &&
+    isUpcomingFieldJob(job, new Date(), timeZone) &&
+    (await hasProductCapability(
+      prisma,
+      field.businessId,
+      PRODUCT_CAPABILITIES.JOBS_TASKS,
+    ));
+  const reassignmentRequests = canRequestReassignment
+    ? (await loadSelfJobReassignmentRequests(prisma, {
+        businessId: field.businessId,
+        membershipId: field.membershipId,
+      })).filter((request) => request.jobId === job.id)
+    : [];
   const directions = directionsUrl(job.property);
   const tel = telHref(job.customer?.phone ?? null);
 
@@ -358,6 +377,25 @@ export default async function FieldJobPage({
           <AddFieldJobPhotoForm jobId={job.id} />
         </CardContent>
       </Card>
+
+      {canRequestReassignment ? (
+        <JobReassignmentRequestForm
+          defaultJobId={job.id}
+          jobs={[
+            {
+              id: job.id,
+              label: job.customer?.name ?? (job.property ? formatAddress(job.property) : "This job"),
+            },
+          ]}
+          requests={reassignmentRequests.map((request) => ({
+            id: request.id,
+            jobId: request.jobId,
+            jobLabel: request.jobLabel,
+            reason: request.reason,
+            status: request.status,
+          }))}
+        />
+      ) : null}
 
       <div className="space-y-2">
         <ReportProblemForm jobId={job.id} />

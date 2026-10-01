@@ -74,14 +74,8 @@ import {
 } from "@/lib/workforce-window";
 import { createJobFromApprovedEstimate } from "@/lib/job-from-estimate";
 import { jobWriteTestHooks } from "@/lib/job-write-test-hooks";
-import {
-  JOB_REASSIGNMENT_TIME_CLOSED_REASON,
-  TimeCardError,
-  isTimeCardError,
-  lockTenantOwnedJob,
-  stopRunningAssignedJobTimeInTransaction,
-  timeCardErrorMessage,
-} from "@/lib/time-card-ops";
+import { writeAssignedMembershipAndLaneWindows } from "@/lib/job-assignment-ops";
+import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export type JobActionState = {
   error?: string;
@@ -838,12 +832,12 @@ export async function assignJobMember(
   );
 
   if (!membershipId) {
-    const unassigned = await writeAssignedMembershipAndLaneWindows(
-      access.businessId,
+    const unassigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+      businessId: access.businessId,
       job,
-      null,
-      access.workspace.membership.id,
-    );
+      nextAssignedMembershipId: null,
+      actorMembershipId: access.workspace.membership.id,
+    });
     if (unassigned?.error) {
       return unassigned;
     }
@@ -873,12 +867,12 @@ export async function assignJobMember(
     return { error: "Choose a team member from this business." };
   }
 
-  const assigned = await writeAssignedMembershipAndLaneWindows(
-    access.businessId,
+  const assigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: access.businessId,
     job,
-    membership.id,
-    access.workspace.membership.id,
-  );
+    nextAssignedMembershipId: membership.id,
+    actorMembershipId: access.workspace.membership.id,
+  });
   if (assigned?.error) {
     return assigned;
   }
@@ -890,85 +884,3 @@ export async function assignJobMember(
   return {};
 }
 
-async function writeAssignedMembershipAndLaneWindows(
-  businessId: string,
-  job: {
-    id: string;
-    scheduledAt: Date | null;
-    assignedMembershipId: string | null;
-    status: string;
-  },
-  nextAssignedMembershipId: string | null,
-  actorMembershipId: string,
-): Promise<JobActionState | void> {
-  try {
-    await prisma.$transaction(
-      async (tx) => {
-        await lockBusinessScheduleReservation(tx, businessId);
-        const lockedJob = await lockTenantOwnedJob(tx, businessId, job.id);
-        if (!lockedJob) {
-          throw new TimeCardError("That job could not be found.");
-        }
-        const previousAssignee = lockedJob.assignedMembershipId;
-        await tx.job.update({
-          where: { id: job.id },
-          data: { assignedMembershipId: nextAssignedMembershipId },
-        });
-        if (
-          previousAssignee &&
-          previousAssignee !== nextAssignedMembershipId
-        ) {
-          const stopped = await stopRunningAssignedJobTimeInTransaction(tx, {
-            businessId,
-            jobId: job.id,
-            actorMembershipId,
-            membershipId: previousAssignee,
-            reason: JOB_REASSIGNMENT_TIME_CLOSED_REASON,
-          });
-          if (!stopped.ok) {
-            throw new TimeCardError(stopped.error);
-          }
-        }
-        await syncAssignedJobArrivalWindows(tx, businessId, job);
-      },
-      { maxWait: 10_000, timeout: 20_000 },
-    );
-  } catch (error) {
-    if (isTimeCardError(error)) {
-      return {
-        error: timeCardErrorMessage(error, "That assignment could not be changed."),
-      };
-    }
-    throw error;
-  }
-}
-
-async function syncAssignedJobArrivalWindows(
-  db: Parameters<typeof persistLaneArrivalWindows>[0],
-  businessId: string,
-  previous: {
-    id: string;
-    scheduledAt: Date | null;
-    assignedMembershipId: string | null;
-  },
-) {
-  if (!previous.scheduledAt) {
-    return;
-  }
-  const [policy, timeZone] = await Promise.all([
-    loadSchedulingPolicy(db, businessId),
-    loadWorkforceTimeZone(db, businessId),
-  ]);
-  await persistLaneArrivalWindows(db, {
-    businessId,
-    timeZone,
-    policy,
-    touchedJobIds: [previous.id],
-    previousLanes: [
-      {
-        assignedMembershipId: previous.assignedMembershipId,
-        scheduledAt: previous.scheduledAt,
-      },
-    ],
-  });
-}

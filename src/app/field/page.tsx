@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { AvailabilityExceptionRequestForm } from "@/components/field/availability-exception-request-form";
 import { FieldJobCard } from "@/components/field/field-job-card";
+import { JobReassignmentRequestForm } from "@/components/field/job-reassignment-request-form";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FieldTimeCorrectionRequests } from "@/components/field/field-time-correction-requests";
-import { FIELD_JOB_SELECT, groupFieldJobs } from "@/lib/field-jobs";
+import { FIELD_JOB_SELECT, groupFieldJobs, isUpcomingFieldJob } from "@/lib/field-jobs";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
@@ -14,6 +15,7 @@ import { hasProductCapability } from "@/lib/product-entitlements";
 import { calculateDailyCapacity } from "@/lib/workforce-capacity";
 import { capacityJobsFromRows, loadSchedulingPolicy, loadWorkforceMembers } from "@/lib/workforce-data";
 import { loadSelfAvailabilityExceptionRequests } from "@/lib/workforce-availability-request-ops";
+import { loadSelfJobReassignmentRequests } from "@/lib/job-reassignment-request-ops";
 import { loadAvailabilitySettings } from "@/lib/availability-data";
 import {
   TIME_ACTIVITY_LABELS,
@@ -116,6 +118,22 @@ export default async function FieldHomePage() {
         membershipId: field.membershipId,
       })
     : [];
+  const canRequestReassignment =
+    field.workspace.role === "MEMBER" &&
+    (await hasProductCapability(
+      prisma,
+      field.businessId,
+      PRODUCT_CAPABILITIES.JOBS_TASKS,
+    ));
+  const reassignmentRequests = canRequestReassignment
+    ? await loadSelfJobReassignmentRequests(prisma, {
+        businessId: field.businessId,
+        membershipId: field.membershipId,
+      })
+    : [];
+  const upcomingRequestableJobs = groups.upcoming.filter((job) =>
+    isUpcomingFieldJob(job, startOfDay(new Date(), timeZone), timeZone),
+  );
   const running = await prisma.timeEntry.findFirst({
     where: {
       businessId: field.businessId,
@@ -163,6 +181,22 @@ export default async function FieldHomePage() {
             startMinutes: request.startMinutes,
             endMinutes: request.endMinutes,
             note: request.note,
+            status: request.status,
+          }))}
+        />
+      ) : null}
+
+      {canRequestReassignment ? (
+        <JobReassignmentRequestForm
+          jobs={upcomingRequestableJobs.map((job) => ({
+            id: job.id,
+            label: job.customer?.name ?? job.property?.addressLine1 ?? "Assigned job",
+          }))}
+          requests={reassignmentRequests.map((request) => ({
+            id: request.id,
+            jobId: request.jobId,
+            jobLabel: request.jobLabel,
+            reason: request.reason,
             status: request.status,
           }))}
         />
