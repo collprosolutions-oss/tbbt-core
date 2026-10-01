@@ -96,11 +96,14 @@ const {
   DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_OWNER_ONLY_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  DAY_ROUTE_APPOINTMENT_NOTICE_IN_PROGRESS_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE,
+  DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS,
   buildDayRouteAppointmentNoticeBody,
   buildDayRouteAppointmentNoticeSubject,
+  dayRouteAppointmentNoticeIdempotencyKey,
   describeRecordedAppointmentWindow,
 } = await import("@/lib/owner-day-route-appointment-notice");
 const {
@@ -245,6 +248,28 @@ async function markRecordedChange(jobId) {
   });
 }
 
+async function insertNoticeClaim(job, input) {
+  return prisma.customerCommunication.create({
+    data: {
+      businessId: job.businessId,
+      customerId: input.customerId,
+      channel: input.channel,
+      purpose: "SCHEDULE_CHANGE",
+      relatedType: "JOB",
+      relatedId: job.id,
+      idempotencyKey: dayRouteAppointmentNoticeIdempotencyKey(
+        job.id,
+        job.appointmentProposalId ?? 0,
+      ),
+      destinationFingerprint: input.destinationFingerprint,
+      bodySnapshot: "",
+      status: "READY",
+      provider: "none",
+      attemptedAt: input.attemptedAt,
+    },
+  });
+}
+
 console.log("\nSTATIC — separate review-and-send, no load/reschedule send, no overclaim");
 check(
   "Day-route path and OWNER-only notice copy stay in place",
@@ -320,6 +345,15 @@ check(
     opsSrc.includes("assertReviewedRecipient") &&
     !opsSrc.includes("input.timeZone?.trim()") &&
     opsSrc.includes("resolveBusinessTimeZone(access.workspace.business)"),
+);
+check(
+  "Stuck READY claims older than the lease can be reclaimed",
+  opsSrc.includes("reclaimExistingNoticeClaim") &&
+    opsSrc.includes("dayRouteAppointmentNoticeClaimLeaseCutoff") &&
+    noticeSrc.includes("DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS") &&
+    DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS === 2 * 60 * 1000 &&
+    opsSrc.includes('status: NOTICE_CLAIM_STATUS') &&
+    opsSrc.includes("attemptedAt: { lt: leaseCutoff }"),
 );
 check(
   "Subject is a recorded update and strips CR/LF from the business name",
@@ -620,6 +654,54 @@ try {
       projectToken: randomUUID(),
     },
   });
+  const recoverEmailJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T13:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const freshReadyJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T15:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const staleParallelEmailJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T17:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const staleParallelSmsJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerSms.id,
+      propertyId: propertySms.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-30T19:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
 
   console.log("\nTEST — page load, preview, and reschedule never send");
   sentEmails.length = 0;
@@ -799,11 +881,21 @@ try {
     (error) => /could not be sent|provider failed|not sent/i.test(error.message),
   );
   const afterFail = await prisma.job.findFirst({ where: { id: emailJob.id } });
+  const failedComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: emailJob.id },
+  });
+  const failedPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: emailJob.id,
+    timeZone: NY,
+  });
   check(
-    "Failed send leaves a retryable unsent recorded change",
+    "Provider failure leaves the row FAILED, job FAILED, and the card offered",
     sentEmails.length === 0 &&
       afterFail?.appointmentNotificationStatus === "FAILED" &&
-      afterFail.appointmentNotifiedForProposalId === afterChange.appointmentProposalId,
+      afterFail.appointmentNotifiedForProposalId === afterChange.appointmentProposalId &&
+      failedComms.some((row) => row.status === "FAILED" && row.purpose === "SCHEDULE_CHANGE") &&
+      failedPreview?.offerSend === true &&
+      failedPreview.sendInProgress === false,
   );
 
   const sent = await sendOwnerDayRouteAppointmentNotice(
@@ -1120,6 +1212,146 @@ try {
       ) &&
       fakeSms.sent.length === smsBefore + 1 &&
       concurrentSmsComms.filter((row) =>
+        ["SENT", "ACCEPTED", "QUEUED", "DELIVERED"].includes(row.status),
+      ).length === 1,
+  );
+
+  console.log("\nTEST — stale READY claims recover; fresh READY stays in flight");
+  const recoverPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: recoverEmailJob.id,
+    timeZone: NY,
+  });
+  await insertNoticeClaim(recoverEmailJob, {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    destinationFingerprint: recoverPreview.destinationFingerprint,
+    attemptedAt: new Date(Date.now() - 60 * 60 * 1000),
+  });
+  const recoverPreviewAfterStuck = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: recoverEmailJob.id,
+    timeZone: NY,
+  });
+  const recoverEmailBefore = sentEmails.length;
+  const recovered = await sendOwnerDayRouteAppointmentNotice(
+    prisma,
+    ownerAccess,
+    noticeSendInput(recoverPreview),
+  );
+  const recoverComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: recoverEmailJob.id },
+  });
+  check(
+    "An aged READY claim is recoverable with exactly one provider call",
+    recoverPreview?.offerSend === true &&
+      recoverPreviewAfterStuck?.offerSend === true &&
+      recoverPreviewAfterStuck.sendInProgress === false &&
+      recovered.channel === "EMAIL" &&
+      sentEmails.length === recoverEmailBefore + 1 &&
+      recoverComms.filter((row) => row.status === "SENT").length === 1,
+  );
+
+  const freshPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: freshReadyJob.id,
+    timeZone: NY,
+  });
+  await insertNoticeClaim(freshReadyJob, {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    destinationFingerprint: freshPreview.destinationFingerprint,
+    attemptedAt: new Date(),
+  });
+  const freshPreviewAfterClaim = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: freshReadyJob.id,
+    timeZone: NY,
+  });
+  const freshEmailBefore = sentEmails.length;
+  await expectThrow(
+    "A fresh READY claim stays a duplicate and does not send",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(freshPreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
+  );
+  check(
+    "Fresh READY shows in-progress and makes no provider call",
+    freshPreviewAfterClaim?.offerSend === false &&
+      freshPreviewAfterClaim.sendInProgress === true &&
+      freshPreviewAfterClaim.unavailableReason ===
+        DAY_ROUTE_APPOINTMENT_NOTICE_IN_PROGRESS_MESSAGE &&
+      sentEmails.length === freshEmailBefore,
+  );
+
+  console.log("\nTEST — parallel reclaim of a stale READY claim");
+  const staleEmailPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: staleParallelEmailJob.id,
+    timeZone: NY,
+  });
+  await insertNoticeClaim(staleParallelEmailJob, {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    destinationFingerprint: staleEmailPreview.destinationFingerprint,
+    attemptedAt: new Date(Date.now() - 60 * 60 * 1000),
+  });
+  const staleEmailBefore = sentEmails.length;
+  emailDelayMs = 40;
+  const staleEmailResults = await Promise.allSettled(
+    Array.from({ length: 4 }, () =>
+      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(staleEmailPreview)),
+    ),
+  );
+  emailDelayMs = 0;
+  const staleEmailFulfilled = staleEmailResults.filter((row) => row.status === "fulfilled");
+  const staleEmailRejected = staleEmailResults.filter((row) => row.status === "rejected");
+  const staleEmailComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: staleParallelEmailJob.id },
+  });
+  check(
+    "Parallel reclaim of a stale READY email claim makes exactly one provider call",
+    staleEmailFulfilled.length === 1 &&
+      staleEmailRejected.length === 3 &&
+      staleEmailRejected.every(
+        (row) =>
+          dayRouteAppointmentNoticeErrorMessage(row.reason, "") ===
+          DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
+      ) &&
+      sentEmails.length === staleEmailBefore + 1 &&
+      staleEmailComms.filter((row) => row.status === "SENT").length === 1,
+  );
+
+  const staleSmsPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: staleParallelSmsJob.id,
+    timeZone: NY,
+  });
+  await insertNoticeClaim(staleParallelSmsJob, {
+    customerId: customerSms.id,
+    channel: "SMS",
+    destinationFingerprint: staleSmsPreview.destinationFingerprint,
+    attemptedAt: new Date(Date.now() - 60 * 60 * 1000),
+  });
+  const staleSmsBefore = fakeSms.sent.length;
+  smsDelayMs = 40;
+  const staleSmsResults = await Promise.allSettled(
+    Array.from({ length: 4 }, () =>
+      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(staleSmsPreview)),
+    ),
+  );
+  smsDelayMs = 0;
+  const staleSmsFulfilled = staleSmsResults.filter((row) => row.status === "fulfilled");
+  const staleSmsRejected = staleSmsResults.filter((row) => row.status === "rejected");
+  const staleSmsComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: staleParallelSmsJob.id },
+  });
+  check(
+    "Parallel reclaim of a stale READY SMS claim makes exactly one provider call",
+    staleSmsFulfilled.length === 1 &&
+      staleSmsRejected.length === 3 &&
+      staleSmsRejected.every(
+        (row) =>
+          dayRouteAppointmentNoticeErrorMessage(row.reason, "") ===
+          DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
+      ) &&
+      fakeSms.sent.length === staleSmsBefore + 1 &&
+      staleSmsComms.filter((row) =>
         ["SENT", "ACCEPTED", "QUEUED", "DELIVERED"].includes(row.status),
       ).length === 1,
   );

@@ -34,6 +34,7 @@ import {
   DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE,
+  dayRouteAppointmentNoticeClaimLeaseCutoff,
   dayRouteAppointmentNoticeDestinationFingerprint,
   dayRouteAppointmentNoticeIdempotencyKey,
   parseDayRouteAppointmentNoticeReviewSnapshot,
@@ -296,6 +297,22 @@ async function loadNoticeChannelFlags(db: NoticeDb, businessId: string) {
   };
 }
 
+async function loadNoticeClaims(
+  db: NoticeDb,
+  businessId: string,
+  jobs: readonly { id: string; appointmentProposalId: number | null }[],
+) {
+  const keys = jobs
+    .map((job) => dayRouteAppointmentNoticeIdempotencyKey(job.id, job.appointmentProposalId ?? 0))
+    .filter((key, index, all) => all.indexOf(key) === index);
+  if (keys.length === 0) return new Map<string, { status: string; attemptedAt: Date | null }>();
+  const rows = await db.customerCommunication.findMany({
+    where: { businessId, idempotencyKey: { in: keys } },
+    select: { idempotencyKey: true, status: true, attemptedAt: true },
+  });
+  return new Map(rows.map((row) => [row.idempotencyKey, row]));
+}
+
 export async function previewOwnerDayRouteAppointmentNotice(
   db: NoticeDb,
   access: BusinessAccess,
@@ -312,11 +329,13 @@ export async function previewOwnerDayRouteAppointmentNotice(
   );
   if (!sameBusinessJob(job, access.businessId)) return null;
   const flags = await loadNoticeChannelFlags(db, access.businessId);
+  const claims = await loadNoticeClaims(db, access.businessId, [job]);
   return buildOwnerDayRouteAppointmentNoticePreview({
     job: noticeJobAsPreviewJob(job),
     snapshot: scheduleSnapshotFromJob(job),
     timeZone: input.timeZone,
     businessId: access.businessId,
+    claim: claims.get(dayRouteAppointmentNoticeIdempotencyKey(job.id, job.appointmentProposalId ?? 0)) ?? null,
     ...flags,
   });
 }
@@ -337,6 +356,7 @@ export async function loadOwnerDayRouteAppointmentNotices(
     }),
     loadNoticeChannelFlags(db, access.businessId),
   ]);
+  const claims = await loadNoticeClaims(db, access.businessId, jobs);
 
   const notices: Record<string, OwnerDayRouteAppointmentNoticePreview> = {};
   for (const job of jobs) {
@@ -346,6 +366,7 @@ export async function loadOwnerDayRouteAppointmentNotices(
       snapshot: scheduleSnapshotFromJob(job),
       timeZone: input.timeZone,
       businessId: access.businessId,
+      claim: claims.get(dayRouteAppointmentNoticeIdempotencyKey(job.id, job.appointmentProposalId ?? 0)) ?? null,
       ...flags,
     });
     if (preview) notices[job.id] = preview;
@@ -407,6 +428,67 @@ function isUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
+async function reclaimExistingNoticeClaim(
+  db: NoticeDb,
+  existing: { id: string; status: string },
+  input: {
+    businessId: string;
+    customerId: string;
+    channel: DayRouteAppointmentNoticeChannel;
+    destinationFingerprint: string;
+    initiatedByMembershipId: string | null;
+  },
+): Promise<{ won: true; communicationId: string } | { won: false; communicationId: string }> {
+  if (isAcceptedCustomerMessageStatus(existing.status)) {
+    return { won: false, communicationId: existing.id };
+  }
+
+  const claimData = {
+    customerId: input.customerId,
+    channel: input.channel,
+    destinationFingerprint: input.destinationFingerprint,
+    failureReason: null,
+    attemptedAt: new Date(),
+    initiatedByMembershipId: input.initiatedByMembershipId,
+  };
+
+  if (existing.status === "FAILED") {
+    const claimed = await db.customerCommunication.updateMany({
+      where: {
+        id: existing.id,
+        businessId: input.businessId,
+        status: "FAILED",
+      },
+      data: {
+        ...claimData,
+        status: NOTICE_CLAIM_STATUS,
+      },
+    });
+    if (claimed.count === 1) {
+      return { won: true, communicationId: existing.id };
+    }
+    return { won: false, communicationId: existing.id };
+  }
+
+  if (existing.status === NOTICE_CLAIM_STATUS) {
+    const leaseCutoff = dayRouteAppointmentNoticeClaimLeaseCutoff();
+    const claimed = await db.customerCommunication.updateMany({
+      where: {
+        id: existing.id,
+        businessId: input.businessId,
+        status: NOTICE_CLAIM_STATUS,
+        OR: [{ attemptedAt: null }, { attemptedAt: { lt: leaseCutoff } }],
+      },
+      data: claimData,
+    });
+    if (claimed.count === 1) {
+      return { won: true, communicationId: existing.id };
+    }
+  }
+
+  return { won: false, communicationId: existing.id };
+}
+
 async function claimDayRouteAppointmentNotice(
   db: NoticeDb,
   input: {
@@ -426,31 +508,7 @@ async function claimDayRouteAppointmentNotice(
   });
 
   if (existing) {
-    if (isAcceptedCustomerMessageStatus(existing.status)) {
-      return { won: false, communicationId: existing.id };
-    }
-    if (existing.status === "FAILED") {
-      const claimed = await db.customerCommunication.updateMany({
-        where: {
-          id: existing.id,
-          businessId: input.businessId,
-          status: "FAILED",
-        },
-        data: {
-          status: NOTICE_CLAIM_STATUS,
-          customerId: input.customerId,
-          channel: input.channel,
-          destinationFingerprint: input.destinationFingerprint,
-          failureReason: null,
-          attemptedAt: new Date(),
-        },
-      });
-      if (claimed.count === 1) {
-        return { won: true, communicationId: existing.id };
-      }
-      return { won: false, communicationId: existing.id };
-    }
-    return { won: false, communicationId: existing.id };
+    return reclaimExistingNoticeClaim(db, existing, input);
   }
 
   try {
@@ -475,6 +533,13 @@ async function claimDayRouteAppointmentNotice(
     return { won: true, communicationId: created.id };
   } catch (error) {
     if (isUniqueConstraintError(error)) {
+      const raced = await db.customerCommunication.findFirst({
+        where: { businessId: input.businessId, idempotencyKey },
+        select: { id: true, status: true },
+      });
+      if (raced) {
+        return reclaimExistingNoticeClaim(db, raced, input);
+      }
       return { won: false, communicationId: null };
     }
     throw error;

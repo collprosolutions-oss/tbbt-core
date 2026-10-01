@@ -33,6 +33,11 @@ export const DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE =
 export const DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE =
   "A notice was already sent for this recorded appointment change.";
 
+export const DAY_ROUTE_APPOINTMENT_NOTICE_IN_PROGRESS_MESSAGE =
+  "A send is already in progress for this recorded appointment change.";
+
+export const DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS = 2 * 60 * 1000;
+
 export const DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE =
   "Review the recorded window and recipient, then confirm send.";
 
@@ -69,6 +74,7 @@ export type OwnerDayRouteAppointmentNoticePreview = {
   available: boolean;
   alreadySent: boolean;
   offerSend: boolean;
+  sendInProgress: boolean;
   unavailableReason: string | null;
   snapshot: OwnerDayRouteScheduleSnapshot;
 };
@@ -193,6 +199,18 @@ export function dayRouteAppointmentNoticeDestinationFingerprint(
   return fingerprint || null;
 }
 
+export function dayRouteAppointmentNoticeClaimLeaseCutoff(now = new Date()) {
+  return new Date(now.getTime() - DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS);
+}
+
+export function dayRouteAppointmentNoticeClaimInProgress(
+  claim: { status: string; attemptedAt: Date | null } | null | undefined,
+  now = new Date(),
+) {
+  if (!claim || claim.status !== "READY" || !claim.attemptedAt) return false;
+  return now.getTime() - claim.attemptedAt.getTime() < DAY_ROUTE_APPOINTMENT_NOTICE_CLAIM_LEASE_MS;
+}
+
 export function sanitizeDayRouteAppointmentNoticeBusinessName(businessName: string) {
   return businessName.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "Your contractor";
 }
@@ -314,6 +332,7 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
   smsEntitled: boolean;
   smsConfigured: boolean;
   emailConfigured: boolean;
+  claim?: { status: string; attemptedAt: Date | null } | null;
 }): OwnerDayRouteAppointmentNoticePreview | null {
   if (input.job.businessId !== input.businessId) return null;
   if (!recordedDayRouteAppointmentNoticeEligible(input.job)) return null;
@@ -343,6 +362,8 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
           input.job.customer?.email,
         )
       : "No recipient";
+  const sendInProgress = dayRouteAppointmentNoticeClaimInProgress(input.claim);
+  const canSend = resolved.available && Boolean(customerId) && Boolean(destinationFingerprint);
 
   return {
     jobId: input.job.id,
@@ -353,10 +374,15 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
     channel,
     channelLabel: dayRouteAppointmentNoticeChannelLabel(channel),
     recipientLabel,
-    available: resolved.available,
+    available: resolved.available && !sendInProgress,
     alreadySent: false,
-    offerSend: resolved.available && Boolean(customerId) && Boolean(destinationFingerprint),
-    unavailableReason: resolved.available ? null : resolved.unavailableReason,
+    offerSend: canSend && !sendInProgress,
+    sendInProgress,
+    unavailableReason: sendInProgress
+      ? DAY_ROUTE_APPOINTMENT_NOTICE_IN_PROGRESS_MESSAGE
+      : resolved.available
+        ? null
+        : resolved.unavailableReason,
     snapshot: input.snapshot,
   };
 }
