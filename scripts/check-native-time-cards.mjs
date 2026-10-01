@@ -145,12 +145,17 @@ check(
     !opsSrc.includes("createPayrollRun") &&
     !opsSrc.includes("authorizePayrollRun"),
 );
+const requestFnSrc = timeCardOpsSrc.slice(
+  timeCardOpsSrc.indexOf("export async function requestTimeCorrection"),
+  timeCardOpsSrc.indexOf("export async function decideTimeCorrectionRequest"),
+);
 check(
   "Canonical request does not rewrite the TimeEntry",
-  timeCardOpsSrc.includes("The TimeEntry") &&
-    /export async function requestTimeCorrection[\s\S]*The TimeEntry[\s\S]*itself is not rewritten/.test(
-      timeCardOpsSrc,
-    ),
+  timeCardOpsSrc.includes("itself is not rewritten here") &&
+    requestFnSrc.includes('action: "CORRECTION_REQUEST"') &&
+    requestFnSrc.includes("return { request, entry: unchanged }") &&
+    !requestFnSrc.includes("timeEntry.update") &&
+    !requestFnSrc.includes("timeEntry.updateMany"),
 );
 check(
   "Native time-card routes use Bearer helpers, cap JSON, and never use cookies()",
