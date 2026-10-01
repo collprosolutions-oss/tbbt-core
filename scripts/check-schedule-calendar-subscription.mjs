@@ -32,7 +32,9 @@ const {
   SCHEDULE_CALENDAR_FEED_CACHE_CONTROL,
   SCHEDULE_CALENDAR_FEED_NOT_FOUND_MESSAGE,
   SCHEDULE_CALENDAR_FEED_PATH_PREFIX,
+  SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
   SCHEDULE_CALENDAR_SUBSCRIPTION_CONTRACT,
+  SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
   SCHEDULE_CALENDAR_SUBSCRIPTION_VERSION,
   ScheduleCalendarSubscriptionError,
   canManageAssignedScheduleCalendarSubscription,
@@ -47,6 +49,7 @@ const {
   rotateScheduleCalendarSubscription,
   revokeScheduleCalendarSubscription,
   scheduleCalendarFeedPath,
+  scheduleCalendarSubscriptionMutationTestHooks,
   scheduleCalendarSubscriptionTestHooks,
 } = await import("@/lib/schedule-calendar-subscription");
 
@@ -212,9 +215,24 @@ check(
     httpSrc.includes("inline") &&
     isScheduleCalendarFeedPath(`${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/abc`) &&
     !isScheduleCalendarFeedPath("/jobs") &&
+    !isScheduleCalendarFeedPath("/calendar/feedback") &&
+    !isScheduleCalendarFeedPath("/calendar/feed-x") &&
     proxySrc.includes("isScheduleCalendarFeedPath") &&
     robotsSrc.includes("/calendar/feed/") &&
-    pathSrc.includes("isScheduleCalendarFeedPath"),
+    pathSrc.includes("isScheduleCalendarFeedPath") &&
+    pathSrc.includes("`${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/`"),
+);
+check(
+  "Rotate and revoke writes are conditional updateMany; create maps P2002",
+  opsSrc.includes("updateMany") &&
+    opsSrc.includes("tokenHash: existing.tokenHash") &&
+    opsSrc.includes("revokedAt: null") &&
+    opsSrc.includes("revokedAt: { not: null }") &&
+    opsSrc.includes("count !== 1") &&
+    opsSrc.includes('error.code === "P2002"') &&
+    opsSrc.includes("SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE") &&
+    opsSrc.includes("scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique") &&
+    !/update\(\{\s*where: \{ id: existing\.id \}/.test(opsSrc),
 );
 check(
   "Local page controls exist without a new global nav, settings, or FieldShell item",
@@ -757,6 +775,137 @@ try {
     data: { active: true },
   });
 
+  const raceIssued = await createScheduleCalendarSubscription(prisma, ownerAccessA, "business");
+  scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = async ({ mode }) => {
+    if (mode !== "rotate") return;
+    scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = undefined;
+    await revokeScheduleCalendarSubscription(prisma, ownerAccessA, "business");
+  };
+  await expectRejects(
+    "Rotate that read before revoke cannot resurrect the revoked feed",
+    () => rotateScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+    (error) =>
+      error instanceof ScheduleCalendarSubscriptionError &&
+      error.message === SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
+  );
+  scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = undefined;
+  const afterForcedRevoke = await prisma.scheduleCalendarSubscription.findFirst({
+    where: { membershipId: ownerMemA.id, scope: "business" },
+  });
+  await expectRejects(
+    "Forced rotate-vs-revoke leaves the previous URL dead",
+    () => readScheduleCalendarFeed(prisma, raceIssued.rawToken, { now: nowSpring }),
+    (error) =>
+      error instanceof ScheduleCalendarSubscriptionError && error.status === 404,
+  );
+  check(
+    "Forced rotate-vs-revoke ends revoked with no live token from the loser",
+    afterForcedRevoke?.revokedAt != null,
+  );
+
+  const dualIssued = await createScheduleCalendarSubscription(prisma, ownerAccessA, "business");
+  let dualSeen = 0;
+  let releaseDual;
+  const dualGate = new Promise((resolve) => {
+    releaseDual = resolve;
+  });
+  scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = async () => {
+    dualSeen += 1;
+    if (dualSeen === 2) releaseDual();
+    await dualGate;
+  };
+  const dualResults = await Promise.allSettled([
+    rotateScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+    rotateScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+  ]);
+  scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = undefined;
+  const dualWins = dualResults.filter(
+    (result) => result.status === "fulfilled",
+  );
+  const dualLosses = dualResults.filter(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof ScheduleCalendarSubscriptionError &&
+      result.reason.message === SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
+  );
+  const dualWinnerToken = dualWins[0]?.status === "fulfilled" ? dualWins[0].value.rawToken : null;
+  const dualLive = [];
+  for (const result of dualResults) {
+    if (result.status !== "fulfilled") continue;
+    try {
+      await readScheduleCalendarFeed(prisma, result.value.rawToken, { now: nowSpring });
+      dualLive.push(result.value.rawToken);
+    } catch {
+      /* dead URL */
+    }
+  }
+  await expectRejects(
+    "Overlapping rotates invalidate the URL from before the race",
+    () => readScheduleCalendarFeed(prisma, dualIssued.rawToken, { now: nowSpring }),
+    (error) =>
+      error instanceof ScheduleCalendarSubscriptionError && error.status === 404,
+  );
+  check(
+    "Two overlapping rotates yield exactly one live URL and one clean NOT_ACTIVE",
+    dualWins.length === 1 &&
+      dualLosses.length === 1 &&
+      dualLive.length === 1 &&
+      dualLive[0] === dualWinnerToken,
+  );
+
+  await revokeScheduleCalendarSubscription(prisma, ownerAccessA, "business");
+  const createResults = await Promise.allSettled(
+    Array.from({ length: 8 }, () =>
+      createScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+    ),
+  );
+  const createWins = createResults.filter((result) => result.status === "fulfilled");
+  const createLosses = createResults.filter(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof ScheduleCalendarSubscriptionError &&
+      result.reason.message === SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
+  );
+  check(
+    "8-way create gives 1 success and 7 clean already-active errors",
+    createWins.length === 1 && createLosses.length === 7,
+  );
+
+  const togetherIssued =
+    createWins[0]?.status === "fulfilled"
+      ? createWins[0].value
+      : await createScheduleCalendarSubscription(prisma, ownerAccessA, "business");
+  const togetherResults = await Promise.allSettled([
+    rotateScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+    revokeScheduleCalendarSubscription(prisma, ownerAccessA, "business"),
+  ]);
+  const togetherRow = await prisma.scheduleCalendarSubscription.findFirst({
+    where: { membershipId: ownerMemA.id, scope: "business" },
+  });
+  const revokeSucceeded = togetherResults[1].status === "fulfilled";
+  const rotateSucceeded = togetherResults[0].status === "fulfilled";
+  if (rotateSucceeded) {
+    const rotateToken = togetherResults[0].value.rawToken;
+    if (revokeSucceeded) {
+      await expectRejects(
+        "Successful revoke after concurrent rotate keeps the new URL dead",
+        () => readScheduleCalendarFeed(prisma, rotateToken, { now: nowSpring }),
+        (error) =>
+          error instanceof ScheduleCalendarSubscriptionError && error.status === 404,
+      );
+    }
+  }
+  await expectRejects(
+    "Concurrent rotate+revoke leaves the pre-race URL dead",
+    () => readScheduleCalendarFeed(prisma, togetherIssued.rawToken, { now: nowSpring }),
+    (error) =>
+      error instanceof ScheduleCalendarSubscriptionError && error.status === 404,
+  );
+  check(
+    "Unforced rotate+revoke never ends active after a successful revoke",
+    !revokeSucceeded || togetherRow?.revokedAt != null,
+  );
+
   check(
     "HTTP cache headers refuse shared caches and referrers",
     SCHEDULE_CALENDAR_FEED_CACHE_CONTROL.includes("no-store") &&
@@ -780,6 +929,7 @@ try {
   console.error(error);
 } finally {
   scheduleCalendarSubscriptionTestHooks.afterLookup = undefined;
+  scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique = undefined;
   await session.cleanup();
 }
 

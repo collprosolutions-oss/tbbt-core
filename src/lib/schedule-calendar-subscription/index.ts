@@ -41,6 +41,7 @@ export {
   rotateScheduleCalendarSubscription,
   revokeScheduleCalendarSubscription,
   scheduleCalendarSubscriptionErrorMessage,
+  scheduleCalendarSubscriptionMutationTestHooks,
   type IssuedScheduleCalendarSubscription,
 } from "@/lib/schedule-calendar-subscription/ops";
 export {

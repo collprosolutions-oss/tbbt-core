@@ -1,10 +1,11 @@
 /**
  * Create / rotate / revoke a hashed calendar-subscription token.
  *
- * Raw tokens are returned once and never stored. Rotate and revoke burn
- * the previous hash so a leaked URL stops matching immediately.
+ * Raw tokens are returned once and never stored. Rotate and revoke use
+ * conditional updateMany so a revoke that commits after a stale read
+ * cannot be overwritten, and a losing rotate never returns a live URL.
  */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError } from "@/lib/authorization";
 import { createSecureToken, hashToken } from "@/lib/auth-crypto";
@@ -52,6 +53,18 @@ export function scheduleCalendarSubscriptionErrorMessage(
   return fallback;
 }
 
+function isUniqueConflict(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return true;
+  }
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      String((error as { code?: string }).code) === "P2002",
+  );
+}
+
 function rethrowSubscriptionWriteError(error: unknown): never {
   if (error instanceof ScheduleCalendarSubscriptionError || error instanceof ForbiddenError) {
     throw error;
@@ -65,12 +78,57 @@ function rethrowSubscriptionWriteError(error: unknown): never {
       SCHEDULE_CALENDAR_SUBSCRIPTION_UNAVAILABLE_MESSAGE,
     );
   }
+  if (isUniqueConflict(error)) {
+    throw new ScheduleCalendarSubscriptionError(
+      "INVALID",
+      SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
+    );
+  }
   throw error;
 }
 
 function issueToken() {
   const rawToken = createSecureToken();
   return { rawToken, tokenHash: hashToken(rawToken) };
+}
+
+export const scheduleCalendarSubscriptionMutationTestHooks: {
+  afterFindUnique?: (input: {
+    id: string | null;
+    mode: "create" | "rotate" | "revoke";
+    tokenHash: string | null;
+    revokedAt: Date | null;
+  }) => Promise<void> | void;
+} = {};
+
+async function findOwnedSubscription(
+  prisma: Db,
+  access: BusinessAccess,
+  scope: ScheduleCalendarSubscriptionScope,
+  mode: "create" | "rotate" | "revoke",
+) {
+  const existing = await prisma.scheduleCalendarSubscription.findUnique({
+    where: {
+      membershipId_scope: {
+        membershipId: access.workspace.membership.id,
+        scope,
+      },
+    },
+    select: {
+      id: true,
+      businessId: true,
+      revokedAt: true,
+      tokenHash: true,
+    },
+  });
+  if (existing) access.assertOwned(existing);
+  await scheduleCalendarSubscriptionMutationTestHooks.afterFindUnique?.({
+    id: existing?.id ?? null,
+    mode,
+    tokenHash: existing?.tokenHash ?? null,
+    revokedAt: existing?.revokedAt ?? null,
+  });
+  return existing;
 }
 
 export async function loadScheduleCalendarSubscriptionStatus(
@@ -132,47 +190,74 @@ async function issueOrReplaceSubscription(
   const issued = issueToken();
 
   try {
-    const existing = await prisma.scheduleCalendarSubscription.findUnique({
-      where: { membershipId_scope: { membershipId, scope } },
-      select: {
-        id: true,
-        businessId: true,
-        revokedAt: true,
-      },
-    });
-    if (existing) access.assertOwned(existing);
+    const existing = await findOwnedSubscription(prisma, access, scope, mode);
 
-    if (mode === "create" && existing && existing.revokedAt == null) {
+    if (mode === "rotate") {
+      if (!existing || existing.revokedAt != null) {
+        throw new ScheduleCalendarSubscriptionError(
+          "INVALID",
+          SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
+        );
+      }
+      const rotated = await prisma.scheduleCalendarSubscription.updateMany({
+        where: {
+          id: existing.id,
+          revokedAt: null,
+          tokenHash: existing.tokenHash,
+        },
+        data: {
+          tokenHash: issued.tokenHash,
+          rotatedAt: now,
+        },
+      });
+      if (rotated.count !== 1) {
+        throw new ScheduleCalendarSubscriptionError(
+          "INVALID",
+          SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
+        );
+      }
+    } else if (existing && existing.revokedAt == null) {
       throw new ScheduleCalendarSubscriptionError(
         "INVALID",
         SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
       );
-    }
-    if (mode === "rotate" && (!existing || existing.revokedAt != null)) {
-      throw new ScheduleCalendarSubscriptionError(
-        "INVALID",
-        SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
-      );
-    }
-
-    if (existing) {
-      await prisma.scheduleCalendarSubscription.update({
-        where: { id: existing.id },
+    } else if (existing && existing.revokedAt != null) {
+      const reissued = await prisma.scheduleCalendarSubscription.updateMany({
+        where: {
+          id: existing.id,
+          revokedAt: { not: null },
+        },
         data: {
           tokenHash: issued.tokenHash,
           rotatedAt: now,
           revokedAt: null,
         },
       });
+      if (reissued.count !== 1) {
+        throw new ScheduleCalendarSubscriptionError(
+          "INVALID",
+          SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
+        );
+      }
     } else {
-      await prisma.scheduleCalendarSubscription.create({
-        data: {
-          businessId,
-          membershipId,
-          scope,
-          tokenHash: issued.tokenHash,
-        },
-      });
+      try {
+        await prisma.scheduleCalendarSubscription.create({
+          data: {
+            businessId,
+            membershipId,
+            scope,
+            tokenHash: issued.tokenHash,
+          },
+        });
+      } catch (error) {
+        if (isUniqueConflict(error)) {
+          throw new ScheduleCalendarSubscriptionError(
+            "INVALID",
+            SCHEDULE_CALENDAR_SUBSCRIPTION_ALREADY_ACTIVE_MESSAGE,
+          );
+        }
+        throw error;
+      }
     }
   } catch (error) {
     rethrowSubscriptionWriteError(error);
@@ -207,28 +292,32 @@ export async function revokeScheduleCalendarSubscription(
   scope: ScheduleCalendarSubscriptionScope,
 ): Promise<void> {
   assertCanManageScheduleCalendarSubscription(access, scope);
-  const membershipId = access.workspace.membership.id;
   const burned = issueToken();
 
   try {
-    const existing = await prisma.scheduleCalendarSubscription.findUnique({
-      where: { membershipId_scope: { membershipId, scope } },
-      select: { id: true, businessId: true, revokedAt: true },
-    });
+    const existing = await findOwnedSubscription(prisma, access, scope, "revoke");
     if (!existing || existing.revokedAt != null) {
       throw new ScheduleCalendarSubscriptionError(
         "INVALID",
         SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
       );
     }
-    access.assertOwned(existing);
-    await prisma.scheduleCalendarSubscription.update({
-      where: { id: existing.id },
+    const revoked = await prisma.scheduleCalendarSubscription.updateMany({
+      where: {
+        id: existing.id,
+        revokedAt: null,
+      },
       data: {
         revokedAt: new Date(),
         tokenHash: burned.tokenHash,
       },
     });
+    if (revoked.count !== 1) {
+      throw new ScheduleCalendarSubscriptionError(
+        "INVALID",
+        SCHEDULE_CALENDAR_SUBSCRIPTION_NOT_ACTIVE_MESSAGE,
+      );
+    }
   } catch (error) {
     rethrowSubscriptionWriteError(error);
   }
