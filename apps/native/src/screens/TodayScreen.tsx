@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -9,7 +10,13 @@ import {
   View,
 } from "react-native";
 import { isApiError, loadNativeToday } from "../api";
-import type { NativeJobSummary, NativeTodayPayload, NativeViewer, NativeWorkspace } from "../types";
+import type {
+  NativeAssignedStopsMaps,
+  NativeJobSummary,
+  NativeTodayPayload,
+  NativeViewer,
+  NativeWorkspace,
+} from "../types";
 
 function JobRow({
   job,
@@ -25,6 +32,41 @@ function JobRow({
       {job.address ? <Text style={styles.jobMeta}>{job.address}</Text> : null}
       <Text style={styles.jobStatus}>{job.status.replaceAll("_", " ")}</Text>
     </Pressable>
+  );
+}
+
+function AssignedStopsMapsCard({ stops }: { stops: NativeAssignedStopsMaps }) {
+  return (
+    <View style={styles.stops}>
+      <Text style={styles.groupTitle}>{stops.label}</Text>
+      <Text style={styles.copy}>{stops.disclaimer}</Text>
+      <Text style={styles.jobMeta}>{stops.orderNote}</Text>
+      {stops.href ? (
+        <Pressable
+          onPress={() => {
+            void Linking.openURL(stops.href!);
+          }}
+          style={styles.mapsAction}
+        >
+          <Text style={styles.mapsActionLabel}>{stops.label}</Text>
+        </Pressable>
+      ) : (
+        <Text style={styles.empty}>{stops.emptyMessage ?? "No complete assigned stops for maps."}</Text>
+      )}
+      {stops.truncated && stops.truncatedNotice ? (
+        <Text style={styles.truncated}>{stops.truncatedNotice}</Text>
+      ) : null}
+      {stops.excluded.length > 0 ? (
+        <View style={styles.excluded}>
+          <Text style={styles.groupTitle}>{stops.excludedHeading}</Text>
+          {stops.excluded.map((stop) => (
+            <Text key={stop.jobId} style={styles.jobMeta}>
+              {stop.customerName} — {stop.label}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -107,6 +149,7 @@ export function TodayScreen({
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload ? (
         <>
+          <AssignedStopsMapsCard stops={payload.assignedStops} />
           <JobGroup title="Today" jobs={payload.today} emptyLabel="Nothing assigned for today." onOpen={onOpenJob} />
           <JobGroup title="Upcoming" jobs={payload.upcoming} emptyLabel="No upcoming jobs assigned." onOpen={onOpenJob} />
           <JobGroup
@@ -195,6 +238,27 @@ const styles = StyleSheet.create({
     color: "#86efac",
     fontSize: 12,
     fontWeight: "700",
+    marginTop: 4,
+  },
+  stops: {
+    backgroundColor: "#1f2937",
+    borderRadius: 16,
+    padding: 16,
+    gap: 8,
+  },
+  mapsAction: {
+    alignSelf: "flex-start",
+    backgroundColor: "#166534",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  mapsActionLabel: {
+    color: "#f9fafb",
+    fontWeight: "700",
+  },
+  excluded: {
+    gap: 4,
     marginTop: 4,
   },
   signOut: {
