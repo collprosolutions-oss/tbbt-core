@@ -29,6 +29,7 @@ import { UnscheduledJobsPanel } from "@/components/schedule/unscheduled-jobs-pan
 import { WeekView } from "@/components/schedule/week-view";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { canDownloadBusinessScheduleCalendar } from "@/lib/schedule-calendar-export";
 import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import {
@@ -596,6 +597,14 @@ export default async function JobsPage({
       <Link href={`/jobs?view=day&date=${todayIso}`} className="underline underline-offset-4">
         View today
       </Link>
+      {canDownloadBusinessScheduleCalendar(access.workspace.role) ? (
+        <>
+          {" "}
+          <a href="/jobs/calendar-export/download" className="underline underline-offset-4">
+            Download upcoming calendar
+          </a>
+        </>
+      ) : null}
       {locationFilterFellBack ? (
         <>
           {" "}
