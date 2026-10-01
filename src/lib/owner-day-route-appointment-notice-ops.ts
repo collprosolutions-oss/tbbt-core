@@ -46,6 +46,7 @@ import {
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { DEFAULT_SETTINGS_PREFERENCES, isEmailDeliveryConfigured } from "@/lib/settings";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import { tenantProjectUrl } from "@/lib/tenant-app-url";
 
@@ -345,7 +346,8 @@ export async function sendOwnerDayRouteAppointmentNotice(
     }
 
     const flags = await loadNoticeChannelFlags(db, access.businessId);
-    const timeZone = input.timeZone?.trim() || access.workspace.business.timezone;
+    const timeZone =
+      input.timeZone?.trim() || resolveBusinessTimeZone(access.workspace.business);
     const preview = buildOwnerDayRouteAppointmentNoticePreview({
       job: noticeJobAsPreviewJob(job),
       snapshot,
