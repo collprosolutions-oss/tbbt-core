@@ -104,6 +104,15 @@ const APPROVED_WEEK_CORRECTION_DECIDE_ERROR =
   "That week is approved. Reopen it before accepting a time correction.";
 const DUPLICATE_PENDING_CORRECTION_ERROR =
   "A correction request is already waiting for the owner.";
+export const TIME_CORRECTION_MAX_DURATION_MS = 24 * 60 * 60 * 1000;
+export const TIME_CORRECTION_FUTURE_SLACK_MS = 5 * 60 * 1000;
+export const TIME_CORRECTION_START_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+export const TIME_CORRECTION_END_IN_FUTURE_ERROR =
+  "Proposed end time cannot be in the future.";
+export const TIME_CORRECTION_DURATION_TOO_LONG_ERROR =
+  "Proposed correction cannot be longer than 24 hours.";
+export const TIME_CORRECTION_START_TOO_OLD_ERROR =
+  "Proposed start time is too far in the past.";
 const DUPLICATE_CORRECTION_DECISION_ERROR =
   "That correction request already has an owner decision.";
 const MISSING_CORRECTION_REQUEST_ERROR = "That correction request could not be found.";
@@ -929,6 +938,45 @@ export type RequestTimeCorrectionInput = {
 };
 
 /**
+ * Shared sanity bounds for a worker correction request. Far-future ends
+ * must not reach collectTouchedWeekStarts (one loop per week). Duration
+ * and a start floor keep an accepted request from writing a multi-day
+ * or ancient clock.
+ */
+export function assertProposedTimeCorrectionBounds(input: {
+  proposedStartedAt: Date;
+  proposedEndedAt: Date;
+  originalStartedAt?: Date | null;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  if (input.proposedEndedAt.getTime() > now.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS) {
+    throw new TimeCardError(TIME_CORRECTION_END_IN_FUTURE_ERROR);
+  }
+  if (
+    input.proposedEndedAt.getTime() - input.proposedStartedAt.getTime() >
+    TIME_CORRECTION_MAX_DURATION_MS
+  ) {
+    throw new TimeCardError(TIME_CORRECTION_DURATION_TOO_LONG_ERROR);
+  }
+  if (input.originalStartedAt) {
+    const nowFloor = now.getTime() - TIME_CORRECTION_START_LOOKBACK_MS;
+    const originalFloor = input.originalStartedAt.getTime() - TIME_CORRECTION_START_LOOKBACK_MS;
+    if (
+      input.proposedStartedAt.getTime() < nowFloor &&
+      input.proposedStartedAt.getTime() < originalFloor
+    ) {
+      throw new TimeCardError(TIME_CORRECTION_START_TOO_OLD_ERROR);
+    }
+  } else if (
+    input.proposedStartedAt.getTime() <
+    now.getTime() - TIME_CORRECTION_START_LOOKBACK_MS
+  ) {
+    throw new TimeCardError(TIME_CORRECTION_START_TOO_OLD_ERROR);
+  }
+}
+
+/**
  * Worker request to correct their own recorded time. Proposed times and
  * the original clock are stored on TimeCorrectionRequest. The TimeEntry
  * itself is not rewritten here -- an OWNER must accept or decline.
@@ -937,6 +985,11 @@ export async function requestTimeCorrection(
   db: PrismaClient,
   access: BusinessAccess,
   input: RequestTimeCorrectionInput,
+  options?: {
+    /** Proof hook: runs after authorize reads and before the write transaction. */
+    afterInitialRead?: () => Promise<void>;
+    now?: Date;
+  },
 ) {
   await requireOperatingProductCapability(db, access, PRODUCT_CAPABILITIES.TIME_TRACKING);
   const reason = input.reason.trim();
@@ -946,10 +999,30 @@ export async function requestTimeCorrection(
   if (input.proposedEndedAt <= input.proposedStartedAt) {
     throw new TimeCardError("Proposed end time must be after the proposed start time.");
   }
+  assertProposedTimeCorrectionBounds({
+    proposedStartedAt: input.proposedStartedAt,
+    proposedEndedAt: input.proposedEndedAt,
+    now: options?.now,
+  });
   const timeZone = input.timeZone || resolveBusinessTimeZone(access.workspace.business);
   const actorMembershipId = access.workspace.membership.id;
 
+  if (options?.afterInitialRead) {
+    await options.afterInitialRead();
+  }
+
   return db.$transaction(async (tx) => {
+    // FOR UPDATE must run on this transaction client. A pre-transaction
+    // PrismaClient lock is released immediately and does not serialize
+    // a deactivation that lands before this write.
+    if (
+      !(await exactActiveMembershipHeld(tx, {
+        businessId: access.businessId,
+        membershipId: actorMembershipId,
+      }))
+    ) {
+      throw new ForbiddenError();
+    }
     const locked = await lockTenantOwnedTimeEntry(tx, access.businessId, input.timeEntryId);
     if (!locked) {
       throw new TimeCardError("That time entry could not be found.");
@@ -964,6 +1037,12 @@ export async function requestTimeCorrection(
     if (entry.membershipId !== actorMembershipId) {
       throw new ForbiddenError();
     }
+    assertProposedTimeCorrectionBounds({
+      proposedStartedAt: input.proposedStartedAt,
+      proposedEndedAt: input.proposedEndedAt,
+      originalStartedAt: entry.startedAt,
+      now: options?.now,
+    });
     const gate = canRequestTimeCorrection({
       entryStatus: entry.status,
       endedAt: entry.endedAt,

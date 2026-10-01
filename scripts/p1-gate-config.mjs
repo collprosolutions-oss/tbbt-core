@@ -132,6 +132,7 @@ export const P1_DOMAINS = [
       "scripts/check-native-field-api.mjs",
       "scripts/check-native-field-visit.mjs",
       "scripts/check-native-field-activity.mjs",
+      "scripts/check-native-time-cards.mjs",
     ],
     pending: [
       {

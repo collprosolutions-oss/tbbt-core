@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { isApiError, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
+import { TimeCardsScreen } from "./src/screens/TimeCardsScreen";
 import { TodayScreen } from "./src/screens/TodayScreen";
 import { secureChecklistDraftStorage } from "./src/checklist-draft-storage";
 import {
@@ -23,6 +24,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<SessionState | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [timeCardsOpen, setTimeCardsOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +61,7 @@ export default function App() {
     await clearSessionToken();
     await clearAllChecklistDrafts(secureChecklistDraftStorage);
     setJobId(null);
+    setTimeCardsOpen(false);
     setSession(null);
   }
 
@@ -94,10 +97,24 @@ export default function App() {
     );
   }
 
+  if (timeCardsOpen) {
+    return (
+      <>
+        <TimeCardsScreen
+          onBack={() => setTimeCardsOpen(false)}
+          token={session.token}
+          workspace={session.workspace}
+        />
+        <StatusBar style="light" />
+      </>
+    );
+  }
+
   return (
     <>
       <TodayScreen
         onOpenJob={setJobId}
+        onOpenTimeCards={() => setTimeCardsOpen(true)}
         onSignOut={() => {
           void signOut();
         }}
