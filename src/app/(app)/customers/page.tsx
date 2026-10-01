@@ -422,6 +422,9 @@ export default async function CustomersPage({
                 <Button asChild size="sm" variant="outline">
                   <Link href="/customers/import">Import customers</Link>
                 </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/customers/records-export">Records export</Link>
+                </Button>
               </>
             ) : null}
             <NewCustomerForm label="New Customer" />

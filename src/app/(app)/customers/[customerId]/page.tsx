@@ -103,11 +103,20 @@ export default async function CustomerProfilePage({
         title={customer.name}
         description="Customer profile"
       >
-        <RecordNav
-          items={recordNavItems}
-          backHref="/customers"
-          backLabel="Back to customers"
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <RecordNav
+            items={recordNavItems}
+            backHref="/customers"
+            backLabel="Back to customers"
+          />
+          {access.workspace.role === "OWNER" ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/customers/records-export?customerId=${customer.id}`}>
+                Export records
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       </PageHeader>
 
       <Card>

@@ -46,6 +46,7 @@ import { getTradeConfig, listConfiguredTradeCodes } from "@/lib/trade-config";
 import {
   ACCOUNT_DELETION_UNAVAILABLE_MESSAGE,
   ACCOUNTING_EXPORT_MESSAGE,
+  CUSTOMER_RECORDS_EXPORT_MESSAGE,
   DOCUMENT_STORAGE_DEFERRED_MESSAGE,
   EMAIL_DELIVERY_UNCONFIGURED_MESSAGE,
   EMERGENCY_SECURITY_LOCK_DEFERRED_MESSAGE,
@@ -1050,6 +1051,21 @@ function SectionBody(props: SettingsWorkspaceProps) {
             <a href="/settings/export/accounting">Download accounting ZIP</a>
           </Button>
         </div>
+        {role === "OWNER" ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+            <div>
+              <p className="font-medium">Customer records JSON</p>
+              <p className="text-sm text-muted-foreground">{CUSTOMER_RECORDS_EXPORT_MESSAGE}</p>
+            </div>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/customers/records-export">Open OWNER export</Link>
+            </Button>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Only the OWNER can download the portable customer-records JSON.
+          </p>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
           <div>
             <p className="font-medium">Customers CSV</p>
