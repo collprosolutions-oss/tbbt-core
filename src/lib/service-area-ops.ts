@@ -130,8 +130,10 @@ export async function upsertServiceArea(
 }
 
 /**
- * Keep the display label and the intake/local-page CITY row in sync.
- * Does not delete or re-enable an owner-disabled area.
+ * Keep the display label and the intake/local-page CITY row in sync when
+ * the label is exactly one city plus an optional 2-letter US state.
+ * Ambiguous labels stay as publicServiceAreaLabel only. Does not delete
+ * or re-enable an owner-disabled area.
  */
 export async function syncPrimaryCityServiceAreaFromLabel(
   db: Db,
@@ -143,6 +145,9 @@ export async function syncPrimaryCityServiceAreaFromLabel(
   if (!trimmed) return { created: false, updated: false };
   const parts = parseServiceAreaLabelParts(trimmed);
   if (!parts.city) return { created: false, updated: false };
+  if (parts.region && !/^[A-Z]{2}$/.test(parts.region)) {
+    return { created: false, updated: false };
+  }
 
   const existing = await db.serviceArea.findFirst({
     where: {
@@ -157,7 +162,7 @@ export async function syncPrimaryCityServiceAreaFromLabel(
     kind: "CITY",
     label: trimmed,
     city: parts.city,
-    region: parts.region ?? existing?.region ?? undefined,
+    region: parts.region ?? undefined,
     enabled: existing?.enabled ?? true,
     notes: existing?.notes,
     travelAdjustment:

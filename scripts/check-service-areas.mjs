@@ -146,6 +146,21 @@ try {
       parseServiceAreaLabelParts("Fort Myers").region === null,
   );
   check(
+    "Multi-city and marketing labels do not parse into a city",
+    parseServiceAreaLabelParts("Reno and Sparks, NV").city === "" &&
+      parseServiceAreaLabelParts("Reno, Sparks, Carson City").city === "" &&
+      parseServiceAreaLabelParts("Greater Reno area").city === "" &&
+      parseServiceAreaLabelParts("Reno, Washoe County").city === "" &&
+      parseServiceAreaLabelParts("89501").city === "" &&
+      parseServiceAreaLabelParts(",NV").city === "" &&
+      parseServiceAreaLabelParts("Reno,").city === "",
+  );
+  check(
+    "A free-text region is never stored from the label",
+    parseServiceAreaLabelParts("Reno, Washoe County").region === null &&
+      parseServiceAreaLabelParts("Reno, Sparks, Carson City").region === null,
+  );
+  check(
     "Unknown when no areas are configured",
     qualifyServiceAddress([], { city: "Reno" }).qualification === "UNKNOWN",
   );

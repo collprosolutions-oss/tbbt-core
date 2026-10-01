@@ -85,7 +85,8 @@ function founderSettingsConsistent(state) {
       state.storageNotFaked === true &&
       state.memberForbidden === true &&
       state.tenantIsolated === true &&
-      state.launchDidNotWipeContact === true,
+      state.launchDidNotWipeContact === true &&
+      state.junkLabelsDidNotInventCities === true,
   );
 }
 
@@ -98,6 +99,7 @@ const launchOpsSrc = readRepo("src/lib/business-launch-ops.ts");
 const consentSrc = readRepo("src/lib/communications/consent.ts");
 const selfSrc = readRepo("scripts/check-founder-handyman-settings.mjs");
 const preflightSrc = readRepo("src/lib/founder-production-preflight.ts");
+const serviceAreasSrc = readRepo("src/lib/service-areas.ts");
 
 check(
   "First-run reuses Settings profile, contact, and timezone ops",
@@ -115,6 +117,11 @@ check(
 check(
   "Settings contact syncs the intake CITY row from the owner label",
   settingsOpsSrc.includes("syncPrimaryCityServiceAreaFromLabel"),
+);
+check(
+  "Label parse only syncs one city plus an optional 2-letter US state",
+  serviceAreasSrc.includes("isUsStateCode") &&
+    !serviceAreasSrc.includes("regionRaw.length <= 20"),
 );
 check(
   "Launch service-area preserves existing public contact when phone/email are omitted",
@@ -184,7 +191,8 @@ try {
   const { loadSettingsSnapshot } = await import("@/lib/settings-data");
   const { describeBusinessTimeZone } = await import("@/lib/business-timezone");
   const { loadPublicSite, loadPublicAboutCopy } = await import("@/lib/public-site-data");
-  const { qualifyServiceAddress, parseServiceAreaLabelParts } = await import("@/lib/service-areas");
+  const { qualifyServiceAddress, parseServiceAreaLabelParts, serviceAreaCities } =
+    await import("@/lib/service-areas");
   const { listServiceAreas, setServiceAreaEnabled } = await import("@/lib/service-area-ops");
   const { setOwnedServiceCatalogItemActive } = await import("@/lib/catalog-ops");
   const { createPublicServiceRequest } = await import("@/lib/public-intake");
@@ -245,6 +253,32 @@ try {
     "Fort Myers stays a single city token",
     parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers" &&
       parseServiceAreaLabelParts("Fort Myers").region === null,
+  );
+  check(
+    "A city-only label is still syncable",
+    parseServiceAreaLabelParts("Reno").city === "Reno" &&
+      parseServiceAreaLabelParts("Reno").region === null,
+  );
+  const rejectedLabels = [
+    "Reno and Sparks, NV",
+    "Reno, Sparks, Carson City",
+    "Greater Reno area",
+    "Reno, Washoe County",
+    "89501",
+    ",NV",
+    "Reno,",
+  ];
+  for (const label of rejectedLabels) {
+    const parsed = parseServiceAreaLabelParts(label);
+    check(
+      `${JSON.stringify(label)} does not parse into a syncable city/region`,
+      parsed.city === "" && parsed.region === null,
+    );
+  }
+  check(
+    "Free-text regions are never parsed",
+    parseServiceAreaLabelParts("Reno, Washoe County").region === null &&
+      parseServiceAreaLabelParts("Reno, Sparks, Carson City").region === null,
   );
   const flippedParse = { ...parseServiceAreaLabelParts("Reno, NV"), city: "Sparks" };
   check(
@@ -449,6 +483,170 @@ try {
       request?.businessId === cedar.business.id,
     );
   }
+
+  console.log("\nDB — ambiguous labels do not invent intake CITY rows");
+
+  function toConfiguredAreas(rows) {
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      label: row.label,
+      city: row.city,
+      region: row.region,
+      postalCode: row.postalCode,
+      enabled: row.enabled,
+      travelAdjustment: row.travelAdjustment ? Number(row.travelAdjustment) : null,
+      minimumAdjustment: row.minimumAdjustment ? Number(row.minimumAdjustment) : null,
+      notes: row.notes,
+    }));
+  }
+
+  function isValidAutoCityRow(row) {
+    const parts = parseServiceAreaLabelParts(row.label);
+    return (
+      row.kind === "CITY" &&
+      Boolean(parts.city) &&
+      row.city === parts.city &&
+      (row.region == null || /^[A-Z]{2}$/.test(row.region)) &&
+      (parts.region === row.region || (parts.region == null && row.region == null))
+    );
+  }
+
+  function junkLabelSyncSafe(result) {
+    return Boolean(
+      result.labelSaved &&
+        result.areaCount === 0 &&
+        result.junkRow === false &&
+        result.renoQualification === "UNKNOWN" &&
+        result.sparksQualification === "UNKNOWN" &&
+        result.publicCities.length === 0 &&
+        result.defaultRegion == null &&
+        result.storedQualification === "UNKNOWN" &&
+        result.storedRegion !== "WASHOE COUNTY" &&
+        result.storedRegion !== "Washoe County" &&
+        result.storedRegion !== "Carson City",
+    );
+  }
+
+  const junkResults = [];
+  for (const label of rejectedLabels) {
+    const token = randomUUID().slice(0, 8);
+    const seeded = await provisionOwnerWorkspace(prisma, {
+      name: `Label Owner ${token}`,
+      email: `label-owner-${token}@example.com`,
+      passwordHash,
+      businessName: `Label Shop ${token}`,
+    });
+    await seedOperating(seeded.business.id);
+    const access = makeAccess(seeded.business, "OWNER", seeded.membership);
+    await updateBusinessPublicContactOp(prisma, access, {
+      phone: "555-222-3333",
+      email: `shop-${token}@example.com`,
+      website: "",
+      serviceArea: label,
+    });
+    const saved = await prisma.business.findUnique({
+      where: { id: seeded.business.id },
+      select: { slug: true, publicServiceAreaLabel: true },
+    });
+    const areas = await prisma.serviceArea.findMany({
+      where: { businessId: seeded.business.id },
+    });
+    const configured = toConfiguredAreas(areas);
+    const renoQ = qualifyServiceAddress(configured, { city: "Reno" });
+    const sparksQ = qualifyServiceAddress(configured, { city: "Sparks" });
+    const publicCities = serviceAreaCities(configured);
+    const defaultRegion = configured.find((area) => area.region)?.region ?? null;
+    const probeCity = label.startsWith("Reno and Sparks") ? "Sparks" : "Reno";
+    const junkIntake = await createPublicServiceRequest(prisma, {
+      slug: saved.slug,
+      name: "Probe Homeowner",
+      email: `probe-${token}@example.com`,
+      phone: "555-111-0000",
+      address: "",
+      streetAddress: "200 Second St",
+      city: probeCity,
+      region: defaultRegion ?? "NV",
+      postalCode: "89431",
+      notes: "Probe",
+      catalogItemIds: [],
+      includeOther: true,
+      otherDescription: "Probe",
+      submissionId: `junk-label-${token}`,
+      smsOptIn: false,
+      configuredAreas: configured,
+    });
+    let storedRegion = null;
+    let storedQualification = null;
+    if (junkIntake.ok) {
+      const junkRequest = await prisma.serviceRequest.findFirst({
+        where: { id: junkIntake.requestId },
+        include: { property: true },
+      });
+      storedRegion = junkRequest?.property?.region ?? null;
+      storedQualification = junkRequest?.serviceAreaQualification ?? null;
+    }
+    const result = {
+      label,
+      labelSaved: saved?.publicServiceAreaLabel === label,
+      areaCount: areas.length,
+      junkRow: areas.some((row) => !isValidAutoCityRow(row)),
+      renoQualification: renoQ.qualification,
+      sparksQualification: sparksQ.qualification,
+      publicCities,
+      defaultRegion,
+      storedRegion,
+      storedQualification,
+      intakeOk: junkIntake.ok,
+    };
+    junkResults.push(result);
+    check(
+      `Display label is kept for ${JSON.stringify(label)}`,
+      result.labelSaved === true,
+    );
+    check(
+      `${JSON.stringify(label)} does not invent a junk CITY row`,
+      result.areaCount === 0 && result.junkRow === false,
+    );
+    check(
+      `A real city request stays UNKNOWN after ${JSON.stringify(label)}`,
+      result.renoQualification === "UNKNOWN" &&
+        result.storedQualification === "UNKNOWN" &&
+        result.intakeOk === true,
+    );
+    check(
+      `${JSON.stringify(label)} does not invent a public city list or free-text state`,
+      result.publicCities.length === 0 &&
+        result.defaultRegion == null &&
+        result.storedRegion !== "WASHOE COUNTY" &&
+        result.storedRegion !== "Washoe County" &&
+        result.storedRegion !== "Carson City",
+    );
+  }
+  check(
+    "Reno and Sparks, NV does not mark Sparks OUTSIDE_PREFERRED",
+    junkResults.find((row) => row.label === "Reno and Sparks, NV")?.sparksQualification ===
+      "UNKNOWN",
+  );
+  check(
+    "Reno, NV still yields IN_AREA for a Reno request",
+    qualification.qualification === "IN_AREA",
+  );
+  const junkLabelsDidNotInventCities = junkResults.every((row) => junkLabelSyncSafe(row));
+  check(
+    "Every ambiguous label kept display copy and wrote no CITY row",
+    junkLabelsDidNotInventCities,
+  );
+  check(
+    "Mutation: a junk CITY row fails the ambiguous-label checker",
+    !junkLabelSyncSafe({
+      ...junkResults[0],
+      areaCount: 1,
+      junkRow: true,
+      renoQualification: "OUTSIDE_PREFERRED",
+      storedQualification: "OUTSIDE_PREFERRED",
+    }),
+  );
 
   console.log("\nDB — service activation, pricing minimum, scheduling, comms");
   const catalog = await prisma.serviceCatalogItem.findMany({
@@ -718,6 +916,7 @@ try {
     memberForbidden: true,
     tenantIsolated: mapleStill.publicEmail === "shop@maple.example",
     launchDidNotWipeContact: afterLaunchArea.publicPhone === "555-222-3333",
+    junkLabelsDidNotInventCities,
   };
 
   console.log("\nMUTATION — vacuous-checker evidence");
@@ -745,6 +944,10 @@ try {
   check(
     "Mutation: swapped business ids fail consistency",
     !founderSettingsConsistent({ ...state, businessId: state.otherBusinessId }),
+  );
+  check(
+    "Mutation: invented junk CITY rows fail consistency",
+    !founderSettingsConsistent({ ...state, junkLabelsDidNotInventCities: false }),
   );
 } finally {
   await session.cleanup();

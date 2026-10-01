@@ -4,6 +4,7 @@
  * This is not a GIS engine. Matching uses owner-entered city/postal
  * strings only. Addresses and jurisdictions are never inferred.
  */
+import { isUsStateCode } from "@/lib/service-address";
 
 export const SERVICE_AREA_KINDS = ["CITY", "POSTAL"] as const;
 export type ServiceAreaKind = (typeof SERVICE_AREA_KINDS)[number];
@@ -53,29 +54,43 @@ function normalizePostal(value: string | null | undefined) {
   return (value ?? "").trim().toUpperCase().replace(/\s+/g, "");
 }
 
+const CITY_LABEL_CONNECTOR = /(?:\s+and\s+|&|\/|;)/i;
+const NON_CITY_LABEL_WORD = /\b(?:area|greater|metro|county|region|vicinity)\b/i;
+
 /**
- * Split an owner-entered display label like "Reno, NV" into the city and
- * region tokens intake qualification already matches. This is not geocoding.
- * A 2-letter token after the last comma is treated as a region code.
+ * Split an owner-entered display label into a single city plus an optional
+ * 2-letter US state. This is not geocoding. Ambiguous marketing copy,
+ * multi-city lists, ZIP-only text, and free-text regions do not parse.
  */
 export function parseServiceAreaLabelParts(label: string): {
   city: string;
   region: string | null;
 } {
-  const trimmed = label.trim();
-  if (!trimmed) return { city: "", region: null };
-  const comma = trimmed.lastIndexOf(",");
-  if (comma <= 0) return { city: trimmed, region: null };
-  const city = trimmed.slice(0, comma).trim();
-  const regionRaw = trimmed.slice(comma + 1).trim();
-  if (!city || !regionRaw) return { city: trimmed, region: null };
-  if (/^[A-Za-z]{2}$/.test(regionRaw)) {
-    return { city, region: regionRaw.toUpperCase() };
+  const empty = { city: "", region: null as string | null };
+  const trimmed = label.trim().replace(/\s+/g, " ");
+  if (!trimmed) return empty;
+  if (/^\d+$/.test(trimmed)) return empty;
+  if (CITY_LABEL_CONNECTOR.test(trimmed)) return empty;
+  if ((trimmed.match(/,/g) ?? []).length > 1) return empty;
+
+  const comma = trimmed.indexOf(",");
+  let city: string;
+  let region: string | null = null;
+  if (comma === -1) {
+    city = trimmed;
+  } else {
+    city = trimmed.slice(0, comma).trim();
+    const regionRaw = trimmed.slice(comma + 1).trim();
+    if (!city || !regionRaw) return empty;
+    if (!/^[A-Za-z]{2}$/.test(regionRaw) || !isUsStateCode(regionRaw)) {
+      return empty;
+    }
+    region = regionRaw.toUpperCase();
   }
-  if (regionRaw.length <= 20) {
-    return { city, region: regionRaw };
+  if (!city || /^\d+$/.test(city) || NON_CITY_LABEL_WORD.test(city)) {
+    return empty;
   }
-  return { city: trimmed, region: null };
+  return { city, region };
 }
 
 export function parseOptionalMoney(raw: string | undefined): number | null {
