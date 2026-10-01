@@ -21,6 +21,29 @@ import {
 
 const FILE_KINDS = new Set<CustomerRecordsExportFileKind>(["REQUEST_PHOTO", "JOB_PHOTO"]);
 const FORBIDDEN_FILE_KEYS = ["url", "storageKey", "storageAccount", "body", "bytes", "content"];
+const FORBIDDEN_PROPERTY_KEYS = [
+  "accessCode",
+  "accessCodes",
+  "entryInstructions",
+  "propertyAccessInstructions",
+  "propertyAccessContactInfo",
+  "propertyAccessPickupLocation",
+  "propertyAccessNote",
+  "keyLocation",
+  "gateCode",
+  "lockboxCode",
+  "publicToken",
+  "projectToken",
+  "storageKey",
+  "url",
+];
+const FORBIDDEN_ADDRESS_KEYS = [
+  "accessCode",
+  "entryInstructions",
+  "keyLocation",
+  "storageKey",
+  "url",
+];
 
 export function serializeCustomerRecordsExport(document: CustomerRecordsExportDocument): string {
   return `${JSON.stringify(document, null, 2)}\n`;
@@ -173,6 +196,12 @@ function parseCustomerPacket(input: unknown, index: number): CustomerRecordsExpo
   const customer = parseCustomer(value.customer, index);
   return {
     customer,
+    properties: parseCollection(
+      value.properties,
+      `customers[${index}].properties`,
+      CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+      (item, itemIndex) => parseProperty(item, index, itemIndex, customer.id),
+    ),
     requests: parseCollection(
       value.requests,
       `customers[${index}].requests`,
@@ -260,6 +289,37 @@ function parseCollection<T>(
     limit,
     items: value.items.map((item, itemIndex) => parseItem(item, itemIndex)),
   };
+}
+
+function parseProperty(
+  input: unknown,
+  customerIndex: number,
+  index: number,
+  customerId: string,
+): CustomerRecordsExportDocument["customers"][number]["properties"]["items"][number] {
+  const label = `customers[${customerIndex}].properties.items[${index}]`;
+  const value = asObject(input, label);
+  assertAbsent(value, `${label}`, FORBIDDEN_PROPERTY_KEYS);
+  const addressValue = asObject(value.address, `${label}.address`);
+  assertAbsent(addressValue, `${label}.address`, FORBIDDEN_ADDRESS_KEYS);
+  const property = {
+    id: asNonEmptyString(value.id, `${label}.id`),
+    customerId: asNonEmptyString(value.customerId, `${label}.customerId`),
+    label: asNullableString(value.label, `${label}.label`),
+    address: {
+      addressLine1: asNonEmptyString(addressValue.addressLine1, `${label}.address.addressLine1`),
+      addressLine2: asNullableString(addressValue.addressLine2, `${label}.address.addressLine2`),
+      city: asNullableString(addressValue.city, `${label}.address.city`),
+      region: asNullableString(addressValue.region, `${label}.address.region`),
+      postalCode: asNullableString(addressValue.postalCode, `${label}.address.postalCode`),
+    },
+    createdAt: asIsoDate(value.createdAt, `${label}.createdAt`),
+    updatedAt: asIsoDate(value.updatedAt, `${label}.updatedAt`),
+  };
+  if (property.customerId !== customerId) {
+    throw invalid(`${label}.customerId must match the parent customer`);
+  }
+  return property;
 }
 
 function parseRequest(

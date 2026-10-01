@@ -2,7 +2,8 @@
  * OWNER-only tenant-scoped customer-records export proofs.
  *
  * Covers authorization, isolation, completeness, pagination/limits,
- * secret omission, and private-file references on a dedicated local
+ * secret omission, private-file references, same-business properties
+ * with structured addresses, and export audit on a dedicated local
  * test database.
  *
  * Run with:
@@ -18,6 +19,8 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { ForbiddenError } = await import("@/lib/authorization");
 const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
 const {
+  CUSTOMER_RECORDS_EXPORT_AUDIT_AREA,
+  CUSTOMER_RECORDS_EXPORT_AUDIT_KEY,
   CUSTOMER_RECORDS_EXPORT_CONTRACT,
   CUSTOMER_RECORDS_EXPORT_FILE_LIMIT,
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
@@ -28,13 +31,17 @@ const {
   boundExportRead,
   buildCustomerRecordsExport,
   canExportCustomerRecords,
+  customerRecordsExportAuditPayload,
   customerRecordsExportFileTruncationMessage,
   customerRecordsExportFilename,
   customerRecordsExportPageTruncationMessage,
+  customerRecordsExportPropertyTruncationMessage,
   listExportableCustomerRecords,
   parseCustomerRecordsExport,
+  recordCustomerRecordsExportAudit,
   serializeCustomerRecordsExport,
 } = await import("@/lib/customer-records-export");
+const { isSecretSettingKey } = await import("@/lib/settings");
 const { CustomerRecordsExportError } = await import("@/lib/customer-records-export/access");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -95,6 +102,7 @@ const contractSrc = readRepo("src/lib/customer-records-export/contract.ts");
 const buildSrc = readRepo("src/lib/customer-records-export/build.ts");
 const parseSrc = readRepo("src/lib/customer-records-export/parse.ts");
 const accessSrc = readRepo("src/lib/customer-records-export/access.ts");
+const auditSrc = readRepo("src/lib/customer-records-export/audit.ts");
 const pageSrc = readRepo("src/app/(app)/customers/records-export/page.tsx");
 const downloadSrc = readRepo("src/app/(app)/customers/records-export/download/route.ts");
 const panelSrc = readRepo("src/components/customers/customer-records-export-panel.tsx");
@@ -154,7 +162,35 @@ check(
   "Secrets, portal tokens, Stripe ids, access codes, and storage keys are never selected",
   SECRET_MARKERS.every((marker) => !buildSrc.includes(marker)) &&
     !buildSrc.includes("url: true") &&
-    buildSrc.includes("PRIVATE_FILE_OMISSION"),
+    buildSrc.includes("PRIVATE_FILE_OMISSION") &&
+    !auditSrc.includes("propertyAccessInstructions") &&
+    !auditSrc.includes("storageKey") &&
+    !auditSrc.includes("publicToken"),
+);
+check(
+  "Same-business properties load with structured addresses and stay bounded",
+  buildSrc.includes("prisma.property.findMany") &&
+    buildSrc.includes("where: { businessId, customerId: customer.id }") &&
+    buildSrc.includes("addressLine1: true") &&
+    buildSrc.includes("address: {") &&
+    buildSrc.includes("postalCode: row.postalCode") &&
+    buildSrc.includes("properties: propertyCollection") &&
+    parseSrc.includes("customers[${index}].properties") &&
+    parseSrc.includes("FORBIDDEN_PROPERTY_KEYS") &&
+    parseSrc.includes("entryInstructions") &&
+    contractSrc.includes("CustomerRecordsExportAddress") &&
+    contractSrc.includes("properties: CustomerRecordsExportCollection<CustomerRecordsExportProperty>"),
+);
+check(
+  "Download records who exported and when on existing SettingsAuditLog",
+  downloadSrc.includes("recordCustomerRecordsExportAudit") &&
+    auditSrc.includes("writeSettingsAuditLog") &&
+    auditSrc.includes("CUSTOMER_RECORDS_EXPORT_AUDIT_AREA") &&
+    CUSTOMER_RECORDS_EXPORT_AUDIT_AREA === "data-export" &&
+    CUSTOMER_RECORDS_EXPORT_AUDIT_KEY === "customerRecordsExport" &&
+    !isSecretSettingKey(CUSTOMER_RECORDS_EXPORT_AUDIT_KEY) &&
+    !schemaSrc.includes("CustomerRecordsExport") &&
+    !pageSrc.includes("recordCustomerRecordsExportAudit"),
 );
 check(
   "Dedicated page and download route stay OWNER-gated",
@@ -206,10 +242,15 @@ check(
     buildSrc.includes("boundExportRead"),
 );
 check(
-  "UI shows pagination and file-reference honesty",
+  "UI shows pagination, property, and file-reference honesty",
   panelSrc.includes("customerRecordsExportPageTruncationMessage") &&
     panelSrc.includes("customerRecordsExportFileTruncationMessage") &&
-    panelSrc.includes("document.provenance.page.truncated"),
+    panelSrc.includes("customerRecordsExportPropertyTruncationMessage") &&
+    panelSrc.includes("document.provenance.page.truncated") &&
+    panelSrc.includes("packet.properties.count") &&
+    customerRecordsExportPropertyTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
+      String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
+    ),
 );
 check(
   "boundExportRead keeps the cap and marks overflow",
@@ -275,6 +316,59 @@ try {
       name: "Beta Secret",
       email: "beta-secret@example.com",
       phone: "555-0199",
+    },
+  });
+
+  const propertyA = await prisma.property.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      label: "Alpha House",
+      addressLine1: "10 Alpha Street",
+      addressLine2: "Unit 2",
+      city: "Austin",
+      region: "TX",
+      postalCode: "78701",
+      createdAt: new Date("2020-01-01T12:00:00.000Z"),
+    },
+  });
+  const propertyA2 = await prisma.property.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      label: "Alpha Shop",
+      addressLine1: "22 Alpha Way",
+      city: "Austin",
+      region: "TX",
+      postalCode: "78702",
+      createdAt: new Date("2020-01-01T13:00:00.000Z"),
+    },
+  });
+  const propertyB = await prisma.property.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerB.id,
+      label: "Beta Only Property",
+      addressLine1: "99 Beta Lane",
+      city: "Dallas",
+      region: "TX",
+      postalCode: "75201",
+    },
+  });
+  const propertyCross = await prisma.property.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerA.id,
+      label: "Cross-tenant planted property",
+      addressLine1: "1 Cross Street",
+    },
+  });
+  const propertyMismatchedOwner = await prisma.property.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerB.id,
+      label: "Wrong-customer planted property",
+      addressLine1: "2 Mismatch Road",
     },
   });
 
@@ -450,6 +544,19 @@ try {
       }),
     ),
   );
+  const overflowProperties = await Promise.all(
+    Array.from({ length: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1 }, (_, index) =>
+      prisma.property.create({
+        data: {
+          businessId: businessA.id,
+          customerId: overflowCustomer.id,
+          label: `Overflow property ${index + 1}`,
+          addressLine1: `${index + 1} Overflow Court`,
+          createdAt: new Date(Date.UTC(2024, 1, 1 + index)),
+        },
+      }),
+    ),
+  );
 
   const extraCustomers = [];
   for (let index = 0; index < CUSTOMER_RECORDS_EXPORT_PAGE_SIZE; index += 1) {
@@ -522,6 +629,20 @@ try {
   check(
     "OWNER export includes the complete related set for a customer under the cap",
     Boolean(packetA) &&
+      packetA.properties.count === 2 &&
+      packetA.properties.truncated === false &&
+      packetA.properties.items.some(
+        (row) =>
+          row.id === propertyA.id &&
+          row.customerId === customerA.id &&
+          row.label === "Alpha House" &&
+          row.address.addressLine1 === "10 Alpha Street" &&
+          row.address.addressLine2 === "Unit 2" &&
+          row.address.city === "Austin" &&
+          row.address.region === "TX" &&
+          row.address.postalCode === "78701",
+      ) &&
+      packetA.properties.items.some((row) => row.id === propertyA2.id) &&
       packetA.requests.count === 2 &&
       packetA.requests.truncated === false &&
       packetA.requests.items.some((row) => row.id === requestA1.id && row.summary === "Fix door") &&
@@ -546,6 +667,13 @@ try {
       overflowPacket.requests.items[0].id === overflowRequests[0].id &&
       !overflowPacket.requests.items.some(
         (row) => row.id === overflowRequests[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
+      ) &&
+      overflowPacket.properties.truncated === true &&
+      overflowPacket.properties.count === CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT &&
+      overflowPacket.properties.items.length === CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT &&
+      overflowPacket.properties.items[0].id === overflowProperties[0].id &&
+      !overflowPacket.properties.items.some(
+        (row) => row.id === overflowProperties[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
       ),
   );
   check(
@@ -561,7 +689,14 @@ try {
       !pageOneJson.includes(paymentB.id) &&
       !pageOneJson.includes("Beta only request") &&
       !pageOneJson.includes("Cross-tenant planted request") &&
-      !pageOneJson.includes("Wrong-customer planted request"),
+      !pageOneJson.includes("Wrong-customer planted request") &&
+      !pageOneJson.includes(propertyB.id) &&
+      !pageOneJson.includes(propertyCross.id) &&
+      !pageOneJson.includes(propertyMismatchedOwner.id) &&
+      !pageOneJson.includes("Beta Only Property") &&
+      !pageOneJson.includes("Cross-tenant planted property") &&
+      !pageOneJson.includes("Wrong-customer planted property") &&
+      !pageOneJson.includes("99 Beta Lane"),
   );
   check(
     "Secrets, portal tokens, Stripe ids, access codes, and private file URLs are omitted",
@@ -575,7 +710,16 @@ try {
       !pageOneJson.includes("publicToken") &&
       !pageOneJson.includes("projectToken") &&
       !pageOneJson.includes("stripeCheckoutSessionId") &&
-      !pageOneJson.includes("storageKey"),
+      !pageOneJson.includes("storageKey") &&
+      !pageOneJson.includes("accessCode") &&
+      !pageOneJson.includes("entryInstructions") &&
+      packetA.properties.items.every(
+        (row) =>
+          !("accessCode" in row) &&
+          !("entryInstructions" in row) &&
+          !("storageKey" in row) &&
+          !("url" in row.address),
+      ),
   );
   check(
     "Private files are same-business references with a labeled omission",
@@ -621,6 +765,8 @@ try {
       single.customers[0].customer.id === customerA.id &&
       single.customers[0].requests.items.map((row) => row.id).sort().join(",") ===
         [requestA1.id, requestA2.id].sort().join(",") &&
+      single.customers[0].properties.items.map((row) => row.id).sort().join(",") ===
+        [propertyA.id, propertyA2.id].sort().join(",") &&
       single.customers[0].payments.items[0].id === paymentA.id &&
       !serializeCustomerRecordsExport(single).includes(customerB.name),
   );
@@ -632,6 +778,8 @@ try {
     otherOwner.customers.length === 1 &&
       otherOwner.customers[0].customer.id === customerB.id &&
       otherOwner.customers[0].requests.items.some((row) => row.id === requestB.id) &&
+      otherOwner.customers[0].properties.items.some((row) => row.id === propertyB.id) &&
+      !otherJson.includes(propertyA.id) &&
       !otherJson.includes(customerA.name) &&
       !otherJson.includes(requestA1.id) &&
       !otherJson.includes(estimateA.id) &&
@@ -657,6 +805,7 @@ try {
     "List helper reuses the same OWNER builder and tenant counts",
     listed.customers.length === 1 &&
       listed.customers[0].customerId === customerA.id &&
+      listed.customers[0].propertyCount === 2 &&
       listed.customers[0].requestCount === 2 &&
       listed.customers[0].paymentCount === 1 &&
       listed.truncated === false,
@@ -690,6 +839,97 @@ try {
     parsedLimited.customers[0].files.truncated === true &&
       parsedLimited.customers[0].files.count === CUSTOMER_RECORDS_EXPORT_FILE_LIMIT,
   );
+
+  const previewAuditRows = await prisma.settingsAuditLog.findMany({
+    where: {
+      businessId: { in: [businessA.id, businessB.id] },
+      settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY,
+    },
+  });
+  check(
+    "Preview/build does not write an export audit row",
+    previewAuditRows.length === 0,
+  );
+
+  const recorded = await recordCustomerRecordsExportAudit(prisma, ownerAccessA, single);
+  const payload = JSON.parse(recorded.newValue);
+  const expectedPayload = customerRecordsExportAuditPayload(single);
+  check(
+    "OWNER download audit records who exported and when on this tenant",
+    recorded.businessId === businessA.id &&
+      recorded.changedByMembershipId === ownerMemA.id &&
+      recorded.settingArea === CUSTOMER_RECORDS_EXPORT_AUDIT_AREA &&
+      recorded.settingKey === CUSTOMER_RECORDS_EXPORT_AUDIT_KEY &&
+      recorded.previousValue === "null" &&
+      recorded.changedAt instanceof Date &&
+      payload.exportedAt === single.exportedAt &&
+      payload.authorizedByMembershipId === ownerMemA.id &&
+      payload.customerId === customerA.id &&
+      payload.contract === CUSTOMER_RECORDS_EXPORT_CONTRACT &&
+      payload.version === CUSTOMER_RECORDS_EXPORT_VERSION &&
+      JSON.stringify(payload) === JSON.stringify(expectedPayload),
+  );
+  check(
+    "Export audit payload keeps secrets, tokens, and storage keys out",
+    !recorded.newValue.includes(estimateToken) &&
+      !recorded.newValue.includes(projectToken) &&
+      !recorded.newValue.includes(stripeSession) &&
+      !recorded.newValue.includes("Key under mat") &&
+      !recorded.newValue.includes(photoUrl) &&
+      !recorded.newValue.includes("hashed-owner-secret") &&
+      !recorded.newValue.includes("publicToken") &&
+      !recorded.newValue.includes("storageKey") &&
+      !recorded.newValue.includes("accessCode"),
+  );
+
+  await expectRejects(
+    "ADMIN cannot record a customer-records export audit",
+    () => recordCustomerRecordsExportAudit(prisma, adminAccessA, single),
+    (error) => error instanceof ForbiddenError,
+  );
+
+  const otherAudit = await recordCustomerRecordsExportAudit(prisma, ownerAccessB, otherOwner);
+  const ownerAAudit = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY },
+  });
+  const ownerBAudit = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessB.id, settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Export audit rows stay tenant-isolated",
+    ownerAAudit.length === 1 &&
+      ownerAAudit[0].id === recorded.id &&
+      ownerAAudit[0].changedByMembershipId === ownerMemA.id &&
+      ownerBAudit.length === 1 &&
+      ownerBAudit[0].id === otherAudit.id &&
+      ownerBAudit[0].changedByMembershipId === ownerMemB.id &&
+      !ownerAAudit.some((row) => row.id === otherAudit.id) &&
+      !ownerBAudit.some((row) => row.id === recorded.id),
+  );
+
+  try {
+    const forgedProperty = structuredClone(single);
+    forgedProperty.customers[0].properties.items[0].accessCode = "4321";
+    parseCustomerRecordsExport(forgedProperty);
+    check("Parser rejects property access codes", false);
+  } catch (error) {
+    check(
+      "Parser rejects property access codes",
+      error instanceof CustomerRecordsExportError && /must not include accessCode/.test(error.message),
+    );
+  }
+  try {
+    const forgedAddress = structuredClone(single);
+    forgedAddress.customers[0].properties.items[0].address.entryInstructions = "Use side gate";
+    parseCustomerRecordsExport(forgedAddress);
+    check("Parser rejects address entry instructions", false);
+  } catch (error) {
+    check(
+      "Parser rejects address entry instructions",
+      error instanceof CustomerRecordsExportError &&
+        /must not include entryInstructions/.test(error.message),
+    );
+  }
 
   try {
     parseCustomerRecordsExport({

@@ -43,7 +43,7 @@ export default async function CustomerRecordsExportPage({
     <PageContainer>
       <PageHeader
         title="Customer records export"
-        description="OWNER-authorized, versioned snapshot of this workspace’s customers and their related requests, estimates, jobs, invoices, and payments. Large exports stay paginated. Private files stay references."
+        description="OWNER-authorized, versioned snapshot of this workspace’s customers and their same-business properties, structured addresses, requests, estimates, jobs, invoices, and payments. Large exports stay paginated. Private files stay references."
       />
       <CustomerRecordsExportPanel document={document} />
     </PageContainer>

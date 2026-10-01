@@ -1,4 +1,6 @@
 export {
+  CUSTOMER_RECORDS_EXPORT_AUDIT_AREA,
+  CUSTOMER_RECORDS_EXPORT_AUDIT_KEY,
   CUSTOMER_RECORDS_EXPORT_CONTRACT,
   CUSTOMER_RECORDS_EXPORT_FILE_LIMIT,
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
@@ -11,10 +13,12 @@ export {
   customerRecordsExportFileTruncationMessage,
   customerRecordsExportFilename,
   customerRecordsExportPageTruncationMessage,
+  customerRecordsExportPropertyTruncationMessage,
   customerRecordsExportRelatedTruncationMessage,
   defaultCustomerRecordsExportLimits,
   type CustomerRecordsExportDocument,
   type CustomerRecordsExportCustomerPacket,
+  type CustomerRecordsExportProperty,
 } from "@/lib/customer-records-export/contract";
 export {
   CustomerRecordsExportError,
@@ -33,3 +37,7 @@ export {
   type ExportableCustomerRecord,
   type ExportableCustomerRecordList,
 } from "@/lib/customer-records-export/build";
+export {
+  customerRecordsExportAuditPayload,
+  recordCustomerRecordsExportAudit,
+} from "@/lib/customer-records-export/audit";

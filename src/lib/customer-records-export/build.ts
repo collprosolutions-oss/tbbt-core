@@ -37,6 +37,7 @@ export type BuildCustomerRecordsExportInput = {
 export type ExportableCustomerRecord = {
   customerId: string;
   name: string;
+  propertyCount: number;
   requestCount: number;
   estimateCount: number;
   jobCount: number;
@@ -93,6 +94,7 @@ export async function listExportableCustomerRecords(
     customers: document.customers.map((packet) => ({
       customerId: packet.customer.id,
       name: packet.customer.name,
+      propertyCount: packet.properties.count,
       requestCount: packet.requests.count,
       estimateCount: packet.estimates.count,
       jobCount: packet.jobs.count,
@@ -243,7 +245,25 @@ async function buildCustomerPacket(
   },
 ): Promise<CustomerRecordsExportCustomerPacket> {
   const businessId = access.businessId;
-  const [requests, estimates, jobs, invoices, payments] = await Promise.all([
+  const [properties, requests, estimates, jobs, invoices, payments] = await Promise.all([
+    prisma.property.findMany({
+      where: { businessId, customerId: customer.id },
+      select: {
+        id: true,
+        businessId: true,
+        customerId: true,
+        label: true,
+        addressLine1: true,
+        addressLine2: true,
+        city: true,
+        region: true,
+        postalCode: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1,
+    }),
     prisma.serviceRequest.findMany({
       where: { businessId, customerId: customer.id },
       select: {
@@ -335,6 +355,9 @@ async function buildCustomerPacket(
     }),
   ]);
 
+  const ownedProperties = properties.filter(
+    (row) => row.businessId === businessId && row.customerId === customer.id,
+  );
   const ownedRequests = requests.filter(
     (row) => row.businessId === businessId && row.customerId === customer.id,
   );
@@ -352,6 +375,7 @@ async function buildCustomerPacket(
   );
 
   for (const row of [
+    ...ownedProperties,
     ...ownedRequests,
     ...ownedEstimates,
     ...ownedJobs,
@@ -361,6 +385,23 @@ async function buildCustomerPacket(
     access.assertOwned(row);
   }
 
+  const propertyCollection = collection(
+    ownedProperties.map((row) => ({
+      id: row.id,
+      customerId: customer.id,
+      label: row.label,
+      address: {
+        addressLine1: row.addressLine1,
+        addressLine2: row.addressLine2,
+        city: row.city,
+        region: row.region,
+        postalCode: row.postalCode,
+      },
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    })),
+    CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+  );
   const requestCollection = collection(
     ownedRequests.map((row) => ({
       id: row.id,
@@ -454,6 +495,7 @@ async function buildCustomerPacket(
       createdAt: customer.createdAt.toISOString(),
       updatedAt: customer.updatedAt.toISOString(),
     },
+    properties: propertyCollection,
     requests: requestCollection,
     estimates: estimateCollection,
     jobs: jobCollection,
