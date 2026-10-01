@@ -17,12 +17,6 @@ import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
-const generateEarly = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
-if (generateEarly.status !== 0) {
-  console.error("Failed to generate Prisma client for native assigned-job maps checks.");
-  process.exit(generateEarly.status ?? 1);
-}
-
 const {
   FORBIDDEN_DAY_ROUTE_CLAIM_PATTERNS,
   completeStructuredRouteAddress,
