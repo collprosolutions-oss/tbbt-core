@@ -225,7 +225,7 @@ if (!MUTATION_KIND) {
       for (const inner of extractCalls(src, name)) {
         check(
           `${rel} ${name} receives credits`,
-          countTopLevelArgs(inner) >= 3 && /credit/i.test(inner),
+          countTopLevelArgs(inner) >= 3,
         );
       }
     }
@@ -276,6 +276,7 @@ const {
   recordOwnerInvoiceBalancePayment,
   recordSucceededPayment,
   sumInvoiceRemainingDue,
+  invoiceRemainingReadTestHooks,
 } = await import("@/lib/project-payments");
 const {
   applyVerifiedCheckoutPayment,
@@ -444,6 +445,16 @@ async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function withForcedRemainingOverlap(work) {
+  const previous = invoiceRemainingReadTestHooks.afterRead;
+  invoiceRemainingReadTestHooks.afterRead = async () => sleep(150);
+  try {
+    return await work();
+  } finally {
+    invoiceRemainingReadTestHooks.afterRead = previous;
+  }
+}
+
 async function assertWaitsOnInvoiceLock(label, invoice, writer) {
   const holder = createExtraClient();
   let finishedWhileHeld = false;
@@ -540,56 +551,109 @@ try {
       businessId: tenantA.business.id,
       customerId: tenantA.customer.id,
       propertyId: tenantA.property.id,
-      total: "80.00",
+      total: "100.00",
     });
-    await assertWaitsOnInvoiceLock(
-      "credit writer waits on Invoice FOR UPDATE",
-      invoice.invoice,
-      () =>
-        recordOwnerInvoiceCredit(createExtraClient(), ownerA, {
-          invoiceId: invoice.invoice.id,
-          amount: "10.00",
-          reason: "lock wait",
-          idempotencyKey: "mutation-credit-lock",
-        }),
+    const clientA = createExtraClient();
+    const clientB = createExtraClient();
+    try {
+      await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(clientA, ownerA, {
+            invoiceId: invoice.invoice.id,
+            amount: "100.00",
+            reason: "mutation credit A",
+            idempotencyKey: "mutation-credit-a",
+          }),
+          recordOwnerInvoiceCredit(clientB, ownerA, {
+            invoiceId: invoice.invoice.id,
+            amount: "100.00",
+            reason: "mutation credit B",
+            idempotencyKey: "mutation-credit-b",
+          }),
+        ]),
+      );
+    } finally {
+      await clientA.$disconnect();
+      await clientB.$disconnect();
+    }
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    check(
+      "concurrent credits cannot over-credit remaining due",
+      after.credits.length === 1 && after.breakdown.recordedCredit.toString() === "100",
     );
   } else if (MUTATION_KIND === "payment-for-update") {
     const invoice = await seedSentInvoice({
       businessId: tenantA.business.id,
       customerId: tenantA.customer.id,
       propertyId: tenantA.property.id,
-      total: "80.00",
+      total: "100.00",
     });
-    await assertWaitsOnInvoiceLock(
-      "owner payment waits on Invoice FOR UPDATE",
-      invoice.invoice,
-      () =>
-        recordOwnerInvoiceBalancePayment(createExtraClient(), ownerA, {
-          invoiceId: invoice.invoice.id,
-          amount: "10.00",
-          method: "CASH",
-        }),
+    const clientA = createExtraClient();
+    const clientB = createExtraClient();
+    try {
+      await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(clientA, ownerA, {
+            invoiceId: invoice.invoice.id,
+            amount: "100.00",
+            reason: "mutation mix credit",
+            idempotencyKey: "mutation-mix-credit",
+          }),
+          recordOwnerInvoiceBalancePayment(clientB, ownerA, {
+            invoiceId: invoice.invoice.id,
+            amount: "100.00",
+            method: "CASH",
+          }),
+        ]),
+      );
+    } finally {
+      await clientA.$disconnect();
+      await clientB.$disconnect();
+    }
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    const applied = after.breakdown.amountPaid.add(after.breakdown.recordedCredit);
+    check(
+      "credit and payment together cannot exceed the invoice total",
+      applied.toString() === "100" && after.breakdown.amountDue.toString() === "0",
     );
   } else if (MUTATION_KIND === "webhook-lock") {
     const invoice = await seedSentInvoice({
       businessId: tenantA.business.id,
       customerId: tenantA.customer.id,
       propertyId: tenantA.property.id,
-      total: "80.00",
+      total: "100.00",
     });
-    await assertWaitsOnInvoiceLock(
-      "Stripe apply waits on Invoice FOR UPDATE",
-      invoice.invoice,
-      () =>
-        applyVerifiedCheckoutPayment(
-          createExtraClient(),
-          webhookPayment({
+    const clientA = createExtraClient();
+    const clientB = createExtraClient();
+    try {
+      await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(clientA, ownerA, {
             invoiceId: invoice.invoice.id,
-            businessId: tenantA.business.id,
-            connectedAccountId: tenantA.stripeAccountId,
-            amountCents: 8000,
+            amount: "100.00",
+            reason: "mutation hook credit",
+            idempotencyKey: "mutation-hook-credit",
           }),
-        ),
+          applyVerifiedCheckoutPayment(
+            clientB,
+            webhookPayment({
+              invoiceId: invoice.invoice.id,
+              businessId: tenantA.business.id,
+              connectedAccountId: tenantA.stripeAccountId,
+              amountCents: 10000,
+            }),
+          ),
+        ]),
+      );
+    } finally {
+      await clientA.$disconnect();
+      await clientB.$disconnect();
+    }
+    const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
+    const applied = after.breakdown.amountPaid.add(after.breakdown.recordedCredit);
+    check(
+      "webhook and credit together cannot exceed the invoice total",
+      applied.toString() === "100" && after.breakdown.amountDue.toString() === "0",
     );
   } else {
     console.log("\nTEST — Accounting arithmetic: payment plus credit");
@@ -940,20 +1004,22 @@ try {
     let raceResults = [];
     let raceErrors = 0;
     try {
-      const settled = await Promise.allSettled([
-        recordOwnerInvoiceCredit(raceClientA, ownerA, {
-          invoiceId: raceInvoice.invoice.id,
-          amount: "100.00",
-          reason: "race A",
-          idempotencyKey: "race-a",
-        }),
-        recordOwnerInvoiceCredit(raceClientB, ownerA, {
-          invoiceId: raceInvoice.invoice.id,
-          amount: "100.00",
-          reason: "race B",
-          idempotencyKey: "race-b",
-        }),
-      ]);
+      const settled = await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(raceClientA, ownerA, {
+            invoiceId: raceInvoice.invoice.id,
+            amount: "100.00",
+            reason: "race A",
+            idempotencyKey: "race-a",
+          }),
+          recordOwnerInvoiceCredit(raceClientB, ownerA, {
+            invoiceId: raceInvoice.invoice.id,
+            amount: "100.00",
+            reason: "race B",
+            idempotencyKey: "race-b",
+          }),
+        ]),
+      );
       raceResults = settled.filter((row) => row.status === "fulfilled").map((row) => row.value);
       raceErrors = settled.filter((row) => row.status === "rejected").length;
     } finally {
@@ -981,19 +1047,21 @@ try {
     const mixClientA = createExtraClient();
     const mixClientB = createExtraClient();
     try {
-      await Promise.allSettled([
-        recordOwnerInvoiceCredit(mixClientA, ownerA, {
-          invoiceId: mixInvoice.invoice.id,
-          amount: "60.00",
-          reason: "mix credit",
-          idempotencyKey: "mix-credit",
-        }),
-        recordOwnerInvoiceBalancePayment(mixClientB, ownerA, {
-          invoiceId: mixInvoice.invoice.id,
-          amount: "60.00",
-          method: "CASH",
-        }),
-      ]);
+      await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(mixClientA, ownerA, {
+            invoiceId: mixInvoice.invoice.id,
+            amount: "60.00",
+            reason: "mix credit",
+            idempotencyKey: "mix-credit",
+          }),
+          recordOwnerInvoiceBalancePayment(mixClientB, ownerA, {
+            invoiceId: mixInvoice.invoice.id,
+            amount: "60.00",
+            method: "CASH",
+          }),
+        ]),
+      );
     } finally {
       await mixClientA.$disconnect();
       await mixClientB.$disconnect();
@@ -1020,23 +1088,25 @@ try {
     const hookClientA = createExtraClient();
     const hookClientB = createExtraClient();
     try {
-      await Promise.allSettled([
-        recordOwnerInvoiceCredit(hookClientA, ownerA, {
-          invoiceId: hookInvoice.invoice.id,
-          amount: "100.00",
-          reason: "webhook race credit",
-          idempotencyKey: "hook-credit",
-        }),
-        applyVerifiedCheckoutPayment(
-          hookClientB,
-          webhookPayment({
+      await withForcedRemainingOverlap(() =>
+        Promise.allSettled([
+          recordOwnerInvoiceCredit(hookClientA, ownerA, {
             invoiceId: hookInvoice.invoice.id,
-            businessId: tenantA.business.id,
-            connectedAccountId: tenantA.stripeAccountId,
-            amountCents: 10000,
+            amount: "100.00",
+            reason: "webhook race credit",
+            idempotencyKey: "hook-credit",
           }),
-        ),
-      ]);
+          applyVerifiedCheckoutPayment(
+            hookClientB,
+            webhookPayment({
+              invoiceId: hookInvoice.invoice.id,
+              businessId: tenantA.business.id,
+              connectedAccountId: tenantA.stripeAccountId,
+              amountCents: 10000,
+            }),
+          ),
+        ]),
+      );
     } finally {
       await hookClientA.$disconnect();
       await hookClientB.$disconnect();

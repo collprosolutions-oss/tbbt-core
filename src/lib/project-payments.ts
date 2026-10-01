@@ -21,6 +21,11 @@ const ZERO = new Prisma.Decimal(0);
 export const PAYMENT_PURPOSE_MATERIAL_DEPOSIT = "MATERIAL_DEPOSIT" as const;
 export const PAYMENT_PURPOSE_INVOICE_BALANCE = "INVOICE_BALANCE" as const;
 
+/** Test-only seam after remaining due is read under the Invoice lock. */
+export const invoiceRemainingReadTestHooks = {
+  afterRead: async () => {},
+};
+
 export type PaymentPurpose =
   | typeof PAYMENT_PURPOSE_MATERIAL_DEPOSIT
   | typeof PAYMENT_PURPOSE_INVOICE_BALANCE;
@@ -859,6 +864,7 @@ export async function recordOwnerInvoiceBalancePayment(
       credits,
     });
     const remaining = breakdown.amountDue;
+    await invoiceRemainingReadTestHooks.afterRead();
 
     if (remaining.lte(0)) {
       const closing = closingTruthFromRecordedPayments(payments, credits);

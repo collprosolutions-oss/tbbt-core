@@ -22,6 +22,7 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   invoicePaymentBreakdown,
+  invoiceRemainingReadTestHooks,
   listPaymentsForInvoice,
   moneyMax,
   ProjectPaymentError,
@@ -300,6 +301,7 @@ export async function recordOwnerInvoiceCredit(
     if (amount.gt(remaining)) {
       throw new InvoiceCreditError("That amount is more than the remaining balance.");
     }
+    await invoiceRemainingReadTestHooks.afterRead();
 
     const paymentSnapshot = payments.map((row) => ({
       id: row.id,

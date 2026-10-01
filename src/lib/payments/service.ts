@@ -12,6 +12,7 @@ import {
   PAYMENT_PURPOSE_INVOICE_BALANCE,
   PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
   invoicePaymentBreakdown,
+  invoiceRemainingReadTestHooks,
   listPaymentsForInvoice,
   listProjectPayments,
   recordSucceededPayment,
@@ -502,6 +503,7 @@ async function applyVerifiedInvoicePayment(
     if (mismatch && !creditCausedMismatch) {
       return { applied: false, reason: "amount_mismatch" };
     }
+    await invoiceRemainingReadTestHooks.afterRead();
 
     const reviewNote = creditCausedMismatch
       ? `${STRIPE_CREDIT_MISMATCH_REVIEW_NOTE}: charged ${payment.amountCents} cents after recorded credit; remaining was ${breakdown.amountDue.toFixed(2)}`
