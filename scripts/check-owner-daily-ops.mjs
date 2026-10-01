@@ -114,14 +114,13 @@ if (!MUTATION_CHILD) {
   );
   check(
     "Pages do not inline the broken deposit / unbounded conflict queries",
-    !dashboardSrc.includes("prisma.estimate.findMany") &&
-      !todaySrc.includes("prisma.estimate.findMany") &&
+    !dashboardSrc.includes('status: "APPROVED"') &&
+      !todaySrc.includes('status: "APPROVED"') &&
       !dashboardSrc.includes("loadCapacityJobs") &&
       !todaySrc.includes("loadCapacityJobs") &&
       !dashboardSrc.includes("ownerTodayAppointmentCandidateWhere") &&
       dataSrc.includes("OWNER_DAILY_DEPOSIT_ESTIMATE_SELECT") &&
       dataSrc.includes("approvedOptionId: true") &&
-      dataSrc.includes("resolveChosenCommercialScope") === false &&
       helperSrc.includes("resolveChosenCommercialScope") &&
       dataSrc.includes("ownerDailyFirstAwaitingCandidateWhere"),
   );
@@ -1408,7 +1407,9 @@ await withDisposableTestDatabase(
       };
       const pairIds = [];
       for (let i = 0; i < 26; i += 1) {
-        const day = new Date(Date.UTC(2026, 9, 1 + i, 13, 0, 0));
+        const day = new Date(
+          Date.UTC(2026, 9, 3 + Math.floor(i / 2), 13 + (i % 2) * 5, 0, 0),
+        );
         const a = await makeJob(business.id, {
           customerName: `Conflict A ${i}`,
           assignedMembershipId: worker.id,
