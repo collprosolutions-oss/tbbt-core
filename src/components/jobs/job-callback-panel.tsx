@@ -212,9 +212,11 @@ export function JobCallbackPanel({ review }: { review: JobCallbackReview }) {
                 <span className="text-xs text-muted-foreground">
                   {reportedViaLabel(callback.reportedVia)} · Recorded{" "}
                   {formatDateTime(callback.recordedAt)}
-                  {callback.recordedBy.user.name
-                    ? ` by ${callback.recordedBy.user.name}`
-                    : ""}
+                  {callback.reportedVia === "PORTAL"
+                    ? ""
+                    : callback.recordedBy.user.name
+                      ? ` by ${callback.recordedBy.user.name}`
+                      : ""}
                 </span>
               </div>
               <p className="whitespace-pre-wrap">{callback.description}</p>

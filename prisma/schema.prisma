@@ -2417,12 +2417,13 @@ model JobProblemReport {
   @@index([membershipId])
 }
 
-/// OWNER-recorded customer-reported callback against a completed
-/// same-business Job. Trade-neutral operational review only — never a
-/// warranty coverage or legal determination, and never an invoice,
-/// scheduled Job, or customer message by itself. Distinct from
-/// AdditionalWorkRequest (portal/field extra-work review) and
-/// JobProblemReport (assigned-member field issues).
+/// OWNER-recorded or customer-portal-submitted callback against a
+/// completed same-business Job. Portal submissions resolve the Job from
+/// projectToken only and reuse this review path. Trade-neutral
+/// operational review only — never a warranty coverage or legal
+/// determination, and never an invoice, scheduled Job, or customer
+/// message by itself. Distinct from AdditionalWorkRequest (portal/field
+/// extra-work review) and JobProblemReport (assigned-member field issues).
 ///
 /// Status: RECORDED -> UNDER_REVIEW -> OUTCOME_RECORDED.
 /// At most one open (RECORDED | UNDER_REVIEW) row per Job is enforced by

@@ -73,6 +73,22 @@ export const JOB_CALLBACK_FORBIDDEN_OUTCOMES = [
 
 export const MAX_JOB_CALLBACK_DESCRIPTION_LENGTH = 2000;
 export const MAX_JOB_CALLBACK_OUTCOME_NOTES_LENGTH = 2000;
+export const MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH = 500;
+export const MAX_PORTAL_PROJECT_TOKEN_LENGTH = 128;
+
+export const JOB_CALLBACK_PREFERRED_CONTACT = ["PHONE", "TEXT", "EMAIL"] as const;
+export type JobCallbackPreferredContact = (typeof JOB_CALLBACK_PREFERRED_CONTACT)[number];
+
+export const JOB_CALLBACK_PREFERRED_CONTACT_LABELS: Record<
+  JobCallbackPreferredContact,
+  string
+> = {
+  PHONE: "Phone",
+  TEXT: "Text",
+  EMAIL: "Email",
+};
+
+export const PORTAL_CALLBACK_PREFERRED_CONTACT_PREFIX = "Preferred contact: ";
 
 export const JOB_CALLBACK_OWNER_ONLY_MESSAGE =
   "Only the business owner can record, review, or close a customer-reported callback.";
@@ -129,6 +145,24 @@ export const JOB_CALLBACK_NO_WARRANTY_TERMS_MESSAGE =
 export const JOB_CALLBACK_OWNER_WORKFLOW_MESSAGE =
   "Record a customer-reported callback on a completed job, review any recorded warranty terms, and record an operational outcome. This does not create an invoice, schedule a job, or message the customer.";
 
+export const JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE =
+  "This project link is not available.";
+
+export const JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE =
+  "A callback request can only be submitted after this job is complete.";
+
+export const JOB_CALLBACK_PORTAL_DESCRIPTION_REQUIRED_MESSAGE =
+  "Describe what you would like the team to review.";
+
+export const JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE =
+  "Choose how you would like to be contacted.";
+
+export const JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE =
+  "We received your callback request. The team will review it. This is not a warranty decision and does not schedule a visit or send a message.";
+
+export const JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE =
+  "Ask the team to review a concern about the completed work. This is not a warranty claim, does not promise coverage, does not schedule a visit, and does not send a message.";
+
 export function jobCallbackWriteAllowed(role: MembershipRole | string): boolean {
   return role === "OWNER";
 }
@@ -176,6 +210,41 @@ export function parseJobCallbackDescription(raw: string | null | undefined): str
   const value = (raw ?? "").trim();
   if (!value) return null;
   return value.slice(0, MAX_JOB_CALLBACK_DESCRIPTION_LENGTH);
+}
+
+export function parsePortalProjectToken(raw: string | null | undefined): string | null {
+  const value = (raw ?? "").trim();
+  if (!value || value.length > MAX_PORTAL_PROJECT_TOKEN_LENGTH) return null;
+  return value;
+}
+
+export function parsePortalJobCallbackDescription(
+  raw: string | null | undefined,
+): string | null {
+  const value = (raw ?? "").trim();
+  if (!value) return null;
+  return value.slice(0, MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH);
+}
+
+export function isJobCallbackPreferredContact(
+  value: string,
+): value is JobCallbackPreferredContact {
+  return (JOB_CALLBACK_PREFERRED_CONTACT as readonly string[]).includes(value);
+}
+
+export function parsePortalJobCallbackPreferredContact(
+  raw: string | null | undefined,
+): JobCallbackPreferredContact | null {
+  const value = (raw ?? "").trim().toUpperCase();
+  return isJobCallbackPreferredContact(value) ? value : null;
+}
+
+export function formatPortalCallbackDescription(
+  description: string,
+  preferredContact: JobCallbackPreferredContact,
+): string {
+  const header = `${PORTAL_CALLBACK_PREFERRED_CONTACT_PREFIX}${JOB_CALLBACK_PREFERRED_CONTACT_LABELS[preferredContact]}`;
+  return `${header}\n\n${description}`.slice(0, MAX_JOB_CALLBACK_DESCRIPTION_LENGTH);
 }
 
 export function parseJobCallbackOutcomeNotes(raw: string | null | undefined): string {
