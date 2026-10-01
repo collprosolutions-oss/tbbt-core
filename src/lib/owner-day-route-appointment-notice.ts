@@ -4,7 +4,7 @@
  * After an OWNER records an appointment change, this path offers a
  * separate review-and-send. Page load and the appointment change itself
  * never send. The reviewed window is the recorded appointment, not a
- * travel arrival or optimized route.
+ * travel arrival or a rearranged route.
  */
 import { customerNotificationNeeded } from "@/lib/appointment-confirmation";
 import {

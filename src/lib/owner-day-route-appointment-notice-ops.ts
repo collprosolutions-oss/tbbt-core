@@ -437,20 +437,6 @@ export async function sendOwnerDayRouteAppointmentNotice(
       idempotencyKey: dayRouteAppointmentNoticeIdempotencyKey(locked.id, proposalId),
     });
 
-    if (result.reused && isAcceptedCustomerMessageStatus(result.status)) {
-      await stampNotification(db, {
-        businessId: access.businessId,
-        job: locked,
-        proposalId,
-        status: "SENT",
-        warning: null,
-        actorMembershipId: access.workspace.membership.id,
-        scheduledAt: locked.scheduledAt!,
-        scheduledDurationMinutes: locked.scheduledDurationMinutes,
-      });
-      throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE);
-    }
-
     if (!result.ok) {
       await stampNotification(db, {
         businessId: access.businessId,
