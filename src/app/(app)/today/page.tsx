@@ -16,7 +16,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
-import { loadAvailabilitySettings } from "@/lib/availability-data";
 import {
   addZonedCalendarDays,
   resolveBusinessTimeZone,
@@ -34,10 +33,10 @@ import {
   buildOwnerDailyAdditionalWorkAttention,
   buildOwnerDailyCallbackAttention,
   buildOwnerDailyChangeOrderAttention,
-  buildOwnerDailyMaterialDepositAttention,
   buildOwnerDailyRunningTimeAttention,
-  buildOwnerDailyScheduleConflictAttention,
+  ownerDailyConflictTruncationLabel,
 } from "@/lib/owner-daily-attention";
+import { loadOwnerDailyActionableAttention } from "@/lib/owner-daily-attention-data";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_FIELD_COMPLETION_COPY,
@@ -56,14 +55,7 @@ import {
   ownerTodayViewerHasAssignedFieldJob,
 } from "@/lib/owner-today";
 import { prisma } from "@/lib/prisma";
-import { depositPaidByEstimateIds } from "@/lib/project-payments";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
-import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
-import {
-  loadCapacityJobs,
-  loadSchedulingPolicy,
-  loadWorkforceMembers,
-} from "@/lib/workforce-data";
 
 export const metadata: Metadata = {
   title: "Today",
@@ -91,11 +83,7 @@ export default async function OwnerTodayPage() {
     changeOrderRows,
     callbackRows,
     runningTimeRows,
-    approvedDepositEstimates,
-    conflictSettings,
-    conflictPolicy,
-    conflictMembers,
-    conflictJobs,
+    dailyAttention,
   ] = await Promise.all([
     prisma.job.findMany({
       where: {
@@ -166,23 +154,14 @@ export default async function OwnerTodayPage() {
       orderBy: { startedAt: "desc" },
       take: OWNER_DAILY_ATTENTION_TAKE,
     }),
-    prisma.estimate.findMany({
-      where: { ...access.scope, status: "APPROVED" },
-      select: {
-        id: true,
-        businessId: true,
-        status: true,
-        total: true,
-        customer: { select: { name: true } },
-        lineItems: { select: { type: true, total: true, description: true } },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: OWNER_DAILY_ATTENTION_TAKE,
+    loadOwnerDailyActionableAttention(prisma, {
+      businessId: access.businessId,
+      scope: access.scope,
+      todayStart: todayRange.start,
+      conflictRange,
+      timeZone,
+      includeFirstAwaiting: false,
     }),
-    loadAvailabilitySettings(prisma, access.businessId),
-    loadSchedulingPolicy(prisma, access.businessId),
-    loadWorkforceMembers(prisma, access.businessId),
-    loadCapacityJobs(prisma, access.businessId, conflictRange),
   ]);
 
   const jobs = buildOwnerTodayJobs(todayJobs, {
@@ -204,11 +183,6 @@ export default async function OwnerTodayPage() {
     openFieldProblemReports,
     { businessId: access.businessId, timeZone },
   );
-  const depositPaid = await depositPaidByEstimateIds(
-    prisma,
-    access.businessId,
-    approvedDepositEstimates.map((estimate) => estimate.id),
-  );
   const additionalWorkAttention = buildOwnerDailyAdditionalWorkAttention(
     additionalWorkRows,
     access.businessId,
@@ -226,27 +200,8 @@ export default async function OwnerTodayPage() {
     access.businessId,
     timeZone,
   );
-  const materialDepositAttention = buildOwnerDailyMaterialDepositAttention(
-    approvedDepositEstimates,
-    depositPaid,
-    access.businessId,
-  );
-  const scheduleConflictAttention = buildOwnerDailyScheduleConflictAttention(
-    detectScheduleConflicts({
-      jobs: conflictJobs,
-      settings: conflictSettings,
-      policy: conflictPolicy,
-      members: conflictMembers,
-      timeZone,
-    }),
-    new Map(
-      conflictJobs.map((job) => [
-        job.id,
-        { id: job.id, businessId: access.businessId, customerName: job.customerName },
-      ]),
-    ),
-    access.businessId,
-  );
+  const materialDepositAttention = dailyAttention.materialDeposits;
+  const scheduleConflictAttention = dailyAttention.scheduleConflicts;
   const unassignedToday = jobs.filter((job) => job.assignment.kind === "UNASSIGNED");
   const eligibleMembers = eligibleMemberRows.map((member) => ({
     id: member.id,
@@ -298,8 +253,8 @@ export default async function OwnerTodayPage() {
           changeOrderAttention.length === 0 &&
           callbackAttention.length === 0 &&
           runningTimeAttention.length === 0 &&
-          materialDepositAttention.length === 0 &&
-          scheduleConflictAttention.length === 0 &&
+          materialDepositAttention.items.length === 0 &&
+          scheduleConflictAttention.items.length === 0 &&
           handoffItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
@@ -347,11 +302,19 @@ export default async function OwnerTodayPage() {
           />
           <OwnerDailyAttentionList
             title={OWNER_DAILY_GROUP_TITLES.materialDeposits}
-            items={materialDepositAttention}
+            items={materialDepositAttention.items}
+            count={materialDepositAttention.count}
+            moreNotShown={materialDepositAttention.truncated}
           />
           <OwnerDailyAttentionList
             title={OWNER_DAILY_GROUP_TITLES.scheduleConflicts}
-            items={scheduleConflictAttention}
+            items={scheduleConflictAttention.items}
+            count={scheduleConflictAttention.count}
+            moreNotShown={scheduleConflictAttention.truncated}
+            truncationLabel={ownerDailyConflictTruncationLabel(
+              scheduleConflictAttention.count,
+              scheduleConflictAttention.items.length,
+            )}
           />
 
           {handoffItems.length > 0 ? (

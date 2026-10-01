@@ -25,7 +25,11 @@ import { DashboardLaunchCard } from "@/components/launch/dashboard-card";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { requireManagementPageAccess } from "@/lib/access";
-import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import {
+  addZonedCalendarDays,
+  resolveBusinessTimeZone,
+  startOfZonedDay,
+} from "@/lib/business-timezone";
 import {
   DASHBOARD_APPOINTMENT_ATTENTION_SELECT,
   DASHBOARD_APPOINTMENT_ATTENTION_TAKE,
@@ -43,14 +47,11 @@ import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import {
-  OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_FIELD_PROBLEM_SELECT,
   OWNER_TODAY_FIELD_PROBLEM_TAKE,
   OWNER_TODAY_JOB_SELECT,
-  buildOwnerTodayAppointmentAttention,
   buildOwnerTodayFieldProblemAttention,
   buildOwnerTodayJobs,
-  ownerTodayAppointmentCandidateWhere,
   ownerTodayScheduledWhere,
 } from "@/lib/owner-today";
 import {
@@ -59,31 +60,26 @@ import {
   OWNER_DAILY_CALLBACK_SELECT,
   OWNER_DAILY_CHANGE_ORDER_SELECT,
   OWNER_DAILY_GROUP_TITLES,
+  OWNER_DAILY_MORE_NOT_SHOWN,
   OWNER_DAILY_RUNNING_TIME_SELECT,
   buildOwnerDailyAdditionalWorkAttention,
   buildOwnerDailyCallbackAttention,
   buildOwnerDailyChangeOrderAttention,
-  buildOwnerDailyMaterialDepositAttention,
   buildOwnerDailyRunningTimeAttention,
-  buildOwnerDailyScheduleConflictAttention,
+  ownerDailyConflictTruncationLabel,
   ownerDailyUnpaidInvoiceWhere,
   ownerDailyUnscheduledApprovedWhere,
 } from "@/lib/owner-daily-attention";
+import {
+  loadOwnerDailyActionableAttention,
+  projectOwnerDailyFirstAwaitingAttention,
+} from "@/lib/owner-daily-attention-data";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import {
-  depositPaidByEstimateIds,
   listPaymentsGroupedByInvoiceId,
   sumInvoiceRemainingDue,
 } from "@/lib/project-payments";
-import { loadAvailabilitySettings } from "@/lib/availability-data";
-import { addZonedCalendarDays, startOfZonedDay } from "@/lib/business-timezone";
-import {
-  loadCapacityJobs,
-  loadSchedulingPolicy,
-  loadWorkforceMembers,
-} from "@/lib/workforce-data";
-import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
 import { JOB_CALLBACK_OPEN_STATUSES } from "@/lib/job-callback";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
@@ -265,13 +261,8 @@ export default async function DashboardPage() {
     changeOrderRows,
     callbackRows,
     runningTimeRows,
-    approvedDepositEstimates,
     openFieldProblemReports,
-    firstAwaitingJobs,
-    conflictSettings,
-    conflictPolicy,
-    conflictMembers,
-    conflictJobs,
+    dailyAttention,
   ] = await Promise.all([
     prisma.additionalWorkRequest.findMany({
       where: { ...access.scope, status: "OPEN" },
@@ -304,44 +295,21 @@ export default async function DashboardPage() {
       orderBy: { startedAt: "desc" },
       take: OWNER_DAILY_ATTENTION_TAKE,
     }),
-    prisma.estimate.findMany({
-      where: { ...access.scope, status: "APPROVED" },
-      select: {
-        id: true,
-        businessId: true,
-        status: true,
-        total: true,
-        customer: { select: { name: true } },
-        lineItems: { select: { type: true, total: true, description: true } },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: OWNER_DAILY_ATTENTION_TAKE,
-    }),
     prisma.jobProblemReport.findMany({
       where: { businessId: access.businessId, status: "OPEN" },
       select: OWNER_TODAY_FIELD_PROBLEM_SELECT,
       orderBy: { createdAt: "desc" },
       take: OWNER_TODAY_FIELD_PROBLEM_TAKE,
     }),
-    prisma.job.findMany({
-      where: {
-        ...access.scope,
-        ...ownerTodayAppointmentCandidateWhere(todayRange.start),
-      },
-      select: OWNER_TODAY_JOB_SELECT,
-      orderBy: { scheduledAt: "asc" },
-      take: OWNER_TODAY_APPOINTMENT_TAKE,
+    loadOwnerDailyActionableAttention(prisma, {
+      businessId: access.businessId,
+      scope: access.scope,
+      todayStart: todayRange.start,
+      conflictRange,
+      timeZone,
+      includeFirstAwaiting: true,
     }),
-    loadAvailabilitySettings(prisma, access.businessId),
-    loadSchedulingPolicy(prisma, access.businessId),
-    loadWorkforceMembers(prisma, access.businessId),
-    loadCapacityJobs(prisma, access.businessId, conflictRange),
   ]);
-  const depositPaid = await depositPaidByEstimateIds(
-    prisma,
-    access.businessId,
-    approvedDepositEstimates.map((estimate) => estimate.id),
-  );
   const additionalWorkAttention = buildOwnerDailyAdditionalWorkAttention(
     additionalWorkRows,
     access.businessId,
@@ -359,36 +327,16 @@ export default async function DashboardPage() {
     access.businessId,
     timeZone,
   );
-  const materialDepositAttention = buildOwnerDailyMaterialDepositAttention(
-    approvedDepositEstimates,
-    depositPaid,
-    access.businessId,
-  );
+  const materialDepositAttention = dailyAttention.materialDeposits;
   const fieldProblemAttention = buildOwnerTodayFieldProblemAttention(
     openFieldProblemReports,
     { businessId: access.businessId, timeZone },
   );
-  const firstAwaitingAttention = buildOwnerTodayAppointmentAttention(
-    firstAwaitingJobs,
+  const firstAwaitingAttention = projectOwnerDailyFirstAwaitingAttention(
+    dailyAttention.firstAwaitingJobs,
     { businessId: access.businessId, start: todayRange.start, timeZone },
-  ).filter((item) => item.kind === "AWAITING_CUSTOMER");
-  const recordedConflicts = detectScheduleConflicts({
-    jobs: conflictJobs,
-    settings: conflictSettings,
-    policy: conflictPolicy,
-    members: conflictMembers,
-    timeZone,
-  });
-  const scheduleConflictAttention = buildOwnerDailyScheduleConflictAttention(
-    recordedConflicts,
-    new Map(
-      conflictJobs.map((job) => [
-        job.id,
-        { id: job.id, businessId: access.businessId, customerName: job.customerName },
-      ]),
-    ),
-    access.businessId,
   );
+  const scheduleConflictAttention = dailyAttention.scheduleConflicts;
 
   const outstandingPayments = await listPaymentsGroupedByInvoiceId(
     prisma,
@@ -540,13 +488,19 @@ export default async function DashboardPage() {
     },
     {
       title: OWNER_DAILY_GROUP_TITLES.materialDeposits,
-      count: materialDepositAttention.length,
-      items: materialDepositAttention,
+      count: materialDepositAttention.count,
+      items: materialDepositAttention.items,
+      moreNotShown: materialDepositAttention.truncated,
     },
     {
       title: OWNER_DAILY_GROUP_TITLES.scheduleConflicts,
-      count: scheduleConflictAttention.length,
-      items: scheduleConflictAttention,
+      count: scheduleConflictAttention.count,
+      items: scheduleConflictAttention.items,
+      moreNotShown: scheduleConflictAttention.truncated,
+      truncationLabel: ownerDailyConflictTruncationLabel(
+        scheduleConflictAttention.count,
+        scheduleConflictAttention.items.length,
+      ),
     },
     {
       title: OWNER_DAILY_GROUP_TITLES.fieldProblems,
@@ -846,17 +800,31 @@ type AttentionGroupData = {
   title: string;
   count: number;
   items: AttentionItem[];
+  moreNotShown?: boolean;
+  truncationLabel?: string | null;
 };
 
 function AttentionGroup({ group }: { group: AttentionGroupData }) {
+  const truncated =
+    Boolean(group.moreNotShown) || group.count > group.items.length;
+  const truncationLabel =
+    group.truncationLabel ??
+    (truncated && group.count > group.items.length
+      ? `${group.count} total, showing ${group.items.length}`
+      : null);
   return (
     <div className="space-y-2">
       <p className="text-sm font-medium text-foreground">
         {group.title}
-        {group.count > group.items.length ? (
+        {truncationLabel ? (
+          <span className="ml-1.5 text-muted-foreground">({truncationLabel})</span>
+        ) : group.count > group.items.length ? (
           <span className="ml-1.5 text-muted-foreground">({group.count})</span>
         ) : null}
       </p>
+      {truncated ? (
+        <p className="text-xs text-muted-foreground">{OWNER_DAILY_MORE_NOT_SHOWN}</p>
+      ) : null}
       <div className="space-y-2">
         {group.items.map((item) => (
           <RecordRow

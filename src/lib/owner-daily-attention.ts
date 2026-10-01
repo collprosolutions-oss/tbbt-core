@@ -10,6 +10,7 @@ import { Prisma } from "@prisma/client";
 import { conflictingJobHref } from "@/lib/availability";
 import { JOB_CALLBACK_OPEN_STATUSES, recordedCallbackStatusLabel } from "@/lib/job-callback";
 import { formatMoney, formatTime } from "@/lib/format";
+import { resolveChosenCommercialScope } from "@/lib/estimate-options";
 import { unpaidMaterialDepositWarning } from "@/lib/project-payments";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import { requestedWorkLabels, requestedWorkSummary } from "@/lib/service-request-work";
@@ -20,6 +21,10 @@ import {
 import type { ScheduleConflict } from "@/lib/workforce-conflicts";
 
 export const OWNER_DAILY_ATTENTION_TAKE = 25;
+export const OWNER_DAILY_DEPOSIT_PAGE_SIZE = 50;
+export const OWNER_DAILY_DEPOSIT_MAX_PAGES = 20;
+export const OWNER_DAILY_CONFLICT_JOBS_TAKE = 200;
+export const OWNER_DAILY_MORE_NOT_SHOWN = "more not shown";
 
 export const OWNER_DAILY_UNPAID_INVOICE_STATUSES = ["SENT"] as const;
 export const OWNER_DAILY_CHANGE_ORDER_ATTENTION_STATUSES = ["DRAFT", "SENT"] as const;
@@ -359,18 +364,41 @@ export function buildOwnerDailyRunningTimeAttention(
   return items;
 }
 
+export type OwnerDailyDepositLine = {
+  type: string;
+  total: Prisma.Decimal | number | string;
+  description: string;
+  optionId?: string | null;
+};
+
 export type OwnerDailyDepositEstimateRecord = {
   id: string;
   businessId: string;
   status: string;
   total: Prisma.Decimal | number | string;
+  approvedOptionId?: string | null;
   customer?: { name: string | null } | null;
-  lineItems: Array<{
-    type: string;
+  lineItems: OwnerDailyDepositLine[];
+  approvedOption?: {
+    id: string;
+    name?: string | null;
     total: Prisma.Decimal | number | string;
-    description: string;
-  }>;
+  } | null;
+  approvedVersion?: {
+    total: Prisma.Decimal | number | string;
+    lineItems?: OwnerDailyDepositLine[];
+  } | null;
 };
+
+export function chosenOwnerDailyDepositScope(estimate: OwnerDailyDepositEstimateRecord) {
+  return resolveChosenCommercialScope({
+    total: estimate.total,
+    lineItems: estimate.lineItems,
+    approvedOptionId: estimate.approvedOptionId ?? estimate.approvedOption?.id ?? null,
+    approvedOption: estimate.approvedOption,
+    approvedVersion: estimate.approvedVersion,
+  });
+}
 
 export function buildOwnerDailyMaterialDepositItem(
   estimate: OwnerDailyDepositEstimateRecord,
@@ -379,10 +407,13 @@ export function buildOwnerDailyMaterialDepositItem(
 ): OwnerDailyAttentionItem | null {
   if (estimate.businessId !== businessId) return null;
   if (estimate.status !== "APPROVED") return null;
+  // OWNER_DAILY_DEPOSIT_SCOPE_BEGIN
+  const chosen = chosenOwnerDailyDepositScope(estimate);
   const deposit = resolveMaterialDeposit({
-    lines: estimate.lineItems,
-    total: estimate.total,
+    lines: chosen.lineItems,
+    total: chosen.total,
   });
+  // OWNER_DAILY_DEPOSIT_SCOPE_END
   if (deposit.amount.lte(0)) return null;
   const paid = paidTowardDeposit instanceof Prisma.Decimal
     ? paidTowardDeposit
@@ -423,11 +454,12 @@ export type OwnerDailyConflictJob = {
 };
 
 export function scheduleConflictNeedsOwnerAttention(conflict: ScheduleConflict) {
+  // OWNER_DAILY_CONFLICT_FILTER_BEGIN
   return (
-    conflict.severity === "ERROR" ||
-    conflict.kind === "DOUBLE_BOOKING" ||
-    conflict.kind === "OVERLAP"
+    conflict.severity === "ERROR" &&
+    (conflict.kind === "DOUBLE_BOOKING" || conflict.kind === "OVERLAP")
   );
+  // OWNER_DAILY_CONFLICT_FILTER_END
 }
 
 export function buildOwnerDailyScheduleConflictItem(
@@ -478,18 +510,39 @@ export type OwnerDailyAttentionGroup = {
   title: string;
   count: number;
   items: OwnerDailyAttentionItem[];
+  truncated?: boolean;
+  truncationLabel?: string | null;
 };
+
+export function ownerDailyTruncationLabel(count: number, shown: number) {
+  if (count <= shown) return null;
+  return `${count} total, showing ${shown}`;
+}
+
+export function ownerDailyConflictTruncationLabel(count: number, shown: number) {
+  if (count <= shown) return null;
+  return `${count} conflicts, showing ${shown}`;
+}
 
 export function ownerDailyAttentionGroup(
   title: string,
   items: readonly OwnerDailyAttentionItem[],
   count = items.length,
+  extra?: { truncated?: boolean; truncationLabel?: string | null },
 ): OwnerDailyAttentionGroup | null {
   if (count <= 0 && items.length === 0) return null;
+  const sliced = items.slice(0, OWNER_DAILY_ATTENTION_TAKE);
+  const truncated = Boolean(extra?.truncated) || count > sliced.length;
   return {
     title,
     count,
-    items: items.slice(0, OWNER_DAILY_ATTENTION_TAKE),
+    items: sliced,
+    truncated,
+    truncationLabel:
+      extra?.truncationLabel ??
+      (title === OWNER_DAILY_GROUP_TITLES.scheduleConflicts
+        ? ownerDailyConflictTruncationLabel(count, sliced.length)
+        : ownerDailyTruncationLabel(count, sliced.length)),
   };
 }
 
