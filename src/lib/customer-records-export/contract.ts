@@ -2,10 +2,10 @@
  * Versioned OWNER-only customer-records export contract.
  *
  * This is a tenant-scoped portable JSON snapshot of recorded customers
- * and their same-business requests, estimates, jobs, invoices, and
- * payments. Large exports are paginated. Private files stay references
- * or a labeled omission — bytes and storage credentials are never
- * included.
+ * and their same-business properties (with structured addresses),
+ * requests, estimates, jobs, invoices, and payments. Large exports are
+ * paginated. Private files stay references or a labeled omission —
+ * bytes and storage credentials are never included.
  *
  * It is not the Settings business ZIP, not the customers-page CSV, not
  * live synchronization, and not a shared database.
@@ -19,6 +19,9 @@ export const CUSTOMER_RECORDS_EXPORT_PRODUCT = "TBBT" as const;
 export const CUSTOMER_RECORDS_EXPORT_PAGE_SIZE = 25;
 export const CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT = 50;
 export const CUSTOMER_RECORDS_EXPORT_FILE_LIMIT = 40;
+
+export const CUSTOMER_RECORDS_EXPORT_AUDIT_AREA = "data-export" as const;
+export const CUSTOMER_RECORDS_EXPORT_AUDIT_KEY = "customerRecordsExport" as const;
 
 export const CUSTOMER_RECORDS_EXPORT_OMISSIONS = [
   "Password hashes, session tokens, TOTP secrets, and setup/reset tokens",
@@ -87,6 +90,23 @@ export type CustomerRecordsExportCustomer = {
   phone: string | null;
   smsConsentStatus: string;
   firstLeadSource: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CustomerRecordsExportAddress = {
+  addressLine1: string;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+};
+
+export type CustomerRecordsExportProperty = {
+  id: string;
+  customerId: string;
+  label: string | null;
+  address: CustomerRecordsExportAddress;
   createdAt: string;
   updatedAt: string;
 };
@@ -171,6 +191,7 @@ export type CustomerRecordsExportFileRef = {
 
 export type CustomerRecordsExportCustomerPacket = {
   customer: CustomerRecordsExportCustomer;
+  properties: CustomerRecordsExportCollection<CustomerRecordsExportProperty>;
   requests: CustomerRecordsExportCollection<CustomerRecordsExportRequest>;
   estimates: CustomerRecordsExportCollection<CustomerRecordsExportEstimate>;
   jobs: CustomerRecordsExportCollection<CustomerRecordsExportJob>;
@@ -217,6 +238,13 @@ export function customerRecordsExportPageTruncationMessage(limit: number): strin
 
 export function customerRecordsExportRelatedTruncationMessage(kind: string, limit: number): string {
   return `${kind} are truncated at ${limit}. Additional same-customer records were not loaded.`;
+}
+
+export function customerRecordsExportPropertyTruncationMessage(limit: number): string {
+  return customerRecordsExportRelatedTruncationMessage(
+    "Same-business properties and structured addresses",
+    limit,
+  );
 }
 
 export function customerRecordsExportFileTruncationMessage(limit: number): string {

@@ -6,6 +6,7 @@ import {
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
   customerRecordsExportFileTruncationMessage,
   customerRecordsExportPageTruncationMessage,
+  customerRecordsExportPropertyTruncationMessage,
   customerRecordsExportRelatedTruncationMessage,
   type CustomerRecordsExportDocument,
 } from "@/lib/customer-records-export";
@@ -29,6 +30,7 @@ export function CustomerRecordsExportPanel({
   const nextHref = document.provenance.page.nextCursor
     ? `/customers/records-export?cursor=${encodeURIComponent(document.provenance.page.nextCursor)}`
     : null;
+  const propertiesTruncated = document.customers.some((packet) => packet.properties.truncated);
   const relatedTruncated = document.customers.some(
     (packet) =>
       packet.requests.truncated ||
@@ -46,8 +48,9 @@ export function CustomerRecordsExportPanel({
           <CardTitle>Customer records packet</CardTitle>
           <CardDescription>
             Versioned {CUSTOMER_RECORDS_EXPORT_CONTRACT} snapshot of recorded customers and their
-            same-business requests, estimates, jobs, invoices, and payments. This is not the
-            Settings business ZIP, not live synchronization, and not a shared database.
+            same-business properties, structured addresses, requests, estimates, jobs, invoices,
+            and payments. This is not the Settings business ZIP, not live synchronization, and
+            not a shared database.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
@@ -69,6 +72,11 @@ export function CustomerRecordsExportPanel({
                 : "Every same-business customer fits on this page."}
             </p>
           )}
+          {propertiesTruncated ? (
+            <p className="text-muted-foreground">
+              {customerRecordsExportPropertyTruncationMessage(document.limits.relatedRecordLimit)}
+            </p>
+          ) : null}
           {relatedTruncated ? (
             <p className="text-muted-foreground">
               {customerRecordsExportRelatedTruncationMessage(
@@ -113,9 +121,10 @@ export function CustomerRecordsExportPanel({
                   <div className="text-sm">
                     <p className="font-medium">{packet.customer.name}</p>
                     <p className="text-muted-foreground">
-                      {packet.requests.count} requests · {packet.estimates.count} estimates ·{" "}
-                      {packet.jobs.count} jobs · {packet.invoices.count} invoices ·{" "}
-                      {packet.payments.count} payments · {packet.files.count} file refs
+                      {packet.properties.count} properties · {packet.requests.count} requests ·{" "}
+                      {packet.estimates.count} estimates · {packet.jobs.count} jobs ·{" "}
+                      {packet.invoices.count} invoices · {packet.payments.count} payments ·{" "}
+                      {packet.files.count} file refs
                     </p>
                   </div>
                   <Link

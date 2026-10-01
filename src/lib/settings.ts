@@ -234,7 +234,7 @@ export const ACCOUNTING_EXPORT_MESSAGE =
   "Invoices, payments, and expenses recorded in this workspace, as CSV. Payment rows are actual Payment records — a PAID invoice status never invents a Payment row. Invoice Amount Paid uses recorded payments, or the legacy PAID-status fallback when that invoice has no Payment rows. Voided expenses are omitted. This is not a general ledger and not a QuickBooks or Xero connection.";
 
 export const CUSTOMER_RECORDS_EXPORT_MESSAGE =
-  "OWNER-only portable JSON of this workspace’s customers and their related requests, estimates, jobs, invoices, and payments. Large exports are paginated. Private files stay references or a labeled omission. Secrets and another business’s records are never included.";
+  "OWNER-only portable JSON of this workspace’s customers and their same-business properties, structured addresses, requests, estimates, jobs, invoices, and payments. Large exports are paginated. Private files stay references or a labeled omission. Secrets and another business’s records are never included.";
 
 export type IntegrationConnectionStatus = "connected" | "not_connected" | "needs_attention";
 

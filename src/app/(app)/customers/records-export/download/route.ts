@@ -5,6 +5,7 @@ import {
   CustomerRecordsExportError,
   buildCustomerRecordsExport,
   customerRecordsExportFilename,
+  recordCustomerRecordsExportAudit,
   serializeCustomerRecordsExport,
 } from "@/lib/customer-records-export";
 import { prisma } from "@/lib/prisma";
@@ -20,6 +21,7 @@ export async function GET(request: Request) {
       cursor: url.searchParams.get("cursor"),
       customerId: url.searchParams.get("customerId"),
     });
+    await recordCustomerRecordsExportAudit(prisma, access, document);
     return new NextResponse(serializeCustomerRecordsExport(document), {
       status: 200,
       headers: {
