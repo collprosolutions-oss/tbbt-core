@@ -146,6 +146,11 @@ export default async function FieldHomePage() {
           known, {myCapacity.remainingMinutes} min remaining
           {myCapacity.overloaded ? " — this day looks full" : ""}. Other workers and the Fill-In Bench stay hidden.
         </p>
+        <p className="mt-2 text-sm">
+          <a href="/field/calendar-export/download" className="underline underline-offset-4">
+            Download my assigned calendar
+          </a>
+        </p>
       </div>
 
       {canRequestAvailability ? (
