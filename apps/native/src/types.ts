@@ -104,6 +104,39 @@ export type NativeJobChecklist = {
   items: NativeJobChecklistItem[];
 };
 
+export type NativeTimeCorrectionStatus = "PENDING" | "ACCEPTED" | "DECLINED";
+
+export type NativeTimeCorrectionEntry = {
+  id: string;
+  activityType: string;
+  activityLabel: string;
+  startedAt: string;
+  startedAtLabel: string;
+  endedAt: string;
+  endedAtLabel: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  hours: number;
+  hoursLabel: string;
+  canRequest: boolean;
+  blockedReason: string | null;
+  requestStatus: NativeTimeCorrectionStatus | null;
+  requestStatusLabel: string | null;
+  requestReason: string | null;
+  proposedStartedAt: string | null;
+  proposedEndedAt: string | null;
+  proposedClockLabel: string | null;
+};
+
+export type NativeJobTimeCorrections = {
+  entries: NativeTimeCorrectionEntry[];
+  truncated: boolean;
+  limit: number;
+  truncatedNotice: string | null;
+};
+
 export type NativeVisitOutcomeStatus = "VISIT_COMPLETED" | "RE_CLEAN_REQUESTED";
 
 export type NativeJobPhotos = {
@@ -165,6 +198,7 @@ export type NativeJobDetail = NativeJobSummary & {
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
+  timeCorrections: NativeJobTimeCorrections;
 };
 
 export type NativeJobPhotoAuthorizePayload = {

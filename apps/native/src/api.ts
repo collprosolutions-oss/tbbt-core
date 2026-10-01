@@ -288,6 +288,41 @@ export async function syncNativeJobChecklistDraft(
   }
 }
 
+export async function requestNativeJobTimeCorrection(
+  token: string,
+  jobId: string,
+  input: {
+    timeEntryId: string;
+    reason: string;
+    proposedStartDate: string;
+    proposedStartTime: string;
+    proposedEndDate: string;
+    proposedEndTime: string;
+  },
+): Promise<{ job: NativeJobDetail } | NativeApiError> {
+  const response = await fetch(
+    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/time-corrections`),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = await parseJson(response);
+  if (!response.ok) {
+    return {
+      error:
+        typeof body.error === "string"
+          ? body.error
+          : "That time correction could not be requested.",
+    };
+  }
+  return body as unknown as { job: NativeJobDetail };
+}
+
 export async function recordNativeJobPickupItem(
   token: string,
   jobId: string,

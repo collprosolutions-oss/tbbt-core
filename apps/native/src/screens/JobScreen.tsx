@@ -27,6 +27,7 @@ import type {
 import { JobChecklistSection } from "./JobChecklistSection";
 import { JobPhotosSection } from "./JobPhotosSection";
 import { JobPickupSection } from "./JobPickupSection";
+import { JobTimeCorrectionSection } from "./JobTimeCorrectionSection";
 
 export function JobScreen({
   token,
@@ -412,6 +413,15 @@ export function JobScreen({
               </Text>
             ))
           )}
+          {job.timeCorrections?.entries?.length ? (
+            <JobTimeCorrectionSection
+              entries={job.timeCorrections.entries}
+              jobId={job.id}
+              onJobUpdated={setJob}
+              token={token}
+              truncatedNotice={job.timeCorrections.truncatedNotice}
+            />
+          ) : null}
           {job.pickupItems?.length ? (
             <JobPickupSection
               items={job.pickupItems}

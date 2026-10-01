@@ -174,6 +174,7 @@
     "test:native-field-checklist-offline": "node --experimental-strip-types scripts/check-native-field-checklist-offline.mjs",
     "test:native-field-activity": "node --experimental-strip-types scripts/check-native-field-activity.mjs",
     "test:native-field-pickup": "node --experimental-strip-types scripts/check-native-field-pickup.mjs",
+    "test:native-field-time-correction": "node --experimental-strip-types scripts/check-native-field-time-correction.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",
     "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs",

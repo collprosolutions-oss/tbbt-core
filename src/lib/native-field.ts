@@ -13,7 +13,8 @@
  * query. There is no fetch-then-compare step. Assigned-worker writes
  * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-activity.ts`,
  * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`,
- * `src/lib/native-field-checklist.ts`, and `src/lib/native-field-pickup.ts`.
+ * `src/lib/native-field-checklist.ts`, `src/lib/native-field-pickup.ts`,
+ * and `src/lib/native-field-time-correction.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -45,6 +46,7 @@ import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/priv
 import type { StorageProvider } from "@/lib/business-storage/types";
 import { listAssignedJobPickupView } from "@/lib/materials/pickup";
 import type { FieldJobPickupView } from "@/lib/materials/types";
+import type { NativeJobTimeCorrections } from "@/lib/native-field-time-correction";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -263,6 +265,7 @@ export type NativeJobDetail = NativeJobSummary & {
   photos: NativeJobPhotos;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
+  timeCorrections: NativeJobTimeCorrections;
 };
 
 export type NativeJobLoadOptions = {
@@ -673,6 +676,9 @@ export async function loadNativeAssignedJob(
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     visit: await loadNativeAssignedJobVisit(db, access, job),
     checklist: await loadNativeAssignedJobChecklist(db, access, job),
+    timeCorrections: await (
+      await import("@/lib/native-field-time-correction")
+    ).loadNativeAssignedJobTimeCorrections(db, access, job.id, timeZone),
   };
 }
 
