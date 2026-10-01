@@ -36,7 +36,6 @@ const {
   OWNER_DAY_ROUTE_NO_PROPERTY_LABEL,
   completeStructuredRouteAddress,
   extractOwnerDayRouteMapsAddresses,
-  ownerDayRouteMapsContainsAddress,
   ownerDayRouteTextHasForbiddenClaim,
 } = await import("@/lib/owner-day-route");
 const { formatStructuredAddress } = await import("@/lib/service-address");
@@ -116,6 +115,10 @@ function formatted(street) {
     region: "FL",
     postalCode: "33901",
   });
+}
+
+function mapsHasStreet(href, street) {
+  return extractOwnerDayRouteMapsAddresses(href).some((address) => address.includes(street));
 }
 
 const assignedStopsSrc = readRepo("src/lib/native-assigned-stops.ts");
@@ -259,8 +262,8 @@ check(
 );
 check(
   "Other-worker, other-tenant, and other-day jobs never enter the maps link or exclusion list",
-  !ownerDayRouteMapsContainsAddress(builder.href, otherStreet) &&
-    !ownerDayRouteMapsContainsAddress(builder.href, betaStreet) &&
+  !mapsHasStreet(builder.href, otherStreet) &&
+    !mapsHasStreet(builder.href, betaStreet) &&
     !builder.excluded.some((stop) =>
       ["job-other-worker", "job-beta", "job-tomorrow"].includes(stop.jobId),
     ) &&
@@ -316,7 +319,7 @@ check(
         stop.reason === "OVER_CAP" &&
         stop.label === NATIVE_ASSIGNED_STOPS_CAP_LABEL,
     ) &&
-    !ownerDayRouteMapsContainsAddress(overflow.href, "112 Cap St"),
+    !mapsHasStreet(overflow.href, "112 Cap St"),
 );
 
 try {
@@ -530,14 +533,14 @@ try {
     "Assigned maps starts with the earliest complete assigned stop",
     earlyComplete.ok === true &&
       memberAddresses[0] === earlyComplete.address.formatted &&
-      ownerDayRouteMapsContainsAddress(memberHref, "10 Live Early St"),
+      mapsHasStreet(memberHref, "10 Live Early St"),
   );
   check(
     "Other-worker and other-tenant complete addresses stay out of the assigned maps link",
-    !ownerDayRouteMapsContainsAddress(memberHref, "55 Live Other Rd") &&
-      !ownerDayRouteMapsContainsAddress(memberHref, "77 Live Foreign Ave") &&
-      !ownerDayRouteMapsContainsAddress(memberHref, "8 Live Yesterday St") &&
-      !ownerDayRouteMapsContainsAddress(memberHref, "33 Live Unassigned Rd") &&
+    !mapsHasStreet(memberHref, "55 Live Other Rd") &&
+      !mapsHasStreet(memberHref, "77 Live Foreign Ave") &&
+      !mapsHasStreet(memberHref, "8 Live Yesterday St") &&
+      !mapsHasStreet(memberHref, "33 Live Unassigned Rd") &&
       !memberToday.assignedStops.excluded.some((stop) =>
         ["Live Other Worker", "Live Beta", "Live Yesterday", "Live Unassigned"].includes(
           stop.customerName,
@@ -554,7 +557,7 @@ try {
         stop.customerName === "Live Incomplete" &&
         stop.reason === "INCOMPLETE_ADDRESS" &&
         stop.label === OWNER_DAY_ROUTE_INCOMPLETE_LABEL,
-    ) && !ownerDayRouteMapsContainsAddress(memberHref, "12 Live Partial Row"),
+    ) && !mapsHasStreet(memberHref, "12 Live Partial Row"),
   );
   check(
     "Stop cap keeps the 12th complete assigned stop off the maps link",
@@ -566,19 +569,19 @@ try {
           stop.reason === "OVER_CAP" &&
           stop.label === NATIVE_ASSIGNED_STOPS_CAP_LABEL,
       ) &&
-      !ownerDayRouteMapsContainsAddress(memberHref, "199 Live Cap Overflow St") &&
-      !ownerDayRouteMapsContainsAddress(memberHref, "200 Live Late Ave"),
+      !mapsHasStreet(memberHref, "199 Live Cap Overflow St") &&
+      !mapsHasStreet(memberHref, "200 Live Late Ave"),
   );
   check(
     "Another worker only sees their own assigned complete stop",
     otherToday.assignedStops.includedStopCount === 1 &&
-      ownerDayRouteMapsContainsAddress(otherToday.assignedStops.href, "55 Live Other Rd") &&
-      !ownerDayRouteMapsContainsAddress(otherToday.assignedStops.href, "10 Live Early St"),
+      mapsHasStreet(otherToday.assignedStops.href, "55 Live Other Rd") &&
+      !mapsHasStreet(otherToday.assignedStops.href, "10 Live Early St"),
   );
   check(
     "Other-tenant Today maps cannot include this tenant's assigned stops",
-    ownerDayRouteMapsContainsAddress(betaToday.assignedStops.href, "77 Live Foreign Ave") &&
-      !ownerDayRouteMapsContainsAddress(betaToday.assignedStops.href, "10 Live Early St") &&
+    mapsHasStreet(betaToday.assignedStops.href, "77 Live Foreign Ave") &&
+      !mapsHasStreet(betaToday.assignedStops.href, "10 Live Early St") &&
       betaToday.assignedStops.excluded.every((stop) => stop.jobId !== liveEarly.id && stop.jobId !== liveLate.id),
   );
 } catch (error) {
