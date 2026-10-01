@@ -29,6 +29,13 @@ import {
 } from "@/lib/mail";
 import { buildTeamInviteEmail } from "@/lib/team-mail";
 import { prisma } from "@/lib/prisma";
+import {
+  MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
+  TimeCardError,
+  closeRunningTimeForMembershipInTransaction,
+  isTimeCardError,
+  timeCardErrorMessage,
+} from "@/lib/time-card-ops";
 
 export type TeamActionState = {
   error?: string;
@@ -246,10 +253,32 @@ export async function setTeamMemberActive(
     return { error: "That team member could not be found." };
   }
 
-  await prisma.membership.update({
-    where: { id: membership.id },
-    data: { active },
-  });
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (!active) {
+        await closeRunningTimeForMembershipInTransaction(tx, {
+          businessId: access.businessId,
+          membershipId: membership.id,
+          actorMembershipId: access.workspace.membership.id,
+          reason: MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
+        });
+      }
+      await tx.membership.update({
+        where: { id: membership.id },
+        data: { active },
+      });
+    });
+  } catch (error) {
+    if (isTimeCardError(error) || error instanceof TimeCardError) {
+      return {
+        error: timeCardErrorMessage(
+          error,
+          "That team member could not be updated while approved time is still running.",
+        ),
+      };
+    }
+    throw error;
+  }
 
   revalidatePath("/team");
   revalidatePath("/jobs");
