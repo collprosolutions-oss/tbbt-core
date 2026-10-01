@@ -181,6 +181,7 @@
     "test:native-field-pickup": "node --experimental-strip-types scripts/check-native-field-pickup.mjs",
     "test:native-assigned-stops": "node --experimental-strip-types scripts/check-native-assigned-stops.mjs",
     "test:native-time-cards": "node --experimental-strip-types scripts/check-native-time-cards.mjs",
+    "test:native-job-milestones": "node --experimental-strip-types scripts/check-native-job-milestones.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",
     "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs",

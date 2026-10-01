@@ -25,6 +25,7 @@ import type {
   NativeWorkspace,
 } from "../types";
 import { JobChecklistSection } from "./JobChecklistSection";
+import { JobMilestonesSection } from "./JobMilestonesSection";
 import { JobPhotosSection } from "./JobPhotosSection";
 import { JobPickupSection } from "./JobPickupSection";
 
@@ -412,6 +413,7 @@ export function JobScreen({
               </Text>
             ))
           )}
+          <JobMilestonesSection milestones={job.milestones} />
           {job.pickupItems?.length ? (
             <JobPickupSection
               items={job.pickupItems}

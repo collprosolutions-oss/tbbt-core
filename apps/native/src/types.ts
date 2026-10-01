@@ -140,6 +140,26 @@ export type NativeJobPickupItem = {
   pickupRecorded: boolean;
 };
 
+export type NativeJobMilestone = {
+  id: string;
+  title: string;
+  sortOrder: number;
+  status: "OPEN" | "COMPLETED";
+  statusLabel: string;
+  recordedAt: string;
+  recordedAtLabel: string;
+  completedAt: string | null;
+  completedAtLabel: string | null;
+};
+
+export type NativeJobMilestones = {
+  items: NativeJobMilestone[];
+  count: number;
+  limit: number;
+  truncated: boolean;
+  truncatedNotice: string | null;
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -163,6 +183,7 @@ export type NativeJobDetail = NativeJobSummary & {
   stopPickupAction: NativeJobActivityAction;
   pickupItems: NativeJobPickupItem[];
   photos: NativeJobPhotos;
+  milestones: NativeJobMilestones;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
 };
