@@ -239,7 +239,7 @@ export type CollectedRevenueReconciliation = {
  * into the partition.
  */
 export function reconcileCollectedRevenue(
-  source: Pick<FinancialSource, "invoices" | "payments" | "jobs">,
+  source: Pick<FinancialSource, "invoices" | "payments" | "jobs" | "invoiceCredits">,
 ): CollectedRevenueReconciliation {
   const payments = uniquePayments(source.payments);
   const credits = source.invoiceCredits ?? [];
