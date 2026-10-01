@@ -14,6 +14,7 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { writeAssignedMembershipAndLaneWindows } from "@/lib/job-assignment-ops";
+import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   JOB_REASSIGNMENT_REQUEST_ALREADY_REASSIGNED_MESSAGE,
   JOB_REASSIGNMENT_REQUEST_CANCELLED_MESSAGE,
@@ -43,8 +44,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Test-only barriers. Production never sets these.
- * - beforeRequestCreate: both creates have passed the pending lookup
- *   before either inserts.
+ * - beforeRequestCreate: both creates have passed the pre-checks and
+ *   are about to take the Job-lock write transaction.
  * - beforeAcceptAssignment: accept has validated the request and is
  *   about to take the canonical assignment locks.
  * - beforeDecideClaims: both decide transactions have read PENDING
@@ -301,32 +302,56 @@ export async function requestJobReassignmentOp(
   const reason = requireJobReassignmentRequestReason(input.reason);
 
   try {
-    const pending = await db.jobReassignmentRequest.findFirst({
-      where: {
-        businessId: access.businessId,
-        jobId: job.id,
-        status: "PENDING",
-      },
-      select: { id: true },
-    });
-    if (pending) {
-      throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE);
-    }
-
     await jobReassignmentRequestTestHooks.beforeRequestCreate?.({
       membershipId: membership.id,
       jobId: job.id,
     });
-    const created = await db.jobReassignmentRequest.create({
-      data: {
-        businessId: access.businessId,
-        jobId: job.id,
-        membershipId: membership.id,
-        reason,
-        status: "PENDING",
-      },
-      select: REQUEST_SELECT,
-    });
+    const created = await db.$transaction(async (tx) => {
+      const lockedJob = await lockTenantOwnedJob(tx, access.businessId, job.id);
+      if (!lockedJob) throw new ForbiddenError();
+      const refusal = jobReassignmentRefusalMessage(
+        lockedJob.status,
+        lockedJob.assignedMembershipId,
+        membership.id,
+      );
+      if (refusal) {
+        throw new JobReassignmentRequestError(refusal);
+      }
+      await tx.jobReassignmentRequest.updateMany({
+        where: {
+          businessId: access.businessId,
+          jobId: job.id,
+          status: "PENDING",
+          membershipId: { not: membership.id },
+        },
+        data: {
+          status: "DECLINED",
+          decidedAt: new Date(),
+        },
+      });
+      const pending = await tx.jobReassignmentRequest.findFirst({
+        where: {
+          businessId: access.businessId,
+          jobId: job.id,
+          membershipId: membership.id,
+          status: "PENDING",
+        },
+        select: { id: true },
+      });
+      if (pending) {
+        throw new JobReassignmentRequestError(JOB_REASSIGNMENT_REQUEST_PENDING_EXISTS_MESSAGE);
+      }
+      return tx.jobReassignmentRequest.create({
+        data: {
+          businessId: access.businessId,
+          jobId: job.id,
+          membershipId: membership.id,
+          reason,
+          status: "PENDING",
+        },
+        select: REQUEST_SELECT,
+      });
+    }, { timeout: 15000, maxWait: 10000 });
     return toRequestRecord(created);
   } catch (error) {
     asRequestWriteError(error);

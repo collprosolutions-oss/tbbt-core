@@ -64,11 +64,32 @@ export async function applyAssignedMembershipChangeInTransaction(
   },
 ) {
   const previousAssignee = input.lockedJob.assignedMembershipId;
+  const nextAssignee = input.nextAssignedMembershipId;
   await tx.job.update({
     where: { id: input.job.id },
-    data: { assignedMembershipId: input.nextAssignedMembershipId },
+    data: { assignedMembershipId: nextAssignee },
   });
-  if (previousAssignee && previousAssignee !== input.nextAssignedMembershipId) {
+  if (previousAssignee !== nextAssignee) {
+    const schemaRows = await tx.$queryRaw<Array<{ present: boolean | string | null }>>`
+      SELECT to_regclass('"JobReassignmentRequest"') IS NOT NULL AS present
+    `;
+    const present = schemaRows[0]?.present;
+    if (present === true || present === "t") {
+      await tx.jobReassignmentRequest.updateMany({
+        where: {
+          businessId: input.businessId,
+          jobId: input.job.id,
+          status: "PENDING",
+          ...(nextAssignee ? { membershipId: { not: nextAssignee } } : {}),
+        },
+        data: {
+          status: "DECLINED",
+          decidedAt: new Date(),
+        },
+      });
+    }
+  }
+  if (previousAssignee && previousAssignee !== nextAssignee) {
     const stopped = await stopRunningAssignedJobTimeInTransaction(tx, {
       businessId: input.businessId,
       jobId: input.job.id,

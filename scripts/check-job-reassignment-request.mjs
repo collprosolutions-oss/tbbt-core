@@ -170,7 +170,25 @@ check(
     !requestFnSrc.includes("assignedMembershipId: null") &&
     !requestFnSrc.includes("notifyCustomer") &&
     !requestFnSrc.includes("emitAndProcessBusinessEvent") &&
+    !requestFnSrc.includes("lockBusinessScheduleReservation") &&
+    requestFnSrc.includes("lockTenantOwnedJob") &&
+    requestFnSrc.includes("membershipId: { not: membership.id }") &&
+    requestFnSrc.includes("membershipId: membership.id") &&
     requestFnSrc.includes("jobReassignmentRequest.create"),
+);
+const applyAssignSrc = assignOpsSrc.slice(
+  assignOpsSrc.indexOf("export async function applyAssignedMembershipChangeInTransaction"),
+);
+check(
+  "Assignment write supersedes other workers' PENDING reassignment requests",
+  applyAssignSrc.includes(`to_regclass('"JobReassignmentRequest"')`) &&
+    applyAssignSrc.includes('status: "DECLINED"') &&
+    applyAssignSrc.includes("membershipId: { not:") &&
+    applyAssignSrc.includes("decidedAt: new Date()") &&
+    applyAssignSrc.indexOf("tx.job.update") < applyAssignSrc.indexOf("to_regclass") &&
+    applyAssignSrc.indexOf("to_regclass") < applyAssignSrc.indexOf("jobReassignmentRequest.updateMany") &&
+    applyAssignSrc.indexOf("previousAssignee !== nextAssignee") <
+      applyAssignSrc.indexOf("to_regclass"),
 );
 check(
   "Accept rechecks the upcoming window after Job lock before claiming",
@@ -739,7 +757,9 @@ try {
       acceptRace[0].reason instanceof JobReassignmentRequestError &&
       acceptRace[0].reason.message === JOB_REASSIGNMENT_REQUEST_ALREADY_REASSIGNED_MESSAGE &&
       raceJobAfter?.assignedMembershipId === helperMem.id &&
-      raceRequestAfter?.status === "PENDING" &&
+      raceRequestAfter?.status === "DECLINED" &&
+      raceRequestAfter?.decidedByMembershipId == null &&
+      raceRequestAfter?.decidedAt instanceof Date &&
       eventsAfterRace === 0,
   );
 
@@ -835,6 +855,190 @@ try {
   check(
     "Exactly one concurrent duplicate create wins against the pending-unique index",
     createWon.length === 1 && createLost.length === 1 && createRows.length === 1,
+  );
+
+  async function assignMember(job, membershipId) {
+    return writeAssignedMembershipAndLaneWindows(prisma, {
+      businessId: businessA.id,
+      job,
+      nextAssignedMembershipId: membershipId,
+      actorMembershipId: ownerMem.id,
+    });
+  }
+
+  async function proveStaleRequestCleared({ label, afterRequest, bRequest }) {
+    const job = await createAssignedJob({
+      businessId: businessA.id,
+      customerId: customer.id,
+      assignedMembershipId: memberMem.id,
+    });
+    const request = await requestJobReassignmentOp(prisma, memberA, {
+      jobId: job.id,
+      reason: `Stale ${label}`,
+      now: NOW,
+    });
+    await afterRequest?.(job);
+    const assigned = await assignMember(job, helperMem.id);
+    check(`${label}: reassignment write succeeds`, !assigned?.error);
+    const stale = await prisma.jobReassignmentRequest.findFirst({
+      where: { id: request.id, businessId: businessA.id },
+    });
+    check(
+      `${label}: A's row is DECLINED with no decider and a decidedAt`,
+      stale?.status === "DECLINED" &&
+        stale.decidedByMembershipId == null &&
+        stale.decidedAt instanceof Date,
+    );
+    const ownedQueue = await loadOwnedJobReassignmentRequests(prisma, ownerA);
+    check(
+      `${label}: owner pending queue no longer lists A's row`,
+      !ownedQueue.pending.some((row) => row.id === request.id),
+    );
+    const selfA = await loadSelfJobReassignmentRequests(prisma, {
+      businessId: businessA.id,
+      membershipId: memberMem.id,
+    });
+    check(
+      `${label}: A's field row is no longer PENDING`,
+      !selfA.some((row) => row.id === request.id && row.status === "PENDING"),
+    );
+    if (bRequest === "ok") {
+      const created = await requestJobReassignmentOp(prisma, helperA, {
+        jobId: job.id,
+        reason: `Current ${label}`,
+        now: NOW,
+      });
+      check(
+        `${label}: current assignee B can request`,
+        created.status === "PENDING" && created.membershipId === helperMem.id,
+      );
+    } else {
+      const expected =
+        bRequest === "completed"
+          ? JOB_REASSIGNMENT_REQUEST_COMPLETED_MESSAGE
+          : JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE;
+      await expectError(
+        `${label}: B is refused only by the real ${bRequest} rule`,
+        () =>
+          requestJobReassignmentOp(prisma, helperA, {
+            jobId: job.id,
+            reason: `Current ${label}`,
+            now: NOW,
+          }),
+        (error) =>
+          error instanceof JobReassignmentRequestError && error.message === expected,
+      );
+    }
+    await expectError(
+      `${label}: Accept on A's old row refuses`,
+      () =>
+        decideJobReassignmentRequestOp(prisma, ownerA, {
+          requestId: request.id,
+          decision: "ACCEPT",
+          expectedUpdatedAt: stale.updatedAt,
+          now: NOW,
+        }),
+      (error) =>
+        error instanceof JobReassignmentRequestError &&
+        (error.message === JOB_REASSIGNMENT_REQUEST_STALE_MESSAGE ||
+          error.message === JOB_REASSIGNMENT_REQUEST_ALREADY_REASSIGNED_MESSAGE),
+    );
+    const jobAfterAccept = await prisma.job.findFirst({
+      where: { id: job.id, businessId: businessA.id },
+    });
+    const events = await prisma.jobAppointmentEvent.count({
+      where: { jobId: job.id, businessId: businessA.id },
+    });
+    const comms = await prisma.customerCommunication.count({
+      where: { businessId: businessA.id, relatedId: job.id },
+    });
+    check(
+      `${label}: B stays assigned; no customer appointment or communication rows`,
+      jobAfterAccept?.assignedMembershipId === helperMem.id && events === 0 && comms === 0,
+    );
+  }
+
+  await proveStaleRequestCleared({
+    label: "manual reassign",
+    bRequest: "ok",
+  });
+  await proveStaleRequestCleared({
+    label: "cancel-reopen",
+    afterRequest: async (job) => {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "CANCELLED" },
+      });
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "SCHEDULED" },
+      });
+    },
+    bRequest: "ok",
+  });
+  await proveStaleRequestCleared({
+    label: "deactivate",
+    afterRequest: async () => {
+      await prisma.membership.update({
+        where: { id: memberMem.id },
+        data: { active: false },
+      });
+    },
+    bRequest: "ok",
+  });
+  await prisma.membership.update({
+    where: { id: memberMem.id },
+    data: { active: true },
+  });
+  await proveStaleRequestCleared({
+    label: "unassign-then-assign",
+    afterRequest: async (job) => {
+      const cleared = await assignMember(job, null);
+      check("unassign-then-assign: unassign write succeeds", !cleared?.error);
+    },
+    bRequest: "ok",
+  });
+  await proveStaleRequestCleared({
+    label: "complete",
+    afterRequest: async (job) => {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "COMPLETED" },
+      });
+    },
+    bRequest: "completed",
+  });
+  await proveStaleRequestCleared({
+    label: "today",
+    afterRequest: async (job) => {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { scheduledAt: new Date("2026-10-01T18:00:00.000Z") },
+      });
+    },
+    bRequest: "not-upcoming",
+  });
+
+  const sameAssigneeJob = await createAssignedJob({
+    businessId: businessA.id,
+    customerId: customer.id,
+    assignedMembershipId: memberMem.id,
+  });
+  const sameAssigneeRequest = await requestJobReassignmentOp(prisma, memberA, {
+    jobId: sameAssigneeJob.id,
+    reason: "Keep my own pending",
+    now: NOW,
+  });
+  const sameAssigneeWrite = await assignMember(sameAssigneeJob, memberMem.id);
+  const sameAssigneeAfter = await prisma.jobReassignmentRequest.findFirst({
+    where: { id: sameAssigneeRequest.id, businessId: businessA.id },
+  });
+  check(
+    "Re-saving the same assignee leaves that worker's PENDING row alone",
+    !sameAssigneeWrite?.error &&
+      sameAssigneeAfter?.status === "PENDING" &&
+      sameAssigneeAfter.decidedAt == null &&
+      sameAssigneeAfter.decidedByMembershipId == null,
   );
 
   await prisma.membership.update({
@@ -1021,6 +1225,19 @@ try {
     "Missing-table write refusals do not change assignment",
     missingWriteJobAfterDrop?.assignedMembershipId === memberMem.id &&
       missingWriteJobAfterDrop?.scheduledAt?.getTime() === upcomingAt.getTime(),
+  );
+  const missingAssign = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: missingWriteJob,
+    nextAssignedMembershipId: helperMem.id,
+    actorMembershipId: ownerMem.id,
+  });
+  const missingAssignAfter = await prisma.job.findFirst({
+    where: { id: missingWriteJob.id, businessId: businessA.id },
+  });
+  check(
+    "Assignment write still succeeds when JobReassignmentRequest is missing",
+    !missingAssign?.error && missingAssignAfter?.assignedMembershipId === helperMem.id,
   );
 } catch (error) {
   failed += 1;
