@@ -175,6 +175,27 @@ export type NativeJobPhotoAuthorizePayload = {
   expiresInSeconds: number;
 };
 
+export type NativeAssignedStopExclusion = {
+  jobId: string;
+  customerName: string;
+  reason: "NO_PROPERTY" | "FOREIGN_PROPERTY" | "INCOMPLETE_ADDRESS" | "OVER_CAP";
+  label: string;
+};
+
+export type NativeAssignedStopsMaps = {
+  href: string | null;
+  label: string;
+  disclaimer: string;
+  orderNote: string;
+  includedStopCount: number;
+  omittedCompleteStopCount: number;
+  truncated: boolean;
+  truncatedNotice: string | null;
+  excludedHeading: string;
+  excluded: NativeAssignedStopExclusion[];
+  emptyMessage: string | null;
+};
+
 export type NativeTodayPayload = {
   viewer: NativeViewer;
   workspace: NativeWorkspace;
@@ -185,6 +206,7 @@ export type NativeTodayPayload = {
   truncated: boolean;
   limit: number;
   truncatedNotice: string | null;
+  assignedStops: NativeAssignedStopsMaps;
 };
 
 export type NativeSessionPayload = {

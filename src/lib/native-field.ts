@@ -31,7 +31,13 @@ import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { parseChecklistJson, START_BEFORE_COMPLETE_MESSAGE } from "@/lib/cleaning-visit-workflow";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
-import { startOfDay } from "@/lib/schedule";
+import { dayRange, startOfDay, type DateRange } from "@/lib/schedule";
+import {
+  buildNativeAssignedStopsMaps,
+  type NativeAssignedStopJob,
+  type NativeAssignedStopsMaps,
+} from "@/lib/native-assigned-stops";
+import { OWNER_DAY_ROUTE_JOBS_TAKE } from "@/lib/owner-day-route/constants";
 import {
   TIME_ACTIVITY_LABELS,
   formatDurationClock,
@@ -54,10 +60,28 @@ export const NATIVE_ASSIGNED_JOB_WHERE = {
   assignedMembershipId: true,
 } as const;
 
-export const NATIVE_FIELD_JOB_LIST_SELECT = FIELD_JOB_SELECT;
+export const NATIVE_FIELD_JOB_LIST_SELECT = {
+  ...FIELD_JOB_SELECT,
+  businessId: true,
+  assignedMembershipId: true,
+  property: {
+    select: {
+      id: true,
+      businessId: true,
+      addressLine1: true,
+      addressLine2: true,
+      city: true,
+      region: true,
+      postalCode: true,
+    },
+  },
+} as const;
 
 /** Hard cap on the native Today list. Detail stays one assigned job by id. */
 export const NATIVE_TODAY_JOB_LIMIT = 20;
+
+/** Assigned same-day jobs considered for the maps handoff before the 11-stop cap. */
+export const NATIVE_ASSIGNED_STOPS_JOB_TAKE = OWNER_DAY_ROUTE_JOBS_TAKE;
 
 /** Hard cap on assigned-job photos shown and uploaded from native. */
 export const NATIVE_JOB_PHOTO_LIMIT = 12;
@@ -527,6 +551,7 @@ export type NativeTodayPayload = {
   truncated: boolean;
   limit: number;
   truncatedNotice: string | null;
+  assignedStops: NativeAssignedStopsMaps;
 };
 
 export function nativeAssignedJobWhere(
@@ -574,6 +599,23 @@ export async function listNativeAssignedJobs(
   };
 }
 
+export async function listNativeAssignedDayJobs(
+  db: Db,
+  field: Pick<NativeFieldAccess, "businessId" | "membershipId">,
+  range: DateRange,
+): Promise<NativeAssignedStopJob[]> {
+  return db.job.findMany({
+    where: {
+      businessId: field.businessId,
+      assignedMembershipId: field.membershipId,
+      scheduledAt: { gte: range.start, lt: range.end },
+    },
+    select: NATIVE_FIELD_JOB_LIST_SELECT,
+    orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+    take: NATIVE_ASSIGNED_STOPS_JOB_TAKE,
+  });
+}
+
 export function buildNativeTodayPayload(
   jobs: FieldJob[],
   input: {
@@ -582,10 +624,12 @@ export function buildNativeTodayPayload(
     timeZone?: string;
     truncated?: boolean;
     limit?: number;
+    dayJobs?: NativeAssignedStopJob[];
   },
 ): NativeTodayPayload {
   const timeZone = input.timeZone ?? resolveBusinessTimeZone(null);
-  const groups = groupFieldJobs(jobs, startOfDay(input.now ?? new Date(), timeZone), timeZone);
+  const now = input.now ?? new Date();
+  const groups = groupFieldJobs(jobs, startOfDay(now, timeZone), timeZone);
   const truncated = Boolean(input.truncated);
   const limit = input.limit ?? NATIVE_TODAY_JOB_LIMIT;
   return {
@@ -598,6 +642,11 @@ export function buildNativeTodayPayload(
     truncated,
     limit,
     truncatedNotice: truncated ? nativeTodayTruncatedNotice(limit) : null,
+    assignedStops: buildNativeAssignedStopsMaps(input.dayJobs ?? jobs, {
+      businessId: input.access.businessId,
+      membershipId: input.access.membershipId,
+      range: dayRange(now, timeZone),
+    }),
   };
 }
 
@@ -612,13 +661,19 @@ export async function loadNativeToday(
       select: { timezone: true },
     }),
   );
-  const page = await listNativeAssignedJobs(db, access);
+  const now = options?.now ?? new Date();
+  const range = dayRange(now, timeZone);
+  const [page, dayJobs] = await Promise.all([
+    listNativeAssignedJobs(db, access),
+    listNativeAssignedDayJobs(db, access, range),
+  ]);
   return buildNativeTodayPayload(page.jobs, {
     access,
-    now: options?.now,
+    now,
     timeZone,
     truncated: page.truncated,
     limit: page.limit,
+    dayJobs,
   });
 }
 

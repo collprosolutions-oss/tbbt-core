@@ -26,7 +26,7 @@ The edge proxy lets `/api/native/` through without a cookie so Bearer auth can r
 
 Today is also **capped**. `listNativeAssignedJobs()` takes at most `NATIVE_TODAY_JOB_LIMIT` assigned jobs (currently 20), ordered by `scheduledAt` then `id`. If more assigned jobs exist, the payload sets `truncated: true` and `truncatedNotice`. The extra assigned rows are not returned. Cross-tenant and other workers' jobs are never part of that page. Job detail by id is unchanged: one assigned job, or 404.
 
-Returned job data is operational only: status, schedule, customer name/phone, address, access lines, approved-scope descriptions/quantities, whether **Start job** / **Complete job** / **Stop job time** / **Start travel** / **Stop travel** / **Start material pickup** / **Stop material pickup** are available, the caller's running or recorded JOB / TRAVEL / MATERIAL_PICKUP time on that job, that job's purchase-list pickup items (needed quantity, location, ready flag, and any worker-recorded picked-up quantity or exception — not vendor prices), assigned-job photos (captions, stage, and short-lived private preview URLs), crew checklist items when the Job already has them (any trade), and — on Cleaning jobs only — the recorded visit outcome. It does **not** return invoices, estimate totals, unit prices, wages, customer emails, portal tokens, other members' jobs, or owner Today / management records.
+Returned job data is operational only: status, schedule, customer name/phone, address, access lines, approved-scope descriptions/quantities, whether **Start job** / **Complete job** / **Stop job time** / **Start travel** / **Stop travel** / **Start material pickup** / **Stop material pickup** are available, the caller's running or recorded JOB / TRAVEL / MATERIAL_PICKUP time on that job, that job's purchase-list pickup items (needed quantity, location, ready flag, and any worker-recorded picked-up quantity or exception — not vendor prices), assigned-job photos (captions, stage, and short-lived private preview URLs), crew checklist items when the Job already has them (any trade), and — on Cleaning jobs only — the recorded visit outcome. Native Today also returns one read-only **Open assigned stops in maps** handoff: complete same-business addresses on the caller's assigned jobs for the current business day (`listNativeAssignedDayJobs`, appointment order), plus the stops excluded from that link. That day query is separate from the 20-job Today list so older assigned rows cannot starve today's maps stops. The maps URL reuses the owner day-route handoff and stops at 11 complete addresses. Job detail still uses the existing `directionsHref` for one assigned job. It does **not** return invoices, estimate totals, unit prices, wages, customer emails, portal tokens, other members' jobs, or owner Today / management records.
 
 MEMBER access stays field-scoped. OWNER/ADMIN using this API also only see, start, complete, stop job time, start/stop travel and material pickup, record picked-up quantities or exceptions, record and sync checklist progress, and record visit outcomes on jobs assigned to themselves. An OWNER who is not assigned still sees recorded pickup on the existing purchase-list / owner pickup feed.
 
@@ -45,7 +45,8 @@ After Start job, Complete job, Stop job time, Start/Stop travel, Start/Stop mate
 
 ## What this slice does not do
 
-- A standalone time clock or owner/admin checklist editor
+- A standalone time clock, owner/admin checklist editor, or a second Job-detail maps URL
+- Route optimization, geocoding, or ETA claims on the assigned-stops maps link
 - Owner/admin Today, Reports, invoices, or management console
 - App Store / Play distribution, device attestation, or compiled iOS/Android binaries
 - Website UI changes
@@ -62,6 +63,7 @@ npm run test:native-field-checklist
 npm run test:native-field-checklist-offline
 npm run test:native-field-activity
 npm run test:native-field-pickup
+npm run test:native-assigned-stops
 npx tsc --noEmit
 npm run build
 cd apps/native && npx tsc --noEmit && npm run build
