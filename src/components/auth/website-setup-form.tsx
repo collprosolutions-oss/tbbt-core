@@ -114,6 +114,11 @@ export function WebsiteSetupForm({
             required
             placeholder="e.g. Reno, NV"
           />
+          <p className="text-xs text-muted-foreground">
+            Shown on the public site and used to match incoming request cities.
+            A label like Reno, NV also records Reno as a served city. You can
+            add more cities or ZIPs later in Settings → Service Area.
+          </p>
         </div>
 
         <Button type="submit" className="w-full" disabled={pending}>

@@ -4,6 +4,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   isServiceAreaKind,
   parseOptionalMoney,
+  parseServiceAreaLabelParts,
   type RecordedServiceArea,
 } from "@/lib/service-areas";
 
@@ -126,6 +127,45 @@ export async function upsertServiceArea(
       },
     }),
   );
+}
+
+/**
+ * Keep the display label and the intake/local-page CITY row in sync.
+ * Does not delete or re-enable an owner-disabled area.
+ */
+export async function syncPrimaryCityServiceAreaFromLabel(
+  db: Db,
+  access: BusinessAccess,
+  label: string,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  const trimmed = label.trim();
+  if (!trimmed) return { created: false, updated: false };
+  const parts = parseServiceAreaLabelParts(trimmed);
+  if (!parts.city) return { created: false, updated: false };
+
+  const existing = await db.serviceArea.findFirst({
+    where: {
+      businessId: access.businessId,
+      kind: "CITY",
+      OR: [{ city: parts.city }, { label: trimmed }],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  await upsertServiceArea(db, access, {
+    areaId: existing?.id,
+    kind: "CITY",
+    label: trimmed,
+    city: parts.city,
+    region: parts.region ?? existing?.region ?? undefined,
+    enabled: existing?.enabled ?? true,
+    notes: existing?.notes,
+    travelAdjustment:
+      existing?.travelAdjustment == null ? undefined : String(existing.travelAdjustment),
+    minimumAdjustment:
+      existing?.minimumAdjustment == null ? undefined : String(existing.minimumAdjustment),
+  });
+  return { created: !existing, updated: Boolean(existing) };
 }
 
 export async function setServiceAreaEnabled(

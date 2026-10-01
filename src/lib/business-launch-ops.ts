@@ -245,10 +245,14 @@ export async function completeLaunchStep(
       if (stepKey === "service_area") {
         const label = input.serviceAreaLabel?.trim() ?? "";
         if (!label) throw new LaunchError("Enter the area you actually serve.");
+        const currentContact = await tx.business.findFirst({
+          where: { id: access.businessId },
+          select: { publicPhone: true, publicEmail: true, publicWebsite: true },
+        });
         await updateBusinessPublicContactOp(db, access, {
-          phone: input.phone ?? "",
-          email: input.email ?? "",
-          website: input.website ?? "",
+          phone: input.phone?.trim() || currentContact?.publicPhone || "",
+          email: input.email?.trim() || currentContact?.publicEmail || "",
+          website: input.website?.trim() || currentContact?.publicWebsite || "",
           serviceArea: label,
         });
         if (input.serviceAreaCity?.trim()) {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isUsableEmail } from "@/lib/mail";
 import {
+  communicationPreferenceEnabled,
   evaluateSmsEligibility,
   smsBlockFailureReason,
   type SmsEligibility,
@@ -54,6 +55,8 @@ export function evaluateEmailEligibility(input: {
   businessId: string;
   email: string | null | undefined;
   deliveryConfigured?: boolean;
+  purpose?: CustomerMessagePurpose;
+  preferences?: Partial<SettingsPreferenceFlags> | null;
 }): ChannelEligibility {
   const configured = input.deliveryConfigured ?? isEmailDeliveryConfigured();
   if (!isUsableEmail(input.email)) {
@@ -68,6 +71,20 @@ export function evaluateEmailEligibility(input: {
     };
   }
   const email = input.email!.trim();
+  if (
+    input.purpose &&
+    !communicationPreferenceEnabled(input.purpose, input.preferences)
+  ) {
+    return {
+      channel: "EMAIL",
+      permitted: false,
+      available: false,
+      reason: "preference_disabled",
+      ownerReason: "Customer communication preference is off for this message type.",
+      last4: emailDestinationLast4(email),
+      fingerprint: emailDestinationFingerprint(input.businessId, email),
+    };
+  }
   if (!configured) {
     return {
       channel: "EMAIL",
@@ -131,6 +148,8 @@ export function evaluateComposeChannelEligibility(input: {
       businessId: input.businessId,
       email: input.email,
       deliveryConfigured: input.emailConfigured,
+      purpose: input.purpose,
+      preferences: input.preferences,
     });
   }
 

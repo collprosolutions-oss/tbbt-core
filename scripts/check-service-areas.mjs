@@ -24,6 +24,7 @@ const {
 } = await import("@/lib/lead-attribution");
 const {
   matchServiceArea,
+  parseServiceAreaLabelParts,
   qualifyServiceAddress,
   publicServiceCityPath,
   resolvePublicLocalPage,
@@ -133,6 +134,16 @@ try {
   check(
     "Disabled city is ignored",
     matchServiceArea([disabled], { city: "Sparks" }) === null,
+  );
+  check(
+    "Owner label Reno, NV parses to city Reno and region NV",
+    parseServiceAreaLabelParts("Reno, NV").city === "Reno" &&
+      parseServiceAreaLabelParts("Reno, NV").region === "NV",
+  );
+  check(
+    "Owner label without a state stays a single city token",
+    parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers" &&
+      parseServiceAreaLabelParts("Fort Myers").region === null,
   );
   check(
     "Unknown when no areas are configured",

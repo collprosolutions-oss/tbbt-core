@@ -53,6 +53,31 @@ function normalizePostal(value: string | null | undefined) {
   return (value ?? "").trim().toUpperCase().replace(/\s+/g, "");
 }
 
+/**
+ * Split an owner-entered display label like "Reno, NV" into the city and
+ * region tokens intake qualification already matches. This is not geocoding.
+ * A 2-letter token after the last comma is treated as a region code.
+ */
+export function parseServiceAreaLabelParts(label: string): {
+  city: string;
+  region: string | null;
+} {
+  const trimmed = label.trim();
+  if (!trimmed) return { city: "", region: null };
+  const comma = trimmed.lastIndexOf(",");
+  if (comma <= 0) return { city: trimmed, region: null };
+  const city = trimmed.slice(0, comma).trim();
+  const regionRaw = trimmed.slice(comma + 1).trim();
+  if (!city || !regionRaw) return { city: trimmed, region: null };
+  if (/^[A-Za-z]{2}$/.test(regionRaw)) {
+    return { city, region: regionRaw.toUpperCase() };
+  }
+  if (regionRaw.length <= 20) {
+    return { city, region: regionRaw };
+  }
+  return { city: trimmed, region: null };
+}
+
 export function parseOptionalMoney(raw: string | undefined): number | null {
   const value = raw?.trim() ?? "";
   if (!value) return null;

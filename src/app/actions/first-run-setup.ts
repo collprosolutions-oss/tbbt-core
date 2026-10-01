@@ -27,6 +27,7 @@ export async function completeFirstRunSetupAction(
       phone: readString(formData, "publicPhone"),
       email: readString(formData, "publicEmail"),
       website: readString(formData, "publicWebsite"),
+      timezone: readString(formData, "timezone"),
     });
     nextPath = postAuthenticationPath({
       role: access.workspace.role,

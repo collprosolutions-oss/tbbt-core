@@ -41,6 +41,7 @@ export default async function FirstRunSetupPage() {
           publicPhone={workspace.business.publicPhone ?? ""}
           publicEmail={workspace.business.publicEmail ?? ""}
           publicWebsite={workspace.business.publicWebsite ?? ""}
+          timezone={workspace.business.timezone ?? ""}
         />
       </CardContent>
     </Card>
