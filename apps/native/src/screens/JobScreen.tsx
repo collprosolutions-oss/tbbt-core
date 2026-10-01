@@ -28,6 +28,7 @@ import { JobChecklistSection } from "./JobChecklistSection";
 import { JobMilestonesSection } from "./JobMilestonesSection";
 import { JobPhotosSection } from "./JobPhotosSection";
 import { JobPickupSection } from "./JobPickupSection";
+import { JobProblemReportsSection } from "./JobProblemReportsSection";
 
 export function JobScreen({
   token,
@@ -414,6 +415,12 @@ export function JobScreen({
             ))
           )}
           <JobMilestonesSection milestones={job.milestones} />
+          <JobProblemReportsSection
+            jobId={job.id}
+            onJobUpdated={setJob}
+            reports={job.problemReports}
+            token={token}
+          />
           {job.pickupItems?.length ? (
             <JobPickupSection
               items={job.pickupItems}

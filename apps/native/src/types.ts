@@ -160,6 +160,37 @@ export type NativeJobMilestones = {
   truncatedNotice: string | null;
 };
 
+export type NativeJobProblemKind =
+  | "ACCESS"
+  | "UNEXPECTED_CONDITION"
+  | "MATERIAL"
+  | "CANNOT_PROCEED"
+  | "SAFETY"
+  | "CUSTOMER_UNAVAILABLE";
+
+export type NativeJobProblemReport = {
+  id: string;
+  kind: NativeJobProblemKind | null;
+  kindLabel: string | null;
+  description: string;
+  status: string;
+  statusLabel: string;
+  reportedAt: string;
+  reportedAtLabel: string;
+};
+
+export type NativeJobProblemReports = {
+  items: NativeJobProblemReport[];
+  count: number;
+  limit: number;
+  truncated: boolean;
+  truncatedNotice: string | null;
+  recordAction: {
+    available: boolean;
+    reason: string | null;
+  };
+};
+
 export type NativeJobDetail = NativeJobSummary & {
   customerPhone: string | null;
   callHref: string | null;
@@ -184,6 +215,7 @@ export type NativeJobDetail = NativeJobSummary & {
   pickupItems: NativeJobPickupItem[];
   photos: NativeJobPhotos;
   milestones: NativeJobMilestones;
+  problemReports: NativeJobProblemReports;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
 };

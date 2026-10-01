@@ -19,6 +19,8 @@ import { revalidatePath } from "next/cache";
 import { findAssignedJob } from "@/lib/field-access";
 import {
   FIELD_JOB_NOT_ASSIGNED,
+  FIELD_JOB_PROBLEM_DESCRIPTION_MAX,
+  normalizeAssignedJobProblemDescription,
   reportAssignedJobProblem,
   requestAssignedJobAdditionalWork,
   startAssignedFieldJob,
@@ -54,7 +56,7 @@ function readString(formData: FormData, key: string) {
 }
 
 const NOT_ASSIGNED_ERROR = FIELD_JOB_NOT_ASSIGNED;
-const MAX_TEXT_LENGTH = 2000;
+const MAX_TEXT_LENGTH = FIELD_JOB_PROBLEM_DESCRIPTION_MAX;
 
 async function requireAssignedJobOperating(jobId: string) {
   const result = await findAssignedJob(jobId);
@@ -285,7 +287,9 @@ export async function reportJobProblem(
   formData: FormData,
 ): Promise<FieldJobActionState> {
   const jobId = readString(formData, "jobId");
-  const description = readString(formData, "description").slice(0, MAX_TEXT_LENGTH);
+  const description = normalizeAssignedJobProblemDescription(
+    readString(formData, "description"),
+  );
 
   if (!jobId) {
     return { error: "That job could not be found." };

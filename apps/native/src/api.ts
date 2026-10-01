@@ -4,6 +4,7 @@ import type {
   NativeJobDetail,
   NativeJobPhotoAuthorizePayload,
   NativeJobPhotoStage,
+  NativeJobProblemKind,
   NativePickupException,
   NativeSessionPayload,
   NativeTimeCardsPayload,
@@ -334,6 +335,41 @@ export async function syncNativeJobChecklistDraft(
     return body as unknown as { job: NativeJobDetail; alreadySynced: boolean };
   } catch {
     return { error: NATIVE_CHECKLIST_OFFLINE_MESSAGE };
+  }
+}
+
+export async function recordNativeJobProblem(
+  token: string,
+  jobId: string,
+  input: {
+    kind: NativeJobProblemKind;
+    description: string;
+  },
+): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
+  try {
+    const response = await fetch(
+      nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/problem`),
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      },
+    );
+    const body = await parseJson(response);
+    if (!response.ok) {
+      return {
+        error:
+          typeof body.error === "string"
+            ? body.error
+            : "That problem report could not be recorded.",
+      };
+    }
+    return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
+  } catch {
+    return { error: "Couldn't reach the server." };
   }
 }
 
