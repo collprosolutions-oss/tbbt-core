@@ -12,7 +12,7 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -117,6 +117,10 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 assertLocalDatabaseUrl(testUrl, "customer-merge test DATABASE_URL");
 process.env.DATABASE_URL = testUrl;
+
+const MUTATION_KIND = process.argv.includes("--mutation")
+  ? process.argv[process.argv.indexOf("--mutation") + 1]
+  : null;
 
 let failures = 0;
 function check(label, condition) {
@@ -279,6 +283,7 @@ async function releaseAfterLock(admin, barrier, label) {
 }
 
 try {
+  if (!MUTATION_KIND) {
   console.log("\nSTATIC — OWNER review, no name identity, no outreach");
   check("Dedicated route is /customers/duplicates", CUSTOMER_MERGE_ROUTE === "/customers/duplicates");
   check("Owner-only copy is present", OWNER_ONLY_MERGE_MESSAGE.includes("business owner"));
@@ -303,6 +308,17 @@ try {
       CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "invoice") &&
       CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "property") &&
       CUSTOMER_REASSIGN_SPECS.some((spec) => spec.kind === "updateMany" && spec.delegate === "customerCommunication"),
+  );
+  check(
+    "Merge remaps InvoiceCredit.customerId onto the survivor",
+    CUSTOMER_REASSIGN_SPECS.some(
+      (spec) =>
+        spec.kind === "updateMany" &&
+        spec.model === "InvoiceCredit" &&
+        spec.delegate === "invoiceCredit" &&
+        spec.field === "customerId" &&
+        spec.relation === "invoiceCredits",
+    ),
   );
   check(
     "Merge remaps JobCallback, InvoiceCollectionWorkItem, and both CustomerCsvImportRow customer ids",
@@ -456,7 +472,8 @@ try {
       requiredRefs.some((ref) => ref.model === "JobCallback" && ref.field === "customerId") &&
       requiredRefs.some((ref) => ref.model === "InvoiceCollectionWorkItem" && ref.field === "customerId") &&
       requiredRefs.some((ref) => ref.model === "CustomerCsvImportRow" && ref.field === "createdCustomerId") &&
-      requiredRefs.some((ref) => ref.model === "CustomerCsvImportRow" && ref.field === "possibleDuplicateCustomerId"),
+      requiredRefs.some((ref) => ref.model === "CustomerCsvImportRow" && ref.field === "possibleDuplicateCustomerId") &&
+      requiredRefs.some((ref) => ref.model === "InvoiceCredit" && ref.field === "customerId"),
   );
   if (missingRefs.length > 0) {
     console.error(
@@ -568,6 +585,7 @@ try {
   if (push.status !== 0) {
     throw new Error("Failed to push schema for customer merge test database.");
   }
+  }
 
   prisma = new PrismaClient({ datasourceUrl: testUrl });
 
@@ -661,6 +679,17 @@ try {
         purpose: "INVOICE_BALANCE",
         amount: 25,
         method: "CASH",
+      },
+    });
+    const invoiceCredit = await prisma.invoiceCredit.create({
+      data: {
+        businessId,
+        invoiceId: invoice.id,
+        customerId,
+        amount: 10,
+        reason: `${suffix} recorded credit`,
+        recordedByMembershipId: ownerMem.id,
+        idempotencyKey: `merge-credit-${suffix}-${randomUUID()}`,
       },
     });
     const expense = await prisma.expense.create({
@@ -915,6 +944,7 @@ try {
       job,
       invoice,
       payment,
+      invoiceCredit,
       expense,
       thread,
       communication,
@@ -963,6 +993,74 @@ try {
     if (extras.some((count) => count > 0)) leftovers.push("soft-ref");
     check(`${label}: no leftover or orphaned rows`, leftovers.length === 0);
   }
+
+  async function runInvoiceCreditMergeProof(ctx) {
+    const keepCustomer = await prisma.customer.create({
+      data: {
+        businessId: ctx.business.id,
+        name: "Credit Keep",
+        email: "invoice-credit-merge@example.com",
+        phone: "2395550199",
+      },
+    });
+    const absorbCustomer = await prisma.customer.create({
+      data: {
+        businessId: ctx.business.id,
+        name: "Credit Absorb",
+        email: "invoice-credit-merge@example.com",
+        phone: "(239) 555-0199",
+      },
+    });
+    const job = await prisma.job.create({
+      data: {
+        businessId: ctx.business.id,
+        customerId: absorbCustomer.id,
+        projectToken: randomUUID(),
+        status: "COMPLETED",
+      },
+    });
+    const invoice = await prisma.invoice.create({
+      data: {
+        businessId: ctx.business.id,
+        customerId: absorbCustomer.id,
+        jobId: job.id,
+        kind: "ORIGINAL",
+        status: "SENT",
+        total: 100,
+      },
+    });
+    const credit = await prisma.invoiceCredit.create({
+      data: {
+        businessId: ctx.business.id,
+        invoiceId: invoice.id,
+        customerId: absorbCustomer.id,
+        amount: 30,
+        reason: "absorbed customer credit",
+        recordedByMembershipId: ctx.ownerMem.id,
+        idempotencyKey: `invoice-credit-merge-${randomUUID()}`,
+      },
+    });
+    let mergeError = null;
+    try {
+      await mergeConfirmedCustomers(prisma, ctx.owner, {
+        keepCustomerId: keepCustomer.id,
+        absorbCustomerId: absorbCustomer.id,
+        confirmedSameCustomer: true,
+      });
+    } catch (error) {
+      mergeError = error;
+    }
+    const moved = await prisma.invoiceCredit.findUnique({ where: { id: credit.id } });
+    check(
+      "Absorbed invoice credit now belongs to the survivor",
+      mergeError === null && moved?.customerId === keepCustomer.id,
+    );
+  }
+
+  if (MUTATION_KIND === "invoice-credit-reassign") {
+    const ctx = await seedBusiness("credit-mutation");
+    await runInvoiceCreditMergeProof(ctx);
+  } else {
 
   const alpha = await seedBusiness("alpha");
   const beta = await seedBusiness("beta");
@@ -1163,6 +1261,7 @@ try {
     ["properties", prisma.property, [keepLinks.property.id, absorbLinks.property.id]],
     ["serviceRequests", prisma.serviceRequest, [keepLinks.request.id, absorbLinks.request.id]],
     ["payments", prisma.payment, [keepLinks.payment.id, absorbLinks.payment.id]],
+    ["invoiceCredits", prisma.invoiceCredit, [keepLinks.invoiceCredit.id, absorbLinks.invoiceCredit.id]],
     ["expenses", prisma.expense, [keepLinks.expense.id, absorbLinks.expense.id]],
     ["reviewRequests", prisma.reviewRequest, [keepLinks.reviewRequest.id, absorbLinks.reviewRequest.id]],
     ["reviews", prisma.review, [keepLinks.review.id, absorbLinks.review.id]],
@@ -1216,6 +1315,17 @@ try {
     "InvoiceCollectionWorkItem.customerId remaps onto the survivor and is not nulled",
     remappedCollection?.customerId === keep.id,
   );
+  const remappedInvoiceCredit = await prisma.invoiceCredit.findUnique({
+    where: { id: absorbLinks.invoiceCredit.id },
+  });
+  check(
+    "InvoiceCredit.customerId remaps onto the survivor and is not nulled",
+    remappedInvoiceCredit?.customerId === keep.id,
+  );
+
+  console.log("\nTEST — Merge remaps an absorbed InvoiceCredit onto the survivor");
+  const creditMergeCtx = await seedBusiness("credit-merge");
+  await runInvoiceCreditMergeProof(creditMergeCtx);
   const remappedCsvCreated = await prisma.customerCsvImportRow.findUnique({
     where: { id: absorbLinks.csvCreatedRow.id },
   });
@@ -2448,6 +2558,40 @@ try {
       (await prisma.customer.findUnique({ where: { id: rollbackCustomer.id } }))?.smsConsentStatus ===
         "REVOKED",
   );
+
+  if (failures === 0) {
+    console.log("\nMUTATION — drop InvoiceCredit reassign spec and show the merge test fail");
+    const opsPath = join(root, "src/lib/customer-merge-ops.ts");
+    const original = readFileSync(opsPath, "utf8");
+    const find =
+      '  { kind: "updateMany", model: "InvoiceCredit", delegate: "invoiceCredit", field: "customerId", relation: "invoiceCredits" },\n';
+    if (!original.includes(find)) {
+      check("mutation invoice-credit-reassign found its target", false);
+    } else {
+      writeFileSync(opsPath, original.replace(find, ""));
+      try {
+        const child = spawnSync(
+          process.execPath,
+          ["--experimental-strip-types", fileURLToPath(import.meta.url), "--mutation", "invoice-credit-reassign"],
+          {
+            encoding: "utf8",
+            env: { ...process.env, DATABASE_URL: testUrl, TZ: "America/New_York" },
+          },
+        );
+        check(
+          "mutation invoice-credit-reassign makes the matching test fail",
+          child.status !== 0,
+        );
+        if (child.status === 0) {
+          console.error(child.stdout);
+          console.error(child.stderr);
+        }
+      } finally {
+        writeFileSync(opsPath, original);
+      }
+    }
+  }
+  }
 } catch (error) {
   console.error(error);
   failures += 1;

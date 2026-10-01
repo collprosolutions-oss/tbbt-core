@@ -144,6 +144,7 @@ export const CUSTOMER_REASSIGN_SPECS: readonly CustomerReassignSpec[] = [
   { kind: "updateMany", model: "Job", delegate: "job", field: "customerId", relation: "jobs" },
   { kind: "updateMany", model: "Invoice", delegate: "invoice", field: "customerId", relation: "invoices" },
   { kind: "updateMany", model: "Payment", delegate: "payment", field: "customerId", relation: "payments" },
+  { kind: "updateMany", model: "InvoiceCredit", delegate: "invoiceCredit", field: "customerId", relation: "invoiceCredits" },
   { kind: "updateMany", model: "Expense", delegate: "expense", field: "customerId", relation: "expenses" },
   { kind: "updateMany", model: "ReviewRequest", delegate: "reviewRequest", field: "customerId", relation: "reviewRequests" },
   { kind: "updateMany", model: "Review", delegate: "review", field: "customerId", relation: "reviews" },
