@@ -6,7 +6,7 @@
 -- These rows never send customer messages.
 -- Timestamp is 20261001194700 so it stays unique and after
 -- 20261001180000_job_aftercare_instruction. Do not reuse
--- 20261001180000, 20261001190000, or other wave PR timestamps.
+-- the aftercare timestamp or other wave PR names.
 
 CREATE TABLE IF NOT EXISTS "JobReassignmentRequest" (
     "id" TEXT NOT NULL,

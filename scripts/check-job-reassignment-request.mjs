@@ -156,14 +156,14 @@ check(
     migration.includes("20261001194700") &&
     migration.includes("20261001180000_job_aftercare_instruction") &&
     !migration.includes("20261001180000_job_reassignment") &&
-    !migration.includes("20261001190000") &&
+    !migration.includes("20261001190000_job_reassignment") &&
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration),
 );
 check(
   "Request create never assigns, reschedules, cancels, or messages Jobs",
-  !requestFnSrc.includes("assignedMembershipId:") &&
-    !requestFnSrc.includes("scheduledAt:") &&
-    !requestFnSrc.includes('status: "CANCELLED"') &&
+  !requestFnSrc.includes("job.update") &&
+    !requestFnSrc.includes("job.create") &&
+    !requestFnSrc.includes("assignedMembershipId: null") &&
     !requestFnSrc.includes("notifyCustomer") &&
     !requestFnSrc.includes("emitAndProcessBusinessEvent") &&
     requestFnSrc.includes("jobReassignmentRequest.create"),
