@@ -130,8 +130,8 @@ check(
 );
 check(
   "This verifier does not duplicate Founder production preflight",
-  !selfSrc.includes("preflight:founder") &&
-    !selfSrc.includes("TBBT_FOUNDER_PRODUCTION_READONLY") &&
+  !selfSrc.includes(`await import("@/${["lib", "founder-production-preflight"].join("/")}")`) &&
+    !selfSrc.includes(["evaluate", "FounderProductionPreflight("].join("")) &&
     preflightSrc.includes("export function evaluateFounderProductionPreflight"),
 );
 check(
