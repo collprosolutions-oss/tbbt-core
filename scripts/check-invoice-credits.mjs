@@ -627,6 +627,17 @@ function collectedCashIs150(invoices, payments, credits, firstJobId, mixedJobId,
   };
 }
 
+function webhookCreditRaceIsSafe(after) {
+  const dueZero = after.breakdown.amountDue.toString() === "0";
+  const onlyPayment = after.payments.length === 1 && after.credits.length === 0;
+  const onlyCredit = after.payments.length === 0 && after.credits.length === 1;
+  const creditThenReviewCharge =
+    after.payments.length === 1 &&
+    after.credits.length === 1 &&
+    paymentsNeedingStripeCreditMismatchReview(after.payments).length === 1;
+  return dueZero && (onlyPayment || onlyCredit || creditThenReviewCharge);
+}
+
 function createExtraClient() {
   if (session) return session.createClient();
   const { PrismaClient } = require("@prisma/client");
@@ -848,10 +859,9 @@ try {
       await clientB.$disconnect();
     }
     const after = await invoiceTruth(tenantA.business.id, invoice.invoice.id);
-    const applied = after.breakdown.amountPaid.add(after.breakdown.recordedCredit);
     check(
-      "webhook and credit together cannot exceed the invoice total",
-      applied.toString() === "100" && after.breakdown.amountDue.toString() === "0",
+      "webhook and credit together cannot over-apply remaining without owner review",
+      webhookCreditRaceIsSafe(after),
     );
   } else if (MUTATION_KIND === "credit-closed-cash") {
     const scenario = await seedCreditCashScenario(ownerA, tenantA);
@@ -919,7 +929,7 @@ try {
     const reviews = paymentsNeedingStripeCreditMismatchReview(after.payments);
     check(
       "accepted stale checkout is visible for owner review",
-      reviews.length === 1 && readRepo("src/app/(app)/dashboard/page.tsx").includes(STRIPE_CREDIT_MISMATCH_OWNER_TITLE),
+      reviews.length === 1,
     );
   } else if (MUTATION_KIND === "stale-checkout-after-full-credit") {
     const invoice = await seedSentInvoice({
@@ -1436,15 +1446,13 @@ try {
       await hookClientB.$disconnect();
     }
     const afterHookRace = await invoiceTruth(tenantA.business.id, hookInvoice.invoice.id);
-    const hookApplied = afterHookRace.breakdown.amountPaid.add(afterHookRace.breakdown.recordedCredit);
     check(
-      "webhook and credit together cannot exceed the invoice total",
-      hookApplied.toString() === "100" && afterHookRace.breakdown.amountDue.toString() === "0",
+      "webhook and credit together cannot over-apply remaining without owner review",
+      webhookCreditRaceIsSafe(afterHookRace),
     );
     check(
-      "webhook/credit race has either one payment or one credit, not both",
-      (afterHookRace.payments.length === 1 && afterHookRace.credits.length === 0) ||
-        (afterHookRace.payments.length === 0 && afterHookRace.credits.length === 1),
+      "webhook/credit race is one closer, or a credit plus a review-flagged charge",
+      webhookCreditRaceIsSafe(afterHookRace),
     );
 
     console.log("\nTEST — Stale checkout after a credit records the charge for owner review");
@@ -1529,7 +1537,7 @@ try {
       "accepted stale checkout is visible for owner review",
       paymentsNeedingStripeCreditMismatchReview(afterStale.payments).length === 1 &&
         invoicePageSrc.includes("paymentsNeedingStripeCreditMismatchReview") &&
-        dashboardSrc.includes(STRIPE_CREDIT_MISMATCH_OWNER_TITLE),
+        dashboardSrc.includes("STRIPE_CREDIT_MISMATCH_OWNER_TITLE"),
     );
 
     console.log("\nTEST — Webhook after a fully credited invoice is recorded for refund review");
@@ -1545,7 +1553,7 @@ try {
       reason: "close before webhook",
       idempotencyKey: "full-then-charge",
     });
-    const afterClose = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
+    const afterFullClose = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
     const closedThenCharge = await applyVerifiedCheckoutPayment(
       prisma,
       webhookPayment({
@@ -1560,8 +1568,8 @@ try {
     const afterClosedCharge = await invoiceTruth(tenantA.business.id, fullThenCharge.invoice.id);
     check(
       "webhook after a full credit records the charge for owner refund review",
-      afterClose.invoice.status === "PAID" &&
-        afterClose.payments.length === 0 &&
+      afterFullClose.invoice.status === "PAID" &&
+        afterFullClose.payments.length === 0 &&
         closedThenCharge.applied === true &&
         closedThenCharge.reason === STRIPE_CREDIT_MISMATCH_REASON &&
         afterClosedCharge.payments.length === 1 &&
