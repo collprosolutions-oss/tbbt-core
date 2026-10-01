@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
 import { OTHER_TASK_LABEL } from "@/lib/service-request-work";
@@ -9,6 +9,11 @@ export function PublicContactForm({ slug }: { slug: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
+  const submissionIdRef = useRef(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
 
   if (ok) {
     return (
@@ -30,6 +35,7 @@ export function PublicContactForm({ slug }: { slug: string }) {
     formData.set("otherDescription", OTHER_TASK_LABEL);
     formData.set("description", message);
     formData.set("address", "");
+    formData.set("submissionId", submissionIdRef.current.replace(/[^A-Za-z0-9_-]/g, ""));
     if (typeof window !== "undefined") {
       formData.set("landingPagePath", window.location.pathname);
     }

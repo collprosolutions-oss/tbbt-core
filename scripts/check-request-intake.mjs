@@ -11,7 +11,12 @@ import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
-const { createPublicServiceRequest } = await import("@/lib/public-intake");
+const {
+  createPublicServiceRequest,
+  publicIntakeSubmissionLockKey,
+  publicIntakeTestHooks,
+} = await import("@/lib/public-intake");
+const { INTAKE_SUBMISSION_MARKER } = await import("@/lib/work-area-intake");
 const {
   createOwnerLoggedLead,
   recordedLeadSourceForChannel,
@@ -216,6 +221,40 @@ check(
       attachFnSrc.indexOf("putPublicRequestPhotoFromBytes(deps, slug") &&
     !attachFnSrc.includes("LOCK TABLE") &&
     !/pg_advisory|advisory_lock/i.test(attachFnSrc),
+);
+
+const publicIntakeSrc = readRepo("src/lib/public-intake.ts");
+const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
+const submissionLockIdx = submissionClaimSlice.indexOf("pg_advisory_xact_lock");
+const submissionFindIdx = submissionClaimSlice.indexOf("serviceRequest.findFirst");
+check(
+  "Public intake claims submissionId with a transaction lock before replay lookup",
+  submissionLockIdx > -1 &&
+    submissionFindIdx > submissionLockIdx &&
+    submissionClaimSlice.includes("publicIntakeSubmissionLockKey") &&
+    submissionClaimSlice.includes("INTAKE_SUBMISSION_MARKER") &&
+    publicIntakeSubmissionLockKey("biz", "token12ab") === "tbbt.public-intake:biz:token12ab",
+);
+const mutatedIntakeSrc = publicIntakeSrc.replace(
+  /await tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{publicIntakeSubmissionLockKey\(business\.id, submissionId\)\}\)\)`;\s*/,
+  "",
+);
+const mutatedClaimSlice = mutatedIntakeSrc.slice(mutatedIntakeSrc.indexOf("if (submissionId) {"));
+check(
+  "Mutation: removing the submission lock leaves replay lookup unserialized",
+  publicIntakeSrc.includes("pg_advisory_xact_lock") &&
+    !mutatedClaimSlice.includes("pg_advisory_xact_lock") &&
+    mutatedClaimSlice.includes("serviceRequest.findFirst") &&
+    mutatedClaimSlice.includes("INTAKE_SUBMISSION_MARKER"),
+);
+const contactFormSrc = readRepo("src/components/public/public-contact-form.tsx");
+check(
+  "Public contact form reuses submitServiceRequest with a stable submissionId",
+  contactFormSrc.includes("submitServiceRequest") &&
+    contactFormSrc.includes('formData.set("submissionId"') &&
+    contactFormSrc.includes("submissionIdRef") &&
+    !contactFormSrc.includes("createLead") &&
+    !contactFormSrc.includes("Lead.create"),
 );
 check(
   "Combined remaining slots are MAX_INTAKE_PHOTOS minus recorded attachments",
@@ -1548,6 +1587,152 @@ try {
   });
   check("Resubmit with the same submissionId reuses the request",
     retry.ok === true && retry.requestId === phoneLead.requestId && retry.reused === true);
+
+  function instrumentReplayLookupDelay(client, ms) {
+    const origTx = client.$transaction.bind(client);
+    client.$transaction = (fn, options) =>
+      origTx(async (tx) => {
+        const origFind = tx.serviceRequest.findFirst.bind(tx.serviceRequest);
+        tx.serviceRequest.findFirst = async (args) => {
+          const result = await origFind(args);
+          if (args?.where?.description?.contains) {
+            await new Promise((resolve) => setTimeout(resolve, ms));
+          }
+          return result;
+        };
+        return fn(tx);
+      }, options);
+  }
+
+  function publicIntakePayload(slug, catalogItemId, submissionId, name) {
+    return {
+      slug,
+      name,
+      email: `${name.replace(/\s+/g, ".").toLowerCase()}@example.com`,
+      phone: "2395550100",
+      address: "1 Main St",
+      streetAddress: "1 Main St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: "Concurrent intake replay",
+      catalogItemIds: [catalogItemId],
+      includeOther: false,
+      otherDescription: "",
+      submissionId,
+    };
+  }
+
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  instrumentReplayLookupDelay(raceClientA, 200);
+  instrumentReplayLookupDelay(raceClientB, 200);
+  const concurrentToken = `conc${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  try {
+    const [raceA, raceB] = await Promise.all([
+      createPublicServiceRequest(
+        raceClientA,
+        publicIntakePayload("collpro-reno", fan.id, concurrentToken, "Concurrent A"),
+      ),
+      createPublicServiceRequest(
+        raceClientB,
+        publicIntakePayload("collpro-reno", fan.id, concurrentToken, "Concurrent B"),
+      ),
+    ]);
+    const concurrentRows = await prisma.serviceRequest.findMany({
+      where: {
+        businessId: business.id,
+        description: { contains: `${INTAKE_SUBMISSION_MARKER}${concurrentToken}` },
+      },
+      select: { id: true, customerId: true, description: true },
+    });
+    check(
+      "Concurrent same submissionId converges on one request after the old findFirst window",
+      raceA.ok === true &&
+        raceB.ok === true &&
+        raceA.requestId === raceB.requestId &&
+        concurrentRows.length === 1 &&
+        concurrentRows[0].id === raceA.requestId,
+    );
+    check(
+      "Concurrent same submissionId does not create a second customer",
+      concurrentRows.length === 1 &&
+        new Set(concurrentRows.map((row) => row.customerId)).size === 1,
+    );
+  } finally {
+    await raceClientA.$disconnect();
+    await raceClientB.$disconnect();
+  }
+
+  const barrierClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const barrierClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const barrierToken = `lock${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  try {
+    let releaseBarrier;
+    const held = new Promise((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let arrivedBarrier;
+    const waiting = new Promise((resolve) => {
+      arrivedBarrier = resolve;
+    });
+    publicIntakeTestHooks.afterSubmissionClaim = async () => {
+      arrivedBarrier();
+      await held;
+    };
+    const firstLocked = createPublicServiceRequest(
+      barrierClientA,
+      publicIntakePayload("collpro-reno", fan.id, barrierToken, "Barrier First"),
+    );
+    await Promise.race([
+      waiting,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("submission claim barrier timed out")), 8000);
+      }),
+    ]);
+    const secondLocked = createPublicServiceRequest(
+      barrierClientB,
+      publicIntakePayload("collpro-reno", fan.id, barrierToken, "Barrier Second"),
+    );
+    releaseBarrier();
+    const [barrierFirst, barrierSecond] = await Promise.all([firstLocked, secondLocked]);
+    const barrierRows = await prisma.serviceRequest.findMany({
+      where: {
+        businessId: business.id,
+        description: { contains: `${INTAKE_SUBMISSION_MARKER}${barrierToken}` },
+      },
+      select: { id: true },
+    });
+    check(
+      "Submission claim hook still converges concurrent writers on one request",
+      barrierFirst.ok === true &&
+        barrierSecond.ok === true &&
+        barrierFirst.requestId === barrierSecond.requestId &&
+        barrierRows.length === 1,
+    );
+  } finally {
+    publicIntakeTestHooks.afterSubmissionClaim = undefined;
+    await barrierClientA.$disconnect();
+    await barrierClientB.$disconnect();
+  }
+
+  const isolatedToken = `iso${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  const [isoA, isoB] = await Promise.all([
+    createPublicServiceRequest(
+      prisma,
+      publicIntakePayload("collpro-reno", fan.id, isolatedToken, "Iso Handy"),
+    ),
+    createPublicServiceRequest(
+      prisma,
+      publicIntakePayload("other-handyman", otherItem.id, isolatedToken, "Iso Other"),
+    ),
+  ]);
+  check(
+    "Same submissionId on two tenants still creates isolated requests",
+    isoA.ok === true &&
+      isoB.ok === true &&
+      isoA.requestId !== isoB.requestId,
+  );
 
   const customersBeforeHandoff = await prisma.customer.count({ where: { businessId: business.id } });
   const estimate = await prisma.estimate.create({

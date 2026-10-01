@@ -11,6 +11,7 @@ import {
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
   catalogAsksWorkAreaIntake,
+  INTAKE_SUBMISSION_MARKER,
   joinRequestDescription,
   normalizeIntakeSubmissionId,
   validateWorkAreaIntakeAnswer,
@@ -66,6 +67,17 @@ import {
 import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
+
+export function publicIntakeSubmissionLockKey(businessId: string, submissionId: string) {
+  return `tbbt.public-intake:${businessId}:${submissionId}`;
+}
+
+export const publicIntakeTestHooks: {
+  afterSubmissionClaim?: (input: {
+    businessId: string;
+    submissionId: string;
+  }) => Promise<void> | void;
+} = {};
 
 export type PublicIntakeInput = {
   slug: string;
@@ -412,6 +424,7 @@ export type PublicIntakeTx = {
       }>;
     }) => Promise<unknown>;
   };
+  $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 };
 
 export type PublicIntakeResult =
@@ -778,10 +791,15 @@ async function createPublicServiceRequestInner(
       }
 
       if (submissionId) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${publicIntakeSubmissionLockKey(business.id, submissionId)}))`;
+        await publicIntakeTestHooks.afterSubmissionClaim?.({
+          businessId: business.id,
+          submissionId,
+        });
         const existing = await tx.serviceRequest.findFirst({
           where: {
             businessId: business.id,
-            description: { contains: submissionId },
+            description: { contains: `${INTAKE_SUBMISSION_MARKER}${submissionId}` },
           },
           select: { id: true },
         });
