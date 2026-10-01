@@ -2,10 +2,12 @@
  * Assigned-job Field writes shared by the web Field actions.
  *
  * The server action still derives the workspace and SaaS entitlement.
- * These helpers re-read the assigned Job, then lock it and recheck the
- * exact active membership immediately before mutation so a deactivated
- * MEMBER cannot commit after a valid initial read. Start uses the same
- * canonical running-time write as native field start.
+ * These helpers re-read the assigned Job, then lock it and recheck
+ * businessId, assignment, job status, and the exact active membership
+ * immediately before mutation so a deactivated MEMBER cannot commit
+ * after a valid initial read. Start uses the same canonical running-time
+ * write as native field start. Problem reports never complete, cancel,
+ * or reschedule the Job and never send a customer message.
  */
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -22,6 +24,23 @@ import {
 } from "@/lib/time-card-ops";
 
 export const FIELD_JOB_NOT_ASSIGNED = "That job isn't assigned to you.";
+export const FIELD_JOB_PROBLEM_CLOSED = "This job cannot receive a problem report.";
+export const FIELD_JOB_PROBLEM_DESCRIBE = "Describe the problem.";
+export const FIELD_JOB_PROBLEM_DESCRIPTION_MAX = 2000;
+export const FIELD_JOB_PROBLEM_REPORT_STATUSES = [
+  "SCHEDULED",
+  "UNSCHEDULED",
+  "IN_PROGRESS",
+  "COMPLETED",
+] as const;
+
+export function assignedJobCanReceiveProblemReport(status: string) {
+  return (FIELD_JOB_PROBLEM_REPORT_STATUSES as readonly string[]).includes(status);
+}
+
+export function normalizeAssignedJobProblemDescription(description: string) {
+  return description.trim().slice(0, FIELD_JOB_PROBLEM_DESCRIPTION_MAX);
+}
 
 const START_AUTHORIZE_SELECT = {
   id: true,
@@ -145,16 +164,29 @@ export async function reportAssignedJobProblem(
     afterInitialRead?: () => Promise<void>;
   },
 ) {
+  const description = normalizeAssignedJobProblemDescription(input.description);
+  if (!description) {
+    return { ok: false as const, error: FIELD_JOB_PROBLEM_DESCRIBE };
+  }
+
   const assigned = await db.job.findFirst({
     where: {
       id: input.jobId,
       businessId: actor.businessId,
       assignedMembershipId: actor.membershipId,
     },
-    select: { id: true },
+    select: {
+      id: true,
+      businessId: true,
+      assignedMembershipId: true,
+      status: true,
+    },
   });
   if (!assigned) {
     return { ok: false as const, error: FIELD_JOB_NOT_ASSIGNED };
+  }
+  if (!assignedJobCanReceiveProblemReport(assigned.status)) {
+    return { ok: false as const, error: FIELD_JOB_PROBLEM_CLOSED };
   }
 
   if (input.afterInitialRead) {
@@ -163,22 +195,43 @@ export async function reportAssignedJobProblem(
 
   return db.$transaction(async (tx) => {
     const locked = await lockTenantOwnedJob(tx, actor.businessId, assigned.id);
-    if (!locked || locked.assignedMembershipId !== actor.membershipId) {
+    if (
+      !locked ||
+      locked.businessId !== actor.businessId ||
+      locked.assignedMembershipId !== actor.membershipId
+    ) {
       return { ok: false as const, error: FIELD_JOB_NOT_ASSIGNED };
+    }
+    if (!assignedJobCanReceiveProblemReport(locked.status)) {
+      return { ok: false as const, error: FIELD_JOB_PROBLEM_CLOSED };
     }
     if (!(await exactActiveMembershipHeld(tx, actor))) {
       return { ok: false as const, error: FIELD_JOB_NOT_ASSIGNED };
     }
 
-    const report = await tx.jobProblemReport.create({
-      data: {
-        businessId: actor.businessId,
+    const existing = await tx.jobProblemReport.findFirst({
+      where: {
+        businessId: locked.businessId,
         jobId: locked.id,
         membershipId: actor.membershipId,
-        description: input.description,
+        description,
+        status: "OPEN",
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    if (existing) {
+      return { ok: true as const, alreadyRecorded: true, report: existing };
+    }
+
+    const report = await tx.jobProblemReport.create({
+      data: {
+        businessId: locked.businessId,
+        jobId: locked.id,
+        membershipId: actor.membershipId,
+        description,
       },
     });
-    return { ok: true as const, report };
+    return { ok: true as const, alreadyRecorded: false, report };
   });
 }
 

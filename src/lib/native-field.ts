@@ -14,7 +14,8 @@
  * live in `src/lib/native-field-ops.ts`, `src/lib/native-field-activity.ts`,
  * `src/lib/native-field-photos.ts`, `src/lib/native-field-visits.ts`,
  * `src/lib/native-field-checklist.ts`, `src/lib/native-field-pickup.ts`,
- * `src/lib/native-field-milestones.ts`, and `src/lib/native-time-cards.ts`.
+ * `src/lib/native-field-milestones.ts`, `src/lib/native-field-problems.ts`,
+ * and `src/lib/native-time-cards.ts`.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -57,9 +58,18 @@ import {
   loadNativeAssignedJobMilestones,
   type NativeJobMilestones,
 } from "@/lib/native-field-milestones";
+import {
+  loadNativeAssignedJobProblemReports,
+  type NativeJobProblemReports,
+} from "@/lib/native-field-problems";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 
 export type { NativeJobMilestone, NativeJobMilestones } from "@/lib/native-field-milestones";
+export type {
+  NativeJobProblemKind,
+  NativeJobProblemReport,
+  NativeJobProblemReports,
+} from "@/lib/native-field-problems";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -296,6 +306,7 @@ export type NativeJobDetail = NativeJobSummary & {
   pickupItems: NativeJobPickupItem[];
   photos: NativeJobPhotos;
   milestones: NativeJobMilestones;
+  problemReports: NativeJobProblemReports;
   visit: NativeJobVisit | null;
   checklist: NativeJobChecklist | null;
 };
@@ -742,6 +753,13 @@ export async function loadNativeAssignedJob(
     pickupItems: await loadNativeAssignedJobPickupItems(db, access, job.id),
     photos: await loadNativeAssignedJobPhotos(db, access, job.id, options),
     milestones: await loadNativeAssignedJobMilestones(db, access, job.id, timeZone),
+    problemReports: await loadNativeAssignedJobProblemReports(
+      db,
+      access,
+      job.id,
+      timeZone,
+      job.status,
+    ),
     visit: await loadNativeAssignedJobVisit(db, access, job),
     checklist: await loadNativeAssignedJobChecklist(db, access, job),
   };

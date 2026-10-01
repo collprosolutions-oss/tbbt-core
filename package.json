@@ -180,6 +180,7 @@
     "test:native-field-checklist-offline": "node --experimental-strip-types scripts/check-native-field-checklist-offline.mjs",
     "test:native-field-activity": "node --experimental-strip-types scripts/check-native-field-activity.mjs",
     "test:native-field-pickup": "node --experimental-strip-types scripts/check-native-field-pickup.mjs",
+    "test:native-field-problem": "node --experimental-strip-types scripts/check-native-field-problem.mjs",
     "test:native-assigned-stops": "node --experimental-strip-types scripts/check-native-assigned-stops.mjs",
     "test:native-time-cards": "node --experimental-strip-types scripts/check-native-time-cards.mjs",
     "test:native-job-milestones": "node --experimental-strip-types scripts/check-native-job-milestones.mjs",
