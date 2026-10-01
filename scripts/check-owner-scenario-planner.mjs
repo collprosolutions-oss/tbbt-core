@@ -152,6 +152,7 @@ function plannerSource(overrides = {}) {
     jobs: [],
     invoices: [],
     payments: [],
+    invoiceCredits: [],
     expenses: [],
     approvedTimeEntries: [],
     customers: [],

@@ -64,7 +64,7 @@ export async function loadOwnerScenarioPlannerSource(
   const businessId = access.businessId;
   const scope = { businessId } as const;
 
-  const [jobs, invoices, payments, expenses, timeEntries, customers, estimates, changeOrders] =
+  const [jobs, invoices, payments, invoiceCredits, expenses, timeEntries, customers, estimates, changeOrders] =
     await Promise.all([
       prisma.job.findMany({
         where: scope,
@@ -113,6 +113,12 @@ export async function loadOwnerScenarioPlannerSource(
         },
         take: PLANNER_READ_BOUND,
         orderBy: { receivedAt: "desc" },
+      }),
+      prisma.invoiceCredit.findMany({
+        where: scope,
+        select: { id: true, invoiceId: true, amount: true },
+        take: PLANNER_READ_BOUND,
+        orderBy: { createdAt: "desc" },
       }),
       prisma.expense.findMany({
         where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
@@ -206,6 +212,11 @@ export async function loadOwnerScenarioPlannerSource(
       payments: payments.map((payment) => ({
         ...payment,
         amount: asNumber(payment.amount),
+      })),
+      invoiceCredits: invoiceCredits.map((credit) => ({
+        id: credit.id,
+        invoiceId: credit.invoiceId,
+        amount: asNumber(credit.amount),
       })),
       expenses: expenses.map((expense) => ({
         ...expense,

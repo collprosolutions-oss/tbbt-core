@@ -59,7 +59,11 @@ export function buildReceivables(source: FinancialSource, now: Date = new Date()
     .filter((invoice) => invoice.status === "SENT")
     .map((invoice) => {
       const collectedAgainstInvoice = paymentsAppliedToInvoice(source.payments, invoice.id);
-      const balanceDue = invoiceBalanceDue(invoice, source.payments);
+      const balanceDue = invoiceBalanceDue(
+        invoice,
+        source.payments,
+        source.invoiceCredits ?? [],
+      );
       const ageDays = ageInWholeDays(invoice.createdAt, now);
       const agingBucket = agingBucketForDays(ageDays);
       const customer = source.customers.find((row) => row.id === invoice.customerId);

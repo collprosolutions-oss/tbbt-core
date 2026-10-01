@@ -24,6 +24,7 @@ import {
   emptyLaborBurdenConfig,
   invoiceBalanceDue,
   type FinancialEstimateLine,
+  type FinancialInvoiceCredit,
   type FinancialPayment,
   type FinancialSource,
   type JobProfitability,
@@ -133,6 +134,7 @@ export type JobCloseoutInput = {
   estimateLines: readonly CloseoutEstimateLine[];
   invoices: readonly ReportInvoice[];
   payments: readonly FinancialPayment[];
+  invoiceCredits?: readonly FinancialInvoiceCredit[];
   timeEntries: readonly CloseoutTimeEntry[];
   expenses: readonly ReportExpense[];
   materialItems: readonly CloseoutMaterialItem[];
@@ -365,6 +367,7 @@ export function assessCloseoutCoverage(input: {
   materialItems: readonly CloseoutMaterialItem[];
   invoices: readonly ReportInvoice[];
   payments: readonly FinancialPayment[];
+  invoiceCredits: readonly FinancialInvoiceCredit[];
   approvedLines: readonly FinancialEstimateLine[];
   readsTruncated?: boolean;
 }): CloseoutCoverage {
@@ -417,11 +420,12 @@ export function assessCloseoutCoverage(input: {
     jobId: billed[0]?.jobId ?? input.invoices[0]?.jobId ?? "",
     invoices: input.invoices,
     payments: input.payments,
+    credits: input.invoiceCredits,
   });
   const outstanding = roundMoney(
     input.invoices
       .filter((row) => row.status === "SENT")
-      .reduce((sum, row) => sum + invoiceBalanceDue(row, input.payments), 0),
+      .reduce((sum, row) => sum + invoiceBalanceDue(row, input.payments, input.invoiceCredits), 0),
   );
   const payments: CloseoutCoverageState =
     collected > 0 && outstanding === 0 && billed.length > 0
@@ -462,6 +466,7 @@ function emptyFinanceSource(businessId: string): Omit<FinancialSource, never> {
     memberships: [],
     expenses: [],
     payments: [],
+    invoiceCredits: [],
     changeOrders: [],
     estimateLines: [],
     laborBurden: emptyLaborBurdenConfig(),
@@ -532,6 +537,9 @@ export function buildJobProfitabilityCloseout(
       approvedLaborCost: entry.approvedLaborCost,
     }));
 
+  const invoiceCredits = (input.invoiceCredits ?? []).filter((credit) =>
+    invoices.some((invoice) => invoice.id === credit.invoiceId),
+  );
   const coverage = assessCloseoutCoverage({
     approvedEstimate,
     hasAnyEstimate: Boolean(job.estimateId && estimates.some((row) => row.id === job.estimateId)),
@@ -540,6 +548,7 @@ export function buildJobProfitabilityCloseout(
     materialItems,
     invoices,
     payments,
+    invoiceCredits,
     approvedLines,
     readsTruncated: input.readsTruncated,
   });
@@ -573,6 +582,7 @@ export function buildJobProfitabilityCloseout(
       : [],
     invoices,
     payments,
+    invoiceCredits,
     approvedTimeEntries,
     expenses,
     changeOrders,

@@ -30,6 +30,7 @@ export async function loadReportSource(
     payrollRuns,
     memberships,
     expenses,
+    invoiceCredits,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: scope,
@@ -126,6 +127,10 @@ export async function loadReportSource(
         recurring: true,
       },
     }),
+    prisma.invoiceCredit.findMany({
+      where: scope,
+      select: { id: true, invoiceId: true, amount: true },
+    }),
   ]);
 
   return {
@@ -177,6 +182,11 @@ export async function loadReportSource(
       vendor: expense.vendor,
       jobId: expense.jobId,
       recurring: expense.recurring,
+    })),
+    invoiceCredits: invoiceCredits.map((credit) => ({
+      id: credit.id,
+      invoiceId: credit.invoiceId,
+      amount: asNumber(credit.amount),
     })),
   };
 }

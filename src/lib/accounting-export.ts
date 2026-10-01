@@ -197,12 +197,19 @@ export type AccountingJobRecord = {
   id: string;
 };
 
+export type AccountingInvoiceCreditRecord = {
+  id: string;
+  invoiceId: string;
+  amount: Prisma.Decimal;
+};
+
 export type AccountingExportSource = {
   businessId: string;
   businessName: string;
   slug: string;
   invoices: AccountingInvoiceRecord[];
   payments: AccountingPaymentRecord[];
+  credits?: AccountingInvoiceCreditRecord[];
   expenses: AccountingExpenseRecord[];
   customers: AccountingNamedRecord[];
   jobs: AccountingJobRecord[];
@@ -312,6 +319,7 @@ export function paymentsAllocatedToInvoice<
 export function accountingInvoicePaymentTotals(
   invoice: Pick<AccountingInvoiceRecord, "id" | "jobId" | "kind" | "status" | "total">,
   payments: readonly AccountingPaymentRecord[],
+  credits: readonly AccountingInvoiceCreditRecord[] = [],
 ): {
   amountPaid: Prisma.Decimal;
   amountRemaining: Prisma.Decimal;
@@ -319,10 +327,12 @@ export function accountingInvoicePaymentTotals(
   legacyFullyPaid: boolean;
 } {
   const allocated = paymentsAllocatedToInvoice(invoice, payments);
+  const invoiceCredits = credits.filter((credit) => credit.invoiceId === invoice.id);
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
     payments: allocated,
+    credits: invoiceCredits,
   });
   const paymentBasis: PaymentBasis =
     allocated.length > 0
@@ -343,7 +353,11 @@ export function buildAccountingInvoiceRows(source: AccountingExportSource): Arra
   return [...source.invoices]
     .sort((a, b) => compareByDateThenId(a.createdAt, a.id, b.createdAt, b.id))
     .map((invoice) => {
-      const totals = accountingInvoicePaymentTotals(invoice, source.payments);
+      const totals = accountingInvoicePaymentTotals(
+        invoice,
+        source.payments,
+        source.credits ?? [],
+      );
       return {
         "Invoice Number": invoiceNumberFromId(invoice.id),
         "Invoice ID": invoice.id,
@@ -470,7 +484,7 @@ export async function loadAccountingExportSource(
     throw new Error("Business not found.");
   }
 
-  const [invoices, payments, expenses, customers, jobs] = await Promise.all([
+  const [invoices, payments, credits, expenses, customers, jobs] = await Promise.all([
     prisma.invoice.findMany({
       where: { businessId },
       select: {
@@ -503,6 +517,15 @@ export async function loadAccountingExportSource(
         createdAt: true,
       },
       orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.invoiceCredit.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        invoiceId: true,
+        amount: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     prisma.expense.findMany({
       where: { businessId, ...ACTIVE_EXPENSE_WHERE },
@@ -540,6 +563,7 @@ export async function loadAccountingExportSource(
     slug: business.slug,
     invoices,
     payments,
+    credits,
     expenses,
     customers,
     jobs,

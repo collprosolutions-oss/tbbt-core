@@ -30,6 +30,7 @@ import {
   outstandingReceivableAmount,
   type FinancialChangeOrder,
   type FinancialEstimateLine,
+  type FinancialInvoiceCredit,
   type FinancialPayment,
   type FinancialSource,
   type JobProfitability,
@@ -123,6 +124,7 @@ export type PlannerRecordSource = {
   jobs: Array<ReportJob & { businessId: string }>;
   invoices: ReportInvoice[];
   payments: FinancialPayment[];
+  invoiceCredits: FinancialInvoiceCredit[];
   expenses: ReportExpense[];
   approvedTimeEntries: PlannerTimeEntry[];
   customers: PlannerCustomer[];
@@ -516,12 +518,16 @@ export function isolatePlannerSource(source: PlannerRecordSource): PlannerRecord
   const estimateIds = new Set(estimates.map((estimate) => estimate.id));
   const estimateLines = source.estimateLines.filter((line) => estimateIds.has(line.estimateId));
   const changeOrders = source.changeOrders.filter((order) => jobIds.has(order.jobId));
+  const invoiceCredits = (source.invoiceCredits ?? []).filter((credit) =>
+    invoiceIds.has(credit.invoiceId),
+  );
 
   return {
     businessId,
     jobs,
     invoices,
     payments,
+    invoiceCredits,
     expenses,
     approvedTimeEntries,
     customers,
@@ -565,6 +571,7 @@ export function plannerSourceToFinancialSource(source: PlannerRecordSource): Fin
     memberships: [],
     expenses: isolated.expenses,
     payments: isolated.payments,
+    invoiceCredits: isolated.invoiceCredits,
     changeOrders: isolated.changeOrders,
     estimateLines: isolated.estimateLines,
     laborBurden: emptyLaborBurdenConfig(),
@@ -622,8 +629,16 @@ export function buildOwnerScenarioPlan(
   const billedRevenue = sumTotals(
     isolated.invoices.filter((invoice) => invoice.status === "SENT" || invoice.status === "PAID"),
   );
-  const collectedRevenue = collectedRevenueForInvoices(isolated.invoices, isolated.payments);
-  const unpaid = outstandingReceivableAmount(isolated.invoices, isolated.payments);
+  const collectedRevenue = collectedRevenueForInvoices(
+    isolated.invoices,
+    isolated.payments,
+    isolated.invoiceCredits,
+  );
+  const unpaid = outstandingReceivableAmount(
+    isolated.invoices,
+    isolated.payments,
+    isolated.invoiceCredits,
+  );
   const recordedWageLabor = completeJobs.length
     ? roundMoney(completeJobs.reduce((sum, job) => sum + (job.recordedWageLaborCost ?? 0), 0))
     : jobs.some((job) => job.recordedWageLaborCost != null)

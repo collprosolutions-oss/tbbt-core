@@ -220,16 +220,28 @@ export async function loadBsosFactsBundle(
     return (completedByCustomer.get(customer.id) ?? 0) > 1 || (paidByCustomer.get(customer.id) ?? 0) > 1;
   }).length;
 
-  const payments = await prisma.payment.findMany({
-    where: scope,
-    select: { id: true, amount: true, invoiceId: true, jobId: true, customerId: true, receivedAt: true },
-  });
+  const [payments, invoiceCredits] = await Promise.all([
+    prisma.payment.findMany({
+      where: scope,
+      select: { id: true, amount: true, invoiceId: true, jobId: true, customerId: true, receivedAt: true },
+    }),
+    prisma.invoiceCredit.findMany({
+      where: scope,
+      select: { invoiceId: true, amount: true },
+    }),
+  ]);
   const paymentRows = payments.map((payment) => ({
     ...payment,
     amount: asNumber(payment.amount),
   }));
+  const creditRows = invoiceCredits.map((credit) => ({
+    invoiceId: credit.invoiceId,
+    amount: asNumber(credit.amount),
+  }));
   const unpaidRemaining = unpaid
-    .map((invoice) => invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows))
+    .map((invoice) =>
+      invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows, creditRows),
+    )
     .filter((amount) => amount > 0);
   const [hasInsights, hasMarketing, growthLoaded] = await Promise.all([
     hasProductCapability(prisma, businessId, PRODUCT_CAPABILITIES.REPORTING_INSIGHTS),

@@ -21,6 +21,7 @@ import {
   type CollectionsNextStep,
 } from "@/lib/collections/constants";
 import { missingCollectionWorkItemSchema } from "@/lib/collections/schema";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
@@ -131,10 +132,15 @@ async function loadOwnedUnpaidInvoice(
     businessId: access.businessId,
     invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
   });
+  const credits = await listInvoiceCreditsForInvoice(db, {
+    businessId: access.businessId,
+    invoiceId: invoice.id,
+  });
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
     payments,
+    credits,
   });
   if (breakdown.amountDue.lte(0)) {
     throw new CollectionWorkItemError(COLLECTIONS_NOT_UNPAID_MESSAGE);

@@ -26,6 +26,7 @@ import type {
 import { ageInWholeDays, agingBucketForDays } from "@/lib/financial-intelligence/receivables";
 import { formatMoney } from "@/lib/format";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
+import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsGroupedByInvoiceId,
@@ -179,11 +180,19 @@ export async function loadCollectionsWorklist(
     select: INVOICE_SELECT,
   });
 
-  const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
-    db,
-    businessId,
-    invoices.map((invoice) => ({ id: invoice.id, jobId: invoice.jobId, kind: invoice.kind })),
-  );
+  const invoiceTargets = invoices.map((invoice) => ({
+    id: invoice.id,
+    jobId: invoice.jobId,
+    kind: invoice.kind,
+  }));
+  const [paymentsByInvoiceId, creditsByInvoiceId] = await Promise.all([
+    listPaymentsGroupedByInvoiceId(db, businessId, invoiceTargets),
+    listInvoiceCreditsGroupedByInvoiceId(
+      db,
+      businessId,
+      invoices.map((invoice) => invoice.id),
+    ),
+  ]);
 
   const unpaid = invoices
     .map((invoice) => {
@@ -191,6 +200,7 @@ export async function loadCollectionsWorklist(
         status: invoice.status,
         total: invoice.total,
         payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+        credits: creditsByInvoiceId.get(invoice.id) ?? [],
       });
       return { invoice, breakdown };
     })

@@ -45,7 +45,11 @@ import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
-import { getBusinessPaymentStatus } from "@/lib/payments";
+import {
+  getBusinessPaymentStatus,
+  listOpenStripeCreditMismatchReviews,
+  STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
+} from "@/lib/payments";
 import {
   OWNER_TODAY_FIELD_PROBLEM_SELECT,
   OWNER_TODAY_FIELD_PROBLEM_TAKE,
@@ -80,6 +84,7 @@ import {
 } from "@/lib/owner-daily-attention-data";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   listPaymentsGroupedByInvoiceId,
   sumInvoiceRemainingDue,
@@ -341,15 +346,26 @@ export default async function DashboardPage() {
     { businessId: access.businessId, start: todayRange.start, timeZone },
   );
   const scheduleConflictAttention = dailyAttention.scheduleConflicts;
+  const stripeCreditMismatchReviews = await listOpenStripeCreditMismatchReviews(
+    prisma,
+    access.businessId,
+    ATTENTION_TAKE,
+  );
 
   const outstandingPayments = await listPaymentsGroupedByInvoiceId(
     prisma,
     access.businessId,
     sentOutstandingInvoices,
   );
+  const outstandingCredits = await listInvoiceCreditsGroupedByInvoiceId(
+    prisma,
+    access.businessId,
+    sentOutstandingInvoices.map((invoice) => invoice.id),
+  );
   const outstandingTotal = sumInvoiceRemainingDue(
     sentOutstandingInvoices,
     outstandingPayments,
+    outstandingCredits,
   );
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(paymentStatus);
   const appointmentAttention = dashboardAppointmentAttentionItems(
@@ -458,6 +474,17 @@ export default async function DashboardPage() {
         status: invoice.status,
         href: `/invoices/${invoice.id}`,
         action: "Open",
+      })),
+    },
+    {
+      title: STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
+      count: stripeCreditMismatchReviews.length,
+      items: stripeCreditMismatchReviews.map((payment) => ({
+        key: payment.id,
+        name: payment.invoice?.customer?.name ?? "Customer",
+        meta: formatMoney(payment.amount),
+        href: payment.invoiceId ? `/invoices/${payment.invoiceId}` : "/invoices",
+        action: "Review",
       })),
     },
     {

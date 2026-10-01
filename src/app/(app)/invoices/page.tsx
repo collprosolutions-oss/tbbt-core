@@ -24,6 +24,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
+import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsGroupedByInvoiceId,
@@ -211,21 +212,26 @@ export default async function InvoicesPage({
     }),
   ]);
 
-  const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
-    prisma,
-    access.businessId,
-    [
-      ...invoicesRaw.map((invoice) => ({
-        id: invoice.id,
-        jobId: invoice.job?.id ?? null,
-        kind: invoice.kind,
-      })),
-      ...sentInvoicesForKpi,
-    ],
-  );
+  const invoiceTargets = [
+    ...invoicesRaw.map((invoice) => ({
+      id: invoice.id,
+      jobId: invoice.job?.id ?? null,
+      kind: invoice.kind,
+    })),
+    ...sentInvoicesForKpi,
+  ];
+  const [paymentsByInvoiceId, creditsByInvoiceId] = await Promise.all([
+    listPaymentsGroupedByInvoiceId(prisma, access.businessId, invoiceTargets),
+    listInvoiceCreditsGroupedByInvoiceId(
+      prisma,
+      access.businessId,
+      invoiceTargets.map((invoice) => invoice.id),
+    ),
+  ]);
   const sentRemainingDue = sumInvoiceRemainingDue(
     sentInvoicesForKpi,
     paymentsByInvoiceId,
+    creditsByInvoiceId,
   );
 
   const invoices: InvoiceListItem[] = invoicesRaw.map((invoice) => {
@@ -233,6 +239,7 @@ export default async function InvoicesPage({
       status: invoice.status,
       total: invoice.total,
       payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+      credits: creditsByInvoiceId.get(invoice.id) ?? [],
     });
     return {
       id: invoice.id,

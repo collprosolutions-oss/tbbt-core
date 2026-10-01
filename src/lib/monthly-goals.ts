@@ -79,7 +79,7 @@ export const INVOICES_PAID_FACT_MESSAGE =
   "Invoices paid this month are Invoice rows with status PAID and paidAt in the Business.timezone civil month. SENT, DRAFT, and VOID invoices are not paid.";
 
 export const REVENUE_RECEIVED_FACT_MESSAGE =
-  "Collected payments (recorded) are TBBT-recorded collected cash for the Business.timezone month: Payment rows by receivedAt, including material deposits, plus legacy PAID invoices that have no Payment rows using paidAt. That is not bank balance and not unpaid invoice value.";
+  "Collected payments (recorded) are TBBT-recorded collected cash for the Business.timezone month: Payment rows by receivedAt, including material deposits, plus legacy PAID invoices that have no Payment rows and were not closed by recorded credits, using paidAt. That is not bank balance and not unpaid invoice value.";
 
 export const UNCLOCKED_COMPLETED_JOBS_MESSAGE =
   "Some completed jobs have no recorded completion date, so their completion month is unavailable and they are not counted toward this month.";
@@ -156,6 +156,8 @@ export type MonthlyGoalFactSource = {
     status: string;
     total: number;
     paidAt: Date | null;
+    paymentMethod?: string | null;
+    paymentReference?: string | null;
   }>;
   payments: Array<{
     businessId: string;
@@ -164,6 +166,7 @@ export type MonthlyGoalFactSource = {
     invoiceId: string | null;
     receivedAt: Date;
   }>;
+  invoiceCredits?: Array<{ id?: string; businessId: string; invoiceId: string; amount: number }>;
   paymentsOnPaidInvoices: Array<{ businessId: string; invoiceId: string }>;
   jobCompletionsTruncated: boolean;
   completedJobsTruncated: boolean;
@@ -355,6 +358,7 @@ export function isolateMonthlyGoalFacts(source: MonthlyGoalFactSource): MonthlyG
     completionEventsForCompletedJobs: isolateSameBusinessRows(source.completionEventsForCompletedJobs, businessId),
     paidInvoices: isolateSameBusinessRows(source.paidInvoices, businessId),
     payments: isolateSameBusinessRows(source.payments, businessId),
+    invoiceCredits: isolateSameBusinessRows(source.invoiceCredits ?? [], businessId),
     paymentsOnPaidInvoices: isolateSameBusinessRows(source.paymentsOnPaidInvoices, businessId),
   };
 }
@@ -418,6 +422,11 @@ export function collectedRevenueInPeriod(source: MonthlyGoalFactSource, period: 
       invoices: isolated.paidInvoices.map((invoice) => ({
         ...invoice,
         total: Number(toMonthlyGoalMoney(invoice.total).toFixed(2)),
+      })),
+      invoiceCredits: (isolated.invoiceCredits ?? []).map((credit) => ({
+        id: credit.id,
+        invoiceId: credit.invoiceId,
+        amount: Number(toMonthlyGoalMoney(credit.amount).toFixed(2)),
       })),
     } as FinancialSource,
     period,

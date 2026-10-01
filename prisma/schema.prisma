@@ -303,6 +303,7 @@ model Business {
   jobs                     Job[]
   appointmentEvents        JobAppointmentEvent[]
   invoices                 Invoice[]
+  invoiceCredits           InvoiceCredit[]
   lineItems                LineItem[]
   jobPhotos                JobPhoto[]
   changeOrders             ChangeOrder[]
@@ -352,6 +353,7 @@ model Business {
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
+  invoiceCheckoutSessions  InvoiceCheckoutSession[]
   unavailableDates         BusinessUnavailableDate[]
   supplierPreferences      BusinessSupplierPreference[]
   materialSupplierMappings BusinessMaterialSupplierMapping[]
@@ -720,6 +722,7 @@ model Membership {
   updatedMonthlyBusinessGoals MonthlyBusinessGoal[] @relation("MonthlyBusinessGoalUpdater")
   createdInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemCreator")
   updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
+  recordedInvoiceCredits InvoiceCredit[] @relation("InvoiceCreditRecorder")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -748,6 +751,7 @@ model Customer {
   jobs            Job[]
   invoices        Invoice[]
   payments        Payment[]
+  invoiceCredits  InvoiceCredit[]
   invoiceCollectionWorkItems InvoiceCollectionWorkItem[]
   expenses        Expense[]
   reviewRequests  ReviewRequest[]
@@ -2042,6 +2046,8 @@ model Invoice {
   job                  Job?          @relation(fields: [jobId], references: [id], onDelete: SetNull)
   lineItems            LineItem[]
   payments             Payment[]
+  credits              InvoiceCredit[]
+  checkoutSessions     InvoiceCheckoutSession[]
   billedChangeOrders   ChangeOrder[]
   collectionWorkItems  InvoiceCollectionWorkItem[]
 
@@ -2069,6 +2075,9 @@ model Payment {
   note                    String?
   stripeCheckoutSessionId String?   @unique
   stripePaymentIntentId   String?   @unique
+  /// Set when OWNER acknowledges a STRIPE_CREDIT_MISMATCH_REVIEW flag.
+  /// Null means the flag is still open on Dashboard / Reports.
+  stripeCreditMismatchResolvedAt DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
@@ -2081,6 +2090,25 @@ model Payment {
   @@index([businessId])
   @@index([estimateId])
   @@index([jobId])
+  @@index([invoiceId])
+}
+
+/// Expected Stripe Checkout amount at session creation. Webhooks that
+/// match this session id and amount are accepted even if later credits
+/// changed remaining due. Additive only. Sessions created before this
+/// table fall back to historical remaining-due amounts.
+model InvoiceCheckoutSession {
+  id              String   @id @default(cuid())
+  businessId      String
+  invoiceId       String
+  stripeSessionId String   @unique
+  amountCents     Int
+  createdAt       DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
   @@index([invoiceId])
 }
 
@@ -2113,6 +2141,36 @@ model InvoiceCollectionWorkItem {
   @@index([businessId, status])
   @@index([invoiceId])
   @@index([customerId])
+}
+
+/// OWNER-recorded internal credit / correction against an issued invoice.
+/// Additive only. Never rewrites Invoice.total, LineItem snapshots, or
+/// Payment rows. Never issues a Stripe refund or customer message.
+/// Remaining due = invoice total − attributed payments − recorded credits.
+model InvoiceCredit {
+  id                     String   @id @default(cuid())
+  businessId             String
+  invoiceId              String
+  customerId             String?
+  /// Positive credit amount. Whole cents only (at most two decimal places).
+  /// Not a payment and not a refund.
+  amount                 Decimal
+  reason                 String
+  recordedByMembershipId String
+  /// Client-supplied idempotency key. Duplicate submit returns this row.
+  idempotencyKey         String
+  createdAt              DateTime @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  recordedBy Membership @relation("InvoiceCreditRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([businessId, invoiceId, idempotencyKey])
+  @@index([businessId])
+  @@index([invoiceId])
+  @@index([customerId])
+  @@index([recordedByMembershipId])
 }
 
 /// Detection ledger for revenue-integrity backfills that joined on

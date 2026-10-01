@@ -25,6 +25,7 @@ import {
   ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
 } from "@/lib/business-contact";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
@@ -146,6 +147,7 @@ export type InvoiceDocumentView = {
   amountDueLabel: string;
   depositPaidLabel: string | null;
   otherPaymentsLabel: string | null;
+  recordedCreditLabel: string | null;
   creditLabel: string | null;
   thankYou: string;
 };
@@ -236,6 +238,7 @@ function toDocumentView(
     }>;
   },
   payments: Array<{ purpose: string; amount: Prisma.Decimal | number | string }> = [],
+  credits: Array<{ amount: Prisma.Decimal | number | string }> = [],
 ): InvoiceDocumentView {
   const invoiceNumber = invoiceNumberFromId(invoice.id);
   const customerName = invoice.customer?.name ?? null;
@@ -257,6 +260,7 @@ function toDocumentView(
     status: invoice.status,
     total: invoice.total,
     payments,
+    credits,
   });
   const amountPaid = amount.amountPaid;
   const amountDue = amount.amountDue;
@@ -304,6 +308,9 @@ function toDocumentView(
       amount.depositPaid.gt(0) && amount.otherPaid.gt(0)
         ? formatMoney(amount.otherPaid)
         : null,
+    recordedCreditLabel: amount.recordedCredit.gt(0)
+      ? formatMoney(amount.recordedCredit)
+      : null,
     creditLabel: amount.credit.gt(0)
       ? `Credit on account ${formatMoney(amount.credit)}`
       : null,
@@ -344,7 +351,11 @@ export async function loadInvoiceDocumentForBusiness(
       kind: invoice.kind,
     },
   });
-  return toDocumentView(invoice, payments);
+  const credits = await listInvoiceCreditsForInvoice(db, {
+    businessId,
+    invoiceId: invoice.id,
+  });
+  return toDocumentView(invoice, payments, credits);
 }
 
 /**
@@ -435,6 +446,8 @@ export function invoiceDocumentPlainText(document: InvoiceDocumentView): string 
     document.amountPaidLabel,
     document.depositPaidLabel ? "Deposit Paid" : "",
     document.depositPaidLabel ? `-${document.depositPaidLabel}` : "",
+    document.recordedCreditLabel ? "Recorded credit" : "",
+    document.recordedCreditLabel ? `-${document.recordedCreditLabel}` : "",
     "Amount Due",
     document.amountDueLabel,
     document.thankYou,

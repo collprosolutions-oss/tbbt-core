@@ -266,6 +266,8 @@ try {
   const ownerOnly = [
     CAPABILITIES.AUTHORIZE_PAYROLL,
     CAPABILITIES.DECIDE_TIME_CORRECTIONS,
+    CAPABILITIES.RECORD_INVOICE_CREDIT,
+    CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
@@ -592,6 +594,24 @@ try {
   });
   await expectAllowed("OWNER can pass the time-correction decision capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.DECIDE_TIME_CORRECTIONS);
+  });
+  check("OWNER has RECORD_INVOICE_CREDIT", roleHasCapability("OWNER", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  check("ADMIN does not have RECORD_INVOICE_CREDIT", !roleHasCapability("ADMIN", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  check("MEMBER does not have RECORD_INVOICE_CREDIT", !roleHasCapability("MEMBER", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  await expectForbidden("ADMIN cannot pass the invoice-credit capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.RECORD_INVOICE_CREDIT);
+  });
+  await expectAllowed("OWNER can pass the invoice-credit capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.RECORD_INVOICE_CREDIT);
+  });
+  check("OWNER has RESOLVE_STRIPE_CREDIT_MISMATCH", roleHasCapability("OWNER", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  check("ADMIN does not have RESOLVE_STRIPE_CREDIT_MISMATCH", !roleHasCapability("ADMIN", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  check("MEMBER does not have RESOLVE_STRIPE_CREDIT_MISMATCH", !roleHasCapability("MEMBER", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  await expectForbidden("ADMIN cannot pass the Stripe credit-mismatch resolve gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
+  });
+  await expectAllowed("OWNER can pass the Stripe credit-mismatch resolve gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
   });
 
   console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");

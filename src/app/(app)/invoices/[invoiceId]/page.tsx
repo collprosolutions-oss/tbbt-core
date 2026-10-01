@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
+import { RecordInvoiceCreditForm } from "@/components/invoices/record-invoice-credit-form";
+import { ResolveStripeCreditMismatchForm } from "@/components/invoices/resolve-stripe-credit-mismatch-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -19,13 +21,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   getBusinessPaymentStatus,
+  paymentsNeedingStripeCreditMismatchReview,
   reconcileStripeCheckoutPayment,
+  STRIPE_CREDIT_MISMATCH_OWNER_DETAIL,
+  STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
 } from "@/lib/payments";
 import {
   explainPaymentsGoLiveFromStatus,
@@ -33,6 +40,7 @@ import {
 } from "@/lib/payments/go-live";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
@@ -94,18 +102,32 @@ export default async function InvoicePage({
       kind: invoice.kind,
     },
   });
+  const credits = await listInvoiceCreditsForInvoice(prisma, {
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+  });
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
     payments,
+    credits,
   });
   const isDraft = invoice.status === "DRAFT";
   const isSent = invoice.status === "SENT";
   const isPaid = invoice.status === "PAID";
   const dueIsZero = breakdown.amountDue.lte(0);
+  const canRecordCredit = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RECORD_INVOICE_CREDIT,
+  );
+  const canResolveStripeMismatch = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
+  );
   const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
   const showCollectionHelp = isSent && !dueIsZero;
+  const stripeCreditMismatchReviews = paymentsNeedingStripeCreditMismatchReview(payments);
 
   return (
     <PageContainer>
@@ -126,8 +148,14 @@ export default async function InvoicePage({
             <a href={`/invoices/${invoice.id}/pdf`}>Download PDF</a>
           </Button>
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
-          {isSent ? (
+          {isSent && !dueIsZero ? (
             <MarkInvoicePaidForm
+              invoiceId={invoice.id}
+              remainingDue={breakdown.amountDue.toFixed(2)}
+            />
+          ) : null}
+          {isSent && !dueIsZero && canRecordCredit ? (
+            <RecordInvoiceCreditForm
               invoiceId={invoice.id}
               remainingDue={breakdown.amountDue.toFixed(2)}
             />
@@ -151,6 +179,24 @@ export default async function InvoicePage({
           />
         </div>
       </PageHeader>
+
+      {stripeCreditMismatchReviews.length > 0 ? (
+        <Alert>
+          <AlertTitle>{STRIPE_CREDIT_MISMATCH_OWNER_TITLE}</AlertTitle>
+          <AlertDescription>
+            {STRIPE_CREDIT_MISMATCH_OWNER_DETAIL}
+            {canResolveStripeMismatch
+              ? stripeCreditMismatchReviews.map((payment) => (
+                  <ResolveStripeCreditMismatchForm
+                    key={payment.id}
+                    paymentId={payment.id}
+                    invoiceId={invoice.id}
+                  />
+                ))
+              : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -220,6 +266,9 @@ export default async function InvoicePage({
             <p>Deposit paid: {formatMoney(breakdown.depositPaid)}</p>
           ) : null}
           <p>Payments: {formatMoney(breakdown.amountPaid)}</p>
+          {breakdown.recordedCredit.gt(0) ? (
+            <p>Recorded credit: {formatMoney(breakdown.recordedCredit)}</p>
+          ) : null}
           <p>Amount due: {formatMoney(breakdown.amountDue)}</p>
           {breakdown.credit.gt(0) ? (
             <p>Credit on account: {formatMoney(breakdown.credit)}</p>
@@ -239,6 +288,20 @@ export default async function InvoicePage({
                       ? ` · ${formatDateTime(payment.receivedAt)}`
                       : ""}
                     {payment.note ? ` · ${payment.note}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {credits.length > 0 ? (
+            <div className="space-y-1 pt-1">
+              <p className="font-medium">Recorded credits</p>
+              <ul className="space-y-1 text-muted-foreground">
+                {credits.map((credit) => (
+                  <li key={credit.id}>
+                    {formatMoney(credit.amount)} · Internal credit ·{" "}
+                    {formatDateTime(credit.createdAt)}
+                    {credit.reason ? ` · ${credit.reason}` : ""}
                   </li>
                 ))}
               </ul>

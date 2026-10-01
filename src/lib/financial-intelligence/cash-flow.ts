@@ -1,5 +1,6 @@
 import { inRange } from "@/lib/reports";
 import { roundMoney } from "@/lib/time-cards";
+import { legacyCollectedForInvoice } from "@/lib/financial-intelligence/collected-revenue";
 import type { FinancialSource } from "@/lib/financial-intelligence/source";
 
 export const CASH_FLOW_COVERAGE_MESSAGE = "Based on recorded TBBT transactions.";
@@ -85,15 +86,13 @@ export function collectedPaymentsInRange(
   range: { start: Date | null; end: Date | null },
 ) {
   const paymentRows = source.payments.filter((payment) => inRange(payment.receivedAt, range));
-  const paidInvoiceIdsWithPayments = new Set(
-    source.payments.map((payment) => payment.invoiceId).filter((id): id is string => Boolean(id)),
-  );
+  const credits = source.invoiceCredits ?? [];
   const legacyPaid = source.invoices.filter(
     (invoice) =>
       invoice.status === "PAID" &&
       invoice.paidAt != null &&
       inRange(invoice.paidAt, range) &&
-      !paidInvoiceIdsWithPayments.has(invoice.id),
+      legacyCollectedForInvoice(invoice, source.payments, credits) > 0,
   );
   return {
     payments: paymentRows,

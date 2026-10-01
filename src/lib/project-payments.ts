@@ -7,7 +7,7 @@
  * is missing. They must not CREATE TABLE.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { assertRequiredTablesExist } from "@/lib/request-path-schema";
+import { assertRequiredColumnsExist, assertRequiredTablesExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
@@ -20,6 +20,11 @@ const ZERO = new Prisma.Decimal(0);
 
 export const PAYMENT_PURPOSE_MATERIAL_DEPOSIT = "MATERIAL_DEPOSIT" as const;
 export const PAYMENT_PURPOSE_INVOICE_BALANCE = "INVOICE_BALANCE" as const;
+
+/** Test-only seam after remaining due is read under the Invoice lock. */
+export const invoiceRemainingReadTestHooks = {
+  afterRead: async () => {},
+};
 
 export type PaymentPurpose =
   | typeof PAYMENT_PURPOSE_MATERIAL_DEPOSIT
@@ -50,6 +55,7 @@ CREATE TABLE IF NOT EXISTS "Payment" (
     "note" TEXT,
     "stripeCheckoutSessionId" TEXT,
     "stripePaymentIntentId" TEXT,
+    "stripeCreditMismatchResolvedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     CONSTRAINT "Payment_pkey" PRIMARY KEY ("id")
@@ -73,7 +79,11 @@ export function resetPaymentTableEnsure() {
 
 export async function ensurePaymentTable(db: PaymentsDb) {
   if (!ensureTablePromise) {
-    ensureTablePromise = assertRequiredTablesExist(db, ["Payment"]).catch(
+    ensureTablePromise = assertRequiredTablesExist(db, ["Payment"])
+      .then(() =>
+        assertRequiredColumnsExist(db, "Payment", ["stripeCreditMismatchResolvedAt"]),
+      )
+      .catch(
       (error) => {
         ensureTablePromise = null;
         throw error;
@@ -210,6 +220,7 @@ export type InvoicePaymentBreakdown = {
   depositPaid: Prisma.Decimal;
   otherPaid: Prisma.Decimal;
   amountPaid: Prisma.Decimal;
+  recordedCredit: Prisma.Decimal;
   amountDue: Prisma.Decimal;
   credit: Prisma.Decimal;
   legacyFullyPaid: boolean;
@@ -222,15 +233,20 @@ export function invoicePaymentBreakdown(input: {
     purpose: string;
     amount: Prisma.Decimal | number | string;
   }>;
+  credits?: Array<{
+    amount: Prisma.Decimal | number | string;
+  }>;
 }): InvoicePaymentBreakdown {
   const total = moneyMax(toMoney(input.total));
   const recorded = moneyMax(sumPaymentAmounts(input.payments));
-  if (recorded.lte(0) && input.status === "PAID") {
+  const recordedCredit = moneyMax(sumPaymentAmounts(input.credits ?? []));
+  if (recorded.lte(0) && recordedCredit.lte(0) && input.status === "PAID") {
     return {
       total,
       depositPaid: ZERO,
       otherPaid: total,
       amountPaid: total,
+      recordedCredit: ZERO,
       amountDue: ZERO,
       credit: ZERO,
       legacyFullyPaid: true,
@@ -242,13 +258,15 @@ export function invoicePaymentBreakdown(input: {
     ),
   );
   const otherPaid = moneyMax(recorded.sub(depositPaid));
+  const applied = recorded.add(recordedCredit);
   return {
     total,
     depositPaid,
     otherPaid,
     amountPaid: recorded,
-    amountDue: moneyMax(total.sub(recorded)),
-    credit: moneyMax(recorded.sub(total)),
+    recordedCredit,
+    amountDue: moneyMax(total.sub(applied)),
+    credit: moneyMax(applied.sub(total)),
     legacyFullyPaid: false,
   };
 }
@@ -269,6 +287,10 @@ export function sumInvoiceRemainingDue(
     string,
     Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
   >,
+  creditsByInvoiceId?: Map<
+    string,
+    Array<{ amount: Prisma.Decimal | number | string }>
+  >,
 ) {
   return invoices.reduce((sum, invoice) => {
     return sum.add(
@@ -276,6 +298,7 @@ export function sumInvoiceRemainingDue(
         status: invoice.status,
         total: invoice.total,
         payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+        credits: creditsByInvoiceId?.get(invoice.id) ?? [],
       }).amountDue,
     );
   }, ZERO);
@@ -291,10 +314,15 @@ export function sumSentInvoiceRemainingDue(
     string,
     Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
   >,
+  creditsByInvoiceId?: Map<
+    string,
+    Array<{ amount: Prisma.Decimal | number | string }>
+  >,
 ) {
   return sumInvoiceRemainingDue(
     invoices.filter((invoice) => invoice.status === "SENT"),
     paymentsByInvoiceId,
+    creditsByInvoiceId,
   );
 }
 
@@ -305,6 +333,7 @@ const PROJECT_PAYMENT_SELECT = {
   method: true,
   receivedAt: true,
   note: true,
+  stripeCreditMismatchResolvedAt: true,
   estimateId: true,
   jobId: true,
   invoiceId: true,
@@ -317,6 +346,7 @@ export type ProjectPaymentRow = {
   method: string;
   receivedAt: Date;
   note: string | null;
+  stripeCreditMismatchResolvedAt: Date | null;
   estimateId: string | null;
   jobId: string | null;
   invoiceId: string | null;
@@ -740,15 +770,20 @@ function parseOwnerInvoicePaymentAmount(raw: string | null | undefined) {
   }
 }
 
-function closingTruthFromRecordedPayments(
+export function closingTruthFromRecordedPayments(
   payments: Array<{ method: string; note: string | null; receivedAt: Date }>,
+  credits: Array<{ id?: string; createdAt?: Date }> = [],
 ) {
   const latest = payments[payments.length - 1];
   if (!latest) {
+    const latestCredit = credits[credits.length - 1];
     return {
-      paymentMethod: null as string | null,
-      paymentReference: null as string | null,
-      paidAt: new Date(),
+      paymentMethod: latestCredit ? "OTHER" : (null as string | null),
+      paymentReference: latestCredit?.id ? `Recorded credit ${latestCredit.id}` : null,
+      paidAt:
+        latestCredit?.createdAt instanceof Date && !Number.isNaN(latestCredit.createdAt.getTime())
+          ? latestCredit.createdAt
+          : new Date(),
     };
   }
   const method = latest.method.trim();
@@ -825,15 +860,21 @@ export async function recordOwnerInvoiceBalancePayment(
       businessId: access.businessId,
       invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
     });
+    const credits = await tx.invoiceCredit.findMany({
+      where: { businessId: access.businessId, invoiceId: invoice.id },
+      select: { id: true, amount: true, createdAt: true },
+    });
     const breakdown = invoicePaymentBreakdown({
       status: invoice.status,
       total: invoice.total,
       payments,
+      credits,
     });
     const remaining = breakdown.amountDue;
+    await invoiceRemainingReadTestHooks.afterRead();
 
     if (remaining.lte(0)) {
-      const closing = closingTruthFromRecordedPayments(payments);
+      const closing = closingTruthFromRecordedPayments(payments, credits);
       const closed = await tx.invoice.updateMany({
         where: {
           id: invoice.id,

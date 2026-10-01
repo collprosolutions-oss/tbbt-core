@@ -131,6 +131,12 @@ export function InvoiceDocument({
             <span className="tabular-nums">-{invoice.otherPaymentsLabel}</span>
           </div>
         ) : null}
+        {invoice.recordedCreditLabel ? (
+          <div className="flex justify-between gap-6 text-neutral-600">
+            <span>Recorded credit</span>
+            <span className="tabular-nums">-{invoice.recordedCreditLabel}</span>
+          </div>
+        ) : null}
         <div className="flex justify-between gap-6 border-t border-neutral-200 pt-2 font-semibold">
           <span>Amount Due</span>
           <span className="tabular-nums">{invoice.amountDueLabel}</span>

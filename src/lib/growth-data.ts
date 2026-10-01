@@ -57,6 +57,7 @@ export async function loadGrowthSource(
     jobs,
     invoices,
     payments,
+    invoiceCredits,
     jobCompletionEvents,
     pipeline,
     customers,
@@ -124,6 +125,8 @@ export async function loadGrowthSource(
         total: true,
         paidAt: true,
         createdAt: true,
+        paymentMethod: true,
+        paymentReference: true,
       },
     }),
     prisma.payment.findMany({
@@ -135,6 +138,10 @@ export async function loadGrowthSource(
         customerId: true,
         amount: true,
       },
+    }),
+    prisma.invoiceCredit.findMany({
+      where: scope,
+      select: { id: true, invoiceId: true, amount: true },
     }),
     prisma.businessEvent.findMany({
       where: { ...scope, type: "JOB_COMPLETED", subjectType: "JOB" },
@@ -251,6 +258,7 @@ export async function loadGrowthSource(
     jobs,
     invoices,
     payments,
+    invoiceCredits,
     jobCompletions: jobCompletionEvents.map((row) => ({
       jobId: row.subjectId,
       completedAt: row.occurredAt,

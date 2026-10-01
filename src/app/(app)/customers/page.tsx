@@ -32,6 +32,7 @@ import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatDate, formatMoney } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
+import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   listPaymentsGroupedByInvoiceId,
   sumInvoiceRemainingDue,
@@ -217,17 +218,25 @@ export default async function CustomersPage({
 
   const areaOptions = areaRows.map((row) => row.city).filter((city): city is string => Boolean(city));
 
-  const paymentsByInvoiceId = await listPaymentsGroupedByInvoiceId(
-    prisma,
-    access.businessId,
-    customersRaw.flatMap((customer) =>
-      customer.invoices.map((invoice) => ({
-        id: invoice.id,
-        jobId: invoice.jobId,
-        kind: invoice.kind,
-      })),
-    ),
+  const customerInvoiceTargets = customersRaw.flatMap((customer) =>
+    customer.invoices.map((invoice) => ({
+      id: invoice.id,
+      jobId: invoice.jobId,
+      kind: invoice.kind,
+    })),
   );
+  const [paymentsByInvoiceId, creditsByInvoiceId] = await Promise.all([
+    listPaymentsGroupedByInvoiceId(
+      prisma,
+      access.businessId,
+      customerInvoiceTargets,
+    ),
+    listInvoiceCreditsGroupedByInvoiceId(
+      prisma,
+      access.businessId,
+      customerInvoiceTargets.map((invoice) => invoice.id),
+    ),
+  ]);
 
   const customers = customersRaw.map((customer) => {
     const totalSpent = customer.invoices
@@ -237,6 +246,7 @@ export default async function CustomersPage({
       sumInvoiceRemainingDue(
         customer.invoices.filter((invoice) => invoice.status === "SENT"),
         paymentsByInvoiceId,
+        creditsByInvoiceId,
       ),
     );
 

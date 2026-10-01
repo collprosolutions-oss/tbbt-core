@@ -292,6 +292,9 @@ export function renderInvoicePdf(
     if (docView.otherPaymentsLabel && docView.depositPaidLabel) {
       row("Other Payments", `-${docView.otherPaymentsLabel}`);
     }
+    if (docView.recordedCreditLabel) {
+      row("Recorded credit", `-${docView.recordedCreditLabel}`);
+    }
     row("Amount Due", docView.amountDueLabel, true);
     if (docView.creditLabel) {
       ensureSpace(18);
