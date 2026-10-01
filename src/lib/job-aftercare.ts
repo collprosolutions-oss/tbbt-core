@@ -63,6 +63,9 @@ export const JOB_AFTERCARE_UNCHANGED_MESSAGE =
 export const JOB_AFTERCARE_OWNER_WORKFLOW_MESSAGE =
   "Write job-specific aftercare for this completed job, then publish it to the existing customer project link. Drafts and private owner notes stay hidden. Publishing does not send a message.";
 
+export const JOB_AFTERCARE_UNAVAILABLE_MESSAGE =
+  "Job aftercare is unavailable on this environment until the aftercare migration is applied.";
+
 export const JOB_AFTERCARE_PORTAL_HEADING = "Aftercare instructions";
 
 export const JOB_AFTERCARE_PORTAL_DESCRIPTION =
@@ -101,6 +104,14 @@ export function parseJobAftercareInstructions(raw: string | null | undefined): s
 
 export function parseJobAftercareOwnerNotes(raw: string | null | undefined): string {
   return (raw ?? "").trim().slice(0, MAX_JOB_AFTERCARE_OWNER_NOTES_LENGTH);
+}
+
+export function missingJobAftercareSchema(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  return code === "P2021" || code === "P2022";
 }
 
 export type OwnerJobAftercareHistoryEvent = {

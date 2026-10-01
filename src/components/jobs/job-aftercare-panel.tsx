@@ -162,6 +162,9 @@ export function JobAftercarePanel({ review }: { review: JobAftercareReview }) {
       {!review.eligible ? (
         <p className="text-sm text-muted-foreground">
           Aftercare instructions can only be recorded against a completed job.
+          {review.aftercare?.status === "PUBLISHED"
+            ? " Already-published instructions can still be unpublished."
+            : ""}
         </p>
       ) : null}
       {review.eligible && !review.canWrite ? (
@@ -187,9 +190,7 @@ export function JobAftercarePanel({ review }: { review: JobAftercareReview }) {
       {review.canWrite && review.eligible && review.aftercare ? (
         <PublishButton jobId={review.jobId} />
       ) : null}
-      {review.canWrite &&
-      review.eligible &&
-      review.aftercare?.status === "PUBLISHED" ? (
+      {review.canWrite && review.aftercare?.status === "PUBLISHED" ? (
         <UnpublishButton jobId={review.jobId} />
       ) : null}
 

@@ -4,6 +4,10 @@
  * OWNER review includes drafts, private notes, history, and recorded
  * warranty terms as stored. The customer project token may read only
  * published instructions for that token-scoped Job.
+ *
+ * Preview shares production and skips migrate. A missing aftercare table
+ * (Prisma P2021/P2022) returns null so /p/[token] and /jobs/[jobId]
+ * still render.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -11,6 +15,7 @@ import {
   JOB_AFTERCARE_HISTORY_BOUND,
   JOB_AFTERCARE_OWNER_WORKFLOW_MESSAGE,
   jobAftercareWriteAllowed,
+  missingJobAftercareSchema,
   recordedAftercareEventLabel,
   recordedAftercareStatusLabel,
   type CustomerPublishedAftercare,
@@ -115,27 +120,32 @@ export async function loadJobAftercareReview(
   if (!job) return null;
   access.assertOwned(job);
 
-  const [aftercare, warrantyTerms] = await Promise.all([
-    db.jobAftercareInstruction.findFirst({
-      where: { jobId: job.id, businessId: access.businessId },
-      select: AFTERCARE_SELECT,
-    }),
-    loadRecordedWarrantyTerms(db, access, job),
-  ]);
-  const owned = aftercare ? access.assertOwned(aftercare) : null;
+  try {
+    const [aftercare, warrantyTerms] = await Promise.all([
+      db.jobAftercareInstruction.findFirst({
+        where: { jobId: job.id, businessId: access.businessId },
+        select: AFTERCARE_SELECT,
+      }),
+      loadRecordedWarrantyTerms(db, access, job),
+    ]);
+    const owned = aftercare ? access.assertOwned(aftercare) : null;
 
-  return {
-    jobId: job.id,
-    jobStatus: job.status,
-    eligible: completedSameBusinessJobEligible(job, access.businessId),
-    canWrite: jobAftercareWriteAllowed(access.workspace.role),
-    aftercare: owned ? asOwnerAftercare(owned) : null,
-    history: owned ? asHistory(owned) : [],
-    warrantyTerms,
-    warrantyDisclaimer: JOB_CALLBACK_WARRANTY_DISCLAIMER,
-    noWarrantyTermsMessage: JOB_CALLBACK_NO_WARRANTY_TERMS_MESSAGE,
-    workflowMessage: JOB_AFTERCARE_OWNER_WORKFLOW_MESSAGE,
-  };
+    return {
+      jobId: job.id,
+      jobStatus: job.status,
+      eligible: completedSameBusinessJobEligible(job, access.businessId),
+      canWrite: jobAftercareWriteAllowed(access.workspace.role),
+      aftercare: owned ? asOwnerAftercare(owned) : null,
+      history: owned ? asHistory(owned) : [],
+      warrantyTerms,
+      warrantyDisclaimer: JOB_CALLBACK_WARRANTY_DISCLAIMER,
+      noWarrantyTermsMessage: JOB_CALLBACK_NO_WARRANTY_TERMS_MESSAGE,
+      workflowMessage: JOB_AFTERCARE_OWNER_WORKFLOW_MESSAGE,
+    };
+  } catch (error) {
+    if (missingJobAftercareSchema(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -154,28 +164,33 @@ export async function loadPublishedAftercareForProjectToken(
   });
   if (!job) return null;
 
-  const row = await db.jobAftercareInstruction.findFirst({
-    where: {
+  try {
+    const row = await db.jobAftercareInstruction.findFirst({
+      where: {
+        jobId: job.id,
+        businessId: job.businessId,
+        status: "PUBLISHED",
+      },
+      select: {
+        jobId: true,
+        businessId: true,
+        publishedInstructions: true,
+        publishedAt: true,
+        status: true,
+      },
+    });
+    const instructions = row?.publishedInstructions?.trim() || "";
+    if (!row || row.status !== "PUBLISHED" || !instructions) {
+      return null;
+    }
+    return {
       jobId: job.id,
       businessId: job.businessId,
-      status: "PUBLISHED",
-    },
-    select: {
-      jobId: true,
-      businessId: true,
-      publishedInstructions: true,
-      publishedAt: true,
-      status: true,
-    },
-  });
-  const instructions = row?.publishedInstructions?.trim() || "";
-  if (!row || row.status !== "PUBLISHED" || !instructions) {
-    return null;
+      instructions,
+      publishedAt: row.publishedAt,
+    };
+  } catch (error) {
+    if (missingJobAftercareSchema(error)) return null;
+    throw error;
   }
-  return {
-    jobId: job.id,
-    businessId: job.businessId,
-    instructions,
-    publishedAt: row.publishedAt,
-  };
 }

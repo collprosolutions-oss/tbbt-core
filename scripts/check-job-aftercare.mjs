@@ -48,8 +48,10 @@ const {
   JOB_AFTERCARE_OWNER_WORKFLOW_MESSAGE,
   JOB_AFTERCARE_PORTAL_DESCRIPTION,
   JOB_AFTERCARE_PUBLISHED_MESSAGE,
+  JOB_AFTERCARE_UNAVAILABLE_MESSAGE,
   JOB_AFTERCARE_UNPUBLISHED_MESSAGE,
   jobAftercareWriteAllowed,
+  missingJobAftercareSchema,
 } = await import("@/lib/job-aftercare");
 const {
   loadJobAftercareReview,
@@ -61,10 +63,14 @@ const {
   countBusinessJobs,
   countBusinessPayments,
   jobAftercareErrorMessage,
+  jobAftercareTestHooks,
   publishJobAftercare,
   saveJobAftercareDraft,
   unpublishJobAftercare,
 } = await import("@/lib/job-aftercare-ops");
+const { ProjectAftercare } = await import("@/components/portal/project-aftercare");
+const { createElement } = await import("react");
+const { renderToStaticMarkup } = await import("react-dom/server");
 const {
   JOB_CALLBACK_NO_WARRANTY_TERMS_MESSAGE,
   JOB_CALLBACK_WARRANTY_DISCLAIMER,
@@ -96,6 +102,33 @@ async function expectThrow(label, fn, predicate) {
   } catch (error) {
     check(label, predicate(error));
   }
+}
+
+function createWriteBarrier(expected, timeoutMs) {
+  let arrived = 0;
+  let released = false;
+  let release;
+  let fail;
+  const held = new Promise((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  const timer = setTimeout(() => {
+    if (!released) {
+      fail(new Error(`Race barrier timed out after ${timeoutMs}ms`));
+    }
+  }, timeoutMs);
+  return {
+    async arriveAndWait() {
+      arrived += 1;
+      if (arrived >= expected) {
+        released = true;
+        clearTimeout(timer);
+        release();
+      }
+      await held;
+    },
+  };
 }
 
 function makeAccess(businessId, role, membershipId, userId) {
@@ -203,6 +236,27 @@ check(
     !/\.(create|update|delete|upsert|createMany|updateMany|deleteMany)\(/.test(dataSrc),
 );
 check(
+  "Loaders degrade on missing aftercare tables (P2021/P2022); writes fail closed",
+  missingJobAftercareSchema({ code: "P2021" }) &&
+    missingJobAftercareSchema({ code: "P2022" }) &&
+    !missingJobAftercareSchema({ code: "P2002" }) &&
+    !missingJobAftercareSchema(new Error("Can't reach database server")) &&
+    dataSrc.includes("missingJobAftercareSchema") &&
+    dataSrc.includes("if (missingJobAftercareSchema(error)) return null") &&
+    opsSrc.includes("JOB_AFTERCARE_UNAVAILABLE_MESSAGE") &&
+    opsSrc.includes("rethrowAftercareWriteError") &&
+    jobAftercareErrorMessage({ code: "P2021" }, "fallback") ===
+      JOB_AFTERCARE_UNAVAILABLE_MESSAGE,
+);
+check(
+  "Unpublish locks the job but does not require COMPLETED",
+  /unpublishJobAftercare[\s\S]*requireOwnedLockedJob/.test(opsSrc) &&
+    !/unpublishJobAftercare[\s\S]*requireCompletedOwnedJob/.test(opsSrc) &&
+    !/unpublishJobAftercare[\s\S]*completedSameBusinessJobEligible/.test(opsSrc) &&
+    formSrc.includes("Already-published instructions can still be unpublished") &&
+    formSrc.includes("review.aftercare?.status === \"PUBLISHED\""),
+);
+check(
   "Work Order hosts the OWNER panel; portal reads published only; no global nav change",
   pageSrc.includes("JobAftercarePanel") &&
     pageSrc.includes("Job aftercare instructions") &&
@@ -217,6 +271,27 @@ check(
     !portalComponentSrc.includes("draftInstructions") &&
     !navSrc.includes("aftercare") &&
     !navSrc.includes("Aftercare"),
+);
+
+console.log("\nBEHAVIOR — published aftercare text is escaped");
+const xssPayload = `<script>alert("xss")</script>`;
+const aftercareHtml = renderToStaticMarkup(
+  createElement(ProjectAftercare, {
+    aftercare: {
+      jobId: "job-xss",
+      businessId: "biz-xss",
+      instructions: xssPayload,
+      publishedAt: null,
+    },
+    timeZone: "UTC",
+  }),
+);
+check(
+  "ProjectAftercare escapes script text instead of embedding HTML",
+  aftercareHtml.includes("&lt;script&gt;") &&
+    !aftercareHtml.includes("<script>") &&
+    !aftercareHtml.includes(xssPayload) &&
+    !portalComponentSrc.includes("dangerouslySetInnerHTML"),
 );
 
 let session;
@@ -722,6 +797,161 @@ try {
     "Portal description does not invent a legal conclusion",
     JOB_AFTERCARE_PORTAL_DESCRIPTION.includes("Shown as written") &&
       !/covered|expires|legal advice/i.test(JOB_AFTERCARE_PORTAL_DESCRIPTION),
+  );
+
+  console.log("\nUNPUBLISH — already-published text can be withdrawn after leaving COMPLETED");
+  const reopenJob = await createJob(businessA.id, { token: `reopen-${suffix}` });
+  await saveJobAftercareDraft(prisma, ownerA, {
+    jobId: reopenJob.id,
+    instructions: "Withdraw this if the job is reopened.",
+  });
+  await publishJobAftercare(prisma, ownerA, { jobId: reopenJob.id });
+  await prisma.job.update({
+    where: { id: reopenJob.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  const stillPublished = await loadPublishedAftercareForProjectToken(
+    prisma,
+    reopenJob.projectToken,
+  );
+  check(
+    "Token still sees published text after the job leaves COMPLETED",
+    stillPublished?.instructions === "Withdraw this if the job is reopened.",
+  );
+  await expectThrow(
+    "Draft save still requires COMPLETED after the job is reopened",
+    () =>
+      saveJobAftercareDraft(prisma, ownerA, {
+        jobId: reopenJob.id,
+        instructions: "Cannot revise after reopen.",
+      }),
+    (error) => error.message === JOB_AFTERCARE_COMPLETED_JOB_MESSAGE,
+  );
+  const withdrawn = await unpublishJobAftercare(prisma, ownerA, {
+    jobId: reopenJob.id,
+  });
+  check(
+    "OWNER can unpublish after the job leaves COMPLETED",
+    withdrawn.aftercare.status === "UNPUBLISHED" &&
+      withdrawn.aftercare.publishedInstructions == null,
+  );
+  check(
+    "Token no longer sees withdrawn text after unpublish on a non-completed job",
+    (await loadPublishedAftercareForProjectToken(prisma, reopenJob.projectToken)) ===
+      null,
+  );
+
+  console.log("\nCONCURRENCY — 8 parallel publishes share the FOR UPDATE job lock");
+  const raceJob = await createJob(businessA.id, { token: `race-${suffix}` });
+  await saveJobAftercareDraft(prisma, ownerA, {
+    jobId: raceJob.id,
+    instructions: "One published wording only.",
+  });
+  const publishBarrier = createWriteBarrier(8, 8000);
+  jobAftercareTestHooks.beforeJobLock = async ({ kind }) => {
+    if (kind === "publish") await publishBarrier.arriveAndWait();
+  };
+  const raceClients = Array.from({ length: 8 }, () => session.createClient());
+  try {
+    const raceResults = await Promise.allSettled(
+      raceClients.map((client) =>
+        publishJobAftercare(client, ownerA, { jobId: raceJob.id }),
+      ),
+    );
+    const publishedEvents = await prisma.jobAftercareEvent.count({
+      where: {
+        businessId: businessA.id,
+        jobId: raceJob.id,
+        eventType: "PUBLISHED",
+      },
+    });
+    const fulfilled = raceResults.filter((result) => result.status === "fulfilled");
+    check(
+      "Eight parallel publishes produce exactly one PUBLISHED event",
+      publishedEvents === 1 && fulfilled.length === 8,
+    );
+    check(
+      "Race result stays PUBLISHED with the same wording",
+      (await prisma.jobAftercareInstruction.findFirst({
+        where: { jobId: raceJob.id, businessId: businessA.id },
+      }))?.status === "PUBLISHED",
+    );
+  } finally {
+    jobAftercareTestHooks.beforeJobLock = undefined;
+    await Promise.all(raceClients.map((client) => client.$disconnect()));
+  }
+
+  console.log("\nMISSING SCHEMA — loaders degrade; writes fail closed");
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobAftercareEvent" CASCADE`);
+  await prisma.$executeRawUnsafe(
+    `DROP TABLE IF EXISTS "JobAftercareInstruction" CASCADE`,
+  );
+  const missingTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename IN ('JobAftercareInstruction', 'JobAftercareEvent')
+  `;
+  check("Aftercare tables are absent after the drop", missingTables.length === 0);
+
+  let tokenMissingError = null;
+  let tokenMissing = "threw";
+  try {
+    tokenMissing = await loadPublishedAftercareForProjectToken(prisma, tokenA);
+  } catch (error) {
+    tokenMissingError = error;
+  }
+  let ownerMissingError = null;
+  let ownerMissing = "threw";
+  try {
+    ownerMissing = await loadJobAftercareReview(prisma, ownerA, completedA.id);
+  } catch (error) {
+    ownerMissingError = error;
+  }
+  let inProgressMissingError = null;
+  let inProgressMissing = "threw";
+  try {
+    inProgressMissing = await loadJobAftercareReview(prisma, ownerA, inProgressA.id);
+  } catch (error) {
+    inProgressMissingError = error;
+  }
+  let foreignMissingError = null;
+  let foreignMissing = "threw";
+  try {
+    foreignMissing = await loadPublishedAftercareForProjectToken(prisma, tokenB);
+  } catch (error) {
+    foreignMissingError = error;
+  }
+  check(
+    "Token loader returns null without throwing when aftercare tables are missing",
+    tokenMissing === null && tokenMissingError === null,
+  );
+  check(
+    "Owner loader returns null without throwing when aftercare tables are missing",
+    ownerMissing === null && ownerMissingError === null,
+  );
+  check(
+    "In-progress job owner loader degrades without throwing",
+    inProgressMissing === null && inProgressMissingError === null,
+  );
+  check(
+    "Foreign token loader degrades without throwing",
+    foreignMissing === null && foreignMissingError === null,
+  );
+  await expectThrow(
+    "Publish fail-closes with a clear setup-pending error when tables are missing",
+    () => publishJobAftercare(prisma, ownerA, { jobId: completedA.id }),
+    (error) =>
+      error.name === "JobAftercareError" &&
+      error.message === JOB_AFTERCARE_UNAVAILABLE_MESSAGE,
+  );
+  const stillMissing = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename IN ('JobAftercareInstruction', 'JobAftercareEvent')
+  `;
+  check(
+    "Failed writes do not recreate the dropped aftercare tables",
+    stillMissing.length === 0,
   );
 } catch (error) {
   console.error(error);

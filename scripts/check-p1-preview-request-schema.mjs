@@ -28,6 +28,11 @@ const {
   SAAS_FOUNDER_TRIAL_BACKFILL_SQL,
 } = await import("@/lib/saas-billing/schema");
 const { RequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
+const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
+const {
+  loadJobAftercareReview,
+  loadPublishedAftercareForProjectToken,
+} = await import("@/lib/job-aftercare-data");
 const { requireWorkspace } = await import("@/lib/workspace-request");
 const {
   ensureBusinessPublicContactSchema,
@@ -212,6 +217,21 @@ check(
     readRepo("src/lib/appointment-change-request.ts").includes(
       "not a request-path operation",
     ),
+);
+const aftercareDataSrc = readRepo("src/lib/job-aftercare-data.ts");
+const aftercareOpsSrc = readRepo("src/lib/job-aftercare-ops.ts");
+const aftercareActionSrc = readRepo("src/app/actions/job-aftercare.ts");
+check(
+  "Job aftercare request paths do not ensure or CREATE JobAftercare tables",
+  aftercareDataSrc.includes("missingJobAftercareSchema") &&
+    aftercareDataSrc.includes("if (missingJobAftercareSchema(error)) return null") &&
+    !aftercareDataSrc.includes("$executeRaw") &&
+    !aftercareDataSrc.includes("CREATE TABLE") &&
+    !aftercareOpsSrc.includes("$executeRaw") &&
+    !aftercareOpsSrc.includes("CREATE TABLE") &&
+    !aftercareActionSrc.includes("$executeRaw") &&
+    !aftercareActionSrc.includes("CREATE TABLE") &&
+    aftercareOpsSrc.includes("JOB_AFTERCARE_UNAVAILABLE_MESSAGE"),
 );
 check(
   "Historical founder access-repair SQL is classified as forbidden backfill",
@@ -670,6 +690,73 @@ try {
   check(
     "Missing billing table does not recreate schema or backfill rows",
     recordedWrites(missingBilling.statements).length === 0,
+  );
+
+  console.log("\nDYNAMIC — missing JobAftercare tables degrade without DDL");
+  const aftercareToken = `preview-aftercare-${randomUUID()}`;
+  const aftercareJob = await prisma.job.create({
+    data: {
+      businessId: business.id,
+      status: "COMPLETED",
+      projectToken: aftercareToken,
+    },
+  });
+  const aftercareAccess = {
+    businessId: business.id,
+    workspace: {
+      role: "OWNER",
+      membership: { id: membership.id },
+      user: { id: owner.id, email: owner.email, name: owner.name },
+      business: { id: business.id, name: business.name },
+    },
+    scope: businessScope(business.id),
+    assertOwned(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+    assertAttachable(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+  };
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobAftercareEvent" CASCADE`);
+  await prisma.$executeRawUnsafe(
+    `DROP TABLE IF EXISTS "JobAftercareInstruction" CASCADE`,
+  );
+  const aftercareProbe = instrumentPrisma(prisma);
+  let tokenAftercare = "threw";
+  let ownerAftercare = "threw";
+  let aftercareLoadError = null;
+  try {
+    tokenAftercare = await loadPublishedAftercareForProjectToken(
+      aftercareProbe.client,
+      aftercareToken,
+    );
+    ownerAftercare = await loadJobAftercareReview(
+      aftercareProbe.client,
+      aftercareAccess,
+      aftercareJob.id,
+    );
+  } catch (error) {
+    aftercareLoadError = error;
+  }
+  const aftercareWrites = recordedWrites(aftercareProbe.statements);
+  const aftercareTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename IN ('JobAftercareInstruction', 'JobAftercareEvent')
+  `;
+  check(
+    "Preview loaders return null for missing JobAftercareInstruction/JobAftercareEvent",
+    tokenAftercare === null &&
+      ownerAftercare === null &&
+      aftercareLoadError === null,
+  );
+  check(
+    "Missing aftercare tables do not run schema DDL or backfill DML",
+    aftercareWrites.length === 0,
+  );
+  check(
+    "Dropped JobAftercare tables stay absent after the request-path load",
+    aftercareTables.length === 0,
   );
 } finally {
   await session.cleanup();

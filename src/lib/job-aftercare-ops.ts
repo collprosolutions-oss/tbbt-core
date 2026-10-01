@@ -15,9 +15,11 @@ import {
   JOB_AFTERCARE_NOT_PUBLISHED_MESSAGE,
   JOB_AFTERCARE_NOTHING_TO_PUBLISH_MESSAGE,
   JOB_AFTERCARE_OWNER_ONLY_MESSAGE,
+  JOB_AFTERCARE_UNAVAILABLE_MESSAGE,
   JOB_AFTERCARE_UNKNOWN_MESSAGE,
   completedSameBusinessJobEligible,
   jobAftercareWriteAllowed,
+  missingJobAftercareSchema,
   parseJobAftercareInstructions,
   parseJobAftercareOwnerNotes,
 } from "@/lib/job-aftercare";
@@ -36,7 +38,32 @@ export function jobAftercareErrorMessage(error: unknown, fallback: string) {
   if (error instanceof JobAftercareError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (missingJobAftercareSchema(error)) return JOB_AFTERCARE_UNAVAILABLE_MESSAGE;
   return fallback;
+}
+
+/**
+ * Test-only barriers. Production never sets these.
+ * beforeJobLock runs inside the write transaction before lockTenantOwnedJob
+ * so concurrent publishers can rendezvous, then contend for FOR UPDATE.
+ * afterJobLock runs after the lock is taken.
+ */
+export const jobAftercareTestHooks: {
+  beforeJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
+  afterJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
+} = {};
+
+function rethrowAftercareWriteError(error: unknown): never {
+  if (error instanceof JobAftercareError || error instanceof ForbiddenError) {
+    throw error;
+  }
+  if (error instanceof Error && error.name === "ForbiddenError") {
+    throw error;
+  }
+  if (missingJobAftercareSchema(error)) {
+    throw new JobAftercareError(JOB_AFTERCARE_UNAVAILABLE_MESSAGE);
+  }
+  throw error;
 }
 
 function requireOwnerAftercareWrite(access: BusinessAccess) {
@@ -70,16 +97,29 @@ export async function countBusinessCommunications(db: Db, businessId: string) {
   return db.customerCommunication.count({ where: { businessId } });
 }
 
-async function requireCompletedOwnedJob(
+async function requireOwnedLockedJob(
   tx: Prisma.TransactionClient,
   access: BusinessAccess,
   jobId: string,
+  kind: string,
 ) {
+  await jobAftercareTestHooks.beforeJobLock?.({ jobId, kind });
   const locked = await lockTenantOwnedJob(tx, access.businessId, jobId);
   if (!locked) {
     throw new JobAftercareError(JOB_AFTERCARE_JOB_REQUIRED_MESSAGE);
   }
   access.assertOwned(locked);
+  await jobAftercareTestHooks.afterJobLock?.({ jobId: locked.id, kind });
+  return locked;
+}
+
+async function requireCompletedOwnedJob(
+  tx: Prisma.TransactionClient,
+  access: BusinessAccess,
+  jobId: string,
+  kind: string,
+) {
+  const locked = await requireOwnedLockedJob(tx, access, jobId, kind);
   if (!completedSameBusinessJobEligible(locked, access.businessId)) {
     throw new JobAftercareError(JOB_AFTERCARE_COMPLETED_JOB_MESSAGE);
   }
@@ -107,8 +147,9 @@ export async function saveJobAftercareDraft(
   const ownerNotes = parseJobAftercareOwnerNotes(input.ownerNotes);
   const actorId = actorMembershipId(access);
 
-  return db.$transaction(async (tx) => {
-    const locked = await requireCompletedOwnedJob(tx, access, jobId);
+  try {
+  return await db.$transaction(async (tx) => {
+    const locked = await requireCompletedOwnedJob(tx, access, jobId, "draft");
     const existing = await tx.jobAftercareInstruction.findFirst({
       where: { jobId: locked.id, businessId: access.businessId },
     });
@@ -185,6 +226,9 @@ export async function saveJobAftercareDraft(
       unchanged: false as const,
     };
   });
+  } catch (error) {
+    rethrowAftercareWriteError(error);
+  }
 }
 
 export async function publishJobAftercare(
@@ -198,8 +242,9 @@ export async function publishJobAftercare(
     throw new JobAftercareError(JOB_AFTERCARE_JOB_REQUIRED_MESSAGE);
   }
 
-  return db.$transaction(async (tx) => {
-    const locked = await requireCompletedOwnedJob(tx, access, jobId);
+  try {
+  return await db.$transaction(async (tx) => {
+    const locked = await requireCompletedOwnedJob(tx, access, jobId, "publish");
     const current = await tx.jobAftercareInstruction.findFirst({
       where: { jobId: locked.id, businessId: access.businessId },
     });
@@ -256,6 +301,9 @@ export async function publishJobAftercare(
       unchanged: false as const,
     };
   });
+  } catch (error) {
+    rethrowAftercareWriteError(error);
+  }
 }
 
 export async function unpublishJobAftercare(
@@ -269,8 +317,11 @@ export async function unpublishJobAftercare(
     throw new JobAftercareError(JOB_AFTERCARE_JOB_REQUIRED_MESSAGE);
   }
 
-  return db.$transaction(async (tx) => {
-    const locked = await requireCompletedOwnedJob(tx, access, jobId);
+  try {
+  return await db.$transaction(async (tx) => {
+    // Unpublish must not require COMPLETED. If a job later leaves
+    // COMPLETED, the owner must still be able to withdraw live text.
+    const locked = await requireOwnedLockedJob(tx, access, jobId, "unpublish");
     const current = await tx.jobAftercareInstruction.findFirst({
       where: { jobId: locked.id, businessId: access.businessId },
     });
@@ -334,4 +385,7 @@ export async function unpublishJobAftercare(
       unchanged: false as const,
     };
   });
+  } catch (error) {
+    rethrowAftercareWriteError(error);
+  }
 }
