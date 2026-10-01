@@ -120,7 +120,7 @@ check(
   "Launch service-area preserves existing public contact when phone/email are omitted",
   launchOpsSrc.includes("currentContact") &&
     launchOpsSrc.includes("currentContact?.publicPhone") &&
-    !/phone: input\.phone \?\? ""/.test(launchOpsSrc),
+    launchOpsSrc.includes("input.phone?.trim() || currentContact?.publicPhone"),
 );
 check(
   "Compose email now honors the same communication preference flags as SMS",
@@ -132,7 +132,7 @@ check(
   "This verifier does not duplicate Founder production preflight",
   !selfSrc.includes("preflight:founder") &&
     !selfSrc.includes("TBBT_FOUNDER_PRODUCTION_READONLY") &&
-    preflightSrc.includes("export async function runFounderProductionPreflight"),
+    preflightSrc.includes("export function evaluateFounderProductionPreflight"),
 );
 check(
   "This verifier imports production modules instead of a parallel fake settings store",
@@ -412,14 +412,17 @@ try {
     name: "Homeowner",
     email: "homeowner@example.com",
     phone: "555-111-2222",
-    address: "100 First St, Reno, NV 89501",
+    address: "",
+    streetAddress: "100 First St",
     city: "Reno",
     region: "NV",
     postalCode: "89501",
-    streetAddress: "100 First St",
     notes: "Door latch",
+    catalogItemIds: [],
     includeOther: true,
     otherDescription: "Door latch",
+    submissionId: `founder-settings-${suffix}`,
+    smsOptIn: false,
     configuredAreas: cedarAreas.map((row) => ({
       id: row.id,
       kind: row.kind,
@@ -434,6 +437,9 @@ try {
     })),
   });
   check("Public intake accepts the owner-configured service area", intake.ok === true);
+  if (!intake.ok) {
+    console.error(`  intake error: ${intake.error}`);
+  }
   if (intake.ok) {
     const request = await prisma.serviceRequest.findFirst({
       where: { id: intake.requestId },
