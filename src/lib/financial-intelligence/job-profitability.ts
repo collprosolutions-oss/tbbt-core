@@ -169,7 +169,10 @@ export function calculateJobProfitability(
   const outstandingReceivable = roundMoney(
     jobInvoices
       .filter((invoice) => invoice.status === "SENT")
-      .reduce((sum, invoice) => sum + invoiceBalanceDue(invoice, source.payments), 0),
+      .reduce(
+        (sum, invoice) => sum + invoiceBalanceDue(invoice, source.payments, source.invoiceCredits),
+        0,
+      ),
   );
   const collectedRevenue = collectedRevenueForJob({
     jobId,

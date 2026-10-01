@@ -323,6 +323,11 @@ export type ReportPayment = {
   receivedAt: Date;
 };
 
+export type ReportInvoiceCredit = {
+  invoiceId: string;
+  amount: number;
+};
+
 export type ReportEstimate = {
   id: string;
   status: string;
@@ -405,6 +410,7 @@ export type ReportSource = {
   memberships: ReportMembership[];
   expenses: ReportExpense[];
   payments?: ReportPayment[];
+  invoiceCredits?: ReportInvoiceCredit[];
   changeOrders?: ReportChangeOrder[];
 };
 
@@ -435,17 +441,33 @@ function paymentsOnInvoice(payments: readonly ReportPayment[] | undefined, invoi
   );
 }
 
-/** Remaining SENT balance after recorded payments when payments are present. */
+function creditsOnInvoice(credits: readonly ReportInvoiceCredit[] | undefined, invoiceId: string) {
+  if (!credits?.length) return 0;
+  return roundMoney(
+    credits.filter((credit) => credit.invoiceId === invoiceId).reduce((sum, credit) => sum + credit.amount, 0),
+  );
+}
+
+/** Remaining SENT balance after recorded payments and OWNER credits. */
 export function outstandingRemaining(
   invoices: readonly ReportInvoice[],
   payments?: readonly ReportPayment[],
+  credits?: readonly ReportInvoiceCredit[],
 ) {
   const sent = outstandingInvoices(invoices);
-  if (!payments?.length) {
+  if (!payments?.length && !credits?.length) {
     return { amount: sumTotals(sent), count: sent.length, rows: sent.map((invoice) => ({ invoice, balance: invoice.total })) };
   }
   const rows = sent
-    .map((invoice) => ({ invoice, balance: roundMoney(Math.max(0, invoice.total - paymentsOnInvoice(payments, invoice.id))) }))
+    .map((invoice) => ({
+      invoice,
+      balance: roundMoney(
+        Math.max(
+          0,
+          invoice.total - paymentsOnInvoice(payments, invoice.id) - creditsOnInvoice(credits, invoice.id),
+        ),
+      ),
+    }))
     .filter((row) => row.balance > 0);
   return {
     amount: roundMoney(rows.reduce((sum, row) => sum + row.balance, 0)),
@@ -774,7 +796,11 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
   const priorPaid = priorRange ? paidInvoicesInRange(source.invoices, priorRange) : [];
   const issued = issuedInvoicesInRange(source.invoices, range);
   const priorIssued = priorRange ? issuedInvoicesInRange(source.invoices, priorRange) : [];
-  const outstandingRemainingSnapshot = outstandingRemaining(source.invoices, source.payments);
+  const outstandingRemainingSnapshot = outstandingRemaining(
+    source.invoices,
+    source.payments,
+    source.invoiceCredits,
+  );
 
   const laborEntries = source.approvedTimeEntries.filter((entry) => inRange(entry.startedAt, range));
   const priorLaborEntries = priorRange
@@ -963,7 +989,11 @@ export function buildReport(source: ReportSource, range: ReportDateRange): Built
       const job = jobById.get(jobId);
       const jobInvoices = source.invoices.filter((invoice) => invoice.jobId === jobId);
       const paidRevenueForJob = sumTotals(jobInvoices.filter((invoice) => invoice.status === "PAID"));
-      const outstandingForJob = outstandingRemaining(jobInvoices, source.payments).amount;
+      const outstandingForJob = outstandingRemaining(
+        jobInvoices,
+        source.payments,
+        source.invoiceCredits,
+      ).amount;
       const jobLabor = rollupApprovedLabor(laborEntries.filter((entry) => entry.jobId === jobId));
       const recordedJobExpense = roundMoney(
         periodExpenses.filter((expense) => expense.jobId === jobId).reduce((sum, expense) => sum + expense.amount, 0),

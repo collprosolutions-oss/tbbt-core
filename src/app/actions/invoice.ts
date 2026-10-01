@@ -9,6 +9,11 @@ import { sendDraftInvoiceIfNeeded } from "@/lib/complete-job-invoice";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { isPaymentMethodValue } from "@/lib/invoice-payment";
 import {
+  InvoiceCreditError,
+  invoiceCreditErrorMessage,
+  recordOwnerInvoiceCredit,
+} from "@/lib/invoice-credits";
+import {
   ProjectPaymentError,
   recordOwnerInvoiceBalancePayment,
 } from "@/lib/project-payments";
@@ -160,6 +165,52 @@ export async function markInvoicePaid(
   } catch (error) {
     if (error instanceof ProjectPaymentError) {
       return { error: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function recordInvoiceCredit(
+  _prev: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  requireBusinessCapability(access, CAPABILITIES.RECORD_INVOICE_CREDIT);
+  const invoiceId = readString(formData, "invoiceId");
+  const amount = readString(formData, "amount");
+  const reason = readString(formData, "reason");
+  const idempotencyKey = readString(formData, "idempotencyKey");
+
+  if (!invoiceId) {
+    return { error: "That credit could not be recorded." };
+  }
+
+  access.assertOwned(
+    await prisma.invoice.findFirst({
+      where: { id: invoiceId, ...access.scope },
+      select: { id: true, businessId: true },
+    }),
+  );
+
+  try {
+    await recordOwnerInvoiceCredit(prisma, access, {
+      invoiceId,
+      amount,
+      reason,
+      idempotencyKey,
+    });
+    revalidatePath("/invoices");
+    revalidatePath(`/invoices/${invoiceId}`);
+    revalidatePath("/customers");
+    revalidatePath("/dashboard");
+    return {};
+  } catch (error) {
+    if (error instanceof InvoiceCreditError || error instanceof ProjectPaymentError) {
+      return { error: invoiceCreditErrorMessage(error, error.message) };
     }
     throw error;
   }

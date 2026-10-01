@@ -10,6 +10,7 @@ import {
   reconcileProjectTokenCheckoutPayment,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import { invoicePaymentBreakdown, listProjectPayments, paymentsBelongingToInvoice } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
 
@@ -63,11 +64,19 @@ export default async function CustomerInvoicePage({
           }),
         )
       : [];
+  const invoiceCredits =
+    payable && invoice
+      ? await listInvoiceCreditsForInvoice(prisma, {
+          businessId: payable.business.id,
+          invoiceId: invoice.id,
+        })
+      : [];
   const breakdown = invoice
     ? invoicePaymentBreakdown({
         status: invoice.status,
         total: invoice.total,
         payments: invoicePayments,
+        credits: invoiceCredits,
       })
     : null;
   const showPayInvoice = Boolean(

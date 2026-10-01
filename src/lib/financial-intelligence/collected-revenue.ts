@@ -48,12 +48,35 @@ export function paymentsAppliedToInvoice(
   );
 }
 
-/** Remaining SENT/PAID balance after recorded payments. Never negative. */
+export type CollectedInvoiceCredit = {
+  invoiceId: string;
+  amount: number;
+};
+
+function creditsAppliedToInvoice(
+  credits: readonly CollectedInvoiceCredit[] | undefined,
+  invoiceId: string,
+) {
+  if (!credits?.length) return 0;
+  return roundMoney(
+    credits.filter((credit) => credit.invoiceId === invoiceId).reduce((sum, credit) => sum + credit.amount, 0),
+  );
+}
+
+/** Remaining SENT/PAID balance after recorded payments and OWNER credits. Never negative. */
 export function invoiceBalanceDue(
   invoice: Pick<CollectedInvoice, "id" | "total">,
   payments: readonly CollectedPayment[],
+  credits: readonly CollectedInvoiceCredit[] = [],
 ): number {
-  return roundMoney(Math.max(0, invoice.total - paymentsAppliedToInvoice(payments, invoice.id)));
+  return roundMoney(
+    Math.max(
+      0,
+      invoice.total -
+        paymentsAppliedToInvoice(payments, invoice.id) -
+        creditsAppliedToInvoice(credits, invoice.id),
+    ),
+  );
 }
 
 export function invoiceHasPaymentRows(
@@ -162,10 +185,11 @@ export function collectedRevenueForInvoices(
 export function outstandingReceivableAmount(
   invoices: readonly CollectedInvoice[],
   payments: readonly CollectedPayment[],
+  credits: readonly CollectedInvoiceCredit[] = [],
 ): { amount: number; count: number } {
   const sent = invoices.filter((invoice) => invoice.status === "SENT");
   const withBalance = sent
-    .map((invoice) => ({ invoice, balance: invoiceBalanceDue(invoice, payments) }))
+    .map((invoice) => ({ invoice, balance: invoiceBalanceDue(invoice, payments, credits) }))
     .filter((row) => row.balance > 0);
   return {
     amount: roundMoney(withBalance.reduce((sum, row) => sum + row.balance, 0)),

@@ -48,9 +48,15 @@ export type FinancialJob = ReportSource["jobs"][number] & {
   scheduledDurationMinutes?: number | null;
 };
 
+export type FinancialInvoiceCredit = {
+  invoiceId: string;
+  amount: number;
+};
+
 export type FinancialSource = Omit<ReportSource, "jobs"> & {
   jobs: FinancialJob[];
   payments: FinancialPayment[];
+  invoiceCredits?: FinancialInvoiceCredit[];
   changeOrders: FinancialChangeOrder[];
   estimateLines: FinancialEstimateLine[];
   laborBurden: LaborBurdenConfig;

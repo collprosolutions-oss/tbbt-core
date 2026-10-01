@@ -80,6 +80,7 @@ import {
 } from "@/lib/owner-daily-attention-data";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
+import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   listPaymentsGroupedByInvoiceId,
   sumInvoiceRemainingDue,
@@ -347,9 +348,15 @@ export default async function DashboardPage() {
     access.businessId,
     sentOutstandingInvoices,
   );
+  const outstandingCredits = await listInvoiceCreditsGroupedByInvoiceId(
+    prisma,
+    access.businessId,
+    sentOutstandingInvoices.map((invoice) => invoice.id),
+  );
   const outstandingTotal = sumInvoiceRemainingDue(
     sentOutstandingInvoices,
     outstandingPayments,
+    outstandingCredits,
   );
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(paymentStatus);
   const appointmentAttention = dashboardAppointmentAttentionItems(

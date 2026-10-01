@@ -274,14 +274,21 @@ async function loadInvoicePaymentBreakdown(
   db: PaymentsClient,
   invoice: { id: string; businessId: string; status: string; total: Prisma.Decimal },
 ) {
-  const payments = await listProjectPayments(db, {
-    businessId: invoice.businessId,
-    invoiceId: invoice.id,
-  });
+  const [payments, credits] = await Promise.all([
+    listProjectPayments(db, {
+      businessId: invoice.businessId,
+      invoiceId: invoice.id,
+    }),
+    db.invoiceCredit.findMany({
+      where: { businessId: invoice.businessId, invoiceId: invoice.id },
+      select: { amount: true },
+    }),
+  ]);
   return invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
     payments,
+    credits,
   });
 }
 

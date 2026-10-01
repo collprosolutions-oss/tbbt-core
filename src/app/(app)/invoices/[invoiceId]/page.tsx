@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
+import { RecordInvoiceCreditForm } from "@/components/invoices/record-invoice-credit-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -19,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
@@ -33,6 +35,7 @@ import {
 } from "@/lib/payments/go-live";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   listPaymentsForInvoice,
@@ -94,15 +97,24 @@ export default async function InvoicePage({
       kind: invoice.kind,
     },
   });
+  const credits = await listInvoiceCreditsForInvoice(prisma, {
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+  });
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: invoice.total,
     payments,
+    credits,
   });
   const isDraft = invoice.status === "DRAFT";
   const isSent = invoice.status === "SENT";
   const isPaid = invoice.status === "PAID";
   const dueIsZero = breakdown.amountDue.lte(0);
+  const canRecordCredit = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RECORD_INVOICE_CREDIT,
+  );
   const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
   const showCollectionHelp = isSent && !dueIsZero;
@@ -128,6 +140,12 @@ export default async function InvoicePage({
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
           {isSent ? (
             <MarkInvoicePaidForm
+              invoiceId={invoice.id}
+              remainingDue={breakdown.amountDue.toFixed(2)}
+            />
+          ) : null}
+          {isSent && canRecordCredit ? (
+            <RecordInvoiceCreditForm
               invoiceId={invoice.id}
               remainingDue={breakdown.amountDue.toFixed(2)}
             />
@@ -220,6 +238,9 @@ export default async function InvoicePage({
             <p>Deposit paid: {formatMoney(breakdown.depositPaid)}</p>
           ) : null}
           <p>Payments: {formatMoney(breakdown.amountPaid)}</p>
+          {breakdown.recordedCredit.gt(0) ? (
+            <p>Recorded credit: {formatMoney(breakdown.recordedCredit)}</p>
+          ) : null}
           <p>Amount due: {formatMoney(breakdown.amountDue)}</p>
           {breakdown.credit.gt(0) ? (
             <p>Credit on account: {formatMoney(breakdown.credit)}</p>
@@ -239,6 +260,20 @@ export default async function InvoicePage({
                       ? ` · ${formatDateTime(payment.receivedAt)}`
                       : ""}
                     {payment.note ? ` · ${payment.note}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {credits.length > 0 ? (
+            <div className="space-y-1 pt-1">
+              <p className="font-medium">Recorded credits</p>
+              <ul className="space-y-1 text-muted-foreground">
+                {credits.map((credit) => (
+                  <li key={credit.id}>
+                    {formatMoney(credit.amount)} · Internal credit ·{" "}
+                    {formatDateTime(credit.createdAt)}
+                    {credit.reason ? ` · ${credit.reason}` : ""}
                   </li>
                 ))}
               </ul>

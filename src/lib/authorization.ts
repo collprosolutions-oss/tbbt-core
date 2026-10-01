@@ -131,6 +131,14 @@ export const CAPABILITIES = {
    */
   DECIDE_TIME_CORRECTIONS: "DECIDE_TIME_CORRECTIONS",
   /**
+   * OWNER-only internal credit / correction against an issued invoice.
+   * ADMIN may record ordinary invoice payments via MANAGE_INVOICES but
+   * must not silently inherit this write-down. Recording a credit never
+   * rewrites invoice lines, never mutates Payment rows, never issues a
+   * Stripe refund, and never sends a customer message.
+   */
+  RECORD_INVOICE_CREDIT: "RECORD_INVOICE_CREDIT",
+  /**
    * Owner/admin Expenses management: record, review, and allocate
    * business-wide expenses. MEMBER must never receive this -- employee
    * field submission is a later, separately scoped feature.
@@ -222,6 +230,7 @@ const ALL_CAPABILITIES = Object.values(CAPABILITIES) as Capability[];
 const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.AUTHORIZE_PAYROLL,
   CAPABILITIES.DECIDE_TIME_CORRECTIONS,
+  CAPABILITIES.RECORD_INVOICE_CREDIT,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,

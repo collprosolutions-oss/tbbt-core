@@ -210,6 +210,7 @@ export type InvoicePaymentBreakdown = {
   depositPaid: Prisma.Decimal;
   otherPaid: Prisma.Decimal;
   amountPaid: Prisma.Decimal;
+  recordedCredit: Prisma.Decimal;
   amountDue: Prisma.Decimal;
   credit: Prisma.Decimal;
   legacyFullyPaid: boolean;
@@ -222,15 +223,20 @@ export function invoicePaymentBreakdown(input: {
     purpose: string;
     amount: Prisma.Decimal | number | string;
   }>;
+  credits?: Array<{
+    amount: Prisma.Decimal | number | string;
+  }>;
 }): InvoicePaymentBreakdown {
   const total = moneyMax(toMoney(input.total));
   const recorded = moneyMax(sumPaymentAmounts(input.payments));
-  if (recorded.lte(0) && input.status === "PAID") {
+  const recordedCredit = moneyMax(sumPaymentAmounts(input.credits ?? []));
+  if (recorded.lte(0) && recordedCredit.lte(0) && input.status === "PAID") {
     return {
       total,
       depositPaid: ZERO,
       otherPaid: total,
       amountPaid: total,
+      recordedCredit: ZERO,
       amountDue: ZERO,
       credit: ZERO,
       legacyFullyPaid: true,
@@ -242,13 +248,15 @@ export function invoicePaymentBreakdown(input: {
     ),
   );
   const otherPaid = moneyMax(recorded.sub(depositPaid));
+  const applied = recorded.add(recordedCredit);
   return {
     total,
     depositPaid,
     otherPaid,
     amountPaid: recorded,
-    amountDue: moneyMax(total.sub(recorded)),
-    credit: moneyMax(recorded.sub(total)),
+    recordedCredit,
+    amountDue: moneyMax(total.sub(applied)),
+    credit: moneyMax(applied.sub(total)),
     legacyFullyPaid: false,
   };
 }
@@ -269,6 +277,10 @@ export function sumInvoiceRemainingDue(
     string,
     Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
   >,
+  creditsByInvoiceId?: Map<
+    string,
+    Array<{ amount: Prisma.Decimal | number | string }>
+  >,
 ) {
   return invoices.reduce((sum, invoice) => {
     return sum.add(
@@ -276,6 +288,7 @@ export function sumInvoiceRemainingDue(
         status: invoice.status,
         total: invoice.total,
         payments: paymentsByInvoiceId.get(invoice.id) ?? [],
+        credits: creditsByInvoiceId?.get(invoice.id) ?? [],
       }).amountDue,
     );
   }, ZERO);
@@ -291,10 +304,15 @@ export function sumSentInvoiceRemainingDue(
     string,
     Array<{ purpose: string; amount: Prisma.Decimal | number | string }>
   >,
+  creditsByInvoiceId?: Map<
+    string,
+    Array<{ amount: Prisma.Decimal | number | string }>
+  >,
 ) {
   return sumInvoiceRemainingDue(
     invoices.filter((invoice) => invoice.status === "SENT"),
     paymentsByInvoiceId,
+    creditsByInvoiceId,
   );
 }
 
@@ -825,10 +843,15 @@ export async function recordOwnerInvoiceBalancePayment(
       businessId: access.businessId,
       invoice: { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
     });
+    const credits = await tx.invoiceCredit.findMany({
+      where: { businessId: access.businessId, invoiceId: invoice.id },
+      select: { amount: true },
+    });
     const breakdown = invoicePaymentBreakdown({
       status: invoice.status,
       total: invoice.total,
       payments,
+      credits,
     });
     const remaining = breakdown.amountDue;
 

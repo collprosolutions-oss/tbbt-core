@@ -53,6 +53,7 @@ import {
   shouldShowPayDeposit,
   shouldShowPayInvoice,
 } from "@/lib/payments";
+import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
   loadEstimatePaymentSummary,
@@ -304,11 +305,18 @@ export default async function CustomerProjectPortalPage({
         }),
       )
     : [];
+  const invoiceCredits = invoice
+    ? await listInvoiceCreditsForInvoice(prisma, {
+        businessId: job.business.id,
+        invoiceId: invoice.id,
+      })
+    : [];
   const invoiceBreakdown = invoice
     ? invoicePaymentBreakdown({
         status: invoice.status,
         total: invoice.total,
         payments: invoicePayments,
+        credits: invoiceCredits,
       })
     : null;
   const showPayInvoice = Boolean(

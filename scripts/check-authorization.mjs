@@ -266,6 +266,7 @@ try {
   const ownerOnly = [
     CAPABILITIES.AUTHORIZE_PAYROLL,
     CAPABILITIES.DECIDE_TIME_CORRECTIONS,
+    CAPABILITIES.RECORD_INVOICE_CREDIT,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
@@ -592,6 +593,15 @@ try {
   });
   await expectAllowed("OWNER can pass the time-correction decision capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.DECIDE_TIME_CORRECTIONS);
+  });
+  check("OWNER has RECORD_INVOICE_CREDIT", roleHasCapability("OWNER", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  check("ADMIN does not have RECORD_INVOICE_CREDIT", !roleHasCapability("ADMIN", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  check("MEMBER does not have RECORD_INVOICE_CREDIT", !roleHasCapability("MEMBER", CAPABILITIES.RECORD_INVOICE_CREDIT));
+  await expectForbidden("ADMIN cannot pass the invoice-credit capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.RECORD_INVOICE_CREDIT);
+  });
+  await expectAllowed("OWNER can pass the invoice-credit capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.RECORD_INVOICE_CREDIT);
   });
 
   console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");
