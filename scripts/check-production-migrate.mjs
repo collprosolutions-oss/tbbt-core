@@ -1911,6 +1911,26 @@ check(
     !materialsSchema.includes("CREATE TABLE IF NOT EXISTS"),
 );
 
+const jobAftercareMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261001180000_job_aftercare_instruction/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Job aftercare migration is additive and does not alter Job columns",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(jobAftercareMigration) &&
+    jobAftercareMigration.includes('CREATE TABLE IF NOT EXISTS "JobAftercareInstruction"') &&
+    jobAftercareMigration.includes('CREATE TABLE IF NOT EXISTS "JobAftercareEvent"') &&
+    !jobAftercareMigration.includes('ALTER TABLE "Job"') &&
+    !jobAftercareMigration.includes("ADD COLUMN") &&
+    localNames.includes("20261001180000_job_aftercare_instruction") &&
+    localNames.includes("20261001140000_invoice_checkout_session_and_mismatch_resolved") &&
+    localNames.indexOf("20261001140000_invoice_checkout_session_and_mismatch_resolved") <
+      localNames.indexOf("20261001180000_job_aftercare_instruction"),
+);
+
 const jobMilestonesMigration = readFileSync(
   new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
   "utf8",

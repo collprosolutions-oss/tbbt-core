@@ -187,6 +187,7 @@
     "test:retention-follow-up-due": "node --experimental-strip-types scripts/check-retention-follow-up-due.mjs",
     "test:day-route-appointment": "node --experimental-strip-types scripts/check-day-route-appointment.mjs",
     "test:job-callback": "node --experimental-strip-types scripts/check-job-callback.mjs",
+    "test:job-aftercare": "node --experimental-strip-types scripts/check-job-aftercare.mjs",
     "test:request-source-report": "node --experimental-strip-types scripts/check-request-source-report.mjs",
     "test:collections-worklist": "node --experimental-strip-types scripts/check-collections-worklist.mjs",
     "test:p1-migration-and-db-safety": "node scripts/run-p1-gate.mjs migration-and-db-safety",

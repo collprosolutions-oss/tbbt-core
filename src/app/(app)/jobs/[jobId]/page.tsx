@@ -27,6 +27,7 @@ import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-b
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
+import { JobAftercarePanel } from "@/components/jobs/job-aftercare-panel";
 import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
@@ -116,6 +117,7 @@ import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-cle
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-booking-data";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
+import { loadJobAftercareReview } from "@/lib/job-aftercare-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
 
 export const metadata: Metadata = {
@@ -410,6 +412,7 @@ export default async function JobPage({
     ? await loadCleaningNextBookingReview(prisma, access, job.id)
     : null;
   const jobCallbackReview = await loadJobCallbackReview(prisma, access, job.id);
+  const jobAftercareReview = await loadJobAftercareReview(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -1146,6 +1149,24 @@ export default async function JobPage({
           />
         </CardContent>
       </Card>
+
+      {jobAftercareReview ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Job aftercare instructions</CardTitle>
+            <CardDescription>
+              OWNER write and explicit publish of job-specific aftercare for
+              a completed same-business job. The customer project link shows
+              only published instructions. Drafts and private owner notes stay
+              hidden. Shows recorded warranty terms as stored. Does not invent
+              coverage, send a message, or change the invoice.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <JobAftercarePanel review={jobAftercareReview} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {jobCallbackReview ? (
         <Card>

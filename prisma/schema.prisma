@@ -312,6 +312,10 @@ model Business {
   jobProblemReports           JobProblemReport[]
   jobCallbacks                JobCallback[]
   jobCallbackEvents           JobCallbackEvent[]
+  /// OWNER-authored aftercare for a completed Job. Separate table so Job
+  /// columns stay untouched. Concurrent Job-column chats do not collide.
+  jobAftercareInstructions    JobAftercareInstruction[]
+  jobAftercareEvents          JobAftercareEvent[]
   timeEntries              TimeEntry[]
   timeEntryAdjustments     TimeEntryAdjustment[]
   timeCorrectionRequests   TimeCorrectionRequest[]
@@ -713,6 +717,11 @@ model Membership {
   reviewedJobCallbacks         JobCallback[]          @relation("JobCallbackReviewer")
   outcomeJobCallbacks          JobCallback[]          @relation("JobCallbackOutcome")
   jobCallbackEvents            JobCallbackEvent[]     @relation("JobCallbackEventActor")
+  createdJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercareCreator")
+  updatedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercareUpdater")
+  publishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercarePublisher")
+  unpublishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercareUnpublisher")
+  jobAftercareEvents           JobAftercareEvent[]    @relation("JobAftercareEventActor")
   createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
   createdEquipmentMaintenanceEntries EquipmentMaintenanceEntry[] @relation("EquipmentMaintenanceCreator")
   recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
@@ -1662,6 +1671,9 @@ model Job {
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
   callbacks               JobCallback[]
+  /// One current aftercare document per Job. Job columns stay unchanged.
+  aftercareInstruction    JobAftercareInstruction?
+  aftercareEvents         JobAftercareEvent[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
   payments                Payment[]
@@ -2476,6 +2488,79 @@ model JobCallbackEvent {
 
   @@index([businessId])
   @@index([callbackId, createdAt])
+}
+
+/// OWNER-authored aftercare instructions for a completed same-business Job.
+/// One current document per Job. Drafts and ownerNotes are never visible
+/// to Job.projectToken. The customer token may read publishedInstructions
+/// only while status is PUBLISHED. Application code must never send email
+/// or SMS from these rows. Distinct from JobCallback (operational review)
+/// and JobMilestone (progress steps). Warranty terms are displayed from
+/// recorded sources only — never invented here.
+///
+/// Status: DRAFT | PUBLISHED | UNPUBLISHED
+model JobAftercareInstruction {
+  id                         String    @id @default(cuid())
+  businessId                 String
+  jobId                      String    @unique
+  /// Current owner working copy. Hidden from the project token.
+  draftInstructions          String    @default("")
+  /// Private owner notes. Hidden from the project token. Never published.
+  ownerNotes                 String    @default("")
+  /// Snapshot last explicitly published. Null until first publish and
+  /// after an unpublish so a token query cannot leak revoked wording.
+  publishedInstructions      String?
+  /// DRAFT | PUBLISHED | UNPUBLISHED
+  status                     String    @default("DRAFT")
+  createdByMembershipId      String
+  updatedByMembershipId      String?
+  publishedByMembershipId    String?
+  unpublishedByMembershipId  String?
+  publishedAt                DateTime?
+  unpublishedAt              DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  business      Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job           Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdBy     Membership @relation("JobAftercareCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  updatedBy     Membership? @relation("JobAftercareUpdater", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  publishedBy   Membership? @relation("JobAftercarePublisher", fields: [publishedByMembershipId], references: [id], onDelete: SetNull)
+  unpublishedBy Membership? @relation("JobAftercareUnpublisher", fields: [unpublishedByMembershipId], references: [id], onDelete: SetNull)
+  events        JobAftercareEvent[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+}
+
+/// Append-only aftercare history. Application code must never update or
+/// delete an existing row. instructionsSnapshot is the customer-facing
+/// wording at that event. Owner notes are never stored here.
+model JobAftercareEvent {
+  id                    String   @id @default(cuid())
+  businessId            String
+  jobId                 String
+  aftercareId           String
+  /// DRAFTED | REVISED | PUBLISHED | UNPUBLISHED
+  eventType             String
+  fromStatus            String?
+  toStatus              String
+  /// Historical wording of the customer-facing instructions at this event.
+  instructionsSnapshot  String?
+  actorMembershipId     String
+  /// Non-sensitive JSON (instruction length). Never owner notes, never a
+  /// customer message payload, never a coverage determination.
+  payload               String?
+  createdAt             DateTime @default(now())
+
+  business  Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job                      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  aftercare JobAftercareInstruction  @relation(fields: [aftercareId], references: [id], onDelete: Cascade)
+  actor     Membership               @relation("JobAftercareEventActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([jobId])
+  @@index([aftercareId, createdAt])
 }
 
 /// One clocked or manually-entered interval of labor time. This is the
