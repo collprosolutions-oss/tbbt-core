@@ -157,7 +157,11 @@ try {
       parseServiceAreaLabelParts("Reno NV").city === "" &&
       parseServiceAreaLabelParts("Reno-Sparks").city === "" &&
       parseServiceAreaLabelParts("Northern Nevada").city === "" &&
-      parseServiceAreaLabelParts("Reno or Sparks").city === "",
+      parseServiceAreaLabelParts("Reno or Sparks").city === "" &&
+      parseServiceAreaLabelParts("Reno.").city === "" &&
+      parseServiceAreaLabelParts("Sparks NV.").city === "" &&
+      parseServiceAreaLabelParts("...").city === "" &&
+      parseServiceAreaLabelParts("'").city === "",
   );
   check(
     "Official hyphenated and multi-word cities still parse",

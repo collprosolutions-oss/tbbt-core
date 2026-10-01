@@ -81,6 +81,11 @@ function hasTrailingStateToken(city: string) {
   });
 }
 
+function isUsableCityToken(city: string) {
+  if (!/\p{L}/u.test(city)) return false;
+  return /^\p{L}/u.test(city) && /\p{L}$/u.test(city);
+}
+
 /**
  * Split an owner-entered display label into a single city plus an optional
  * 2-letter US state. This is not geocoding. Ambiguous marketing copy,
@@ -90,6 +95,12 @@ function hasTrailingStateToken(city: string) {
  * skipped so it cannot become one fake city. Official hyphenated cities
  * stay syncable when written as City, ST (Winston-Salem, NC). Multi-word
  * cities without hyphens (Fort Myers, Salt Lake City) still sync.
+ *
+ * Trailing-period decision: a whole-label trailing period such as Reno.
+ * is junk punctuation, not an abbreviation. The label stays display-only
+ * and writes no CITY row. Internal abbreviation periods (St. Louis,
+ * Mt. Pleasant) remain allowed because the city token still starts and
+ * ends with a letter.
  */
 export function parseServiceAreaLabelParts(label: string): {
   city: string;
@@ -122,7 +133,7 @@ export function parseServiceAreaLabelParts(label: string): {
     region = regionRaw.toUpperCase();
     if (isStateOrCompassState(city)) return empty;
   }
-  if (!city || NON_CITY_LABEL_WORD.test(city)) {
+  if (!city || NON_CITY_LABEL_WORD.test(city) || !isUsableCityToken(city)) {
     return empty;
   }
   return { city, region };

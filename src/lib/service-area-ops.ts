@@ -153,24 +153,41 @@ export async function syncPrimaryCityServiceAreaFromLabel(
     where: {
       businessId: access.businessId,
       kind: "CITY",
-      OR: [{ city: parts.city }, { label: trimmed }],
+      OR: [
+        { city: { equals: parts.city, mode: "insensitive" } },
+        { label: { equals: trimmed, mode: "insensitive" } },
+      ],
     },
     orderBy: { createdAt: "asc" },
   });
+  if (existing) {
+    if (!parts.region || (existing.region ?? null) === parts.region) {
+      return { created: false, updated: false };
+    }
+    await upsertServiceArea(db, access, {
+      areaId: existing.id,
+      kind: "CITY",
+      label: existing.label,
+      city: existing.city ?? parts.city,
+      region: parts.region,
+      enabled: existing.enabled,
+      notes: existing.notes,
+      travelAdjustment:
+        existing.travelAdjustment == null ? undefined : String(existing.travelAdjustment),
+      minimumAdjustment:
+        existing.minimumAdjustment == null ? undefined : String(existing.minimumAdjustment),
+    });
+    return { created: false, updated: true };
+  }
+
   await upsertServiceArea(db, access, {
-    areaId: existing?.id,
     kind: "CITY",
     label: trimmed,
     city: parts.city,
     region: parts.region ?? undefined,
-    enabled: existing?.enabled ?? true,
-    notes: existing?.notes,
-    travelAdjustment:
-      existing?.travelAdjustment == null ? undefined : String(existing.travelAdjustment),
-    minimumAdjustment:
-      existing?.minimumAdjustment == null ? undefined : String(existing.minimumAdjustment),
+    enabled: true,
   });
-  return { created: !existing, updated: Boolean(existing) };
+  return { created: true, updated: false };
 }
 
 export async function setServiceAreaEnabled(

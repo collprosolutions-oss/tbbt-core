@@ -87,7 +87,8 @@ function founderSettingsConsistent(state) {
       state.tenantIsolated === true &&
       state.launchDidNotWipeContact === true &&
       state.junkLabelsDidNotInventCities === true &&
-      state.keepWorkingLabelsSynced === true,
+      state.keepWorkingLabelsSynced === true &&
+      state.existingRowsPreserved === true,
   );
 }
 
@@ -194,7 +195,8 @@ try {
   const { loadPublicSite, loadPublicAboutCopy } = await import("@/lib/public-site-data");
   const { qualifyServiceAddress, parseServiceAreaLabelParts, serviceAreaCities } =
     await import("@/lib/service-areas");
-  const { listServiceAreas, setServiceAreaEnabled } = await import("@/lib/service-area-ops");
+  const { listServiceAreas, setServiceAreaEnabled, upsertServiceArea } =
+    await import("@/lib/service-area-ops");
   const { setOwnedServiceCatalogItemActive } = await import("@/lib/catalog-ops");
   const { createPublicServiceRequest } = await import("@/lib/public-intake");
   const { evaluateComposeChannelEligibility } = await import("@/lib/communications/consent");
@@ -283,6 +285,13 @@ try {
     "Reno (and nearby)",
     "Reno 🔧, NV",
     "Reno\nSparks",
+    "Reno.",
+    "Sparks NV.",
+    "...",
+    "'",
+    ",",
+    "-",
+    ".",
   ];
   const keepWorkingLabels = [
     { label: "Reno", city: "Reno", region: null },
@@ -320,6 +329,15 @@ try {
     parseServiceAreaLabelParts("Reno-Sparks").city === "" &&
       parseServiceAreaLabelParts("Winston-Salem, NC").city === "Winston-Salem" &&
       parseServiceAreaLabelParts("Winston-Salem, NC").region === "NC",
+  );
+  check(
+    "Trailing period stays display-only; St. Louis and Mt. Pleasant keep internal abbreviation periods",
+    parseServiceAreaLabelParts("Reno.").city === "" &&
+      parseServiceAreaLabelParts("Sparks NV.").city === "" &&
+      parseServiceAreaLabelParts("...").city === "" &&
+      parseServiceAreaLabelParts("'").city === "" &&
+      parseServiceAreaLabelParts("St. Louis, MO").city === "St. Louis" &&
+      parseServiceAreaLabelParts("Mt. Pleasant, SC").city === "Mt. Pleasant",
   );
   check(
     "Free-text regions are never parsed",
@@ -694,6 +712,147 @@ try {
     }),
   );
 
+  console.log("\nDB — display-only saves leave existing ServiceArea rows untouched");
+  const preserveToken = randomUUID().slice(0, 8);
+  const preserveSeeded = await provisionOwnerWorkspace(prisma, {
+    name: `Preserve Owner ${preserveToken}`,
+    email: `preserve-owner-${preserveToken}@example.com`,
+    passwordHash,
+    businessName: `Preserve Shop ${preserveToken}`,
+  });
+  await seedOperating(preserveSeeded.business.id);
+  const preserveAccess = makeAccess(preserveSeeded.business, "OWNER", preserveSeeded.membership);
+  await updateBusinessPublicContactOp(prisma, preserveAccess, {
+    phone: "555-222-3333",
+    email: `preserve-${preserveToken}@example.com`,
+    website: "",
+    serviceArea: "Reno, NV",
+  });
+  await upsertServiceArea(prisma, preserveAccess, {
+    kind: "CITY",
+    label: "Sparks",
+    city: "Sparks",
+    region: "NV",
+    enabled: false,
+  });
+  const seededAreas = await prisma.serviceArea.findMany({
+    where: { businessId: preserveSeeded.business.id },
+    orderBy: { city: "asc" },
+  });
+  const seededSnapshot = seededAreas.map((row) => ({
+    id: row.id,
+    city: row.city,
+    region: row.region,
+    enabled: row.enabled,
+    label: row.label,
+  }));
+  check(
+    "Preserve fixture has enabled Reno NV and disabled Sparks NV",
+    seededSnapshot.length === 2 &&
+      seededSnapshot.some((row) => row.city === "Reno" && row.region === "NV" && row.enabled) &&
+      seededSnapshot.some((row) => row.city === "Sparks" && row.region === "NV" && row.enabled === false),
+  );
+
+  const displayOnlyOverExisting = [
+    "Reno.",
+    "Sparks NV.",
+    "...",
+    "'",
+    ",",
+    "-",
+    ".",
+    "Greater Reno area",
+    "Reno NV",
+    "Reno-Sparks",
+  ];
+  const preserveResults = [];
+  for (const label of displayOnlyOverExisting) {
+    await updateBusinessPublicContactOp(prisma, preserveAccess, {
+      phone: "555-222-3333",
+      email: `preserve-${preserveToken}@example.com`,
+      website: "",
+      serviceArea: label,
+    });
+    const saved = await prisma.business.findUnique({
+      where: { id: preserveSeeded.business.id },
+      select: { publicServiceAreaLabel: true },
+    });
+    const after = await prisma.serviceArea.findMany({
+      where: { businessId: preserveSeeded.business.id },
+      orderBy: { city: "asc" },
+    });
+    const afterSnapshot = after.map((row) => ({
+      id: row.id,
+      city: row.city,
+      region: row.region,
+      enabled: row.enabled,
+      label: row.label,
+    }));
+    const unchanged =
+      afterSnapshot.length === seededSnapshot.length &&
+      afterSnapshot.every((row, index) => {
+        const before = seededSnapshot[index];
+        return (
+          row.id === before.id &&
+          row.city === before.city &&
+          row.region === before.region &&
+          row.enabled === before.enabled &&
+          row.label === before.label
+        );
+      });
+    preserveResults.push({
+      label,
+      labelSaved: saved?.publicServiceAreaLabel === label,
+      unchanged,
+    });
+    check(
+      `Display-only ${JSON.stringify(label)} keeps existing city, region, and enabled flags`,
+      saved?.publicServiceAreaLabel === label && unchanged,
+    );
+  }
+
+  await updateBusinessPublicContactOp(prisma, preserveAccess, {
+    phone: "555-222-3333",
+    email: `preserve-${preserveToken}@example.com`,
+    website: "",
+    serviceArea: "reno",
+  });
+  const afterPlainReno = await prisma.serviceArea.findMany({
+    where: { businessId: preserveSeeded.business.id },
+    orderBy: { city: "asc" },
+  });
+  check(
+    "Parseable city-only reno reuses the Reno row and keeps region NV",
+    afterPlainReno.length === 2 &&
+      afterPlainReno.some((row) => row.city === "Reno" && row.region === "NV" && row.enabled) &&
+      afterPlainReno.some((row) => row.city === "Sparks" && row.enabled === false),
+  );
+  await updateBusinessPublicContactOp(prisma, preserveAccess, {
+    phone: "555-222-3333",
+    email: `preserve-${preserveToken}@example.com`,
+    website: "",
+    serviceArea: "RENO, NV",
+  });
+  const afterCaseReuse = await prisma.serviceArea.findMany({
+    where: { businessId: preserveSeeded.business.id },
+  });
+  check(
+    "Case-insensitive Reno lookup does not create a second city row",
+    afterCaseReuse.length === 2 &&
+      afterCaseReuse.filter((row) => (row.city ?? "").toLowerCase() === "reno").length === 1,
+  );
+  const existingRowsPreserved =
+    preserveResults.every((row) => row.labelSaved && row.unchanged) &&
+    afterPlainReno.length === 2 &&
+    afterCaseReuse.length === 2;
+  check("Existing ServiceArea rows survive display-only and case-insensitive saves", existingRowsPreserved);
+  check(
+    "Mutation: clearing a seeded region fails the preserve checker",
+    !preserveResults
+      .map((row) => ({ ...row, unchanged: false }))
+      .every((row) => row.labelSaved && row.unchanged),
+  );
+
   console.log("\nDB — official city labels still write a CITY row");
   const keepToken = randomUUID().slice(0, 8);
   const keepSeeded = await provisionOwnerWorkspace(prisma, {
@@ -1060,6 +1219,7 @@ try {
     launchDidNotWipeContact: afterLaunchArea.publicPhone === "555-222-3333",
     junkLabelsDidNotInventCities,
     keepWorkingLabelsSynced,
+    existingRowsPreserved,
   };
 
   console.log("\nMUTATION — vacuous-checker evidence");
@@ -1095,6 +1255,10 @@ try {
   check(
     "Mutation: missing official CITY sync fails consistency",
     !founderSettingsConsistent({ ...state, keepWorkingLabelsSynced: false }),
+  );
+  check(
+    "Mutation: wiped existing ServiceArea rows fail consistency",
+    !founderSettingsConsistent({ ...state, existingRowsPreserved: false }),
   );
 } finally {
   await session.cleanup();
