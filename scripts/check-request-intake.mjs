@@ -224,26 +224,30 @@ check(
 );
 
 const publicIntakeSrc = readRepo("src/lib/public-intake.ts");
+const submissionLockSrc = readRepo("src/lib/public-intake-submission.ts");
 const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
-const submissionLockIdx = submissionClaimSlice.indexOf("pg_advisory_xact_lock");
+const submissionLockIdx = submissionClaimSlice.indexOf("claimPublicIntakeSubmission");
 const submissionFindIdx = submissionClaimSlice.indexOf("serviceRequest.findFirst");
 check(
   "Public intake claims submissionId with a transaction lock before replay lookup",
   submissionLockIdx > -1 &&
     submissionFindIdx > submissionLockIdx &&
-    submissionClaimSlice.includes("publicIntakeSubmissionLockKey") &&
+    submissionLockSrc.includes("pg_advisory_xact_lock") &&
+    submissionLockSrc.includes("$executeRaw") &&
+    submissionLockSrc.includes("publicIntakeSubmissionLockKey") &&
     submissionClaimSlice.includes("INTAKE_SUBMISSION_MARKER") &&
+    !publicIntakeSrc.includes("$executeRaw") &&
     publicIntakeSubmissionLockKey("biz", "token12ab") === "tbbt.public-intake:biz:token12ab",
 );
 const mutatedIntakeSrc = publicIntakeSrc.replace(
-  /await tx\.\$queryRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{publicIntakeSubmissionLockKey\(business\.id, submissionId\)\}\)\)`;\s*/,
+  /await claimPublicIntakeSubmission\(tx, business\.id, submissionId\);\s*/,
   "",
 );
 const mutatedClaimSlice = mutatedIntakeSrc.slice(mutatedIntakeSrc.indexOf("if (submissionId) {"));
 check(
   "Mutation: removing the submission lock leaves replay lookup unserialized",
-  publicIntakeSrc.includes("pg_advisory_xact_lock") &&
-    !mutatedClaimSlice.includes("pg_advisory_xact_lock") &&
+  submissionLockSrc.includes("pg_advisory_xact_lock") &&
+    !mutatedClaimSlice.includes("claimPublicIntakeSubmission") &&
     mutatedClaimSlice.includes("serviceRequest.findFirst") &&
     mutatedClaimSlice.includes("INTAKE_SUBMISSION_MARKER"),
 );

@@ -65,19 +65,15 @@ import {
   resolvePublicRequestTrade,
 } from "@/lib/public-request-trade";
 import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
+import { claimPublicIntakeSubmission } from "@/lib/public-intake-submission";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
 
-export function publicIntakeSubmissionLockKey(businessId: string, submissionId: string) {
-  return `tbbt.public-intake:${businessId}:${submissionId}`;
-}
-
-export const publicIntakeTestHooks: {
-  afterSubmissionClaim?: (input: {
-    businessId: string;
-    submissionId: string;
-  }) => Promise<void> | void;
-} = {};
+export {
+  claimPublicIntakeSubmission,
+  publicIntakeSubmissionLockKey,
+  publicIntakeTestHooks,
+} from "@/lib/public-intake-submission";
 
 export type PublicIntakeInput = {
   slug: string;
@@ -424,7 +420,6 @@ export type PublicIntakeTx = {
       }>;
     }) => Promise<unknown>;
   };
-  $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 };
 
 export type PublicIntakeResult =
@@ -791,11 +786,7 @@ async function createPublicServiceRequestInner(
       }
 
       if (submissionId) {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${publicIntakeSubmissionLockKey(business.id, submissionId)}))`;
-        await publicIntakeTestHooks.afterSubmissionClaim?.({
-          businessId: business.id,
-          submissionId,
-        });
+        await claimPublicIntakeSubmission(tx, business.id, submissionId);
         const existing = await tx.serviceRequest.findFirst({
           where: {
             businessId: business.id,
