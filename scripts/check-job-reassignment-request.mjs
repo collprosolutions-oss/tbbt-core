@@ -142,6 +142,7 @@ const requestFnSrc = opsSrc.slice(
   opsSrc.indexOf("export async function decideJobReassignmentRequestOp"),
 );
 const acceptFnSrc = opsSrc.slice(opsSrc.indexOf("export async function decideJobReassignmentRequestOp"));
+const afterJobLockedSrc = acceptFnSrc.slice(Math.max(0, acceptFnSrc.indexOf("afterJobLocked")));
 
 console.log("\nSTATIC — Request is not an assignment write, no customer message, no nav change");
 
@@ -174,15 +175,18 @@ check(
 check(
   "Accept rechecks the upcoming window after Job lock before claiming",
   acceptFnSrc.includes("afterJobLocked") &&
-    acceptFnSrc.includes("isRequestableUpcomingAssignedJob") &&
-    acceptFnSrc.includes("JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE") &&
-    acceptFnSrc.includes("scheduledAt: true") &&
-    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") >
-      acceptFnSrc.indexOf("jobReassignmentRefusalMessage") &&
-    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") <
-      acceptFnSrc.indexOf("beforeDecideClaims") &&
-    acceptFnSrc.indexOf("isRequestableUpcomingAssignedJob") <
-      acceptFnSrc.indexOf("jobReassignmentRequest.updateMany"),
+    afterJobLockedSrc.includes("isRequestableUpcomingAssignedJob") &&
+    afterJobLockedSrc.includes("JOB_REASSIGNMENT_REQUEST_NOT_UPCOMING_MESSAGE") &&
+    afterJobLockedSrc.includes("scheduledAt: true") &&
+    afterJobLockedSrc.includes("status: true") &&
+    afterJobLockedSrc.indexOf("isRequestableUpcomingAssignedJob") >
+      afterJobLockedSrc.indexOf("jobReassignmentRefusalMessage") &&
+    afterJobLockedSrc.indexOf("isRequestableUpcomingAssignedJob") <
+      afterJobLockedSrc.indexOf("beforeDecideClaims") &&
+    afterJobLockedSrc.indexOf("isRequestableUpcomingAssignedJob") <
+      afterJobLockedSrc.indexOf("jobReassignmentRequest.updateMany") &&
+    afterJobLockedSrc.indexOf("tx.job.findFirst") <
+      afterJobLockedSrc.indexOf("isRequestableUpcomingAssignedJob"),
 );
 check(
   "Loaders degrade on missing JobReassignmentRequest schema; writes fail closed",
