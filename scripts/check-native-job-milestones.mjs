@@ -147,7 +147,8 @@ check(
   nativeMilestoneSrc.includes("nativeAssignedJobMilestoneAuthorizeWhere") &&
     nativeMilestoneSrc.includes("assignedMembershipId: field.membershipId") &&
     nativeMilestoneSrc.includes("nativeAssignedJobMilestoneWhere") &&
-    nativeMilestoneSrc.includes("where: { jobId, businessId }") &&
+    nativeMilestoneSrc.includes("return { jobId, businessId }") &&
+    nativeMilestoneSrc.includes("nativeAssignedJobMilestoneWhere(assigned.id, access.businessId)") &&
     nativeFieldSrc.includes("loadNativeAssignedJobMilestones") &&
     nativeFieldSrc.includes("nativeAssignedJobWhere"),
 );
