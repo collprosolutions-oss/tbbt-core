@@ -93,8 +93,10 @@ function extractCalls(src, name) {
 }
 
 let failures = 0;
+let passes = 0;
 function check(label, condition) {
   if (condition) {
+    passes += 1;
     console.log(`  ok  - ${label}`);
   } else {
     console.error(`FAIL - ${label}`);
@@ -1345,4 +1347,4 @@ if (failures > 0) {
   process.exit(1);
 }
 
-console.log("\nAll invoice credit checks passed.");
+console.log(`\nAll invoice credit checks passed (${passes}).`);

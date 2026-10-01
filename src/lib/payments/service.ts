@@ -447,6 +447,17 @@ async function applyVerifiedInvoicePayment(
   }
 
   const applyLocked = async (tx: Prisma.TransactionClient) => {
+    const claimed = await tx.invoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, businessId: true },
+    });
+    if (!claimed) {
+      return { applied: false, reason: "invoice_not_found" };
+    }
+    if (claimed.businessId !== payment.businessId) {
+      return { applied: false, reason: "business_mismatch" };
+    }
+
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM "Invoice"
@@ -473,9 +484,6 @@ async function applyVerifiedInvoicePayment(
 
     if (!invoice) {
       return { applied: false, reason: "invoice_not_found" };
-    }
-    if (invoice.businessId !== payment.businessId) {
-      return { applied: false, reason: "business_mismatch" };
     }
 
     const account = await tx.businessPaymentAccount.findUnique({
