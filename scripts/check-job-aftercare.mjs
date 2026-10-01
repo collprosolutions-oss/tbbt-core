@@ -21,7 +21,7 @@ import {
   openDisposableTestDatabase,
 } from "./disposable-test-database.mjs";
 
-register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+register(new URL("./job-aftercare-test-loader.mjs", import.meta.url), import.meta.url);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => readFileSync(join(root, rel), "utf8");
