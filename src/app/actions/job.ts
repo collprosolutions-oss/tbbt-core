@@ -73,6 +73,15 @@ import {
   shouldAcceptConflictAcknowledgement,
 } from "@/lib/workforce-window";
 import { createJobFromApprovedEstimate } from "@/lib/job-from-estimate";
+import { jobWriteTestHooks } from "@/lib/job-write-test-hooks";
+import {
+  JOB_REASSIGNMENT_TIME_CLOSED_REASON,
+  TimeCardError,
+  isTimeCardError,
+  lockTenantOwnedJob,
+  stopRunningAssignedJobTimeInTransaction,
+  timeCardErrorMessage,
+} from "@/lib/time-card-ops";
 
 export type JobActionState = {
   error?: string;
@@ -365,9 +374,17 @@ export async function scheduleJob(
       )
     : job.nextOccurrenceAt;
 
+  await jobWriteTestHooks.afterScheduleJobRead?.(job.id);
+
+  let completedDuringWrite = false;
   await prisma.$transaction(
     async (tx) => {
       await lockBusinessScheduleReservation(tx, access.businessId);
+      const current = await lockTenantOwnedJob(tx, access.businessId, job.id);
+      if (!current || current.status === "COMPLETED") {
+        completedDuringWrite = true;
+        return;
+      }
       await tx.job.update({
         where: { id: job.id },
         data: {
@@ -413,6 +430,10 @@ export async function scheduleJob(
     },
     { maxWait: 10_000, timeout: 20_000 },
   );
+
+  if (completedDuringWrite) {
+    return { error: "A completed job cannot be rescheduled." };
+  }
 
   await emitAndProcessBusinessEvent(prisma, {
     businessId: access.businessId,
@@ -549,8 +570,14 @@ export async function recordOwnerAppointmentConfirmation(
     return { message: "Appointment is already confirmed." };
   }
 
-  await prisma.job.update({
-    where: { id: job.id },
+  await jobWriteTestHooks.afterOwnerConfirmRead?.(job.id);
+
+  const updated = await prisma.job.updateMany({
+    where: {
+      id: job.id,
+      businessId: access.businessId,
+      appointmentProposalId: job.appointmentProposalId,
+    },
     data: {
       appointmentConfirmationStatus: "CONFIRMED",
       appointmentConfirmedAt: new Date(),
@@ -563,6 +590,21 @@ export async function recordOwnerAppointmentConfirmation(
       ),
     },
   });
+  if (updated.count !== 1) {
+    const latest = access.assertOwned(
+      await prisma.job.findFirst({
+        where: { id: job.id, ...access.scope },
+      }),
+    );
+    if (
+      latest.appointmentConfirmationStatus === "CONFIRMED" &&
+      latest.appointmentConfirmedForProposalId === latest.appointmentProposalId
+    ) {
+      revalidateJobSurfaces(latest);
+      return { message: "Appointment is already confirmed." };
+    }
+    return { error: "The appointment time has changed. Confirm the current time." };
+  }
   await recordAppointmentEvent(prisma, {
     businessId: access.businessId,
     jobId: job.id,
@@ -611,6 +653,38 @@ export async function startJob(
   if (!result.nextStatus) {
     return {};
   }
+  const nextStatus = result.nextStatus;
+
+  await jobWriteTestHooks.afterStartJobRead?.(job.id);
+
+  const writeStart = async (extra: Record<string, unknown> = {}) => {
+    const updated = await prisma.job.updateMany({
+      where: {
+        id: job.id,
+        businessId: access.businessId,
+        status: job.status,
+      },
+      data: {
+        status: nextStatus,
+        ...extra,
+      },
+    });
+    if (updated.count === 1) {
+      return null;
+    }
+    const current = await prisma.job.findFirst({
+      where: { id: job.id, ...access.scope },
+      select: { status: true },
+    });
+    const latest = evaluateStartJob(current?.status ?? "");
+    if (!latest.ok) {
+      return { error: latest.error };
+    }
+    if (!latest.nextStatus) {
+      return {};
+    }
+    return { error: "That job could not be started." };
+  };
 
   if (startJobRequiresCustomerConfirmation(job)) {
     const override = readString(formData, "startWithoutConfirmation") === "1";
@@ -632,15 +706,14 @@ export async function startJob(
       reasonLabel = `Other: ${other}`;
     }
 
-    await prisma.job.update({
-      where: { id: job.id },
-      data: {
-        status: result.nextStatus,
-        startWithoutConfirmationAt: new Date(),
-        startWithoutConfirmationReason: reasonLabel,
-        startWithoutConfirmationByMembershipId: access.workspace.membership.id,
-      },
+    const writeError = await writeStart({
+      startWithoutConfirmationAt: new Date(),
+      startWithoutConfirmationReason: reasonLabel,
+      startWithoutConfirmationByMembershipId: access.workspace.membership.id,
     });
+    if (writeError) {
+      return writeError;
+    }
     await recordAppointmentEvent(prisma, {
       businessId: access.businessId,
       jobId: job.id,
@@ -653,10 +726,10 @@ export async function startJob(
       payload: { overrideReason: reasonLabel },
     });
   } else {
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: result.nextStatus },
-    });
+    const writeError = await writeStart();
+    if (writeError) {
+      return writeError;
+    }
   }
 
   await emitAndProcessBusinessEvent(prisma, {
@@ -765,7 +838,15 @@ export async function assignJobMember(
   );
 
   if (!membershipId) {
-    await writeAssignedMembershipAndLaneWindows(access.businessId, job, null);
+    const unassigned = await writeAssignedMembershipAndLaneWindows(
+      access.businessId,
+      job,
+      null,
+      access.workspace.membership.id,
+    );
+    if (unassigned?.error) {
+      return unassigned;
+    }
     revalidatePath(`/jobs/${job.id}`);
     revalidatePath("/jobs");
     revalidatePath("/field");
@@ -792,7 +873,15 @@ export async function assignJobMember(
     return { error: "Choose a team member from this business." };
   }
 
-  await writeAssignedMembershipAndLaneWindows(access.businessId, job, membership.id);
+  const assigned = await writeAssignedMembershipAndLaneWindows(
+    access.businessId,
+    job,
+    membership.id,
+    access.workspace.membership.id,
+  );
+  if (assigned?.error) {
+    return assigned;
+  }
 
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath("/jobs");
@@ -810,18 +899,48 @@ async function writeAssignedMembershipAndLaneWindows(
     status: string;
   },
   nextAssignedMembershipId: string | null,
-) {
-  await prisma.$transaction(
-    async (tx) => {
-      await lockBusinessScheduleReservation(tx, businessId);
-      await tx.job.update({
-        where: { id: job.id },
-        data: { assignedMembershipId: nextAssignedMembershipId },
-      });
-      await syncAssignedJobArrivalWindows(tx, businessId, job);
-    },
-    { maxWait: 10_000, timeout: 20_000 },
-  );
+  actorMembershipId: string,
+): Promise<JobActionState | void> {
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await lockBusinessScheduleReservation(tx, businessId);
+        const lockedJob = await lockTenantOwnedJob(tx, businessId, job.id);
+        if (!lockedJob) {
+          throw new TimeCardError("That job could not be found.");
+        }
+        const previousAssignee = lockedJob.assignedMembershipId;
+        await tx.job.update({
+          where: { id: job.id },
+          data: { assignedMembershipId: nextAssignedMembershipId },
+        });
+        if (
+          previousAssignee &&
+          previousAssignee !== nextAssignedMembershipId
+        ) {
+          const stopped = await stopRunningAssignedJobTimeInTransaction(tx, {
+            businessId,
+            jobId: job.id,
+            actorMembershipId,
+            membershipId: previousAssignee,
+            reason: JOB_REASSIGNMENT_TIME_CLOSED_REASON,
+          });
+          if (!stopped.ok) {
+            throw new TimeCardError(stopped.error);
+          }
+        }
+        await syncAssignedJobArrivalWindows(tx, businessId, job);
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
+  } catch (error) {
+    if (isTimeCardError(error)) {
+      return {
+        error: timeCardErrorMessage(error, "That assignment could not be changed."),
+      };
+    }
+    throw error;
+  }
 }
 
 async function syncAssignedJobArrivalWindows(

@@ -56,6 +56,14 @@ export const JOB_START_TIME_STARTED_REASON = "Started because the job was starte
 /** Audit reason written when the assigned worker stops RUNNING JOB time. */
 export const JOB_STOP_TIME_CLOSED_REASON = "Stopped job time from the field app.";
 
+/** Audit reason written when reassignment closes the previous worker's JOB clock. */
+export const JOB_REASSIGNMENT_TIME_CLOSED_REASON =
+  "Stopped because the job was reassigned.";
+
+/** Audit reason written when deactivation closes a worker's leftover RUNNING time. */
+export const MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON =
+  "Stopped because the team member was removed.";
+
 /** Audit reason written when the assigned worker starts TRAVEL time. */
 export const TRAVEL_START_TIME_STARTED_REASON = "Started travel time from the field app.";
 
@@ -2104,6 +2112,7 @@ export type StopRunningAssignedJobTimeInput = {
   /** Worker whose RUNNING JOB time is stopped. Defaults to the actor. */
   membershipId?: string;
   endedAt?: Date;
+  reason?: string;
 };
 
 export type StopRunningAssignedJobTimeResult =
@@ -2152,7 +2161,7 @@ export async function stopRunningAssignedJobTimeInTransaction(
     actorMembershipId: input.actorMembershipId,
     membershipId: input.membershipId ?? input.actorMembershipId,
     endedAt: input.endedAt,
-    reason: JOB_STOP_TIME_CLOSED_REASON,
+    reason: input.reason ?? JOB_STOP_TIME_CLOSED_REASON,
     approvedWeekError: APPROVED_WEEK_STOP_ERROR,
     clockOrderError: STOP_CLOCK_ORDER_ERROR,
     missingActorError: MISSING_STOP_ACTOR_ERROR,
@@ -2386,6 +2395,104 @@ export async function stopAssignedActivityTime(
     }
     throw error;
   }
+}
+
+/**
+ * Close every RUNNING TimeEntry for one membership in this business.
+ * Used when an owner deactivates a worker who can no longer clock out.
+ * Approved-week rows still throw so the surrounding write can roll back.
+ */
+export async function closeRunningTimeForMembershipInTransaction(
+  tx: Db,
+  input: {
+    businessId: string;
+    membershipId: string;
+    actorMembershipId: string;
+    endedAt?: Date;
+    reason?: string;
+  },
+): Promise<{ closed: ClosedJobTimeEntry[] }> {
+  if (!input.actorMembershipId) {
+    throw new TimeCardError(MISSING_STOP_ACTOR_ERROR);
+  }
+  await loadMembershipInBusiness(tx, input.businessId, input.actorMembershipId);
+  const endedAt = input.endedAt ?? new Date();
+  const timeZone = await loadBusinessTimeZone(tx, input.businessId);
+  const reason = input.reason ?? MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON;
+  const running = await tx.timeEntry.findMany({
+    where: {
+      businessId: input.businessId,
+      membershipId: input.membershipId,
+      status: "RUNNING",
+      endedAt: null,
+    },
+    orderBy: { startedAt: "asc" },
+  });
+
+  const closed: ClosedJobTimeEntry[] = [];
+  for (const entry of running) {
+    if (!canEditTimeEntry(entry.status)) {
+      throw new TimeCardError(APPROVED_WEEK_STOP_ERROR);
+    }
+    try {
+      await assertIntervalWeeksEditable(
+        tx,
+        input.businessId,
+        entry.membershipId,
+        entry.startedAt,
+        endedAt,
+        timeZone,
+      );
+    } catch (error) {
+      if (isTimeCardError(error)) {
+        throw new TimeCardError(APPROVED_WEEK_STOP_ERROR);
+      }
+      throw error;
+    }
+    if (endedAt <= entry.startedAt) {
+      throw new TimeCardError(STOP_CLOCK_ORDER_ERROR);
+    }
+
+    const previous = toAuditSnapshot(entry);
+    const updated = await tx.timeEntry.updateMany({
+      where: {
+        id: entry.id,
+        businessId: input.businessId,
+        membershipId: input.membershipId,
+        status: "RUNNING",
+        endedAt: null,
+      },
+      data: {
+        endedAt,
+        status: "READY",
+      },
+    });
+    if (updated.count !== 1) {
+      continue;
+    }
+    const next = await tx.timeEntry.findFirst({
+      where: { id: entry.id, businessId: input.businessId },
+    });
+    if (!next || !next.endedAt) {
+      continue;
+    }
+    await writeAdjustment(tx, {
+      businessId: input.businessId,
+      timeEntryId: next.id,
+      actorMembershipId: input.actorMembershipId,
+      action: "UPDATE",
+      reason,
+      previous,
+      next: toAuditSnapshot(next),
+    });
+    closed.push({
+      id: next.id,
+      membershipId: next.membershipId,
+      startedAt: next.startedAt,
+      endedAt: next.endedAt,
+    });
+  }
+  return { closed };
 }
 
 export function isTimeCardError(error: unknown): error is TimeCardError {

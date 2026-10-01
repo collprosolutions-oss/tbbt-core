@@ -4,7 +4,8 @@
  * The server action still derives the workspace and SaaS entitlement.
  * These helpers re-read the assigned Job, then lock it and recheck the
  * exact active membership immediately before mutation so a deactivated
- * MEMBER cannot commit after a valid initial read.
+ * MEMBER cannot commit after a valid initial read. Start uses the same
+ * canonical running-time write as native field start.
  */
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -13,7 +14,12 @@ import {
 } from "@/lib/appointment-confirmation";
 import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
-import { lockTenantOwnedJob } from "@/lib/time-card-ops";
+import {
+  isTimeCardError,
+  lockTenantOwnedJob,
+  startJobWithRunningTimeSafetyInTransaction,
+  timeCardErrorMessage,
+} from "@/lib/time-card-ops";
 
 export const FIELD_JOB_NOT_ASSIGNED = "That job isn't assigned to you.";
 
@@ -101,19 +107,32 @@ export async function startAssignedFieldJob(
     if (lifecycle.nextStatus && startJobRequiresCustomerConfirmation(current)) {
       return { ok: false as const, error: CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT };
     }
-    if (lifecycle.nextStatus) {
-      await tx.job.update({
-        where: { id: current.id },
-        data: { status: lifecycle.nextStatus },
+
+    try {
+      const started = await startJobWithRunningTimeSafetyInTransaction(tx, {
+        businessId: locked.businessId,
+        jobId: locked.id,
+        actorMembershipId: actor.membershipId,
       });
+      if (!started.ok) {
+        return { ok: false as const, error: started.error };
+      }
+      return {
+        ok: true as const,
+        alreadyStarted: started.alreadyStarted,
+        jobId: current.id,
+        businessId: current.businessId,
+        customerId: current.customerId,
+      };
+    } catch (error) {
+      if (isTimeCardError(error)) {
+        return {
+          ok: false as const,
+          error: timeCardErrorMessage(error, FIELD_JOB_NOT_ASSIGNED),
+        };
+      }
+      throw error;
     }
-    return {
-      ok: true as const,
-      alreadyStarted: lifecycle.nextStatus == null,
-      jobId: current.id,
-      businessId: current.businessId,
-      customerId: current.customerId,
-    };
   });
 }
 

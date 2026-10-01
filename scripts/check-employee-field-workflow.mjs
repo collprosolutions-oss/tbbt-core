@@ -221,6 +221,11 @@ check(
     !fieldJobOpsSrc.includes("userId"),
 );
 check(
+  "Web assigned start uses the canonical running-time helper, not a status-only write",
+  startFieldFnSrc.includes("startJobWithRunningTimeSafetyInTransaction") &&
+    !startFieldFnSrc.includes("data: { status: lifecycle.nextStatus }"),
+);
+check(
   "Canonical completion rechecks exact active membership after the Job lock",
   completeInTxSrc.includes("lockTenantOwnedJob") &&
     completeInTxSrc.includes("exactActiveMembershipHeld") &&
