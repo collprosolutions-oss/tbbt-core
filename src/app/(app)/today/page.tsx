@@ -35,7 +35,7 @@ import {
   buildOwnerDailyChangeOrderAttention,
   buildOwnerDailyRunningTimeAttention,
   ownerDailyConflictTruncationLabel,
-  ownerDailyHasWaitingAttention,
+  ownerDailyTodayNothingWaiting,
 } from "@/lib/owner-daily-attention";
 import { loadOwnerDailyActionableAttention } from "@/lib/owner-daily-attention-data";
 import {
@@ -247,16 +247,18 @@ export default async function OwnerTodayPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {appointmentAttention.length === 0 &&
-          unassignedToday.length === 0 &&
-          fieldProblemAttention.length === 0 &&
-          additionalWorkAttention.length === 0 &&
-          changeOrderAttention.length === 0 &&
-          callbackAttention.length === 0 &&
-          runningTimeAttention.length === 0 &&
-          !ownerDailyHasWaitingAttention(materialDepositAttention) &&
-          !ownerDailyHasWaitingAttention(scheduleConflictAttention) &&
-          handoffItems.length === 0 ? (
+          {ownerDailyTodayNothingWaiting({
+            appointmentAttention,
+            unassignedToday,
+            fieldProblemAttention,
+            additionalWorkAttention,
+            changeOrderAttention,
+            callbackAttention,
+            runningTimeAttention,
+            materialDepositAttention,
+            scheduleConflictAttention,
+            handoffItems,
+          }) ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
 

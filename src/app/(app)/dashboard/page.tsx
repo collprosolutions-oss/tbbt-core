@@ -67,7 +67,9 @@ import {
   buildOwnerDailyCallbackAttention,
   buildOwnerDailyChangeOrderAttention,
   buildOwnerDailyRunningTimeAttention,
+  ownerDailyAttentionTotal,
   ownerDailyConflictTruncationLabel,
+  ownerDailyKeepAttentionGroup,
   ownerDailyTruncationLabel,
   ownerDailyUnpaidInvoiceWhere,
   ownerDailyUnscheduledApprovedWhere,
@@ -523,7 +525,7 @@ export default async function DashboardPage() {
         action: "Open",
       })),
     },
-  ].filter((group) => group.count > 0 || group.moreNotShown);
+  ].filter(ownerDailyKeepAttentionGroup);
 
   const recentGroups: AttentionGroupData[] = [
     {
@@ -567,14 +569,10 @@ export default async function DashboardPage() {
       ? await loadLaunchWorkspace(prisma, access.businessId)
       : null;
 
-  const attentionTotal =
-    appointmentAttention.length +
-    firstAwaitingAttention.length +
-    attentionGroups.reduce(
-      (sum, group) =>
-        sum + Math.max(group.count, group.moreNotShown ? 1 : 0),
-      0,
-    );
+  const attentionTotal = ownerDailyAttentionTotal(attentionGroups, {
+    appointmentAttention: appointmentAttention.length,
+    firstAwaitingAttention: firstAwaitingAttention.length,
+  });
 
   return (
     <PageContainer width="xl">

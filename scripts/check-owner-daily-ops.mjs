@@ -47,8 +47,11 @@ const {
   isUnscheduledApprovedWork,
   ownerDailyAttentionGroup,
   ownerDailyAttentionItemHolds,
+  ownerDailyAttentionTotal,
   ownerDailyConflictTruncationLabel,
   ownerDailyHasWaitingAttention,
+  ownerDailyKeepAttentionGroup,
+  ownerDailyTodayNothingWaiting,
   ownerDailyTruncationLabel,
   ownerDailyUnpaidInvoiceWhere,
   ownerDailyUnscheduledApprovedWhere,
@@ -167,8 +170,6 @@ if (!MUTATION_CHILD) {
       dashboardSrc.includes("OWNER_DAILY_MORE_NOT_SHOWN") &&
       dashboardSrc.includes("OWNER_DAILY_SCAN_LIMIT_REACHED") &&
       listSrc.includes("OWNER_DAILY_SCAN_LIMIT_REACHED") &&
-      todaySrc.includes("ownerDailyHasWaitingAttention") &&
-      dashboardSrc.includes("group.moreNotShown") &&
       !helperSrc.includes("Chief of Staff") &&
       !helperSrc.includes("recommend") &&
       !dashboardSrc.includes("new dashboard"),
@@ -196,8 +197,20 @@ if (!MUTATION_CHILD) {
       selfSrc.includes("assertLocalDatabaseUrl") &&
       selfSrc.indexOf("assertLocalDatabaseUrl(") < selfSrc.indexOf("openDisposableTestDatabase("),
   );
+}
 
-  console.log("\nPURE — Inclusion, tenant fail-closed, and actionable hrefs");
+console.log("\nWIRING — page decisions are the exported helpers");
+check(
+  "Pages call exported nothing-waiting, group-keep, and attentionTotal helpers",
+  todaySrc.includes("ownerDailyTodayNothingWaiting(") &&
+    dashboardSrc.includes("ownerDailyKeepAttentionGroup") &&
+    dashboardSrc.includes("ownerDailyAttentionTotal(") &&
+    !todaySrc.includes("materialDepositAttention.items.length === 0") &&
+    !dashboardSrc.includes("group.count > 0 || group.moreNotShown") &&
+    dashboardSrc.includes(".filter(ownerDailyKeepAttentionGroup)"),
+);
+
+console.log("\nPURE — Inclusion, tenant fail-closed, and actionable hrefs");
   const additionalWork = buildOwnerDailyAdditionalWorkAttention(
     [
       {
@@ -647,6 +660,41 @@ if (!MUTATION_CHILD) {
       ownerDailyHasWaitingAttention({ items: [], count: 0, truncated: true }) &&
       ownerDailyAttentionGroup(OWNER_DAILY_GROUP_TITLES.materialDeposits, [], 0) ==
         null,
+  );
+  const truncatedEmptyList = {
+    items: [],
+    count: 0,
+    truncated: true,
+    moreNotShown: true,
+  };
+  const emptyClearInput = {
+    appointmentAttention: [],
+    unassignedToday: [],
+    fieldProblemAttention: [],
+    additionalWorkAttention: [],
+    changeOrderAttention: [],
+    callbackAttention: [],
+    runningTimeAttention: [],
+    materialDepositAttention: { items: [], count: 0, truncated: false },
+    scheduleConflictAttention: { items: [], count: 0, truncated: false },
+    handoffItems: [],
+  };
+  check(
+    "Truncated empty list is not all-clear, keeps the Dashboard group, and attentionTotal is at least 1",
+    ownerDailyTodayNothingWaiting({
+      ...emptyClearInput,
+      materialDepositAttention: truncatedEmptyList,
+      scheduleConflictAttention: truncatedEmptyList,
+    }) === false &&
+      ownerDailyTodayNothingWaiting(emptyClearInput) === true &&
+      ownerDailyKeepAttentionGroup({ count: 0, moreNotShown: true }) === true &&
+      ownerDailyKeepAttentionGroup({ count: 0 }) === false &&
+      ownerDailyAttentionTotal([{ count: 0, moreNotShown: true }]) >= 1 &&
+      ownerDailyAttentionTotal([{ count: 0, moreNotShown: true }], {
+        appointmentAttention: 0,
+        firstAwaitingAttention: 0,
+      }) === 1 &&
+      ownerDailyAttentionTotal([{ count: 0 }]) === 0,
   );
 
   console.log("\nMUTATION — each inclusion rule fails when its fact is wrong");
@@ -1731,6 +1779,131 @@ try {
       );
     }
 
+    if (run("conflict-window-order")) {
+      console.log("\nDB — Nearest-first window scan finds the earliest-day conflict");
+      const business = await makeBusiness(`nearest-${randomUUID()}`);
+      const worker = await makeMember(business.id, "Nova");
+      const customer = await makeCustomer(business.id, "Later Window");
+      const range = {
+        start: new Date("2026-10-01T00:00:00.000Z"),
+        end: new Date("2026-10-22T00:00:00.000Z"),
+      };
+      const laterCount = OWNER_DAILY_CONFLICT_JOBS_TAKE + 10;
+      await prisma.job.createMany({
+        data: Array.from({ length: laterCount }, (_, i) => ({
+          businessId: business.id,
+          customerId: customer.id,
+          projectToken: randomUUID(),
+          status: "SCHEDULED",
+          scheduledAt: new Date(
+            Date.UTC(2026, 9, 10, 13, 0, 0) + i * 60 * 60 * 1000,
+          ),
+          scheduledDurationMinutes: 15,
+        })),
+      });
+      const bookA = await makeJob(business.id, {
+        customerName: "Earliest A",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-01T13:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const bookB = await makeJob(business.id, {
+        customerName: "Earliest B",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-01T14:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const scanned = await loadOwnerDailyConflictJobs(
+        prisma,
+        business.id,
+        range,
+      );
+      const loaded = await loadOwnerDailyScheduleConflictAttention(
+        prisma,
+        business.id,
+        { range, timeZone: "America/New_York" },
+      );
+      check(
+        "210 later window jobs do not hide the Oct 1 DOUBLE_BOOKING under nearest-first order",
+        laterCount > OWNER_DAILY_CONFLICT_JOBS_TAKE &&
+          scanned.jobs.some((job) => job.id === bookA.id) &&
+          scanned.jobs.some((job) => job.id === bookB.id) &&
+          loaded.items.length >= 1 &&
+          loaded.items.some(
+            (item) =>
+              item.href === `/jobs/${bookA.id}` ||
+              item.href === `/jobs/${bookB.id}`,
+          ),
+      );
+    }
+
+    if (run("conflict-recurring-bound")) {
+      console.log(
+        "\nDB — Recurring jobs with nextOccurrenceAt outside the window are not scanned",
+      );
+      const business = await makeBusiness(`recur-out-${randomUUID()}`);
+      const worker = await makeMember(business.id, "Quinn");
+      const customer = await makeCustomer(business.id, "Outside Recurring");
+      const range = {
+        start: new Date("2026-10-01T00:00:00.000Z"),
+        end: new Date("2026-10-22T00:00:00.000Z"),
+      };
+      const outsideNext = new Date("2026-09-01T13:00:00.000Z");
+      await prisma.job.createMany({
+        data: Array.from({ length: 205 }, () => ({
+          businessId: business.id,
+          customerId: customer.id,
+          projectToken: randomUUID(),
+          status: "SCHEDULED",
+          scheduledAt: new Date("2025-01-15T14:00:00.000Z"),
+          scheduledDurationMinutes: 30,
+          serviceIntent: "RECURRING",
+          recurrenceStatus: "ACTIVE",
+          recurrenceCadence: "WEEKLY",
+          nextOccurrenceAt: outsideNext,
+        })),
+      });
+      const outsideRows = await prisma.job.findMany({
+        where: { businessId: business.id, serviceIntent: "RECURRING" },
+        select: { id: true },
+      });
+      const outsideIds = new Set(outsideRows.map((row) => row.id));
+      const bookA = await makeJob(business.id, {
+        customerName: "Window A",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-02T13:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const bookB = await makeJob(business.id, {
+        customerName: "Window B",
+        assignedMembershipId: worker.id,
+        scheduledAt: new Date("2026-10-02T14:00:00.000Z"),
+        scheduledDurationMinutes: 120,
+      });
+      const scanned = await loadOwnerDailyConflictJobs(
+        prisma,
+        business.id,
+        range,
+      );
+      const loaded = await loadOwnerDailyScheduleConflictAttention(
+        prisma,
+        business.id,
+        { range, timeZone: "America/New_York" },
+      );
+      check(
+        "Out-of-window nextOccurrenceAt recurring jobs are not scanned and do not consume the 200 take",
+        outsideIds.size === 205 &&
+          scanned.jobs.every((job) => !outsideIds.has(job.id)) &&
+          scanned.scannedJobCount === 2 &&
+          scanned.jobScanTruncated === false &&
+          loaded.items.some(
+            (item) =>
+              item.href === `/jobs/${bookA.id}` ||
+              item.href === `/jobs/${bookB.id}`,
+          ),
+      );
+    }
+
     if (run("conflict-filter")) {
       console.log("\nDB — WARNING turnaround / outside-hours conflicts stay off the list");
       const business = await makeBusiness(`cfilter-${randomUUID()}`);
@@ -1774,9 +1947,13 @@ if (!MUTATION_CHILD) {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const attentionPath = `${repoRoot}src/lib/owner-daily-attention.ts`;
   const dataPath = `${repoRoot}src/lib/owner-daily-attention-data.ts`;
+  const todayPath = `${repoRoot}src/app/(app)/today/page.tsx`;
+  const dashboardPath = `${repoRoot}src/app/(app)/dashboard/page.tsx`;
   const originals = {
     [attentionPath]: readFileSync(attentionPath, "utf8"),
     [dataPath]: readFileSync(dataPath, "utf8"),
+    [todayPath]: readFileSync(todayPath, "utf8"),
+    [dashboardPath]: readFileSync(dashboardPath, "utf8"),
   };
 
   function replaceMarked(src, begin, end, body) {
@@ -1786,6 +1963,12 @@ if (!MUTATION_CHILD) {
       throw new Error(`missing markers ${begin} / ${end}`);
     }
     return `${src.slice(0, start)}${begin}\n${body}\n${src.slice(stop)}`;
+  }
+
+  function restoreAll() {
+    for (const [path, src] of Object.entries(originals)) {
+      writeFileSync(path, src);
+    }
   }
 
   const reverts = [
@@ -1897,23 +2080,137 @@ if (!MUTATION_CHILD) {
         );
       },
     },
+    {
+      id: "conflict-window-order",
+      file: dataPath,
+      begin: "// OWNER_DAILY_CONFLICT_WINDOW_ORDER_BEGIN",
+      end: "// OWNER_DAILY_CONFLICT_WINDOW_ORDER_END",
+      body: `      orderBy: [{ scheduledAt: "desc" }, { id: "desc" }],`,
+    },
+    {
+      id: "conflict-recurring-bound",
+      file: dataPath,
+      begin: "// OWNER_DAILY_CONFLICT_RECURRING_BOUND_BEGIN",
+      end: "// OWNER_DAILY_CONFLICT_RECURRING_BOUND_END",
+      body: `        nextOccurrenceAt: { not: null },`,
+    },
+    {
+      id: "today-clear",
+      applyAll(files) {
+        files[attentionPath] = replaceMarked(
+          files[attentionPath],
+          "// OWNER_DAILY_TODAY_CLEAR_BEGIN",
+          "// OWNER_DAILY_TODAY_CLEAR_END",
+          `  return (
+    input.appointmentAttention.length === 0 &&
+    input.unassignedToday.length === 0 &&
+    input.fieldProblemAttention.length === 0 &&
+    input.additionalWorkAttention.length === 0 &&
+    input.changeOrderAttention.length === 0 &&
+    input.callbackAttention.length === 0 &&
+    input.runningTimeAttention.length === 0 &&
+    input.materialDepositAttention.items.length === 0 &&
+    input.scheduleConflictAttention.items.length === 0 &&
+    input.handoffItems.length === 0
+  );`,
+        );
+        files[todayPath] = files[todayPath].replace(
+          `          {ownerDailyTodayNothingWaiting({
+            appointmentAttention,
+            unassignedToday,
+            fieldProblemAttention,
+            additionalWorkAttention,
+            changeOrderAttention,
+            callbackAttention,
+            runningTimeAttention,
+            materialDepositAttention,
+            scheduleConflictAttention,
+            handoffItems,
+          }) ? (`,
+          `          {appointmentAttention.length === 0 &&
+          unassignedToday.length === 0 &&
+          fieldProblemAttention.length === 0 &&
+          additionalWorkAttention.length === 0 &&
+          changeOrderAttention.length === 0 &&
+          callbackAttention.length === 0 &&
+          runningTimeAttention.length === 0 &&
+          materialDepositAttention.items.length === 0 &&
+          scheduleConflictAttention.items.length === 0 &&
+          handoffItems.length === 0 ? (`,
+        );
+      },
+    },
+    {
+      id: "dashboard-keep-group",
+      applyAll(files) {
+        files[attentionPath] = replaceMarked(
+          files[attentionPath],
+          "// OWNER_DAILY_KEEP_GROUP_BEGIN",
+          "// OWNER_DAILY_KEEP_GROUP_END",
+          "  return group.count > 0;",
+        );
+        files[dashboardPath] = files[dashboardPath].replace(
+          ".filter(ownerDailyKeepAttentionGroup)",
+          ".filter((group) => group.count > 0)",
+        );
+      },
+    },
+    {
+      id: "attention-total",
+      applyAll(files) {
+        files[attentionPath] = replaceMarked(
+          files[attentionPath],
+          "// OWNER_DAILY_ATTENTION_TOTAL_BEGIN",
+          "// OWNER_DAILY_ATTENTION_TOTAL_END",
+          `  return (
+    (extras.appointmentAttention ?? 0) +
+    (extras.firstAwaitingAttention ?? 0) +
+    groups.reduce((sum, group) => sum + group.count, 0)
+  );`,
+        );
+        files[dashboardPath] = files[dashboardPath].replace(
+          `  const attentionTotal = ownerDailyAttentionTotal(attentionGroups, {
+    appointmentAttention: appointmentAttention.length,
+    firstAwaitingAttention: firstAwaitingAttention.length,
+  });`,
+          `  const attentionTotal =
+    appointmentAttention.length +
+    firstAwaitingAttention.length +
+    attentionGroups.reduce((sum, group) => sum + group.count, 0);`,
+        );
+      },
+    },
   ];
 
   const scriptPath = fileURLToPath(import.meta.url);
   let mutationChildFailures = 0;
   for (const revert of reverts) {
     try {
-      writeFileSync(attentionPath, originals[attentionPath]);
-      writeFileSync(dataPath, originals[dataPath]);
-      const current = readFileSync(revert.file, "utf8");
-      const patched = revert.apply
-        ? revert.apply(current)
-        : replaceMarked(current, revert.begin, revert.end, revert.body);
-      if (patched === current) {
+      restoreAll();
+      const next = { ...originals };
+      let changed = false;
+      if (revert.applyAll) {
+        revert.applyAll(next);
+        for (const [path, src] of Object.entries(next)) {
+          if (src !== originals[path]) {
+            writeFileSync(path, src);
+            changed = true;
+          }
+        }
+      } else {
+        const current = originals[revert.file];
+        const patched = revert.apply
+          ? revert.apply(current)
+          : replaceMarked(current, revert.begin, revert.end, revert.body);
+        if (patched !== current) {
+          writeFileSync(revert.file, patched);
+          changed = true;
+        }
+      }
+      if (!changed) {
         check(`mutation-revert ${revert.id} applied a change`, false);
         continue;
       }
-      writeFileSync(revert.file, patched);
       const child = spawnSync(
         process.execPath,
         ["--experimental-strip-types", scriptPath],
@@ -1927,17 +2224,23 @@ if (!MUTATION_CHILD) {
         },
       );
       if (child.status !== 0) mutationChildFailures += 1;
+      const summary = `${child.stdout || ""}\n${child.stderr || ""}`.match(
+        /(\d+) passed, (\d+) failed/,
+      );
+      const childFailed = summary ? Number(summary[2]) : child.status !== 0 ? 1 : 0;
+      console.log(
+        `  child ${revert.id}: ${childFailed} failed (status ${child.status})`,
+      );
       check(
         `mutation-revert ${revert.id} fails its real-loader test`,
-        child.status !== 0,
+        child.status !== 0 && childFailed >= 1,
       );
       if (child.status === 0) {
         console.error(child.stdout);
         console.error(child.stderr);
       }
     } finally {
-      writeFileSync(attentionPath, originals[attentionPath]);
-      writeFileSync(dataPath, originals[dataPath]);
+      restoreAll();
     }
   }
   console.log(

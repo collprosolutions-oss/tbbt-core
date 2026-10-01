@@ -531,6 +531,65 @@ export function ownerDailyHasWaitingAttention(list: OwnerDailyWaitingList) {
   );
 }
 
+export type OwnerDailyTodayClearInput = {
+  appointmentAttention: readonly unknown[];
+  unassignedToday: readonly unknown[];
+  fieldProblemAttention: readonly unknown[];
+  additionalWorkAttention: readonly unknown[];
+  changeOrderAttention: readonly unknown[];
+  callbackAttention: readonly unknown[];
+  runningTimeAttention: readonly unknown[];
+  materialDepositAttention: OwnerDailyWaitingList;
+  scheduleConflictAttention: OwnerDailyWaitingList;
+  handoffItems: readonly unknown[];
+};
+
+export function ownerDailyTodayNothingWaiting(input: OwnerDailyTodayClearInput) {
+  // OWNER_DAILY_TODAY_CLEAR_BEGIN
+  return (
+    input.appointmentAttention.length === 0 &&
+    input.unassignedToday.length === 0 &&
+    input.fieldProblemAttention.length === 0 &&
+    input.additionalWorkAttention.length === 0 &&
+    input.changeOrderAttention.length === 0 &&
+    input.callbackAttention.length === 0 &&
+    input.runningTimeAttention.length === 0 &&
+    !ownerDailyHasWaitingAttention(input.materialDepositAttention) &&
+    !ownerDailyHasWaitingAttention(input.scheduleConflictAttention) &&
+    input.handoffItems.length === 0
+  );
+  // OWNER_DAILY_TODAY_CLEAR_END
+}
+
+export function ownerDailyKeepAttentionGroup(group: {
+  count: number;
+  moreNotShown?: boolean;
+}) {
+  // OWNER_DAILY_KEEP_GROUP_BEGIN
+  return group.count > 0 || Boolean(group.moreNotShown);
+  // OWNER_DAILY_KEEP_GROUP_END
+}
+
+export function ownerDailyAttentionTotal(
+  groups: readonly { count: number; moreNotShown?: boolean }[],
+  extras: {
+    appointmentAttention?: number;
+    firstAwaitingAttention?: number;
+  } = {},
+) {
+  // OWNER_DAILY_ATTENTION_TOTAL_BEGIN
+  return (
+    (extras.appointmentAttention ?? 0) +
+    (extras.firstAwaitingAttention ?? 0) +
+    groups.reduce(
+      (sum, group) =>
+        sum + Math.max(group.count, group.moreNotShown ? 1 : 0),
+      0,
+    )
+  );
+  // OWNER_DAILY_ATTENTION_TOTAL_END
+}
+
 export function ownerDailyTruncationLabel(
   count: number,
   shown: number,

@@ -222,7 +222,9 @@ export async function loadOwnerDailyConflictJobs(
         scheduledAt: { gte: range.start, lt: range.end },
       },
       select: OWNER_DAILY_CONFLICT_JOB_SELECT,
+      // OWNER_DAILY_CONFLICT_WINDOW_ORDER_BEGIN
       orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+      // OWNER_DAILY_CONFLICT_WINDOW_ORDER_END
       take: queryTake,
     }),
     db.job.findMany({
@@ -230,7 +232,9 @@ export async function loadOwnerDailyConflictJobs(
         businessId,
         serviceIntent: "RECURRING",
         recurrenceStatus: "ACTIVE",
+        // OWNER_DAILY_CONFLICT_RECURRING_BOUND_BEGIN
         nextOccurrenceAt: { gte: range.start, lt: range.end },
+        // OWNER_DAILY_CONFLICT_RECURRING_BOUND_END
         NOT: { scheduledAt: { gte: range.start, lt: range.end } },
       },
       select: OWNER_DAILY_CONFLICT_JOB_SELECT,
