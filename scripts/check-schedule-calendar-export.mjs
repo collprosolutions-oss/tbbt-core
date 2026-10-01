@@ -171,8 +171,8 @@ check(
 );
 check(
   "Dedicated download routes stay authenticated, attachment-only, and uncached",
-  ownerRouteSrc.includes('scope, "business"') &&
-    fieldRouteSrc.includes('scope, "assigned"') &&
+  ownerRouteSrc.includes('scheduleCalendarDownloadResponse(access, "business")') &&
+    fieldRouteSrc.includes('scheduleCalendarDownloadResponse(access, "assigned")') &&
     httpSrc.includes("requireBusinessAccess") === false &&
     ownerRouteSrc.includes("requireBusinessAccess") &&
     fieldRouteSrc.includes("requireBusinessAccess") &&
