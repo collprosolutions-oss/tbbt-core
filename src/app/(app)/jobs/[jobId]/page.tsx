@@ -1118,12 +1118,15 @@ export default async function JobPage({
           <CardTitle>Customer Documents</CardTitle>
           <CardDescription>
             Private files the customer uploaded from their project portal.
-            OWNER and ADMIN can open them. Opening a file does not approve,
-            publish, message, invoice, or change this job.
+            OWNER and ADMIN can open them. Only OWNER can mark Reviewed or
+            Needs replacement. A review does not publish, message, invoice,
+            or change this job.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ProjectDocumentReviewList
+            jobId={job.id}
+            canDecide={access.workspace.role === "OWNER"}
             documents={await listProjectDocumentsForOwnerReview(prisma, {
               businessId: access.businessId,
               jobId: job.id,

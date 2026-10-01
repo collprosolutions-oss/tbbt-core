@@ -23,6 +23,9 @@ type ProjectDocumentReceiptItem = {
   originalFilename: string;
   fileSizeBytes: number;
   createdAt: Date;
+  reviewStatus?: string | null;
+  reviewStatusLabel?: string;
+  reviewReason?: string | null;
 };
 
 export function ProjectDocumentUpload({
@@ -35,7 +38,10 @@ export function ProjectDocumentUpload({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const remaining = PROJECT_DOCUMENT_MAX_COUNT - documents.length;
+  const occupying = documents.filter(
+    (document) => document.reviewStatus !== "NEEDS_REPLACEMENT",
+  ).length;
+  const remaining = PROJECT_DOCUMENT_MAX_COUNT - occupying;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,6 +123,10 @@ export function ProjectDocumentUpload({
                 Received {formatDate(document.createdAt)} ·{" "}
                 {formatStorageBytes(document.fileSizeBytes)}. Private to the
                 business.
+              </p>
+              <p className="text-muted-foreground">
+                Review: {document.reviewStatusLabel || "Awaiting review"}
+                {document.reviewReason ? ` · ${document.reviewReason}` : ""}
               </p>
             </li>
           ))}

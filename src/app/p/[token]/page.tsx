@@ -686,8 +686,10 @@ export default async function CustomerProjectPortalPage({
               <CardTitle>Project Documents</CardTitle>
               <CardDescription>
                 Upload a private document for this project. Files stay private
-                to the business. Uploading does not approve work, publish
-                anything, send a message, create an invoice, or change the job.
+                to the business. You can see the recorded review status here.
+                If a file needs replacement, upload another through these same
+                rules. Uploading does not approve work, publish anything, send
+                a message, create an invoice, or change the job.
               </CardDescription>
             </CardHeader>
             <CardContent>
