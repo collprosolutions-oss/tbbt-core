@@ -346,27 +346,31 @@ export async function recordNativeJobProblem(
     description: string;
   },
 ): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/problem`),
-    {
-      method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
+  try {
+    const response = await fetch(
+      nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/problem`),
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
       },
-      body: JSON.stringify(input),
-    },
-  );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string"
-          ? body.error
-          : "That problem report could not be recorded.",
-    };
+    );
+    const body = await parseJson(response);
+    if (!response.ok) {
+      return {
+        error:
+          typeof body.error === "string"
+            ? body.error
+            : "That problem report could not be recorded.",
+      };
+    }
+    return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
+  } catch {
+    return { error: "Couldn't reach the server." };
   }
-  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
 export async function recordNativeJobPickupItem(

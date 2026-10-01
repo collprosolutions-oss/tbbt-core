@@ -12,10 +12,13 @@
  *   npm run test:native-field-problem
  */
 import { register } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { openDisposableTestDatabase } from "./disposable-test-database.mjs";
+
+const mutationChild = Boolean(process.env.NATIVE_FIELD_PROBLEM_MUTATION_CHILD);
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -59,6 +62,7 @@ const NY = "America/New_York";
 const MEMBER_NOTE = "gate was locked, no one answered";
 const MEMBER_DESCRIPTION = composeNativeProblemDescription("ACCESS", MEMBER_NOTE);
 const OWNER_NOTE = "unexpected rot behind the trim";
+const PRIOR_WORKER_TEXT = "Prior worker problem: hidden from new assignee";
 const OWNER_REVIEW_SELECT = {
   id: true,
   description: true,
@@ -176,6 +180,10 @@ check(
   nativeProblemSrc.includes("reportAssignedJobProblem") &&
     nativeProblemSrc.includes("nativeAssignedJobProblemAuthorizeWhere") &&
     nativeProblemSrc.includes("assignedMembershipId: field.membershipId") &&
+    nativeProblemSrc.includes("return { jobId, businessId, membershipId }") &&
+    /nativeAssignedJobProblemWhere\(\s*assigned\.id,\s*access\.businessId,\s*access\.membershipId/.test(
+      nativeProblemSrc,
+    ) &&
     nativeProblemSrc.includes("afterInitialRead") &&
     nativeProblemSrc.includes("requireSaasOperatingEntitlement") &&
     problemRouteSrc.includes("recordNativeAssignedJobProblem") &&
@@ -203,6 +211,7 @@ check(
     problemScreenSrc.includes("does not complete") &&
     problemScreenSrc.includes("does not message the customer") &&
     nativeApiSrc.includes("/problem") &&
+    nativeApiSrc.includes('return { error: "Couldn\'t reach the server." }') &&
     nativeTypesSrc.includes("problemReports:") &&
     nativeFieldSrc.includes("problemReports:") &&
     nativeFieldSrc.includes("loadNativeAssignedJobProblemReports"),
@@ -247,8 +256,8 @@ check(
     JSON.stringify(
       nativeAssignedJobWhere("job-1", { businessId: "biz-1", membershipId: "mem-1" }),
     ) &&
-    JSON.stringify(nativeAssignedJobProblemWhere("job-1", "biz-1")) ===
-      JSON.stringify({ jobId: "job-1", businessId: "biz-1" }),
+    JSON.stringify(nativeAssignedJobProblemWhere("job-1", "biz-1", "mem-1")) ===
+      JSON.stringify({ jobId: "job-1", businessId: "biz-1", membershipId: "mem-1" }),
 );
 check(
   "Known job states can receive a report; unknown states cannot",
@@ -445,6 +454,10 @@ try {
     assignedMembershipId: otherMem.id,
     customerName: "Other Problem Canary",
   });
+  const leakJob = await makeJob(businessA.id, {
+    assignedMembershipId: otherMem.id,
+    customerName: "Prior Assignee Problem Canary",
+  });
   const raceJob = await makeJob(businessA.id, {
     assignedMembershipId: memberMem.id,
     customerName: "Race Problem Canary",
@@ -489,6 +502,14 @@ try {
       jobId: otherJob.id,
       membershipId: otherMem.id,
       description: "Other worker problem",
+    },
+  });
+  await prisma.jobProblemReport.create({
+    data: {
+      businessId: businessA.id,
+      jobId: leakJob.id,
+      membershipId: otherMem.id,
+      description: PRIOR_WORKER_TEXT,
     },
   });
 
@@ -651,6 +672,50 @@ try {
       emptyNativeJobProblemReports().items.length === 0,
   );
   check("Failed authorization leaves no JobProblemReport", deniedCount === 0);
+
+  console.log("\nDEDICATED DB — prior worker report stays off the new assignee payload");
+  await prisma.job.update({
+    where: { id: leakJob.id },
+    data: { assignedMembershipId: memberMem.id },
+  });
+  const leakOwnWrite = await recordNativeAssignedJobProblem(
+    prisma,
+    memberAccess.access,
+    leakJob.id,
+    { kind: "SAFETY", description: "my own follow-up" },
+  );
+  const leakLoaded = await loadNativeAssignedJobProblemReports(
+    prisma,
+    memberAccess.access,
+    leakJob.id,
+    NY,
+  );
+  const leakDetail = await loadNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    leakJob.id,
+  );
+  const leakOwnDescription = composeNativeProblemDescription(
+    "SAFETY",
+    "my own follow-up",
+  );
+  check(
+    "New assignee can record their own report on the reassigned job",
+    leakOwnWrite.ok === true && leakOwnWrite.alreadyRecorded === false,
+  );
+  check(
+    "Prior worker's report is absent from the new assignee payload and count",
+    leakLoaded.count === 1 &&
+      leakLoaded.items.length === 1 &&
+      leakLoaded.items[0].description === leakOwnDescription &&
+      !leakLoaded.items.some((row) => row.description === PRIOR_WORKER_TEXT) &&
+      leakDetail?.problemReports.count === 1 &&
+      leakDetail?.problemReports.items.length === 1 &&
+      leakDetail?.problemReports.items[0].description === leakOwnDescription &&
+      !leakDetail?.problemReports.items.some(
+        (row) => row.description === PRIOR_WORKER_TEXT,
+      ),
+  );
 
   console.log("\nDEDICATED DB — assigned write, reload, and owner Job review");
   const memberBefore = await prisma.job.findFirst({
@@ -917,6 +982,51 @@ try {
   console.error(error);
 } finally {
   await session.cleanup();
+}
+
+if (failures > 0) {
+  console.error(`\nNative field problem check failed: ${failures} issue(s).`);
+  process.exit(1);
+}
+
+if (!mutationChild) {
+  console.log("\nMUTATION — Revert each guard and require a failing child run");
+  const childScript = fileURLToPath(
+    new URL("./check-native-field-problem.mjs", import.meta.url),
+  );
+  const mutations = [
+    {
+      label: "membershipId scope",
+      file: "src/lib/native-field-problems.ts",
+      search: "  return { jobId, businessId, membershipId } as const;",
+      replace: "  return { jobId, businessId } as const;",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const target = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(target, "utf8");
+    if (!original.includes(mutation.search)) {
+      check(`mutation setup finds ${mutation.label}`, false);
+      continue;
+    }
+    writeFileSync(target, original.replace(mutation.search, mutation.replace));
+    try {
+      const child = spawnSync(process.execPath, ["--experimental-strip-types", childScript], {
+        env: { ...process.env, NATIVE_FIELD_PROBLEM_MUTATION_CHILD: "1" },
+        encoding: "utf8",
+        timeout: 180_000,
+      });
+      const failed = child.status !== 0;
+      check(`Mutation ${mutation.label} fails a test`, failed);
+      if (!failed) {
+        console.error(child.stdout.slice(-2500));
+        console.error(child.stderr.slice(-1000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
+  }
 }
 
 if (failures > 0) {

@@ -125,9 +125,13 @@ export function nativeAssignedJobProblemAuthorizeWhere(
   } as const;
 }
 
-/** Problem-report rows are tenant-scoped to the already-authorized job. */
-export function nativeAssignedJobProblemWhere(jobId: string, businessId: string) {
-  return { jobId, businessId } as const;
+/** Problem-report rows are caller-scoped on the already-authorized job. */
+export function nativeAssignedJobProblemWhere(
+  jobId: string,
+  businessId: string,
+  membershipId: string,
+) {
+  return { jobId, businessId, membershipId } as const;
 }
 
 export function isNativeJobProblemKind(value: unknown): value is NativeJobProblemKind {
@@ -271,7 +275,11 @@ export async function loadNativeAssignedJobProblemReports(
     return emptyNativeJobProblemReports(status);
   }
 
-  const where = nativeAssignedJobProblemWhere(assigned.id, access.businessId);
+  const where = nativeAssignedJobProblemWhere(
+    assigned.id,
+    access.businessId,
+    access.membershipId,
+  );
   const [count, rows] = await Promise.all([
     db.jobProblemReport.count({ where }),
     db.jobProblemReport.findMany({
