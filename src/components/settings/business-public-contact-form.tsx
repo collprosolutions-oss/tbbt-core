@@ -81,8 +81,11 @@ export function BusinessPublicContactForm({
         phone blank to keep the existing public number
         {fallbackPhone ? ` (${fallbackPhone})` : " if one is already on file"}.
         Email and website appear only after they are saved. Service area is the
-        short label shown on the public site. This does not rewrite sent prices
-        or paid invoices.
+        short label shown on the public site. A label like Reno or Reno, NV
+        also records that city for intake matching. State-less or mixed text
+        such as Reno NV, Reno., Reno-Sparks, or Greater Reno area stays
+        display-only until you add cities in Settings → Service Area. This
+        does not rewrite sent prices or paid invoices.
       </p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">

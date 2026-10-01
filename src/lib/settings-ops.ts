@@ -37,6 +37,7 @@ import {
   parsePublicWebsite,
   ensureBusinessPublicContactSchema,
 } from "@/lib/business-contact";
+import { syncPrimaryCityServiceAreaFromLabel } from "@/lib/service-area-ops";
 import {
   MAX_OWNER_STORY_LENGTH,
   MAX_PUBLIC_ABOUT_COPY_LENGTH,
@@ -323,36 +324,46 @@ export async function updateBusinessPublicContactOp(
     (business.publicWebsite ?? null) === next.publicWebsite &&
     (publicServiceAreaLabel === undefined ||
       (business.publicServiceAreaLabel ?? null) === publicServiceAreaLabel);
-  if (unchanged) {
+  const shouldSyncArea = Boolean(publicServiceAreaLabel);
+
+  if (unchanged && !shouldSyncArea) {
     return { unchanged: true as const };
   }
 
   await db.$transaction(async (tx) => {
-    await tx.business.update({
-      where: { id: access.businessId },
-      data: next,
-    });
-    const fields: Array<[string, string | null, string | null]> = [
-      ["publicPhone", business.publicPhone, next.publicPhone],
-      ["publicEmail", business.publicEmail, next.publicEmail],
-      ["publicWebsite", business.publicWebsite, next.publicWebsite],
-    ];
-    if (publicServiceAreaLabel !== undefined) {
-      fields.push(["publicServiceAreaLabel", business.publicServiceAreaLabel, publicServiceAreaLabel]);
-    }
-    for (const [settingKey, previousValue, newValue] of fields) {
-      if ((previousValue ?? null) === (newValue ?? null)) continue;
-      await writeSettingsAuditLog(tx, {
-        businessId: access.businessId,
-        changedByMembershipId: access.workspace.membership.id,
-        settingArea: "profile",
-        settingKey,
-        previousValue,
-        newValue,
+    if (!unchanged) {
+      await tx.business.update({
+        where: { id: access.businessId },
+        data: next,
       });
+      const fields: Array<[string, string | null, string | null]> = [
+        ["publicPhone", business.publicPhone, next.publicPhone],
+        ["publicEmail", business.publicEmail, next.publicEmail],
+        ["publicWebsite", business.publicWebsite, next.publicWebsite],
+      ];
+      if (publicServiceAreaLabel !== undefined) {
+        fields.push(["publicServiceAreaLabel", business.publicServiceAreaLabel, publicServiceAreaLabel]);
+      }
+      for (const [settingKey, previousValue, newValue] of fields) {
+        if ((previousValue ?? null) === (newValue ?? null)) continue;
+        await writeSettingsAuditLog(tx, {
+          businessId: access.businessId,
+          changedByMembershipId: access.workspace.membership.id,
+          settingArea: "profile",
+          settingKey,
+          previousValue,
+          newValue,
+        });
+      }
+    }
+    if (shouldSyncArea && publicServiceAreaLabel) {
+      await syncPrimaryCityServiceAreaFromLabel(tx, access, publicServiceAreaLabel);
     }
   });
 
+  if (unchanged) {
+    return { unchanged: true as const };
+  }
   return { unchanged: false as const };
 }
 

@@ -24,6 +24,7 @@ const {
 } = await import("@/lib/lead-attribution");
 const {
   matchServiceArea,
+  parseServiceAreaLabelParts,
   qualifyServiceAddress,
   publicServiceCityPath,
   resolvePublicLocalPage,
@@ -133,6 +134,46 @@ try {
   check(
     "Disabled city is ignored",
     matchServiceArea([disabled], { city: "Sparks" }) === null,
+  );
+  check(
+    "Owner label Reno, NV parses to city Reno and region NV",
+    parseServiceAreaLabelParts("Reno, NV").city === "Reno" &&
+      parseServiceAreaLabelParts("Reno, NV").region === "NV",
+  );
+  check(
+    "Owner label without a state stays a single city token",
+    parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers" &&
+      parseServiceAreaLabelParts("Fort Myers").region === null,
+  );
+  check(
+    "Multi-city and marketing labels do not parse into a city",
+    parseServiceAreaLabelParts("Reno and Sparks, NV").city === "" &&
+      parseServiceAreaLabelParts("Reno, Sparks, Carson City").city === "" &&
+      parseServiceAreaLabelParts("Greater Reno area").city === "" &&
+      parseServiceAreaLabelParts("Reno, Washoe County").city === "" &&
+      parseServiceAreaLabelParts("89501").city === "" &&
+      parseServiceAreaLabelParts(",NV").city === "" &&
+      parseServiceAreaLabelParts("Reno,").city === "" &&
+      parseServiceAreaLabelParts("Reno NV").city === "" &&
+      parseServiceAreaLabelParts("Reno-Sparks").city === "" &&
+      parseServiceAreaLabelParts("Northern Nevada").city === "" &&
+      parseServiceAreaLabelParts("Reno or Sparks").city === "" &&
+      parseServiceAreaLabelParts("Reno.").city === "" &&
+      parseServiceAreaLabelParts("Sparks NV.").city === "" &&
+      parseServiceAreaLabelParts("...").city === "" &&
+      parseServiceAreaLabelParts("'").city === "",
+  );
+  check(
+    "Official hyphenated and multi-word cities still parse",
+    parseServiceAreaLabelParts("Winston-Salem, NC").city === "Winston-Salem" &&
+      parseServiceAreaLabelParts("Winston-Salem, NC").region === "NC" &&
+      parseServiceAreaLabelParts("Salt Lake City").city === "Salt Lake City" &&
+      parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers",
+  );
+  check(
+    "A free-text region is never stored from the label",
+    parseServiceAreaLabelParts("Reno, Washoe County").region === null &&
+      parseServiceAreaLabelParts("Reno, Sparks, Carson City").region === null,
   );
   check(
     "Unknown when no areas are configured",

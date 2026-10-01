@@ -4,6 +4,7 @@ import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import {
   isServiceAreaKind,
   parseOptionalMoney,
+  parseServiceAreaLabelParts,
   type RecordedServiceArea,
 } from "@/lib/service-areas";
 
@@ -126,6 +127,67 @@ export async function upsertServiceArea(
       },
     }),
   );
+}
+
+/**
+ * Keep the display label and the intake/local-page CITY row in sync when
+ * the label is exactly one city plus an optional 2-letter US state.
+ * Ambiguous labels stay as publicServiceAreaLabel only. Does not delete
+ * or re-enable an owner-disabled area.
+ */
+export async function syncPrimaryCityServiceAreaFromLabel(
+  db: Db,
+  access: BusinessAccess,
+  label: string,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
+  const trimmed = label.trim();
+  if (!trimmed) return { created: false, updated: false };
+  const parts = parseServiceAreaLabelParts(trimmed);
+  if (!parts.city) return { created: false, updated: false };
+  if (parts.region && !/^[A-Z]{2}$/.test(parts.region)) {
+    return { created: false, updated: false };
+  }
+
+  const existing = await db.serviceArea.findFirst({
+    where: {
+      businessId: access.businessId,
+      kind: "CITY",
+      OR: [
+        { city: { equals: parts.city, mode: "insensitive" } },
+        { label: { equals: trimmed, mode: "insensitive" } },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) {
+    if (!parts.region || (existing.region ?? null) === parts.region) {
+      return { created: false, updated: false };
+    }
+    await upsertServiceArea(db, access, {
+      areaId: existing.id,
+      kind: "CITY",
+      label: existing.label,
+      city: existing.city ?? parts.city,
+      region: parts.region,
+      enabled: existing.enabled,
+      notes: existing.notes,
+      travelAdjustment:
+        existing.travelAdjustment == null ? undefined : String(existing.travelAdjustment),
+      minimumAdjustment:
+        existing.minimumAdjustment == null ? undefined : String(existing.minimumAdjustment),
+    });
+    return { created: false, updated: true };
+  }
+
+  await upsertServiceArea(db, access, {
+    kind: "CITY",
+    label: trimmed,
+    city: parts.city,
+    region: parts.region ?? undefined,
+    enabled: true,
+  });
+  return { created: true, updated: false };
 }
 
 export async function setServiceAreaEnabled(

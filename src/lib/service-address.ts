@@ -97,6 +97,16 @@ const US_STATE_BY_NAME = new Map(
   ]),
 );
 
+export function isUsStateCode(value: string) {
+  return US_STATES.some((state) => state.code === value.trim().toUpperCase());
+}
+
+export function isUsStateName(value: string) {
+  return US_STATES.some(
+    (state) => state.name.toLowerCase() === value.trim().toLowerCase(),
+  );
+}
+
 export function isUsServiceCountry(country: ServiceAddressCountry) {
   return (country ?? "").trim().toUpperCase() === "US";
 }

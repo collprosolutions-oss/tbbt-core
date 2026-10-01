@@ -144,7 +144,9 @@ check(
     readRepo("src/lib/first-run-setup.ts").includes("updateBusinessPublicContactOp") &&
     readRepo("src/components/auth/first-run-setup-form.tsx").includes('name="publicPhone"') &&
     readRepo("src/components/auth/first-run-setup-form.tsx").includes('name="publicEmail"') &&
-    readRepo("src/components/auth/first-run-setup-form.tsx").includes('name="publicWebsite"'),
+    readRepo("src/components/auth/first-run-setup-form.tsx").includes('name="publicWebsite"') &&
+    readRepo("src/components/auth/first-run-setup-form.tsx").includes('name="timezone"') &&
+    readRepo("src/lib/first-run-setup.ts").includes("updateBusinessTimeZoneOp"),
 );
 check(
   "Task 1 does not add later onboarding products",

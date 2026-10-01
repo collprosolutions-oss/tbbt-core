@@ -19,6 +19,7 @@ import {
   SettingsError,
   updateBusinessProfileOp,
   updateBusinessPublicContactOp,
+  updateBusinessTimeZoneOp,
   writeSettingsAuditLog,
 } from "@/lib/settings-ops";
 import {
@@ -112,7 +113,7 @@ export function postAuthenticationPath(input: {
 export async function completeFirstRunSetupOp(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { name: string; phone: string; email: string; website: string },
+  input: { name: string; phone: string; email: string; website: string; timezone?: string },
 ) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_SETTINGS);
   requireBusinessRole(access, "OWNER");
@@ -151,6 +152,12 @@ export async function completeFirstRunSetupOp(
     email: input.email,
     website: input.website,
   });
+  if (input.timezone?.trim()) {
+    await updateBusinessTimeZoneOp(db, access, {
+      timezone: input.timezone,
+      confirmed: true,
+    });
+  }
 
   const completedAt = new Date();
   await db.$transaction(async (tx) => {

@@ -600,6 +600,17 @@ try {
       saved?.publicEmail === "shop@cedar.example" &&
       saved?.publicWebsite === "https://cedar.example",
   );
+  const cedarAreas = await prisma.serviceArea.findMany({
+    where: { businessId: provisioned.business.id },
+  });
+  const mapleAreas = await prisma.serviceArea.findMany({
+    where: { businessId: other.business.id },
+  });
+  check(
+    "Website setup also records the served city used for intake matching",
+    cedarAreas.some((row) => row.kind === "CITY" && row.city === "Reno" && row.enabled) &&
+      mapleAreas.length === 0,
+  );
   check(
     "Completion persists explicitly as SAVED",
     saved?.websiteSetupCompletedAt instanceof Date &&

@@ -4,6 +4,7 @@
  * This is not a GIS engine. Matching uses owner-entered city/postal
  * strings only. Addresses and jurisdictions are never inferred.
  */
+import { isUsStateCode, isUsStateName, US_STATES } from "@/lib/service-address";
 
 export const SERVICE_AREA_KINDS = ["CITY", "POSTAL"] as const;
 export type ServiceAreaKind = (typeof SERVICE_AREA_KINDS)[number];
@@ -51,6 +52,91 @@ function normalizeToken(value: string | null | undefined) {
 
 function normalizePostal(value: string | null | undefined) {
   return (value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+const ALLOWED_LABEL_CHAR = /^[\p{L} .'’\-,]+$/u;
+const SPACED_DASH = / - | – /;
+const CITY_LABEL_CONNECTOR = /(?:\s+and\s+|&|\/|;)/i;
+const NON_CITY_LABEL_WORD =
+  /\b(?:area|greater|metro|county|region|vicinity|or|within|miles|serving|near|nearby|around|surrounding)\b/i;
+const COMPASS_WORD =
+  /^(?:north|south|east|west|northern|southern|eastern|western|southwest|southeast|northwest|northeast|central)$/i;
+
+function isStateOrCompassState(city: string) {
+  if (isUsStateName(city)) return true;
+  const words = city.split(" ");
+  if (words.length < 2) return false;
+  if (!COMPASS_WORD.test(words[0] ?? "")) return false;
+  return isUsStateName(words.slice(1).join(" "));
+}
+
+function hasTrailingStateToken(city: string) {
+  const words = city.split(" ");
+  const last = words[words.length - 1] ?? "";
+  if (isUsStateCode(last) || isUsStateName(last)) return true;
+  const lower = city.toLowerCase();
+  return US_STATES.some((state) => {
+    const name = state.name.toLowerCase();
+    return lower === name || lower.endsWith(` ${name}`);
+  });
+}
+
+function isUsableCityToken(city: string) {
+  if (!/\p{L}/u.test(city)) return false;
+  return /^\p{L}/u.test(city) && /\p{L}$/u.test(city);
+}
+
+/**
+ * Split an owner-entered display label into a single city plus an optional
+ * 2-letter US state. This is not geocoding. Ambiguous marketing copy,
+ * multi-city lists, ZIP-only text, and free-text regions do not parse.
+ *
+ * Hyphen decision: a no-comma hyphenated label such as Reno-Sparks is
+ * skipped so it cannot become one fake city. Official hyphenated cities
+ * stay syncable when written as City, ST (Winston-Salem, NC). Multi-word
+ * cities without hyphens (Fort Myers, Salt Lake City) still sync.
+ *
+ * Trailing-period decision: a whole-label trailing period such as Reno.
+ * is junk punctuation, not an abbreviation. The label stays display-only
+ * and writes no CITY row. Internal abbreviation periods (St. Louis,
+ * Mt. Pleasant) remain allowed because the city token still starts and
+ * ends with a letter.
+ */
+export function parseServiceAreaLabelParts(label: string): {
+  city: string;
+  region: string | null;
+} {
+  const empty = { city: "", region: null as string | null };
+  const raw = label.trim();
+  if (!raw) return empty;
+  if (!ALLOWED_LABEL_CHAR.test(raw)) return empty;
+  if (SPACED_DASH.test(raw)) return empty;
+  if ((raw.match(/,/g) ?? []).length > 1) return empty;
+
+  const trimmed = raw.replace(/\s+/g, " ");
+  if (CITY_LABEL_CONNECTOR.test(trimmed)) return empty;
+
+  const comma = trimmed.indexOf(",");
+  let city: string;
+  let region: string | null = null;
+  if (comma === -1) {
+    city = trimmed;
+    if (city.includes("-")) return empty;
+    if (hasTrailingStateToken(city) || isStateOrCompassState(city)) return empty;
+  } else {
+    city = trimmed.slice(0, comma).trim();
+    const regionRaw = trimmed.slice(comma + 1).trim();
+    if (!city || !regionRaw) return empty;
+    if (!/^[A-Za-z]{2}$/.test(regionRaw) || !isUsStateCode(regionRaw)) {
+      return empty;
+    }
+    region = regionRaw.toUpperCase();
+    if (isStateOrCompassState(city)) return empty;
+  }
+  if (!city || NON_CITY_LABEL_WORD.test(city) || !isUsableCityToken(city)) {
+    return empty;
+  }
+  return { city, region };
 }
 
 export function parseOptionalMoney(raw: string | undefined): number | null {
