@@ -8,6 +8,7 @@ import { ProjectPortalHeader } from "@/components/portal/project-portal-header";
 import { ProjectHomeSummary } from "@/components/portal/project-home-summary";
 import { PortalAdditionalWorkHistory } from "@/components/portal/portal-additional-work-history";
 import { PortalCommunicationsCard } from "@/components/portal/portal-communications-card";
+import { ProjectAftercare } from "@/components/portal/project-aftercare";
 import { ProjectMilestonesList } from "@/components/portal/project-milestones-list";
 import { ProjectProgressBar } from "@/components/portal/project-progress-bar";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -40,6 +41,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatAppointmentWhen, formatDateTime, formatMailingAddress, formatMoney } from "@/lib/format";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
+import { loadPublishedAftercareForProjectToken } from "@/lib/job-aftercare-data";
 import { loadCustomerVisibleMilestonesForProjectToken } from "@/lib/job-milestone-ops";
 import {
   customerFacingJobStatusLabel,
@@ -257,6 +259,10 @@ export default async function CustomerProjectPortalPage({
   }
 
   const customerMilestones = await loadCustomerVisibleMilestonesForProjectToken(
+    prisma,
+    token,
+  );
+  const publishedAftercare = await loadPublishedAftercareForProjectToken(
     prisma,
     token,
   );
@@ -515,6 +521,16 @@ export default async function CustomerProjectPortalPage({
                   <p className="text-sm font-medium">Owner-shared milestones</p>
                   <ProjectMilestonesList
                     milestones={customerMilestones.milestones}
+                    timeZone={timeZone}
+                  />
+                </div>
+              ) : null}
+              {publishedAftercare &&
+              publishedAftercare.jobId === job.id &&
+              publishedAftercare.businessId === job.business.id ? (
+                <div className="space-y-2 pt-2">
+                  <ProjectAftercare
+                    aftercare={publishedAftercare}
                     timeZone={timeZone}
                   />
                 </div>
