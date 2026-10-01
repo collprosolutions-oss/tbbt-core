@@ -183,11 +183,11 @@ export async function buildCustomerRecordsExport(
     access.assertOwned(customer);
   }
 
-  const pageRows = customerId
-    ? sameBusinessCustomers
+  const page = customerId
+    ? { items: sameBusinessCustomers, truncated: false, limit: CUSTOMER_RECORDS_EXPORT_PAGE_SIZE }
     : boundExportRead(sameBusinessCustomers, CUSTOMER_RECORDS_EXPORT_PAGE_SIZE);
-  const customers = customerId ? sameBusinessCustomers : pageRows.items;
-  const truncated = customerId ? false : pageRows.truncated;
+  const customers = page.items;
+  const truncated = page.truncated;
   const packets = await Promise.all(
     customers.map((customer) => buildCustomerPacket(prisma, access, customer)),
   );

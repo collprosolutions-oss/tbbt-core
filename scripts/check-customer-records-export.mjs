@@ -8,10 +8,10 @@
  * Run with:
  *   node --experimental-strip-types scripts/check-customer-records-export.mjs
  */
-import { createRequire, register } from "node:module";
-import { spawnSync } from "node:child_process";
+import { register } from "node:module";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { openDisposableTestDatabase } from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -43,25 +43,12 @@ if (!baseUrl) {
   process.exit(1);
 }
 
-const testDbName = "tbbt_customer_records_export_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-process.env.DATABASE_URL = testUrl;
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for customer-records export test database.");
-  process.exit(push.status ?? 1);
-}
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_customer_records_export",
+  pushSchema: true,
+});
+const prisma = session.prisma;
 
 let failures = 0;
 function check(label, condition) {
@@ -121,6 +108,7 @@ const authSrc = readRepo("src/lib/authorization.ts");
 const schemaSrc = readRepo("prisma/schema.prisma");
 const navSrc = readRepo("src/lib/nav.ts");
 const packageSrc = readRepo("package.json");
+const checkSrc = readRepo("scripts/check-customer-records-export.mjs");
 
 const SECRET_MARKERS = [
   "publicToken",
@@ -190,7 +178,9 @@ check(
   !authSrc.includes("EXPORT_CUSTOMER_RECORDS") &&
     !schemaSrc.includes("CustomerRecordsExport") &&
     !buildSrc.includes("liveSynchronization: true") &&
-    packageSrc.includes("test:customer-records-export"),
+    packageSrc.includes("test:customer-records-export") &&
+    checkSrc.includes("openDisposableTestDatabase") &&
+    checkSrc.includes('namePrefix: "tbbt_customer_records_export"'),
 );
 check(
   "Parser rejects live sync, shared database, non-OWNER authorization, and file bytes",
@@ -741,7 +731,7 @@ try {
   console.error("FAIL - unexpected customer-records export test error");
   console.error(error);
 } finally {
-  await prisma.$disconnect();
+  await session.cleanup();
 }
 
 if (failures > 0) {
