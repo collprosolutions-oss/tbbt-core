@@ -728,17 +728,18 @@ try {
   );
 
   console.log("\nTEST — SMS channel when email is unavailable");
+  const smsCurrent = await prisma.job.findFirst({ where: { id: smsJob.id } });
   const smsPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
     jobId: smsJob.id,
     timeZone: NY,
   });
   const smsSent = await sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
     jobId: smsJob.id,
-    snapshot: scheduleSnapshotFromJob(smsJob),
+    snapshot: scheduleSnapshotFromJob(smsCurrent),
     confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
     timeZone: NY,
     reviewedChannel: "SMS",
-    reviewedProposalId: smsJob.appointmentProposalId ?? 0,
+    reviewedProposalId: smsCurrent.appointmentProposalId ?? 0,
   });
   check(
     "SMS-only consented customer uses the fake messaging provider",
