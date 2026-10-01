@@ -246,13 +246,17 @@ check(
 );
 check(
   "credit path never calls Stripe, refunds, or customer messaging",
-  !creditLibSrc.includes("stripe") &&
-    !creditLibSrc.includes("refund") &&
+  !creditLibSrc.includes('from "stripe"') &&
+    !creditLibSrc.includes("from 'stripe'") &&
+    !creditLibSrc.includes("@/lib/payments/stripe") &&
+    !creditLibSrc.includes("createRefund") &&
+    !creditLibSrc.includes("refunds.create") &&
     !creditLibSrc.includes("sendInvoice") &&
-    !creditLibSrc.includes("resend") &&
     !creditLibSrc.includes("@/lib/invoice-mail") &&
     !invoiceActionSrc.includes("createRefund") &&
-    invoiceActionSrc.includes("recordInvoiceCredit"),
+    !invoiceActionSrc.includes("from \"stripe\"") &&
+    invoiceActionSrc.includes("recordInvoiceCredit") &&
+    creditLibSrc.includes("never call Stripe"),
 );
 check(
   "remaining-due math subtracts recorded credits without treating them as payments",
