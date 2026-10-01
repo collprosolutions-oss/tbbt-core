@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DashboardAppointmentAttentionItems } from "@/components/dashboard/appointment-attention-items";
+import { OwnerTodayAppointmentAttention } from "@/components/today/owner-today-appointment-attention";
 import { OwnerTodayJobCard } from "@/components/today/owner-today-job-card";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { DashboardLaunchCard } from "@/components/launch/dashboard-card";
@@ -42,16 +43,48 @@ import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import { getBusinessPaymentStatus } from "@/lib/payments";
 import {
+  OWNER_TODAY_APPOINTMENT_TAKE,
+  OWNER_TODAY_FIELD_PROBLEM_SELECT,
+  OWNER_TODAY_FIELD_PROBLEM_TAKE,
   OWNER_TODAY_JOB_SELECT,
+  buildOwnerTodayAppointmentAttention,
+  buildOwnerTodayFieldProblemAttention,
   buildOwnerTodayJobs,
+  ownerTodayAppointmentCandidateWhere,
   ownerTodayScheduledWhere,
 } from "@/lib/owner-today";
+import {
+  OWNER_DAILY_ADDITIONAL_WORK_SELECT,
+  OWNER_DAILY_ATTENTION_TAKE,
+  OWNER_DAILY_CALLBACK_SELECT,
+  OWNER_DAILY_CHANGE_ORDER_SELECT,
+  OWNER_DAILY_GROUP_TITLES,
+  OWNER_DAILY_RUNNING_TIME_SELECT,
+  buildOwnerDailyAdditionalWorkAttention,
+  buildOwnerDailyCallbackAttention,
+  buildOwnerDailyChangeOrderAttention,
+  buildOwnerDailyMaterialDepositAttention,
+  buildOwnerDailyRunningTimeAttention,
+  buildOwnerDailyScheduleConflictAttention,
+  ownerDailyUnpaidInvoiceWhere,
+  ownerDailyUnscheduledApprovedWhere,
+} from "@/lib/owner-daily-attention";
 import { completedJobBillingAttention } from "@/lib/revenue-integrity";
 import { explainPaymentsGoLiveFromStatus } from "@/lib/payments/go-live";
 import {
+  depositPaidByEstimateIds,
   listPaymentsGroupedByInvoiceId,
   sumInvoiceRemainingDue,
 } from "@/lib/project-payments";
+import { loadAvailabilitySettings } from "@/lib/availability-data";
+import { addZonedCalendarDays, startOfZonedDay } from "@/lib/business-timezone";
+import {
+  loadCapacityJobs,
+  loadSchedulingPolicy,
+  loadWorkforceMembers,
+} from "@/lib/workforce-data";
+import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
+import { JOB_CALLBACK_OPEN_STATUSES } from "@/lib/job-callback";
 import { listActiveTradeCodes } from "@/lib/business-trades";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 
@@ -119,12 +152,16 @@ export default async function DashboardPage() {
       select: { id: true, status: true, total: true, jobId: true, kind: true },
     }),
     prisma.invoice.count({ where: { ...access.scope, status: "SENT" } }),
-    prisma.job.count({ where: { ...access.scope, status: "UNSCHEDULED" } }),
+    prisma.job.count({
+      where: { ...access.scope, ...ownerDailyUnscheduledApprovedWhere() },
+    }),
     prisma.estimate.count({ where: { ...access.scope, status: "DRAFT" } }),
     prisma.serviceRequest.count({
       where: { ...access.scope, estimates: { none: {} } },
     }),
-    prisma.invoice.count({ where: { ...access.scope, status: { not: "PAID" } } }),
+    prisma.invoice.count({
+      where: { ...access.scope, ...ownerDailyUnpaidInvoiceWhere() },
+    }),
     prisma.job.count({
       where: {
         ...access.scope,
@@ -150,13 +187,13 @@ export default async function DashboardPage() {
       take: ATTENTION_TAKE,
     }),
     prisma.job.findMany({
-      where: { ...access.scope, status: "UNSCHEDULED" },
+      where: { ...access.scope, ...ownerDailyUnscheduledApprovedWhere() },
       select: { id: true, customer: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       take: ATTENTION_TAKE,
     }),
     prisma.invoice.findMany({
-      where: { ...access.scope, status: { not: "PAID" } },
+      where: { ...access.scope, ...ownerDailyUnpaidInvoiceWhere() },
       select: { id: true, status: true, total: true, customer: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       take: ATTENTION_TAKE,
@@ -218,6 +255,140 @@ export default async function DashboardPage() {
       orderBy: { updatedAt: "desc" },
     }),
   ]);
+
+  const conflictRange = {
+    start: todayRange.start,
+    end: addZonedCalendarDays(startOfZonedDay(today, timeZone), 21, timeZone),
+  };
+  const [
+    additionalWorkRows,
+    changeOrderRows,
+    callbackRows,
+    runningTimeRows,
+    approvedDepositEstimates,
+    openFieldProblemReports,
+    firstAwaitingJobs,
+    conflictSettings,
+    conflictPolicy,
+    conflictMembers,
+    conflictJobs,
+  ] = await Promise.all([
+    prisma.additionalWorkRequest.findMany({
+      where: { ...access.scope, status: "OPEN" },
+      select: OWNER_DAILY_ADDITIONAL_WORK_SELECT,
+      orderBy: { createdAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.changeOrder.findMany({
+      where: { ...access.scope, status: { in: ["DRAFT", "SENT"] } },
+      select: OWNER_DAILY_CHANGE_ORDER_SELECT,
+      orderBy: { updatedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.jobCallback.findMany({
+      where: {
+        ...access.scope,
+        status: { in: [...JOB_CALLBACK_OPEN_STATUSES] },
+      },
+      select: OWNER_DAILY_CALLBACK_SELECT,
+      orderBy: { recordedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.timeEntry.findMany({
+      where: {
+        ...access.scope,
+        status: "RUNNING",
+        endedAt: null,
+      },
+      select: OWNER_DAILY_RUNNING_TIME_SELECT,
+      orderBy: { startedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.estimate.findMany({
+      where: { ...access.scope, status: "APPROVED" },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        total: true,
+        customer: { select: { name: true } },
+        lineItems: { select: { type: true, total: true, description: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: OWNER_DAILY_ATTENTION_TAKE,
+    }),
+    prisma.jobProblemReport.findMany({
+      where: { businessId: access.businessId, status: "OPEN" },
+      select: OWNER_TODAY_FIELD_PROBLEM_SELECT,
+      orderBy: { createdAt: "desc" },
+      take: OWNER_TODAY_FIELD_PROBLEM_TAKE,
+    }),
+    prisma.job.findMany({
+      where: {
+        ...access.scope,
+        ...ownerTodayAppointmentCandidateWhere(todayRange.start),
+      },
+      select: OWNER_TODAY_JOB_SELECT,
+      orderBy: { scheduledAt: "asc" },
+      take: OWNER_TODAY_APPOINTMENT_TAKE,
+    }),
+    loadAvailabilitySettings(prisma, access.businessId),
+    loadSchedulingPolicy(prisma, access.businessId),
+    loadWorkforceMembers(prisma, access.businessId),
+    loadCapacityJobs(prisma, access.businessId, conflictRange),
+  ]);
+  const depositPaid = await depositPaidByEstimateIds(
+    prisma,
+    access.businessId,
+    approvedDepositEstimates.map((estimate) => estimate.id),
+  );
+  const additionalWorkAttention = buildOwnerDailyAdditionalWorkAttention(
+    additionalWorkRows,
+    access.businessId,
+  );
+  const changeOrderAttention = buildOwnerDailyChangeOrderAttention(
+    changeOrderRows,
+    access.businessId,
+  );
+  const callbackAttention = buildOwnerDailyCallbackAttention(
+    callbackRows,
+    access.businessId,
+  );
+  const runningTimeAttention = buildOwnerDailyRunningTimeAttention(
+    runningTimeRows,
+    access.businessId,
+    timeZone,
+  );
+  const materialDepositAttention = buildOwnerDailyMaterialDepositAttention(
+    approvedDepositEstimates,
+    depositPaid,
+    access.businessId,
+  );
+  const fieldProblemAttention = buildOwnerTodayFieldProblemAttention(
+    openFieldProblemReports,
+    { businessId: access.businessId, timeZone },
+  );
+  const firstAwaitingAttention = buildOwnerTodayAppointmentAttention(
+    firstAwaitingJobs,
+    { businessId: access.businessId, start: todayRange.start, timeZone },
+  ).filter((item) => item.kind === "AWAITING_CUSTOMER");
+  const recordedConflicts = detectScheduleConflicts({
+    jobs: conflictJobs,
+    settings: conflictSettings,
+    policy: conflictPolicy,
+    members: conflictMembers,
+    timeZone,
+  });
+  const scheduleConflictAttention = buildOwnerDailyScheduleConflictAttention(
+    recordedConflicts,
+    new Map(
+      conflictJobs.map((job) => [
+        job.id,
+        { id: job.id, businessId: access.businessId, customerName: job.customerName },
+      ]),
+    ),
+    access.businessId,
+  );
 
   const outstandingPayments = await listPaymentsGroupedByInvoiceId(
     prisma,
@@ -347,6 +518,47 @@ export default async function DashboardPage() {
         action: "Open",
       })),
     },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.additionalWork,
+      count: additionalWorkAttention.length,
+      items: additionalWorkAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.changeOrders,
+      count: changeOrderAttention.length,
+      items: changeOrderAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.callbacks,
+      count: callbackAttention.length,
+      items: callbackAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.runningTime,
+      count: runningTimeAttention.length,
+      items: runningTimeAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.materialDeposits,
+      count: materialDepositAttention.length,
+      items: materialDepositAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.scheduleConflicts,
+      count: scheduleConflictAttention.length,
+      items: scheduleConflictAttention,
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.fieldProblems,
+      count: fieldProblemAttention.length,
+      items: fieldProblemAttention.map((item) => ({
+        key: item.reportId,
+        name: item.customerName,
+        meta: item.description,
+        href: item.href,
+        action: "Open",
+      })),
+    },
   ].filter((group) => group.count > 0);
 
   const recentGroups: AttentionGroupData[] = [
@@ -393,6 +605,7 @@ export default async function DashboardPage() {
 
   const attentionTotal =
     appointmentAttention.length +
+    firstAwaitingAttention.length +
     attentionGroups.reduce((sum, group) => sum + group.count, 0);
 
   return (
@@ -511,6 +724,7 @@ export default async function DashboardPage() {
             ) : (
               <div className="space-y-5">
                 <DashboardAppointmentAttentionItems items={appointmentAttention} />
+                <OwnerTodayAppointmentAttention items={firstAwaitingAttention} />
                 {attentionGroups.length > 0 ? (
                   <div className="grid gap-5 sm:grid-cols-2">
                     {attentionGroups.map((group) => (
