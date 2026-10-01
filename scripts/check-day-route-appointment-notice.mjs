@@ -95,9 +95,11 @@ const {
   DAY_ROUTE_APPOINTMENT_NOTICE_FORM_NOTE,
   DAY_ROUTE_APPOINTMENT_NOTICE_OWNER_ONLY_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE,
   DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE,
   buildDayRouteAppointmentNoticeBody,
+  buildDayRouteAppointmentNoticeSubject,
   describeRecordedAppointmentWindow,
 } = await import("@/lib/owner-day-route-appointment-notice");
 const {
@@ -183,13 +185,18 @@ const appShellSrc = read("src/components/app-shell.tsx");
 const packageSrc = read("package.json");
 
 const NY = "America/New_York";
+const HONOLULU = "Pacific/Honolulu";
 const dayIso = "2026-09-28";
 const morning = new Date("2026-09-28T13:00:00.000Z"); // 9:00 AM ET
 const laterStart = parseScheduleStart(dayIso, "16:00", NY);
 
 const sentEmails = [];
 let failEmailNext = false;
+let emailDelayMs = 0;
 setCommunicationEmailSender(async (input) => {
+  if (emailDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, emailDelayMs));
+  }
   if (failEmailNext) {
     failEmailNext = false;
     return { error: "The email provider failed." };
@@ -198,7 +205,44 @@ setCommunicationEmailSender(async (input) => {
   return { id: `fake-email:${input.idempotencyKey}` };
 });
 const fakeSms = createFakeCustomerMessagingProvider();
+let smsDelayMs = 0;
+const originalSmsSend = fakeSms.send.bind(fakeSms);
+fakeSms.send = async (input) => {
+  if (smsDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, smsDelayMs));
+  }
+  return originalSmsSend(input);
+};
 setCustomerMessagingProvider(fakeSms);
+
+function reviewFromPreview(preview) {
+  return {
+    ...preview.snapshot,
+    customerId: preview.customerId,
+    destinationFingerprint: preview.destinationFingerprint,
+  };
+}
+
+function noticeSendInput(preview, overrides = {}) {
+  return {
+    jobId: preview.jobId,
+    snapshot: reviewFromPreview(preview),
+    confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
+    timeZone: HONOLULU,
+    reviewedChannel: preview.channel,
+    reviewedProposalId: preview.proposalId,
+    reviewedCustomerId: preview.customerId,
+    reviewedDestinationFingerprint: preview.destinationFingerprint,
+    ...overrides,
+  };
+}
+
+async function markRecordedChange(jobId) {
+  return prisma.job.update({
+    where: { id: jobId },
+    data: { appointmentProposalId: { increment: 1 } },
+  });
+}
 
 console.log("\nSTATIC — separate review-and-send, no load/reschedule send, no overclaim");
 check(
@@ -262,6 +306,28 @@ check(
 check(
   "Hidden confirm field is only on the review form, not the change form",
   formSrc.includes('name="confirmSend"') && !changeFormSrc.includes("confirmSend"),
+);
+check(
+  "Review form binds the reviewed customer and destination, and send ignores client timezone",
+  formSrc.includes('name="customerId"') &&
+    formSrc.includes('name="destinationFingerprint"') &&
+    formSrc.includes("serializeDayRouteAppointmentNoticeReviewSnapshot") &&
+    actionSrc.includes("reviewedCustomerId") &&
+    actionSrc.includes("reviewedDestinationFingerprint") &&
+    opsSrc.includes("claimDayRouteAppointmentNotice") &&
+    opsSrc.includes('const NOTICE_CLAIM_STATUS = "READY"') &&
+    opsSrc.includes("assertReviewedRecipient") &&
+    !opsSrc.includes("input.timeZone?.trim()") &&
+    opsSrc.includes("resolveBusinessTimeZone(access.workspace.business)"),
+);
+check(
+  "Subject is a recorded update and strips CR/LF from the business name",
+  buildDayRouteAppointmentNoticeSubject("Alpha\r\nNotice") ===
+    "Your appointment with Alpha Notice was updated" &&
+    !/[\r\n]/.test(buildDayRouteAppointmentNoticeSubject("Alpha\r\nNotice")) &&
+    !noticeSrc.includes("has been rescheduled") &&
+    noticeSrc.includes("recordedDayRouteAppointmentNoticeEligible") &&
+    noticeSrc.includes('job.status === "CANCELLED"'),
 );
 
 try {
@@ -464,6 +530,95 @@ try {
       projectToken: randomUUID(),
     },
   });
+  const recipientCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Reviewed Recipient",
+      email: "reviewed@example.com",
+      phone: "5554445555",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const swapCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Swap Recipient",
+      email: "swap@example.com",
+      phone: "5556667777",
+      smsConsentStatus: "GRANTED",
+    },
+  });
+  const recipientProperty = await prisma.property.create({
+    data: {
+      businessId: businessA.id,
+      customerId: recipientCustomer.id,
+      addressLine1: "40 Review St",
+      city: "Austin",
+      region: "TX",
+      postalCode: "78704",
+    },
+  });
+  const recipientJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: recipientCustomer.id,
+      propertyId: recipientProperty.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-28T14:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const cancelledJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "CANCELLED",
+      scheduledAt: new Date("2026-09-28T16:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 2,
+      projectToken: randomUUID(),
+    },
+  });
+  const concurrentEmailJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-28T17:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const concurrentSmsJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerSms.id,
+      propertyId: propertySms.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-28T19:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      projectToken: randomUUID(),
+    },
+  });
+  const staleCasesJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      status: "SCHEDULED",
+      scheduledAt: new Date("2026-09-28T12:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      arrivalWindowMinutes: 60,
+      projectToken: randomUUID(),
+    },
+  });
 
   console.log("\nTEST — page load, preview, and reschedule never send");
   sentEmails.length = 0;
@@ -483,24 +638,33 @@ try {
     timeZone: NY,
   });
   check(
-    "Load and preview do not send through the fake provider",
+    "Load and preview do not send, and a never-changed job has no notice card",
     sentEmails.length === 0 &&
       fakeSms.sent.length === 0 &&
       loaded.mutationsOnLoad === false &&
-      Boolean(noticesBefore[emailJob.id]) &&
-      previewBefore?.offerSend === true &&
-      previewBefore.channel === "EMAIL" &&
-      previewBefore.recipientLabel === "ada@example.com",
+      !noticesBefore[emailJob.id] &&
+      previewBefore == null,
   );
-  check(
-    "Preview shows the recorded window, not an invented arrival",
-    previewBefore?.appointmentWindowLabel ===
-      describeRecordedAppointmentWindow(
-        { scheduledAt: morning, scheduledDurationMinutes: 60 },
-        NY,
-      ) &&
-      /Sep 28, 2026/.test(previewBefore.appointmentWindowLabel) &&
-      !/ETA|optimized/i.test(previewBefore.appointmentWindowLabel),
+  await expectThrow(
+    "Never-changed job send is refused even with a destination binding",
+    () =>
+      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+        jobId: emailJob.id,
+        snapshot: {
+          ...scheduleSnapshotFromJob(emailJob),
+          customerId: customerA.id,
+          destinationFingerprint: "not-a-real-destination",
+        },
+        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
+        timeZone: HONOLULU,
+        reviewedChannel: "EMAIL",
+        reviewedProposalId: 0,
+        reviewedCustomerId: customerA.id,
+        reviewedDestinationFingerprint: "not-a-real-destination",
+      }),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE,
   );
 
   const changed = await changeOwnerDayRouteAppointment(prisma, ownerAccess, {
@@ -524,8 +688,11 @@ try {
   check(
     "After a recorded change the review card shows the new window and recipient",
     afterChange?.appointmentNotificationStatus == null &&
+      afterChange.appointmentProposalId > 0 &&
       previewAfterChange?.offerSend === true &&
       previewAfterChange.channel === "EMAIL" &&
+      previewAfterChange.customerId === customerA.id &&
+      Boolean(previewAfterChange.destinationFingerprint) &&
       previewAfterChange.appointmentWindowLabel ===
         describeRecordedAppointmentWindow(
           {
@@ -534,21 +701,15 @@ try {
             arrivalWindowMinutes: afterChange.arrivalWindowMinutes,
           },
           NY,
-        ),
+        ) &&
+      /Sep 28, 2026/.test(previewAfterChange.appointmentWindowLabel) &&
+      !/ETA|optimized/i.test(previewAfterChange.appointmentWindowLabel),
   );
 
   console.log("\nTEST — auth, foreign job, unavailable channel, unconfirmed");
   await expectThrow(
     "ADMIN cannot send a day-route appointment notice",
-    () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, adminAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterChange),
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterChange.appointmentProposalId,
-      }),
+    () => sendOwnerDayRouteAppointmentNotice(prisma, adminAccess, noticeSendInput(previewAfterChange)),
     (error) =>
       error instanceof ForbiddenError &&
       dayRouteAppointmentNoticeErrorMessage(error, "") ===
@@ -556,15 +717,7 @@ try {
   );
   await expectThrow(
     "MEMBER cannot send a day-route appointment notice",
-    () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, memberAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterChange),
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterChange.appointmentProposalId,
-      }),
+    () => sendOwnerDayRouteAppointmentNotice(prisma, memberAccess, noticeSendInput(previewAfterChange)),
     (error) =>
       error instanceof ForbiddenError &&
       dayRouteAppointmentNoticeErrorMessage(error, "") ===
@@ -572,15 +725,7 @@ try {
   );
   await expectThrow(
     "Foreign-tenant OWNER cannot notify another business job",
-    () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, ownerBAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterChange),
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterChange.appointmentProposalId,
-      }),
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerBAccess, noticeSendInput(previewAfterChange)),
     (error) =>
       /authorized business|could not be notified|not in the authorized/i.test(
         dayRouteAppointmentNoticeErrorMessage(error, ""),
@@ -591,18 +736,21 @@ try {
   await expectThrow(
     "Send without explicit confirmation is refused and does not send",
     () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterChange),
-        confirmSend: "",
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterChange.appointmentProposalId,
-      }),
+      sendOwnerDayRouteAppointmentNotice(
+        prisma,
+        ownerAccess,
+        noticeSendInput(previewAfterChange, { confirmSend: "" }),
+      ),
     (error) =>
       dayRouteAppointmentNoticeErrorMessage(error, "") ===
       DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE,
   );
+  const neverChangedBlocked = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: blockedJob.id,
+    timeZone: NY,
+  });
+  await markRecordedChange(blockedJob.id);
+  const blockedCurrent = await prisma.job.findFirst({ where: { id: blockedJob.id } });
   const blockedPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
     jobId: blockedJob.id,
     timeZone: NY,
@@ -612,36 +760,41 @@ try {
     () =>
       sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
         jobId: blockedJob.id,
-        snapshot: scheduleSnapshotFromJob(blockedJob),
+        snapshot: {
+          ...scheduleSnapshotFromJob(blockedCurrent),
+          customerId: customerNoChannel.id,
+          destinationFingerprint: "unavailable-channel",
+        },
         confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
+        timeZone: HONOLULU,
         reviewedChannel: blockedPreview?.channel,
-        reviewedProposalId: 0,
+        reviewedProposalId: blockedCurrent.appointmentProposalId,
+        reviewedCustomerId: customerNoChannel.id,
+        reviewedDestinationFingerprint: "unavailable-channel",
       }),
-    (error) =>
-      dayRouteAppointmentNoticeErrorMessage(error, "") ===
-        blockedPreview?.unavailableReason ||
-      dayRouteAppointmentNoticeErrorMessage(error, "") ===
-        DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE,
+    (error) => {
+      const message = dayRouteAppointmentNoticeErrorMessage(error, "");
+      return (
+        message === blockedPreview?.unavailableReason ||
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_UNAVAILABLE_MESSAGE ||
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE
+      );
+    },
   );
   check(
     "Auth, foreign, unconfirmed, and unavailable paths did not send",
-    sentEmails.length === 0 && fakeSms.sent.length === 0 && blockedPreview?.offerSend === false,
+    sentEmails.length === 0 &&
+      fakeSms.sent.length === 0 &&
+      neverChangedBlocked == null &&
+      blockedPreview?.offerSend === false &&
+      Boolean(blockedPreview?.unavailableReason),
   );
 
   console.log("\nTEST — retry after provider failure, then refuse duplicate");
   failEmailNext = true;
   await expectThrow(
     "Provider failure is returned and does not mark the notice sent",
-    () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterChange),
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterChange.appointmentProposalId,
-      }),
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(previewAfterChange)),
     (error) => /could not be sent|provider failed|not sent/i.test(error.message),
   );
   const afterFail = await prisma.job.findFirst({ where: { id: emailJob.id } });
@@ -652,24 +805,43 @@ try {
       afterFail.appointmentNotifiedForProposalId === afterChange.appointmentProposalId,
   );
 
-  const sent = await sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-    jobId: emailJob.id,
-    snapshot: scheduleSnapshotFromJob(afterChange),
-    confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-    timeZone: NY,
-    reviewedChannel: "EMAIL",
-    reviewedProposalId: afterChange.appointmentProposalId,
-  });
+  const sent = await sendOwnerDayRouteAppointmentNotice(
+    prisma,
+    ownerAccess,
+    noticeSendInput(previewAfterChange),
+  );
   const afterSent = await prisma.job.findFirst({ where: { id: emailJob.id } });
   const comms = await prisma.customerCommunication.findMany({
     where: { businessId: businessA.id, relatedId: emailJob.id },
   });
+  const nyWindow = describeRecordedAppointmentWindow(
+    {
+      scheduledAt: afterChange.scheduledAt,
+      scheduledDurationMinutes: afterChange.scheduledDurationMinutes,
+      arrivalWindowMinutes: afterChange.arrivalWindowMinutes,
+    },
+    NY,
+  );
+  const honoluluWindow = describeRecordedAppointmentWindow(
+    {
+      scheduledAt: afterChange.scheduledAt,
+      scheduledDurationMinutes: afterChange.scheduledDurationMinutes,
+      arrivalWindowMinutes: afterChange.arrivalWindowMinutes,
+    },
+    HONOLULU,
+  );
   check(
-    "Confirmed OWNER send uses the fake email provider and recorded window",
+    "Confirmed OWNER send uses the fake email provider, business timezone, and recorded window",
     sent.channel === "EMAIL" &&
       sentEmails.length === 1 &&
       sentEmails[0].to === "ada@example.com" &&
+      sentEmails[0].subject === "Your appointment with Alpha Notice was updated" &&
+      !/[\r\n]/.test(sentEmails[0].subject) &&
+      sent.appointmentWindowLabel === nyWindow &&
+      sentEmails[0].text.includes(nyWindow) &&
       sentEmails[0].text.includes(sent.appointmentWindowLabel) &&
+      honoluluWindow !== nyWindow &&
+      !sentEmails[0].text.includes(honoluluWindow) &&
       !/optimized route|automatic ETA/i.test(sentEmails[0].text) &&
       afterSent?.appointmentNotificationStatus === "SENT" &&
       comms.some((row) => row.status === "SENT" && row.purpose === "SCHEDULE_CHANGE"),
@@ -678,14 +850,14 @@ try {
   await expectThrow(
     "Duplicate notice for the same recorded change is refused",
     () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-        jobId: emailJob.id,
-        snapshot: scheduleSnapshotFromJob(afterSent),
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterSent.appointmentProposalId,
-      }),
+      sendOwnerDayRouteAppointmentNotice(
+        prisma,
+        ownerAccess,
+        noticeSendInput({
+          ...previewAfterChange,
+          snapshot: scheduleSnapshotFromJob(afterSent),
+        }),
+      ),
     (error) =>
       dayRouteAppointmentNoticeErrorMessage(error, "") ===
       DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
@@ -709,14 +881,18 @@ try {
   await expectThrow(
     "Stale review snapshot is refused after the appointment changes again",
     () =>
-      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-        jobId: emailJob.id,
-        snapshot: staleSnapshot,
-        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-        timeZone: NY,
-        reviewedChannel: "EMAIL",
-        reviewedProposalId: afterSent.appointmentProposalId,
-      }),
+      sendOwnerDayRouteAppointmentNotice(
+        prisma,
+        ownerAccess,
+        noticeSendInput(previewAfterChange, {
+          snapshot: {
+            ...staleSnapshot,
+            customerId: previewAfterChange.customerId,
+            destinationFingerprint: previewAfterChange.destinationFingerprint,
+          },
+          reviewedProposalId: afterSent.appointmentProposalId,
+        }),
+      ),
     (error) =>
       dayRouteAppointmentNoticeErrorMessage(error, "") ===
       DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
@@ -728,19 +904,16 @@ try {
   );
 
   console.log("\nTEST — SMS channel when email is unavailable");
-  const smsCurrent = await prisma.job.findFirst({ where: { id: smsJob.id } });
+  await markRecordedChange(smsJob.id);
   const smsPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
     jobId: smsJob.id,
     timeZone: NY,
   });
-  const smsSent = await sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
-    jobId: smsJob.id,
-    snapshot: scheduleSnapshotFromJob(smsCurrent),
-    confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
-    timeZone: NY,
-    reviewedChannel: "SMS",
-    reviewedProposalId: smsCurrent.appointmentProposalId ?? 0,
-  });
+  const smsSent = await sendOwnerDayRouteAppointmentNotice(
+    prisma,
+    ownerAccess,
+    noticeSendInput(smsPreview),
+  );
   check(
     "SMS-only consented customer uses the fake messaging provider",
     smsPreview?.channel === "SMS" &&
@@ -761,6 +934,194 @@ try {
     timeZone: NY,
   });
   check("OWNER load does not attach a foreign job notice", !foreignPreview[foreignJob.id]);
+
+  console.log("\nTEST — cancelled and never-changed jobs have no card");
+  const cancelledPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: cancelledJob.id,
+    timeZone: NY,
+  });
+  const cancelledNotices = await loadOwnerDayRouteAppointmentNotices(prisma, ownerAccess, {
+    jobIds: [cancelledJob.id, emailJob.id],
+    timeZone: NY,
+  });
+  await expectThrow(
+    "CANCELLED job send is refused",
+    () =>
+      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+        jobId: cancelledJob.id,
+        snapshot: {
+          ...scheduleSnapshotFromJob(cancelledJob),
+          customerId: customerA.id,
+          destinationFingerprint: previewAfterChange.destinationFingerprint,
+        },
+        confirmSend: DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
+        timeZone: HONOLULU,
+        reviewedChannel: "EMAIL",
+        reviewedProposalId: 2,
+        reviewedCustomerId: customerA.id,
+        reviewedDestinationFingerprint: previewAfterChange.destinationFingerprint,
+      }),
+    (error) => {
+      const message = dayRouteAppointmentNoticeErrorMessage(error, "");
+      return (
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE ||
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE
+      );
+    },
+  );
+  check(
+    "Never-changed and CANCELLED jobs show no review card",
+    cancelledPreview == null &&
+      !cancelledNotices[cancelledJob.id] &&
+      sentEmails.length === 1 &&
+      fakeSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — reviewed recipient must still be the recipient used");
+  const recipientPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: recipientJob.id,
+    timeZone: NY,
+  });
+  await prisma.customer.update({
+    where: { id: recipientCustomer.id },
+    data: { email: "changed-after-review@example.com" },
+  });
+  await expectThrow(
+    "Changed email after review is refused",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(recipientPreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  );
+  await prisma.customer.update({
+    where: { id: recipientCustomer.id },
+    data: { email: "reviewed@example.com" },
+  });
+  await prisma.job.update({
+    where: { id: recipientJob.id },
+    data: { customerId: swapCustomer.id },
+  });
+  await expectThrow(
+    "Swapped customer after review is refused",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(recipientPreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  );
+  check(
+    "Recipient tampering did not send a notice",
+    sentEmails.length === 1 && fakeSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — status, assignment, and non-material stale snapshots");
+  const stalePreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: staleCasesJob.id,
+    timeZone: NY,
+  });
+  await prisma.job.update({
+    where: { id: staleCasesJob.id },
+    data: { status: "IN_PROGRESS" },
+  });
+  await expectThrow(
+    "Status change after review is refused",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(stalePreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  );
+  await prisma.job.update({
+    where: { id: staleCasesJob.id },
+    data: { status: "SCHEDULED", assignedMembershipId: ownerMembership.id },
+  });
+  await expectThrow(
+    "Assignment change after review is refused",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(stalePreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  );
+  await prisma.job.update({
+    where: { id: staleCasesJob.id },
+    data: { assignedMembershipId: null, arrivalWindowMinutes: 90 },
+  });
+  await expectThrow(
+    "Non-material arrival-window change after review is refused",
+    () => sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(stalePreview)),
+    (error) =>
+      dayRouteAppointmentNoticeErrorMessage(error, "") ===
+      DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE,
+  );
+  check(
+    "Stale status, assignment, and window edits did not send",
+    sentEmails.length === 1 && fakeSms.sent.length === 1,
+  );
+
+  console.log("\nTEST — concurrent sends claim once for email and SMS");
+  const concurrentEmailPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: concurrentEmailJob.id,
+    timeZone: NY,
+  });
+  const emailBefore = sentEmails.length;
+  emailDelayMs = 40;
+  const concurrentEmailResults = await Promise.allSettled(
+    Array.from({ length: 4 }, () =>
+      sendOwnerDayRouteAppointmentNotice(
+        prisma,
+        ownerAccess,
+        noticeSendInput(concurrentEmailPreview),
+      ),
+    ),
+  );
+  emailDelayMs = 0;
+  const emailFulfilled = concurrentEmailResults.filter((row) => row.status === "fulfilled");
+  const emailRejected = concurrentEmailResults.filter((row) => row.status === "rejected");
+  const concurrentEmailComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: concurrentEmailJob.id },
+  });
+  check(
+    "Four concurrent email sends make exactly one provider call",
+    emailFulfilled.length === 1 &&
+      emailRejected.length === 3 &&
+      emailRejected.every(
+        (row) =>
+          dayRouteAppointmentNoticeErrorMessage(row.reason, "") ===
+          DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
+      ) &&
+      sentEmails.length === emailBefore + 1 &&
+      concurrentEmailComms.filter((row) => row.status === "SENT").length === 1,
+  );
+
+  const concurrentSmsPreview = await previewOwnerDayRouteAppointmentNotice(prisma, ownerAccess, {
+    jobId: concurrentSmsJob.id,
+    timeZone: NY,
+  });
+  const smsBefore = fakeSms.sent.length;
+  smsDelayMs = 40;
+  const concurrentSmsResults = await Promise.allSettled(
+    Array.from({ length: 4 }, () =>
+      sendOwnerDayRouteAppointmentNotice(prisma, ownerAccess, noticeSendInput(concurrentSmsPreview)),
+    ),
+  );
+  smsDelayMs = 0;
+  const smsFulfilled = concurrentSmsResults.filter((row) => row.status === "fulfilled");
+  const smsRejected = concurrentSmsResults.filter((row) => row.status === "rejected");
+  const concurrentSmsComms = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, relatedId: concurrentSmsJob.id },
+  });
+  check(
+    "Four concurrent SMS sends make exactly one provider call",
+    smsFulfilled.length === 1 &&
+      smsRejected.length === 3 &&
+      smsRejected.every(
+        (row) =>
+          dayRouteAppointmentNoticeErrorMessage(row.reason, "") ===
+          DAY_ROUTE_APPOINTMENT_NOTICE_DUPLICATE_MESSAGE,
+      ) &&
+      fakeSms.sent.length === smsBefore + 1 &&
+      concurrentSmsComms.filter((row) =>
+        ["SENT", "ACCEPTED", "QUEUED", "DELIVERED"].includes(row.status),
+      ).length === 1,
+  );
 
   if (failed > 0) {
     console.error(`\n${failed} day-route appointment notice check(s) failed; ${passed} passed.`);

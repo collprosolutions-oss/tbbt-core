@@ -12,9 +12,9 @@ import {
   DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
   DAY_ROUTE_APPOINTMENT_NOTICE_FORM_NOTE,
   DAY_ROUTE_APPOINTMENT_NOTICE_SUBMIT_LABEL,
+  serializeDayRouteAppointmentNoticeReviewSnapshot,
   type OwnerDayRouteAppointmentNoticePreview,
 } from "@/lib/owner-day-route-appointment-notice";
-import { serializeOwnerDayRouteScheduleSnapshot } from "@/lib/owner-day-route/snapshot";
 
 const initialState: OwnerDayRouteAppointmentNoticeActionState = {};
 
@@ -43,11 +43,25 @@ export function OwnerDayRouteAppointmentNoticeForm({
       <input
         type="hidden"
         name="scheduleSnapshot"
-        value={serializeOwnerDayRouteScheduleSnapshot(notice.snapshot)}
+        value={
+          notice.customerId && notice.destinationFingerprint
+            ? serializeDayRouteAppointmentNoticeReviewSnapshot({
+                ...notice.snapshot,
+                customerId: notice.customerId,
+                destinationFingerprint: notice.destinationFingerprint,
+              })
+            : ""
+        }
       />
       <input type="hidden" name="timeZone" value={timeZone} />
       <input type="hidden" name="channel" value={notice.channel ?? ""} />
       <input type="hidden" name="proposalId" value={String(notice.proposalId)} />
+      <input type="hidden" name="customerId" value={notice.customerId ?? ""} />
+      <input
+        type="hidden"
+        name="destinationFingerprint"
+        value={notice.destinationFingerprint ?? ""}
+      />
       <input
         type="hidden"
         name="confirmSend"

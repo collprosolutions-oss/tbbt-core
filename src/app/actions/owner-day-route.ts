@@ -102,6 +102,8 @@ export async function sendOwnerDayRouteAppointmentNoticeAction(
       timeZone: readString(formData, "timeZone"),
       reviewedChannel: readString(formData, "channel"),
       reviewedProposalId: readString(formData, "proposalId"),
+      reviewedCustomerId: readString(formData, "customerId"),
+      reviewedDestinationFingerprint: readString(formData, "destinationFingerprint"),
     });
     revalidateDayRouteSurfaces(sent.jobId);
     return { ok: true, message: DAY_ROUTE_APPOINTMENT_NOTICE_SENT_MESSAGE };

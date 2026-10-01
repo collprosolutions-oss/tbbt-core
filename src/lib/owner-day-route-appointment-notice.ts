@@ -39,6 +39,9 @@ export const DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE =
 export const DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE =
   "That appointment notice could not be sent.";
 
+export const DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE =
+  "Send an appointment notice only after a recorded day-route appointment change.";
+
 export const DAY_ROUTE_APPOINTMENT_NOTICE_SENT_MESSAGE =
   "Appointment notice sent for the recorded window. This is not a live travel arrival.";
 
@@ -57,6 +60,8 @@ export type DayRouteAppointmentNoticeChannel = Extract<
 export type OwnerDayRouteAppointmentNoticePreview = {
   jobId: string;
   proposalId: number;
+  customerId: string | null;
+  destinationFingerprint: string | null;
   appointmentWindowLabel: string;
   channel: DayRouteAppointmentNoticeChannel | null;
   channelLabel: string;
@@ -66,6 +71,11 @@ export type OwnerDayRouteAppointmentNoticePreview = {
   offerSend: boolean;
   unavailableReason: string | null;
   snapshot: OwnerDayRouteScheduleSnapshot;
+};
+
+export type DayRouteAppointmentNoticeReviewSnapshot = OwnerDayRouteScheduleSnapshot & {
+  customerId: string;
+  destinationFingerprint: string;
 };
 
 export type DayRouteAppointmentNoticeCustomer = {
@@ -100,6 +110,91 @@ export function parseDayRouteAppointmentNoticeSnapshot(
   const snapshot = parseOwnerDayRouteScheduleSnapshot(raw);
   if (!snapshot || snapshot.jobId !== jobId) return null;
   return snapshot;
+}
+
+function readReviewBindingField(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+export function parseDayRouteAppointmentNoticeReviewSnapshot(
+  raw: string,
+  jobId: string,
+): DayRouteAppointmentNoticeReviewSnapshot | null {
+  const snapshot = parseDayRouteAppointmentNoticeSnapshot(raw, jobId);
+  if (!snapshot) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const customerId = readReviewBindingField(value.customerId);
+    const destinationFingerprint = readReviewBindingField(value.destinationFingerprint);
+    if (!customerId || !destinationFingerprint) return null;
+    return {
+      ...snapshot,
+      customerId,
+      destinationFingerprint,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function serializeDayRouteAppointmentNoticeReviewSnapshot(
+  snapshot: DayRouteAppointmentNoticeReviewSnapshot,
+) {
+  return JSON.stringify({
+    jobId: snapshot.jobId,
+    scheduledAt: snapshot.scheduledAt,
+    status: snapshot.status,
+    pickupDurationMinutes: snapshot.pickupDurationMinutes,
+    arrivalWindowMinutes: snapshot.arrivalWindowMinutes,
+    assignedMembershipId: snapshot.assignedMembershipId,
+    customerId: snapshot.customerId,
+    destinationFingerprint: snapshot.destinationFingerprint,
+  });
+}
+
+export function scheduleFieldsFromNoticeReview(
+  snapshot: DayRouteAppointmentNoticeReviewSnapshot,
+): OwnerDayRouteScheduleSnapshot {
+  return {
+    jobId: snapshot.jobId,
+    scheduledAt: snapshot.scheduledAt,
+    status: snapshot.status,
+    pickupDurationMinutes: snapshot.pickupDurationMinutes,
+    arrivalWindowMinutes: snapshot.arrivalWindowMinutes,
+    assignedMembershipId: snapshot.assignedMembershipId,
+  };
+}
+
+export function recordedDayRouteAppointmentNoticeEligible(job: {
+  status: string;
+  scheduledAt: Date | null;
+  appointmentProposalId?: number | null;
+  appointmentNotificationStatus?: string | null;
+  appointmentNotifiedForProposalId?: number | null;
+}) {
+  if (job.status === "COMPLETED" || job.status === "CANCELLED") return false;
+  if (!job.scheduledAt) return false;
+  const proposalId = job.appointmentProposalId ?? 0;
+  if (proposalId <= 0) return false;
+  return customerNotificationNeeded({
+    scheduledAt: job.scheduledAt,
+    appointmentProposalId: proposalId,
+    appointmentNotificationStatus: job.appointmentNotificationStatus ?? null,
+    appointmentNotifiedForProposalId: job.appointmentNotifiedForProposalId ?? null,
+  });
+}
+
+export function dayRouteAppointmentNoticeDestinationFingerprint(
+  eligibility: ChannelEligibility | null,
+) {
+  const fingerprint = eligibility?.fingerprint?.trim() ?? "";
+  return fingerprint || null;
+}
+
+export function sanitizeDayRouteAppointmentNoticeBusinessName(businessName: string) {
+  return businessName.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "Your contractor";
 }
 
 export function dayRouteAppointmentNoticeIdempotencyKey(
@@ -221,18 +316,7 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
   emailConfigured: boolean;
 }): OwnerDayRouteAppointmentNoticePreview | null {
   if (input.job.businessId !== input.businessId) return null;
-  if (input.job.status === "COMPLETED") return null;
-  if (!input.job.scheduledAt) return null;
-  if (
-    !customerNotificationNeeded({
-      scheduledAt: input.job.scheduledAt,
-      appointmentProposalId: input.job.appointmentProposalId ?? 0,
-      appointmentNotificationStatus: input.job.appointmentNotificationStatus ?? null,
-      appointmentNotifiedForProposalId: input.job.appointmentNotifiedForProposalId ?? null,
-    })
-  ) {
-    return null;
-  }
+  if (!recordedDayRouteAppointmentNoticeEligible(input.job)) return null;
 
   const resolved = resolveDayRouteAppointmentNoticeChannel({
     businessId: input.businessId,
@@ -247,6 +331,10 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
   const windowLabel =
     describeRecordedAppointmentWindow(input.job, input.timeZone) ?? "Recorded appointment";
   const channel = resolved.channel;
+  const destinationFingerprint = dayRouteAppointmentNoticeDestinationFingerprint(
+    resolved.eligibility,
+  );
+  const customerId = input.job.customer?.id ?? input.job.customerId ?? null;
   const recipientLabel =
     channel && resolved.eligibility
       ? dayRouteAppointmentNoticeRecipientLabel(
@@ -259,13 +347,15 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
   return {
     jobId: input.job.id,
     proposalId: input.job.appointmentProposalId ?? 0,
+    customerId,
+    destinationFingerprint,
     appointmentWindowLabel: windowLabel,
     channel,
     channelLabel: dayRouteAppointmentNoticeChannelLabel(channel),
     recipientLabel,
     available: resolved.available,
     alreadySent: false,
-    offerSend: resolved.available && Boolean(input.job.customer?.id),
+    offerSend: resolved.available && Boolean(customerId) && Boolean(destinationFingerprint),
     unavailableReason: resolved.available ? null : resolved.unavailableReason,
     snapshot: input.snapshot,
   };
@@ -276,7 +366,7 @@ export function buildDayRouteAppointmentNoticeBody(input: {
   appointmentWindowLabel: string;
   projectUrl?: string | null;
 }) {
-  const business = input.businessName.trim() || "Your contractor";
+  const business = sanitizeDayRouteAppointmentNoticeBusinessName(input.businessName);
   const lines = [
     `${business} updated your appointment.`,
     "",
@@ -291,6 +381,6 @@ export function buildDayRouteAppointmentNoticeBody(input: {
 }
 
 export function buildDayRouteAppointmentNoticeSubject(businessName: string) {
-  const business = businessName.trim() || "Your contractor";
-  return `Your appointment with ${business} has been rescheduled`;
+  const business = sanitizeDayRouteAppointmentNoticeBusinessName(businessName);
+  return `Your appointment with ${business} was updated`;
 }
