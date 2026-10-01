@@ -655,6 +655,7 @@ export async function startJob(
   if (!result.nextStatus) {
     return {};
   }
+  const nextStatus = result.nextStatus;
 
   await jobWriteTestHooks.afterStartJobRead?.(job.id);
 
@@ -666,7 +667,7 @@ export async function startJob(
         status: job.status,
       },
       data: {
-        status: result.nextStatus,
+        status: nextStatus,
         ...extra,
       },
     });
