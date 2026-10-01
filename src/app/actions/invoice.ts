@@ -13,9 +13,17 @@ import {
   recordOwnerInvoiceBalancePayment,
 } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
+import {
+  RECURRING_OCCURRENCE_INVOICE_CREATED_MESSAGE,
+  RECURRING_OCCURRENCE_INVOICE_REUSED_MESSAGE,
+  createOwnedDraftInvoiceFromCompletedRecurringOccurrence,
+  recurringOccurrenceInvoiceErrorMessage,
+} from "@/lib/recurring-occurrence-invoice";
 
 export type InvoiceActionState = {
   error?: string;
+  message?: string;
+  invoiceId?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -78,6 +86,54 @@ export async function createInvoiceFromJob(
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath("/invoices");
   redirect(`/invoices/${result.invoiceId}`);
+}
+
+/**
+ * OWNER-only. Creates or reuses a DRAFT invoice for one completed
+ * recurring occurrence. Does not send, charge, or bill the source job.
+ */
+export async function createDraftInvoiceFromCompletedRecurringOccurrence(
+  _prev: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_INVOICES);
+  const jobId = readString(formData, "jobId");
+  if (!jobId) {
+    return { error: "That recurring booking could not be invoiced." };
+  }
+
+  try {
+    const result = await createOwnedDraftInvoiceFromCompletedRecurringOccurrence(
+      prisma,
+      access,
+      {
+        jobId,
+        confirmCreate: readString(formData, "confirmCreate"),
+      },
+    );
+    revalidatePath("/jobs");
+    revalidatePath("/invoices");
+    revalidatePath(`/jobs/${jobId}`);
+    revalidatePath(`/invoices/${result.invoiceId}`);
+    return {
+      invoiceId: result.invoiceId,
+      message: result.reused
+        ? RECURRING_OCCURRENCE_INVOICE_REUSED_MESSAGE
+        : RECURRING_OCCURRENCE_INVOICE_CREATED_MESSAGE,
+    };
+  } catch (error) {
+    return {
+      error: recurringOccurrenceInvoiceErrorMessage(
+        error,
+        "That draft invoice could not be created.",
+      ),
+    };
+  }
 }
 
 export async function markInvoiceSent(

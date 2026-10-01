@@ -581,6 +581,27 @@ const billedHandoff = buildOwnerTodayHandoffItems(
 );
 check("fully billed completed job does not", billedHandoff.length === 0);
 
+const occurrenceHandoff = buildOwnerTodayHandoffItems(
+  [
+    {
+      id: "job-occurrence",
+      businessId: "biz-a",
+      status: "COMPLETED",
+      recurrenceSourceJobId: "job-source",
+      recurrenceOccurrenceKey: "recurring:job-source:2026-10-05",
+      estimate: { total: 180 },
+      invoices: [],
+      changeOrders: [],
+      customer: { name: "Recurring" },
+    },
+  ],
+  "biz-a",
+);
+check(
+  "recurring occurrence stays off the Today create-and-send handoff",
+  occurrenceHandoff.length === 0,
+);
+
 const supplementalHandoff = buildOwnerTodayHandoffItems(
   [
     {

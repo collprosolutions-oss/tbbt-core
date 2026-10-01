@@ -159,6 +159,25 @@ export function isRecurringSeriesSource(job: {
   );
 }
 
+/**
+ * A later recurring booking row. Distinct from the series source, a
+ * one-time next booking, and a corrective clean. Occurrence invoices
+ * must bind to this job, never the source.
+ */
+export function isRecurringOccurrenceJob(job: {
+  recurrenceSourceJobId?: string | null;
+  recurrenceOccurrenceKey?: string | null;
+  nextBookingSourceJobId?: string | null;
+  correctiveCleanSourceJobId?: string | null;
+}) {
+  return (
+    Boolean(job.recurrenceSourceJobId) &&
+    Boolean(job.recurrenceOccurrenceKey) &&
+    !job.nextBookingSourceJobId &&
+    !job.correctiveCleanSourceJobId
+  );
+}
+
 export function isActiveRecurringSeries(job: {
   serviceIntent?: string | null;
   recurrenceStatus?: string | null;

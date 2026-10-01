@@ -37,6 +37,7 @@ function check(label, ok) {
 
 const auditedScripts = [
   "scripts/check-cleaning-recurring-booking.mjs",
+  "scripts/check-recurring-occurrence-invoice.mjs",
   "scripts/check-chief-of-staff.mjs",
   "scripts/check-estimate-versions.mjs",
   "scripts/check-password-recovery.mjs",

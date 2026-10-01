@@ -8,8 +8,12 @@
  *
  * Field completeAssignedJob() does not call this — owner financial
  * control stays on the Work Order Complete Job action.
+ *
+ * Recurring occurrences are completed without creating or sending an
+ * invoice. The OWNER occurrence draft action is the only bill path.
  */
 import type { PrismaClient } from "@prisma/client";
+import { isRecurringOccurrenceJob } from "@/lib/cleaning-recurring-booking";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import {
@@ -38,12 +42,13 @@ export type CompleteJobInvoiceResult =
   | {
       ok: true;
       jobCompleted: true;
-      invoiceId: string;
+      invoiceId?: string;
       invoiceCreated: boolean;
       invoiceReused: boolean;
       invoiceStatus: string;
       newlySent: boolean;
       customerNotified: boolean;
+      invoiceSkipped?: boolean;
       warning?: string;
     };
 
@@ -265,6 +270,52 @@ export async function completeJobAndSendInvoice(
 
   if (!safety.ok) {
     return { ok: false, error: safety.error, jobCompleted: false };
+  }
+
+  const completedJob = await db.job.findFirst({
+    where: { id: input.jobId, businessId: input.businessId },
+    select: {
+      recurrenceSourceJobId: true,
+      recurrenceOccurrenceKey: true,
+      nextBookingSourceJobId: true,
+      correctiveCleanSourceJobId: true,
+    },
+  });
+  if (completedJob && isRecurringOccurrenceJob(completedJob)) {
+    await emitAndProcessBusinessEvent(db, {
+      businessId: input.businessId,
+      type: "JOB_COMPLETED",
+      subjectType: "JOB",
+      subjectId: input.jobId,
+      payload: { customerId: safety.customerId, businessName: input.businessName },
+      idempotencyKey: `JOB_COMPLETED:${input.jobId}`,
+    });
+    await emitAndProcessBusinessEvent(db, {
+      businessId: input.businessId,
+      type: "REVIEW_OPPORTUNITY_CREATED",
+      subjectType: "JOB",
+      subjectId: input.jobId,
+      payload: { customerId: safety.customerId, businessName: input.businessName },
+      idempotencyKey: `REVIEW_OPPORTUNITY_CREATED:${input.jobId}`,
+    });
+    await emitAndProcessBusinessEvent(db, {
+      businessId: input.businessId,
+      type: "REFERRAL_OPPORTUNITY_CREATED",
+      subjectType: "JOB",
+      subjectId: input.jobId,
+      payload: { customerId: safety.customerId, businessName: input.businessName },
+      idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${input.jobId}`,
+    });
+    return {
+      ok: true,
+      jobCompleted: true,
+      invoiceCreated: false,
+      invoiceReused: false,
+      invoiceStatus: "NONE",
+      newlySent: false,
+      customerNotified: false,
+      invoiceSkipped: true,
+    };
   }
 
   const persist = await persistDraftInvoiceFromCompletedJob(db, {

@@ -23,6 +23,7 @@ import { ChangeOrderList } from "@/components/jobs/change-order-list";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
+import { CleaningRecurringOccurrenceInvoiceForm } from "@/components/jobs/cleaning-recurring-occurrence-invoice-form";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
@@ -115,6 +116,8 @@ import { loadPurchaseWorkspace } from "@/lib/materials/board";
 import { loadCleaningCorrectiveCleanReview } from "@/lib/cleaning-corrective-clean-data";
 import { loadCleaningNextBookingReview } from "@/lib/cleaning-next-booking-data";
 import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-booking-data";
+import { isRecurringOccurrenceJob } from "@/lib/cleaning-recurring-booking";
+import { loadRecurringOccurrenceInvoiceReview } from "@/lib/recurring-occurrence-invoice";
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
 
@@ -401,6 +404,10 @@ export default async function JobPage({
     access,
     job.id,
   );
+  const recurringOccurrenceInvoice = isCompleted
+    ? await loadRecurringOccurrenceInvoiceReview(prisma, access, job.id)
+    : null;
+  const isRecurringOccurrence = isRecurringOccurrenceJob(job);
   const cleaningCorrectiveClean = await loadCleaningCorrectiveCleanReview(
     prisma,
     access,
@@ -657,13 +664,19 @@ export default async function JobPage({
           <CardHeader>
             <CardTitle>Invoice</CardTitle>
             <CardDescription>
-              {billingAttention.unbilled
-                ? billingAttention.detail
-                : invoices.length === 0
-                  ? "Completing this job did not create an invoice. Create and send one from the approved work."
+              {isRecurringOccurrence
+                ? invoices.length === 0
+                  ? "Completing this recurring booking did not create an invoice. Review the approved work and create a draft for this visit only."
                   : invoices.some((row) => row.status === "DRAFT")
-                    ? "An invoice was created from the approved work but was not sent. Send it so the customer can view and pay it in the project portal."
-                    : "Approved work on this job is billed. Opening an invoice will not rewrite it."}
+                    ? "A draft invoice is bound to this recurring booking. Sending it is a separate owner action."
+                    : "This recurring booking already has an invoice. Opening it will not rewrite it or bill another visit."
+                : billingAttention.unbilled
+                  ? billingAttention.detail
+                  : invoices.length === 0
+                    ? "Completing this job did not create an invoice. Create and send one from the approved work."
+                    : invoices.some((row) => row.status === "DRAFT")
+                      ? "An invoice was created from the approved work but was not sent. Send it so the customer can view and pay it in the project portal."
+                      : "Approved work on this job is billed. Opening an invoice will not rewrite it."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -685,9 +698,14 @@ export default async function JobPage({
                 ))}
               </ul>
             ) : null}
-            {invoices.length === 0 ? (
+            {isRecurringOccurrence && recurringOccurrenceInvoice ? (
+              <CleaningRecurringOccurrenceInvoiceForm
+                review={recurringOccurrenceInvoice}
+              />
+            ) : null}
+            {!isRecurringOccurrence && invoices.length === 0 ? (
               <CreateInvoiceButton jobId={job.id} />
-            ) : unbilledChangeOrders.length > 0 ? (
+            ) : !isRecurringOccurrence && unbilledChangeOrders.length > 0 ? (
               <CreateInvoiceButton jobId={job.id} label="Create balance invoice" />
             ) : null}
           </CardContent>

@@ -715,7 +715,9 @@ export async function markJobComplete(
   revalidatePath("/dashboard");
   revalidatePath("/invoices");
   revalidatePath(`/jobs/${job.id}`);
-  revalidatePath(`/invoices/${result.invoiceId}`);
+  if (result.invoiceId) {
+    revalidatePath(`/invoices/${result.invoiceId}`);
+  }
   return result.warning ? { warning: result.warning } : {};
 }
 
