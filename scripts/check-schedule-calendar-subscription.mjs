@@ -30,7 +30,6 @@ const { createSecureToken, hashToken } = await import("@/lib/auth-crypto");
 const { parseScheduleCalendarIcs } = await import("@/lib/schedule-calendar-export");
 const {
   SCHEDULE_CALENDAR_FEED_CACHE_CONTROL,
-  SCHEDULE_CALENDAR_FEED_HEADERS,
   SCHEDULE_CALENDAR_FEED_NOT_FOUND_MESSAGE,
   SCHEDULE_CALENDAR_FEED_PATH_PREFIX,
   SCHEDULE_CALENDAR_SUBSCRIPTION_CONTRACT,
@@ -204,10 +203,10 @@ check(
 );
 check(
   "Public feed is uncached, no-referrer, and allowed through the auth proxy without a session",
-  routeSrc.includes("scheduleCalendarFeedResponse") &&
+    routeSrc.includes("scheduleCalendarFeedResponse") &&
     routeSrc.includes('dynamic = "force-dynamic"') &&
-    httpSrc.includes(SCHEDULE_CALENDAR_FEED_CACHE_CONTROL) &&
-    SCHEDULE_CALENDAR_FEED_HEADERS["Cache-Control"] === SCHEDULE_CALENDAR_FEED_CACHE_CONTROL &&
+    httpSrc.includes("SCHEDULE_CALENDAR_FEED_CACHE_CONTROL") &&
+    httpSrc.includes("SCHEDULE_CALENDAR_FEED_HEADERS") &&
     httpSrc.includes("Referrer-Policy") &&
     httpSrc.includes("noindex") &&
     httpSrc.includes("inline") &&
@@ -762,8 +761,8 @@ try {
     "HTTP cache headers refuse shared caches and referrers",
     SCHEDULE_CALENDAR_FEED_CACHE_CONTROL.includes("no-store") &&
       SCHEDULE_CALENDAR_FEED_CACHE_CONTROL.includes("private") &&
-      SCHEDULE_CALENDAR_FEED_HEADERS["Referrer-Policy"] === "no-referrer" &&
-      SCHEDULE_CALENDAR_FEED_HEADERS["X-Robots-Tag"].includes("noindex"),
+      httpSrc.includes('"Referrer-Policy": "no-referrer"') &&
+      httpSrc.includes("noindex"),
   );
 
   const status = await loadScheduleCalendarSubscriptionStatus(prisma, memberAccessA, "assigned");

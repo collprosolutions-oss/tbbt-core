@@ -47,7 +47,3 @@ export {
   readScheduleCalendarFeed,
   scheduleCalendarSubscriptionTestHooks,
 } from "@/lib/schedule-calendar-subscription/feed";
-export {
-  SCHEDULE_CALENDAR_FEED_HEADERS,
-  scheduleCalendarFeedResponse,
-} from "@/lib/schedule-calendar-subscription/http";
