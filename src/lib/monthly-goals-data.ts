@@ -95,7 +95,7 @@ export async function loadMonthlyGoalFactSource(
     }),
     prisma.invoiceCredit.findMany({
       where: scope,
-      select: { businessId: true, invoiceId: true, amount: true },
+      select: { id: true, businessId: true, invoiceId: true, amount: true },
       take: takeBound(),
       orderBy: { id: "asc" },
     }),
@@ -147,6 +147,7 @@ export async function loadMonthlyGoalFactSource(
       amount: Number(toMonthlyGoalMoney(payment.amount).toFixed(2)),
     })),
     invoiceCredits: invoiceCredits.map((credit) => ({
+      id: credit.id,
       businessId: credit.businessId,
       invoiceId: credit.invoiceId,
       amount: Number(toMonthlyGoalMoney(credit.amount).toFixed(2)),

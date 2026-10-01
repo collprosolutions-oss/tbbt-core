@@ -129,7 +129,7 @@ export async function loadReportSource(
     }),
     prisma.invoiceCredit.findMany({
       where: scope,
-      select: { invoiceId: true, amount: true },
+      select: { id: true, invoiceId: true, amount: true },
     }),
   ]);
 
@@ -184,6 +184,7 @@ export async function loadReportSource(
       recurring: expense.recurring,
     })),
     invoiceCredits: invoiceCredits.map((credit) => ({
+      id: credit.id,
       invoiceId: credit.invoiceId,
       amount: asNumber(credit.amount),
     })),

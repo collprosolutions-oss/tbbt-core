@@ -13,6 +13,10 @@ export {
 } from "@/lib/payments/stripe-errors";
 export { parseCheckoutPaymentEvent } from "@/lib/payments/events";
 export {
+  findInvoiceCheckoutSession,
+  recordInvoiceCheckoutSession,
+} from "@/lib/payments/checkout-session-record";
+export {
   explainMerchantReadiness,
   formatPaymentReadinessDebug,
   isMerchantPaymentReady,
@@ -38,6 +42,10 @@ export {
   STRIPE_CREDIT_MISMATCH_OWNER_DETAIL,
   isStripeCreditMismatchReviewNote,
   paymentsNeedingStripeCreditMismatchReview,
+  stripeCreditMismatchDashboardWhere,
+  listOpenStripeCreditMismatchReviews,
+  resolveStripeCreditMismatchReview,
+  historicalRemainingDueCents,
   staleCheckoutBoundCents,
   reconcileEstimateDepositCheckout,
   reconcileProjectTokenCheckoutPayment,

@@ -52,6 +52,7 @@ export async function loadFinancialSource(
         method: true,
         receivedAt: true,
         note: true,
+        stripeCreditMismatchResolvedAt: true,
       },
     }),
     prisma.changeOrder.findMany({

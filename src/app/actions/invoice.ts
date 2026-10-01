@@ -14,6 +14,10 @@ import {
   recordOwnerInvoiceCredit,
 } from "@/lib/invoice-credits";
 import {
+  PaymentError,
+  resolveStripeCreditMismatchReview,
+} from "@/lib/payments";
+import {
   ProjectPaymentError,
   recordOwnerInvoiceBalancePayment,
 } from "@/lib/project-payments";
@@ -211,6 +215,36 @@ export async function recordInvoiceCredit(
   } catch (error) {
     if (error instanceof InvoiceCreditError || error instanceof ProjectPaymentError) {
       return { error: invoiceCreditErrorMessage(error, error.message) };
+    }
+    throw error;
+  }
+}
+
+export async function resolveInvoiceStripeCreditMismatch(
+  _prev: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  const paymentId = readString(formData, "paymentId");
+  const invoiceId = readString(formData, "invoiceId");
+  if (!paymentId) {
+    return { error: "That review could not be resolved." };
+  }
+  try {
+    await resolveStripeCreditMismatchReview(prisma, access, paymentId);
+    revalidatePath("/dashboard");
+    revalidatePath("/reports");
+    if (invoiceId) {
+      revalidatePath(`/invoices/${invoiceId}`);
+    }
+    return {};
+  } catch (error) {
+    if (error instanceof PaymentError) {
+      return { error: error.message };
     }
     throw error;
   }

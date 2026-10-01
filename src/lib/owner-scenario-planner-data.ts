@@ -116,7 +116,7 @@ export async function loadOwnerScenarioPlannerSource(
       }),
       prisma.invoiceCredit.findMany({
         where: scope,
-        select: { invoiceId: true, amount: true },
+        select: { id: true, invoiceId: true, amount: true },
         take: PLANNER_READ_BOUND,
         orderBy: { createdAt: "desc" },
       }),
@@ -214,6 +214,7 @@ export async function loadOwnerScenarioPlannerSource(
         amount: asNumber(payment.amount),
       })),
       invoiceCredits: invoiceCredits.map((credit) => ({
+        id: credit.id,
         invoiceId: credit.invoiceId,
         amount: asNumber(credit.amount),
       })),

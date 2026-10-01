@@ -267,6 +267,7 @@ try {
     CAPABILITIES.AUTHORIZE_PAYROLL,
     CAPABILITIES.DECIDE_TIME_CORRECTIONS,
     CAPABILITIES.RECORD_INVOICE_CREDIT,
+    CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
@@ -602,6 +603,15 @@ try {
   });
   await expectAllowed("OWNER can pass the invoice-credit capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.RECORD_INVOICE_CREDIT);
+  });
+  check("OWNER has RESOLVE_STRIPE_CREDIT_MISMATCH", roleHasCapability("OWNER", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  check("ADMIN does not have RESOLVE_STRIPE_CREDIT_MISMATCH", !roleHasCapability("ADMIN", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  check("MEMBER does not have RESOLVE_STRIPE_CREDIT_MISMATCH", !roleHasCapability("MEMBER", CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH));
+  await expectForbidden("ADMIN cannot pass the Stripe credit-mismatch resolve gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
+  });
+  await expectAllowed("OWNER can pass the Stripe credit-mismatch resolve gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
   });
 
   console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");

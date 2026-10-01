@@ -83,6 +83,7 @@ export type GrowthInvoiceRow = {
 };
 
 export type GrowthInvoiceCreditRow = {
+  id?: string;
   invoiceId: string;
   amount: GrowthMoney;
 };

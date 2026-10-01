@@ -353,6 +353,7 @@ model Business {
   storedAssets             StoredAsset[]
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
+  invoiceCheckoutSessions  InvoiceCheckoutSession[]
   unavailableDates         BusinessUnavailableDate[]
   supplierPreferences      BusinessSupplierPreference[]
   materialSupplierMappings BusinessMaterialSupplierMapping[]
@@ -2046,6 +2047,7 @@ model Invoice {
   lineItems            LineItem[]
   payments             Payment[]
   credits              InvoiceCredit[]
+  checkoutSessions     InvoiceCheckoutSession[]
   billedChangeOrders   ChangeOrder[]
   collectionWorkItems  InvoiceCollectionWorkItem[]
 
@@ -2073,6 +2075,9 @@ model Payment {
   note                    String?
   stripeCheckoutSessionId String?   @unique
   stripePaymentIntentId   String?   @unique
+  /// Set when OWNER acknowledges a STRIPE_CREDIT_MISMATCH_REVIEW flag.
+  /// Null means the flag is still open on Dashboard / Reports.
+  stripeCreditMismatchResolvedAt DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
@@ -2085,6 +2090,25 @@ model Payment {
   @@index([businessId])
   @@index([estimateId])
   @@index([jobId])
+  @@index([invoiceId])
+}
+
+/// Expected Stripe Checkout amount at session creation. Webhooks that
+/// match this session id and amount are accepted even if later credits
+/// changed remaining due. Additive only. Sessions created before this
+/// table fall back to historical remaining-due amounts.
+model InvoiceCheckoutSession {
+  id              String   @id @default(cuid())
+  businessId      String
+  invoiceId       String
+  stripeSessionId String   @unique
+  amountCents     Int
+  createdAt       DateTime @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
   @@index([invoiceId])
 }
 

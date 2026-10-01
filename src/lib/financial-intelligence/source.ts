@@ -13,6 +13,7 @@ export type FinancialPayment = {
   method: string;
   receivedAt: Date;
   note?: string | null;
+  stripeCreditMismatchResolvedAt?: Date | null;
 };
 
 export type FinancialChangeOrder = {
@@ -50,6 +51,7 @@ export type FinancialJob = ReportSource["jobs"][number] & {
 };
 
 export type FinancialInvoiceCredit = {
+  id?: string;
   invoiceId: string;
   amount: number;
 };

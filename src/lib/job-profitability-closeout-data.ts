@@ -138,7 +138,7 @@ export async function loadJobProfitabilityCloseout(
     }),
     prisma.invoiceCredit.findMany({
       where: { businessId, invoice: { is: { businessId, jobId: job.id } } },
-      select: { invoiceId: true, amount: true },
+      select: { id: true, invoiceId: true, amount: true },
       take: CLOSEOUT_READ_BOUND,
     }),
     prisma.timeEntry.findMany({
@@ -321,6 +321,7 @@ export async function loadJobProfitabilityCloseout(
       amount: asNumber(payment.amount),
     })),
     invoiceCredits: invoiceCredits.map((credit) => ({
+      id: credit.id,
       invoiceId: credit.invoiceId,
       amount: asNumber(credit.amount),
     })),

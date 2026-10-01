@@ -141,7 +141,7 @@ export async function loadGrowthSource(
     }),
     prisma.invoiceCredit.findMany({
       where: scope,
-      select: { invoiceId: true, amount: true },
+      select: { id: true, invoiceId: true, amount: true },
     }),
     prisma.businessEvent.findMany({
       where: { ...scope, type: "JOB_COMPLETED", subjectType: "JOB" },

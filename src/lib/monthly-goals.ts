@@ -166,7 +166,7 @@ export type MonthlyGoalFactSource = {
     invoiceId: string | null;
     receivedAt: Date;
   }>;
-  invoiceCredits?: Array<{ businessId: string; invoiceId: string; amount: number }>;
+  invoiceCredits?: Array<{ id?: string; businessId: string; invoiceId: string; amount: number }>;
   paymentsOnPaidInvoices: Array<{ businessId: string; invoiceId: string }>;
   jobCompletionsTruncated: boolean;
   completedJobsTruncated: boolean;
@@ -424,6 +424,7 @@ export function collectedRevenueInPeriod(source: MonthlyGoalFactSource, period: 
         total: Number(toMonthlyGoalMoney(invoice.total).toFixed(2)),
       })),
       invoiceCredits: (isolated.invoiceCredits ?? []).map((credit) => ({
+        id: credit.id,
         invoiceId: credit.invoiceId,
         amount: Number(toMonthlyGoalMoney(credit.amount).toFixed(2)),
       })),

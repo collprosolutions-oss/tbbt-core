@@ -10,7 +10,7 @@
  * This module does not rebuild Financial intelligence.
  */
 
-import { invoiceHasRecordedCredits } from "@/lib/financial-intelligence/collected-revenue";
+import { invoiceIsCreditClosed } from "@/lib/financial-intelligence/collected-revenue";
 import { asNumber } from "@/lib/reports";
 
 export type CollectedCashMoney = { toString(): string } | number | string | null | undefined;
@@ -26,6 +26,7 @@ export type CollectedCashInvoice = {
 };
 
 export type CollectedCashCredit = {
+  id?: string;
   invoiceId: string;
   amount?: CollectedCashMoney;
 };
@@ -75,7 +76,23 @@ export function resolveInvoiceCollected(
     };
   }
   // CREDIT_CLOSED_NOT_LEGACY_CASH
-  if (invoice.status === "PAID" && !invoiceHasRecordedCredits(invoice, credits)) {
+  if (
+    invoice.status === "PAID" &&
+    !invoiceIsCreditClosed(
+      {
+        id: invoice.id,
+        status: invoice.status,
+        total: money(invoice.total),
+        paymentMethod: invoice.paymentMethod,
+        paymentReference: invoice.paymentReference,
+      },
+      credits.map((credit) => ({
+        id: credit.id,
+        invoiceId: credit.invoiceId,
+        amount: money(credit.amount),
+      })),
+    )
+  ) {
     return { amount: money(invoice.total), source: "legacy_paid", paymentIds: [] };
   }
   return { amount: 0, source: null, paymentIds: [] };

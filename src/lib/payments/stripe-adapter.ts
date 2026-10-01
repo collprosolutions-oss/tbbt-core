@@ -59,6 +59,7 @@ function checkoutMetadata(input: {
   purpose: "invoice_balance" | "material_deposit";
   businessId: string;
   connectedAccountId: string;
+  amountCents: number;
   invoiceId?: string | null;
   estimateId?: string | null;
 }) {
@@ -66,6 +67,7 @@ function checkoutMetadata(input: {
     purpose: input.purpose,
     businessId: input.businessId,
     connectedAccountId: input.connectedAccountId,
+    amountCents: String(input.amountCents),
     ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     ...(input.estimateId ? { estimateId: input.estimateId } : {}),
   };

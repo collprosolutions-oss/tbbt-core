@@ -4,8 +4,9 @@
  * Payment rows are the modern source of collected cash.
  * A PAID invoice with no Payment rows for that invoice may count its
  * full total as legacy collected revenue, except when OWNER credits
- * closed it (InvoiceCredit rows, or OTHER + "Recorded credit" reference).
- * Credit-closed invoices contribute $0 cash.
+ * closed it: method OTHER plus exactly "Recorded credit <id>" matching
+ * an InvoiceCredit row on that invoice, with credits covering the total.
+ * A lookalike reference or a cash-type method is still legacy cash.
  *
  * One Payment is counted once, even if it is linked through both job
  * and invoice paths. A payment on invoice A never suppresses the legacy
@@ -53,9 +54,18 @@ export function paymentsAppliedToInvoice(
 }
 
 export type CollectedInvoiceCredit = {
+  id?: string;
   invoiceId: string;
   amount: number;
 };
+
+const LEGACY_CASH_PAYMENT_METHODS = new Set([
+  "CASH",
+  "CHECK",
+  "ZELLE_BANK_TRANSFER",
+  "CARD_EXTERNAL",
+  "STRIPE",
+]);
 
 function creditsAppliedToInvoice(
   credits: readonly CollectedInvoiceCredit[] | undefined,
@@ -92,16 +102,56 @@ export function invoiceHasPaymentRows(
 
 export const RECORDED_CREDIT_REFERENCE_PREFIX = "Recorded credit ";
 
-/** Credit-closed invoices are not legacy cash. Prefer InvoiceCredit rows. */
-export function invoiceHasRecordedCredits(
+export function recordedCreditReferenceFor(creditId: string) {
+  return `${RECORDED_CREDIT_REFERENCE_PREFIX}${creditId}`;
+}
+
+function creditsOnInvoice<T extends { invoiceId: string }>(
+  credits: readonly T[] | undefined,
+  invoiceId: string,
+): T[] {
+  return (credits ?? []).filter((credit) => credit.invoiceId === invoiceId);
+}
+
+/** Exact OTHER + "Recorded credit <id>" matching an InvoiceCredit row on this invoice. */
+export function invoiceHasExactRecordedCreditReference(
   invoice: Pick<CollectedInvoice, "id" | "paymentMethod" | "paymentReference">,
-  credits: readonly { invoiceId: string }[] | undefined,
+  credits: readonly { id?: string; invoiceId: string }[] | undefined,
 ): boolean {
-  if (credits?.some((credit) => credit.invoiceId === invoice.id)) return true;
-  return (
-    invoice.paymentMethod === "OTHER" &&
-    Boolean(invoice.paymentReference?.startsWith(RECORDED_CREDIT_REFERENCE_PREFIX))
+  // CREDIT_CLOSED_EXACT_REFERENCE
+  if (invoice.paymentMethod !== "OTHER") return false;
+  const reference = invoice.paymentReference ?? "";
+  return creditsOnInvoice(credits, invoice.id).some(
+    (credit) => credit.id && reference === recordedCreditReferenceFor(credit.id),
   );
+}
+
+/**
+ * Credit-closed invoices are not legacy cash. Closing fields must come
+ * from the credit-close path (OTHER + exact Recorded credit <id>) and
+ * credits must cover the invoice total. A cash-type method or a
+ * lookalike reference keeps counting legacy cash.
+ */
+export function invoiceIsCreditClosed(
+  invoice: Pick<CollectedInvoice, "id" | "status" | "total" | "paymentMethod" | "paymentReference">,
+  credits: readonly CollectedInvoiceCredit[] | undefined,
+): boolean {
+  if (invoice.status !== "PAID") return false;
+  if (invoice.paymentMethod && LEGACY_CASH_PAYMENT_METHODS.has(invoice.paymentMethod)) {
+    return false;
+  }
+  const rows = creditsOnInvoice(credits, invoice.id);
+  if (!invoiceHasExactRecordedCreditReference(invoice, rows)) return false;
+  const covered = roundMoney(rows.reduce((sum, credit) => sum + credit.amount, 0));
+  return covered + 1e-9 >= invoice.total;
+}
+
+/** @deprecated Use invoiceIsCreditClosed. Kept for existing callers. */
+export function invoiceHasRecordedCredits(
+  invoice: Pick<CollectedInvoice, "id" | "status" | "total" | "paymentMethod" | "paymentReference">,
+  credits: readonly CollectedInvoiceCredit[] | undefined,
+): boolean {
+  return invoiceIsCreditClosed(invoice, credits);
 }
 
 export function legacyCollectedForInvoice(
@@ -112,7 +162,7 @@ export function legacyCollectedForInvoice(
   if (invoice.status !== "PAID") return 0;
   if (invoiceHasPaymentRows(invoice.id, payments)) return 0;
   // CREDIT_CLOSED_NOT_LEGACY_CASH
-  if (invoiceHasRecordedCredits(invoice, credits)) return 0;
+  if (invoiceIsCreditClosed(invoice, credits)) return 0;
   return roundMoney(invoice.total);
 }
 

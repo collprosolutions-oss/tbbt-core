@@ -7,7 +7,7 @@
  * is missing. They must not CREATE TABLE.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { assertRequiredTablesExist } from "@/lib/request-path-schema";
+import { assertRequiredColumnsExist, assertRequiredTablesExist } from "@/lib/request-path-schema";
 import type { BusinessAccess } from "@/lib/access";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
@@ -78,7 +78,11 @@ export function resetPaymentTableEnsure() {
 
 export async function ensurePaymentTable(db: PaymentsDb) {
   if (!ensureTablePromise) {
-    ensureTablePromise = assertRequiredTablesExist(db, ["Payment"]).catch(
+    ensureTablePromise = assertRequiredTablesExist(db, ["Payment"])
+      .then(() =>
+        assertRequiredColumnsExist(db, "Payment", ["stripeCreditMismatchResolvedAt"]),
+      )
+      .catch(
       (error) => {
         ensureTablePromise = null;
         throw error;
@@ -328,6 +332,7 @@ const PROJECT_PAYMENT_SELECT = {
   method: true,
   receivedAt: true,
   note: true,
+  stripeCreditMismatchResolvedAt: true,
   estimateId: true,
   jobId: true,
   invoiceId: true,
@@ -340,6 +345,7 @@ export type ProjectPaymentRow = {
   method: string;
   receivedAt: Date;
   note: string | null;
+  stripeCreditMismatchResolvedAt: Date | null;
   estimateId: string | null;
   jobId: string | null;
   invoiceId: string | null;

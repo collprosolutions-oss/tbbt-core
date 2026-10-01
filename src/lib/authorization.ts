@@ -139,6 +139,12 @@ export const CAPABILITIES = {
    */
   RECORD_INVOICE_CREDIT: "RECORD_INVOICE_CREDIT",
   /**
+   * OWNER-only acknowledge of a Stripe charge that landed after a recorded
+   * credit. Clears the Dashboard / Reports review flag. Never refunds and
+   * never messages the customer.
+   */
+  RESOLVE_STRIPE_CREDIT_MISMATCH: "RESOLVE_STRIPE_CREDIT_MISMATCH",
+  /**
    * Owner/admin Expenses management: record, review, and allocate
    * business-wide expenses. MEMBER must never receive this -- employee
    * field submission is a later, separately scoped feature.
@@ -231,6 +237,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.AUTHORIZE_PAYROLL,
   CAPABILITIES.DECIDE_TIME_CORRECTIONS,
   CAPABILITIES.RECORD_INVOICE_CREDIT,
+  CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,

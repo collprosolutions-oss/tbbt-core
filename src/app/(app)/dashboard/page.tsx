@@ -47,8 +47,8 @@ import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import {
   getBusinessPaymentStatus,
+  listOpenStripeCreditMismatchReviews,
   STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
-  STRIPE_CREDIT_MISMATCH_REVIEW_NOTE,
 } from "@/lib/payments";
 import {
   OWNER_TODAY_FIELD_PROBLEM_SELECT,
@@ -346,20 +346,11 @@ export default async function DashboardPage() {
     { businessId: access.businessId, start: todayRange.start, timeZone },
   );
   const scheduleConflictAttention = dailyAttention.scheduleConflicts;
-  const stripeCreditMismatchReviews = await prisma.payment.findMany({
-    where: {
-      ...access.scope,
-      note: { startsWith: STRIPE_CREDIT_MISMATCH_REVIEW_NOTE },
-    },
-    select: {
-      id: true,
-      amount: true,
-      invoiceId: true,
-      invoice: { select: { id: true, customer: { select: { name: true } } } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: ATTENTION_TAKE,
-  });
+  const stripeCreditMismatchReviews = await listOpenStripeCreditMismatchReviews(
+    prisma,
+    access.businessId,
+    ATTENTION_TAKE,
+  );
 
   const outstandingPayments = await listPaymentsGroupedByInvoiceId(
     prisma,

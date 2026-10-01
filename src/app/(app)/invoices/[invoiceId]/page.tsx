@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { RecordInvoiceCreditForm } from "@/components/invoices/record-invoice-credit-form";
+import { ResolveStripeCreditMismatchForm } from "@/components/invoices/resolve-stripe-credit-mismatch-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -119,6 +120,10 @@ export default async function InvoicePage({
     access.workspace.role,
     CAPABILITIES.RECORD_INVOICE_CREDIT,
   );
+  const canResolveStripeMismatch = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
+  );
   const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
   const showCollectionHelp = isSent && !dueIsZero;
@@ -180,6 +185,15 @@ export default async function InvoicePage({
           <AlertTitle>{STRIPE_CREDIT_MISMATCH_OWNER_TITLE}</AlertTitle>
           <AlertDescription>
             {STRIPE_CREDIT_MISMATCH_OWNER_DETAIL}
+            {canResolveStripeMismatch
+              ? stripeCreditMismatchReviews.map((payment) => (
+                  <ResolveStripeCreditMismatchForm
+                    key={payment.id}
+                    paymentId={payment.id}
+                    invoiceId={invoice.id}
+                  />
+                ))
+              : null}
           </AlertDescription>
         </Alert>
       ) : null}

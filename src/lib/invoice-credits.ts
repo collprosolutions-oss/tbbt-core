@@ -319,6 +319,7 @@ export async function recordOwnerInvoiceCredit(
 
     let created;
     try {
+      await tx.$executeRaw`SAVEPOINT invoice_credit_insert`;
       created = await tx.invoiceCredit.create({
         data: {
           businessId: invoice.businessId,
@@ -331,11 +332,13 @@ export async function recordOwnerInvoiceCredit(
         },
         select: { id: true, amount: true },
       });
+      await tx.$executeRaw`RELEASE SAVEPOINT invoice_credit_insert`;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       ) {
+        await tx.$executeRaw`ROLLBACK TO SAVEPOINT invoice_credit_insert`;
         const raced = await tx.invoiceCredit.findFirst({
           where: {
             businessId: access.businessId,

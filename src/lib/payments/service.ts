@@ -20,6 +20,10 @@ import {
 } from "@/lib/project-payments";
 import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { ensureInvoiceCreditTable } from "@/lib/invoice-credits";
+import {
+  findInvoiceCheckoutSession,
+  recordInvoiceCheckoutSession,
+} from "@/lib/payments/checkout-session-record";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import { resolveChosenCommercialScope } from "@/lib/estimate-options";
 import {
@@ -47,11 +51,43 @@ export function isStripeCreditMismatchReviewNote(note: string | null | undefined
   return Boolean(note?.startsWith(STRIPE_CREDIT_MISMATCH_REVIEW_NOTE));
 }
 
-export function paymentsNeedingStripeCreditMismatchReview<T extends { note?: string | null }>(
-  payments: readonly T[],
-): T[] {
+export function paymentsNeedingStripeCreditMismatchReview<
+  T extends { note?: string | null; stripeCreditMismatchResolvedAt?: Date | null },
+>(payments: readonly T[]): T[] {
   // STRIPE_CREDIT_MISMATCH_OWNER_REVIEW
-  return payments.filter((payment) => isStripeCreditMismatchReviewNote(payment.note));
+  return payments.filter(
+    (payment) =>
+      isStripeCreditMismatchReviewNote(payment.note) && !payment.stripeCreditMismatchResolvedAt,
+  );
+}
+
+export function stripeCreditMismatchDashboardWhere(businessId: string) {
+  // STRIPE_CREDIT_MISMATCH_DASHBOARD_UNRESOLVED
+  return {
+    businessId,
+    note: { startsWith: STRIPE_CREDIT_MISMATCH_REVIEW_NOTE },
+    stripeCreditMismatchResolvedAt: null,
+  };
+}
+
+export async function listOpenStripeCreditMismatchReviews(
+  db: PaymentsClient,
+  businessId: string,
+  take?: number,
+) {
+  return db.payment.findMany({
+    where: stripeCreditMismatchDashboardWhere(businessId),
+    select: {
+      id: true,
+      amount: true,
+      invoiceId: true,
+      note: true,
+      stripeCreditMismatchResolvedAt: true,
+      invoice: { select: { id: true, customer: { select: { name: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+    ...(take ? { take } : {}),
+  });
 }
 
 /** Checkout could have been created for remaining due before later credits: total − payments. */
@@ -60,6 +96,41 @@ export function staleCheckoutBoundCents(
   amountPaid: Prisma.Decimal | number | string,
 ) {
   return invoiceAmountToCents(new Prisma.Decimal(invoiceTotal.toString()).sub(amountPaid.toString()));
+}
+
+const ZERO_MONEY = new Prisma.Decimal(0);
+
+export function historicalRemainingDueCents(input: {
+  invoiceTotal: Prisma.Decimal | number | string;
+  payments: readonly { amount: Prisma.Decimal | number | string; receivedAt: Date }[];
+  credits: readonly { amount: Prisma.Decimal | number | string; createdAt: Date }[];
+}): number[] {
+  const total = new Prisma.Decimal(input.invoiceTotal.toString());
+  const credits = [...input.credits].sort((left, right) => {
+    const delta = left.createdAt.getTime() - right.createdAt.getTime();
+    return delta !== 0 ? delta : 0;
+  });
+  const amounts = new Set<number>();
+  if (total.gt(0)) {
+    amounts.add(invoiceAmountToCents(total));
+  }
+  for (let k = 0; k <= credits.length; k += 1) {
+    const creditSum = credits
+      .slice(0, k)
+      .reduce((sum, credit) => sum.add(credit.amount.toString()), ZERO_MONEY);
+    const cutoff = k === 0 ? credits[0]?.createdAt : credits[k - 1]?.createdAt;
+    const paymentSum = input.payments.reduce((sum, payment) => {
+      if (cutoff && ((k === 0 && payment.receivedAt >= cutoff) || (k > 0 && payment.receivedAt > cutoff))) {
+        return sum;
+      }
+      return sum.add(payment.amount.toString());
+    }, ZERO_MONEY);
+    const remaining = total.sub(paymentSum).sub(creditSum);
+    if (remaining.gt(0)) {
+      amounts.add(invoiceAmountToCents(remaining));
+    }
+  }
+  return [...amounts];
 }
 
 type InvoiceBalanceTarget = {
@@ -327,7 +398,7 @@ async function loadInvoicePaymentBreakdown(
     }),
     db.invoiceCredit.findMany({
       where: { businessId: invoice.businessId, invoiceId: invoice.id },
-      select: { id: true, amount: true, recordedByMembershipId: true },
+      select: { id: true, amount: true, recordedByMembershipId: true, createdAt: true },
     }),
   ]);
   return {
@@ -372,12 +443,15 @@ async function maybeMarkInvoicePaid(
 
 /**
  * Customer checkout uses remaining due after payments and recorded
- * credits. Open Checkout sessions do not block OWNER credits. If a
- * later webhook amount no longer matches remaining because a credit
- * landed first, applyVerifiedInvoicePayment records the succeeded
- * charge only when it equals the pre-credit remaining (what checkout
- * could have been created for) and flags owner review instead of
- * dropping it or refunding. Unbounded amounts are amount_mismatch.
+ * credits. The expected cents are stored on the Checkout session
+ * metadata and in InvoiceCheckoutSession. Open Checkout sessions do
+ * not block OWNER credits. A later webhook is accepted when it equals
+ * that stored session amount, or — for sessions created before the
+ * store existed — a historical remaining-due amount (total minus
+ * payments that existed then minus the first k credits). Excess over
+ * current net due is recorded and flagged for owner review. Unbounded
+ * amounts are amount_mismatch. VOID invoices keep VOID and still flag
+ * a matching charge.
  */
 export async function createCustomerInvoiceCheckout(
   db: PaymentsClient,
@@ -436,7 +510,7 @@ export async function createCustomerInvoiceCheckout(
     throw new PaymentError("This invoice cannot be paid online right now.");
   }
 
-  return provider.createInvoiceCheckoutSession({
+  const session = await provider.createInvoiceCheckoutSession({
     connectedAccountId: payment.stripeAccountId,
     invoiceId: invoice.id,
     businessId: job.businessId,
@@ -446,6 +520,13 @@ export async function createCustomerInvoiceCheckout(
     successUrl: `${appUrl}/p/${token}?checkout=return&session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${appUrl}/p/${token}?checkout=cancelled`,
   });
+  await recordInvoiceCheckoutSession(db, {
+    businessId: job.businessId,
+    invoiceId: invoice.id,
+    stripeSessionId: session.id,
+    amountCents,
+  });
+  return session;
 }
 
 export async function applyVerifiedCheckoutPayment(
@@ -518,23 +599,38 @@ async function applyVerifiedInvoicePayment(
       return { applied: false, reason: "account_mismatch" };
     }
 
-    const { breakdown, credits } = await loadInvoicePaymentBreakdown(tx, invoice);
+    const { breakdown, credits, payments } = await loadInvoicePaymentBreakdown(tx, invoice);
     const expectedCents =
       breakdown.amountDue.gt(0) && invoice.status === "SENT"
         ? invoiceAmountToCents(breakdown.amountDue)
         : 0;
-    const staleBoundCents = staleCheckoutBoundCents(invoice.total, breakdown.amountPaid);
+    const storedSession = await findInvoiceCheckoutSession(tx, payment.checkoutSessionId);
+    const storedMatch = Boolean(
+      storedSession &&
+        storedSession.invoiceId === invoice.id &&
+        storedSession.businessId === invoice.businessId &&
+        storedSession.amountCents === payment.amountCents,
+    );
+    const historicalAmounts = historicalRemainingDueCents({
+      invoiceTotal: invoice.total,
+      payments,
+      credits,
+    });
+    // STALE_CHECKOUT_AMOUNT_BOUND
+    const historyMatch = !storedSession && historicalAmounts.includes(payment.amountCents);
     const exactMatch =
       invoice.status === "SENT" &&
       expectedCents > 0 &&
       payment.amountCents === expectedCents;
-    // STALE_CHECKOUT_AMOUNT_BOUND
     const staleCreditMatch =
-      credits.length > 0 &&
-      payment.amountCents === staleBoundCents &&
-      payment.amountCents > expectedCents;
+      (storedMatch || historyMatch) &&
+      payment.amountCents > expectedCents &&
+      (credits.length > 0 || invoice.status === "VOID" || invoice.status === "PAID");
     // STALE_CHECKOUT_AFTER_FULL_CREDIT
     if (!exactMatch && !staleCreditMatch) {
+      if (invoice.status === "VOID") {
+        return { applied: false, reason: "amount_mismatch" };
+      }
       if ((invoice.status === "PAID" || breakdown.amountDue.lte(0)) && !credits.length) {
         return { applied: false, reason: "already_paid" };
       }
@@ -600,6 +696,58 @@ async function applyVerifiedInvoicePayment(
   };
 
   return isPrismaClient(db) ? db.$transaction(applyLocked) : applyLocked(db);
+}
+
+export async function resolveStripeCreditMismatchReview(
+  db: PaymentsClient,
+  access: BusinessAccess,
+  paymentId: string,
+): Promise<{ resolved: boolean; alreadyResolved: boolean; paymentId: string }> {
+  requireBusinessCapability(access, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
+  const payment = access.assertOwned(
+    await db.payment.findFirst({
+      where: { id: paymentId, ...access.scope },
+      select: {
+        id: true,
+        businessId: true,
+        invoiceId: true,
+        note: true,
+        stripeCreditMismatchResolvedAt: true,
+      },
+    }),
+  );
+  if (!isStripeCreditMismatchReviewNote(payment.note)) {
+    throw new PaymentError("That payment is not flagged for credit-mismatch review.");
+  }
+  if (payment.stripeCreditMismatchResolvedAt) {
+    return { resolved: true, alreadyResolved: true, paymentId: payment.id };
+  }
+  await db.payment.updateMany({
+    where: {
+      id: payment.id,
+      businessId: access.businessId,
+      stripeCreditMismatchResolvedAt: null,
+    },
+    data: { stripeCreditMismatchResolvedAt: new Date() },
+  });
+  await writeSettingsAuditLog(db, {
+    businessId: access.businessId,
+    changedByMembershipId: access.workspace.membership.id,
+    settingArea: "payments",
+    settingKey: "invoiceStripeCreditMismatchResolved",
+    previousValue: {
+      paymentId: payment.id,
+      invoiceId: payment.invoiceId,
+      ownerReview: true,
+    },
+    newValue: {
+      paymentId: payment.id,
+      resolved: true,
+      stripeRefund: false,
+      customerMessage: false,
+    },
+  });
+  return { resolved: true, alreadyResolved: false, paymentId: payment.id };
 }
 
 async function applyVerifiedDepositPayment(

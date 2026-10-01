@@ -324,6 +324,7 @@ export type ReportPayment = {
 };
 
 export type ReportInvoiceCredit = {
+  id?: string;
   invoiceId: string;
   amount: number;
 };
