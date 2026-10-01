@@ -760,13 +760,18 @@ function parseOwnerInvoicePaymentAmount(raw: string | null | undefined) {
 
 function closingTruthFromRecordedPayments(
   payments: Array<{ method: string; note: string | null; receivedAt: Date }>,
+  credits: Array<{ id?: string; createdAt?: Date }> = [],
 ) {
   const latest = payments[payments.length - 1];
   if (!latest) {
+    const latestCredit = credits[credits.length - 1];
     return {
-      paymentMethod: null as string | null,
-      paymentReference: null as string | null,
-      paidAt: new Date(),
+      paymentMethod: latestCredit ? "OTHER" : (null as string | null),
+      paymentReference: latestCredit?.id ? `Recorded credit ${latestCredit.id}` : null,
+      paidAt:
+        latestCredit?.createdAt instanceof Date && !Number.isNaN(latestCredit.createdAt.getTime())
+          ? latestCredit.createdAt
+          : new Date(),
     };
   }
   const method = latest.method.trim();
@@ -845,7 +850,7 @@ export async function recordOwnerInvoiceBalancePayment(
     });
     const credits = await tx.invoiceCredit.findMany({
       where: { businessId: access.businessId, invoiceId: invoice.id },
-      select: { amount: true },
+      select: { id: true, amount: true, createdAt: true },
     });
     const breakdown = invoicePaymentBreakdown({
       status: invoice.status,
@@ -856,7 +861,7 @@ export async function recordOwnerInvoiceBalancePayment(
     const remaining = breakdown.amountDue;
 
     if (remaining.lte(0)) {
-      const closing = closingTruthFromRecordedPayments(payments);
+      const closing = closingTruthFromRecordedPayments(payments, credits);
       const closed = await tx.invoice.updateMany({
         where: {
           id: invoice.id,

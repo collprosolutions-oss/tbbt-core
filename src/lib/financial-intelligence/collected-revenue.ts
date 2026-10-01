@@ -67,7 +67,7 @@ function creditsAppliedToInvoice(
 export function invoiceBalanceDue(
   invoice: Pick<CollectedInvoice, "id" | "total">,
   payments: readonly CollectedPayment[],
-  credits: readonly CollectedInvoiceCredit[] = [],
+  credits: readonly CollectedInvoiceCredit[],
 ): number {
   return roundMoney(
     Math.max(
@@ -185,7 +185,7 @@ export function collectedRevenueForInvoices(
 export function outstandingReceivableAmount(
   invoices: readonly CollectedInvoice[],
   payments: readonly CollectedPayment[],
-  credits: readonly CollectedInvoiceCredit[] = [],
+  credits: readonly CollectedInvoiceCredit[],
 ): { amount: number; count: number } {
   const sent = invoices.filter((invoice) => invoice.status === "SENT");
   const withBalance = sent

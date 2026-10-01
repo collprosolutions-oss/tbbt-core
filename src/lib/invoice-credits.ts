@@ -6,6 +6,16 @@
  * snapshots, never mutate Payment rows, never call Stripe, and never send
  * a customer message. Remaining due is invoice total minus attributed
  * payments minus recorded credits.
+ *
+ * Lifecycle: a credit that brings remaining due to $0 closes the invoice
+ * as PAID with paymentMethod OTHER and paymentReference
+ * "Recorded credit <id>". No $0 Payment row is created. Mark Paid on an
+ * already-covered invoice only writes those closing fields.
+ *
+ * Open Stripe Checkout sessions do not block credits. A later webhook
+ * whose charged cents no longer match remaining due because of a credit
+ * records the succeeded charge and flags owner review; it does not
+ * refund and does not send a customer message.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
@@ -55,10 +65,17 @@ export type InvoiceCreditRow = {
 export type RecordedInvoiceCreditResult = {
   alreadyRecorded: boolean;
   created: boolean;
+  replayedViaLookup: boolean;
   creditId: string | null;
   amountDue: Prisma.Decimal;
   recordedAmount: Prisma.Decimal;
 };
+
+export const CREDIT_AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/;
+export const MAX_CREDIT_AMOUNT = new Prisma.Decimal("99999999.99");
+export const INVOICE_CLOSED_BY_CREDIT_METHOD = "OTHER";
+export const invoiceClosedByCreditReference = (creditId: string) =>
+  `Recorded credit ${creditId}`;
 
 let ensureTablePromise: Promise<void> | null = null;
 
@@ -129,15 +146,24 @@ export async function listInvoiceCreditsGroupedByInvoiceId(
   return grouped;
 }
 
-function parseCreditAmount(raw: string | null | undefined) {
+export function parseCreditAmount(raw: string | null | undefined) {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) {
     throw new InvoiceCreditError("Enter a credit amount greater than zero.");
+  }
+  if (!CREDIT_AMOUNT_PATTERN.test(trimmed)) {
+    throw new InvoiceCreditError("Enter a credit amount with at most two decimal places.");
   }
   try {
     const amount = new Prisma.Decimal(trimmed);
     if (!amount.isFinite()) {
       throw new InvoiceCreditError("Enter a valid credit amount.");
+    }
+    if (!amount.gt(0)) {
+      throw new InvoiceCreditError("Enter a credit amount greater than zero.");
+    }
+    if (amount.gt(MAX_CREDIT_AMOUNT)) {
+      throw new InvoiceCreditError("That credit amount is too large.");
     }
     return amount;
   } catch (error) {
@@ -192,10 +218,6 @@ export async function recordOwnerInvoiceCredit(
   const idempotencyKey = parseIdempotencyKey(input.idempotencyKey);
   const recordedByMembershipId = membershipIdFromAccess(access);
 
-  if (!amount.gt(0)) {
-    throw new InvoiceCreditError("Enter a credit amount greater than zero.");
-  }
-
   return db.$transaction(async (tx) => {
     await ensureInvoiceCreditTable(tx);
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
@@ -231,6 +253,7 @@ export async function recordOwnerInvoiceCredit(
       throw new InvoiceCreditError("That credit could not be recorded.");
     }
 
+    // INVOICE_CREDIT_IDEMPOTENCY_LOOKUP
     const existing = await tx.invoiceCredit.findFirst({
       where: {
         businessId: access.businessId,
@@ -258,6 +281,7 @@ export async function recordOwnerInvoiceCredit(
       return {
         alreadyRecorded: true,
         created: false,
+        replayedViaLookup: true,
         creditId: existing.id,
         amountDue: breakdown.amountDue,
         recordedAmount: existing.amount,
@@ -272,6 +296,7 @@ export async function recordOwnerInvoiceCredit(
     if (remaining.lte(0)) {
       throw new InvoiceCreditError("This invoice has no remaining balance to credit.");
     }
+    // INVOICE_CREDIT_OVER_CREDIT_GUARD
     if (amount.gt(remaining)) {
       throw new InvoiceCreditError("That amount is more than the remaining balance.");
     }
@@ -327,6 +352,7 @@ export async function recordOwnerInvoiceCredit(
           return {
             alreadyRecorded: true,
             created: false,
+            replayedViaLookup: false,
             creditId: raced.id,
             amountDue: afterRace.amountDue,
             recordedAmount: raced.amount,
@@ -337,6 +363,21 @@ export async function recordOwnerInvoiceCredit(
     }
 
     const nextDue = moneyMax(remaining.sub(amount));
+    if (nextDue.lte(0)) {
+      await tx.invoice.updateMany({
+        where: {
+          id: invoice.id,
+          businessId: access.businessId,
+          status: "SENT",
+        },
+        data: {
+          status: "PAID",
+          paidAt: new Date(),
+          paymentMethod: INVOICE_CLOSED_BY_CREDIT_METHOD,
+          paymentReference: invoiceClosedByCreditReference(created.id),
+        },
+      });
+    }
     await writeSettingsAuditLog(tx, {
       businessId: access.businessId,
       changedByMembershipId: recorder.id,
@@ -362,6 +403,7 @@ export async function recordOwnerInvoiceCredit(
     return {
       alreadyRecorded: false,
       created: true,
+      replayedViaLookup: false,
       creditId: created.id,
       amountDue: nextDue,
       recordedAmount: created.amount,

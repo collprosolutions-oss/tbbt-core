@@ -70,6 +70,7 @@ export async function loadJobProfitabilityCloseout(
     liveLines,
     invoices,
     payments,
+    invoiceCredits,
     timeEntries,
     expenses,
     changeOrders,
@@ -134,6 +135,11 @@ export async function loadJobProfitabilityCloseout(
       },
       take: CLOSEOUT_READ_BOUND,
       orderBy: { receivedAt: "asc" },
+    }),
+    prisma.invoiceCredit.findMany({
+      where: { businessId, invoice: { is: { businessId, jobId: job.id } } },
+      select: { invoiceId: true, amount: true },
+      take: CLOSEOUT_READ_BOUND,
     }),
     prisma.timeEntry.findMany({
       where: { businessId, jobId: job.id },
@@ -313,6 +319,10 @@ export async function loadJobProfitabilityCloseout(
     payments: payments.map((payment) => ({
       ...payment,
       amount: asNumber(payment.amount),
+    })),
+    invoiceCredits: invoiceCredits.map((credit) => ({
+      invoiceId: credit.invoiceId,
+      amount: asNumber(credit.amount),
     })),
     timeEntries: timeEntries.map((entry) => ({
       ...entry,

@@ -170,7 +170,8 @@ export function calculateJobProfitability(
     jobInvoices
       .filter((invoice) => invoice.status === "SENT")
       .reduce(
-        (sum, invoice) => sum + invoiceBalanceDue(invoice, source.payments, source.invoiceCredits),
+        (sum, invoice) =>
+          sum + invoiceBalanceDue(invoice, source.payments, source.invoiceCredits ?? []),
         0,
       ),
   );

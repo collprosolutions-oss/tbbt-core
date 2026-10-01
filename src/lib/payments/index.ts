@@ -32,6 +32,8 @@ export {
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
 export {
   applyVerifiedCheckoutPayment,
+  STRIPE_CREDIT_MISMATCH_REASON,
+  STRIPE_CREDIT_MISMATCH_REVIEW_NOTE,
   reconcileEstimateDepositCheckout,
   reconcileProjectTokenCheckoutPayment,
   reconcileStripeCheckoutPayment,

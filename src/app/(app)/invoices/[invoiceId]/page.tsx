@@ -138,13 +138,13 @@ export default async function InvoicePage({
             <a href={`/invoices/${invoice.id}/pdf`}>Download PDF</a>
           </Button>
           {isDraft ? <MarkInvoiceSentButton invoiceId={invoice.id} /> : null}
-          {isSent ? (
+          {isSent && !dueIsZero ? (
             <MarkInvoicePaidForm
               invoiceId={invoice.id}
               remainingDue={breakdown.amountDue.toFixed(2)}
             />
           ) : null}
-          {isSent && canRecordCredit ? (
+          {isSent && !dueIsZero && canRecordCredit ? (
             <RecordInvoiceCreditForm
               invoiceId={invoice.id}
               remainingDue={breakdown.amountDue.toFixed(2)}

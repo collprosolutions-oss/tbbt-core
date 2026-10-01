@@ -2128,7 +2128,8 @@ model InvoiceCredit {
   businessId             String
   invoiceId              String
   customerId             String?
-  /// Positive credit amount. Whole cents. Not a payment and not a refund.
+  /// Positive credit amount. Whole cents only (at most two decimal places).
+  /// Not a payment and not a refund.
   amount                 Decimal
   reason                 String
   recordedByMembershipId String

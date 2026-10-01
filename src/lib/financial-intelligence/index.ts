@@ -91,6 +91,7 @@ export { buildServiceProfitability, type ServiceProfitRow } from "@/lib/financia
 export type {
   FinancialChangeOrder,
   FinancialEstimateLine,
+  FinancialInvoiceCredit,
   FinancialPayment,
   FinancialSource,
   RecurringPatternRecord,

@@ -607,8 +607,13 @@ try {
   const sentPartial = invoiceBalanceDue(
     { id: "inv-sent-1000", total: 1000 },
     [{ id: "pay-400", amount: 400, invoiceId: "inv-sent-1000", jobId: "job-1", customerId: "c1", receivedAt: new Date() }],
+    [],
   );
   check("SENT $1000 with $400 collected has $600 remaining, not $1000", sentPartial === 600);
+  check(
+    "SENT $100 with a $40 credit has $60 remaining",
+    invoiceBalanceDue({ id: "inv-credit-100", total: 100 }, [], [{ invoiceId: "inv-credit-100", amount: 40 }]) === 60,
+  );
   const reconSource = financeSource({
     jobs: [{ id: "job-mix", status: "COMPLETED", createdAt: new Date(), customerId: "c1", estimateId: null }],
     customers: [{ id: "c1", name: "Ada", createdAt: new Date() }, { id: "c-partial", name: "Ned", createdAt: new Date() }],
