@@ -236,7 +236,7 @@ check(
     publicIntakeSubmissionLockKey("biz", "token12ab") === "tbbt.public-intake:biz:token12ab",
 );
 const mutatedIntakeSrc = publicIntakeSrc.replace(
-  /await tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{publicIntakeSubmissionLockKey\(business\.id, submissionId\)\}\)\)`;\s*/,
+  /await tx\.\$queryRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{publicIntakeSubmissionLockKey\(business\.id, submissionId\)\}\)\)`;\s*/,
   "",
 );
 const mutatedClaimSlice = mutatedIntakeSrc.slice(mutatedIntakeSrc.indexOf("if (submissionId) {"));

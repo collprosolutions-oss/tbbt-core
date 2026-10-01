@@ -424,7 +424,7 @@ export type PublicIntakeTx = {
       }>;
     }) => Promise<unknown>;
   };
-  $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
+  $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
 };
 
 export type PublicIntakeResult =
@@ -791,7 +791,7 @@ async function createPublicServiceRequestInner(
       }
 
       if (submissionId) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${publicIntakeSubmissionLockKey(business.id, submissionId)}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${publicIntakeSubmissionLockKey(business.id, submissionId)}))`;
         await publicIntakeTestHooks.afterSubmissionClaim?.({
           businessId: business.id,
           submissionId,
