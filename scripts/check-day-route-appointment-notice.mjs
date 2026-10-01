@@ -703,7 +703,7 @@ try {
   const movedAgain = await changeOwnerDayRouteAppointment(prisma, ownerAccess, {
     jobId: emailJob.id,
     date: dayIso,
-    time: "13:00",
+    time: "09:00",
     snapshot: staleSnapshot,
   });
   await expectThrow(
@@ -724,7 +724,7 @@ try {
   check(
     "Stale send did not notify the newer recorded change",
     sentEmails.length === 1 &&
-      movedAgain.scheduledAt.toISOString() === "2026-09-28T17:00:00.000Z",
+      movedAgain.scheduledAt.toISOString() === "2026-09-28T13:00:00.000Z",
   );
 
   console.log("\nTEST — SMS channel when email is unavailable");
