@@ -821,7 +821,6 @@ console.log("\nPURE — Inclusion, tenant fail-closed, and actionable hrefs");
       expectedHrefPrefix: "/jobs/",
     }) === true,
   );
-}
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
