@@ -11,6 +11,7 @@ import {
 import { OTHER_SERVICE_VALUE } from "@/lib/intake";
 import {
   catalogAsksWorkAreaIntake,
+  INTAKE_SUBMISSION_MARKER,
   joinRequestDescription,
   normalizeIntakeSubmissionId,
   validateWorkAreaIntakeAnswer,
@@ -64,8 +65,15 @@ import {
   resolvePublicRequestTrade,
 } from "@/lib/public-request-trade";
 import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
+import { claimPublicIntakeSubmission } from "@/lib/public-intake-submission";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
+
+export {
+  claimPublicIntakeSubmission,
+  publicIntakeSubmissionLockKey,
+  publicIntakeTestHooks,
+} from "@/lib/public-intake-submission";
 
 export type PublicIntakeInput = {
   slug: string;
@@ -778,10 +786,11 @@ async function createPublicServiceRequestInner(
       }
 
       if (submissionId) {
+        await claimPublicIntakeSubmission(tx, business.id, submissionId);
         const existing = await tx.serviceRequest.findFirst({
           where: {
             businessId: business.id,
-            description: { contains: submissionId },
+            description: { contains: `${INTAKE_SUBMISSION_MARKER}${submissionId}` },
           },
           select: { id: true },
         });

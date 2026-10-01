@@ -222,6 +222,12 @@ check(
     !requestFlowSrc.includes("Property / service address"),
 );
 check(
+  "Public contact page submits through the canonical request action with a submissionId",
+  readRepo("src/components/public/public-contact-form.tsx").includes("submitServiceRequest") &&
+    readRepo("src/components/public/public-contact-form.tsx").includes('formData.set("submissionId"') &&
+    readRepo("src/app/hire/[slug]/contact/page.tsx").includes("PublicContactForm"),
+);
+check(
   "Reusable address fields do not hardcode CollPro cities or Florida",
   !readRepo("src/components/public/service-address-fields.tsx").includes("Fort Myers") &&
     !readRepo("src/components/public/service-address-fields.tsx").includes("Cape Coral") &&
