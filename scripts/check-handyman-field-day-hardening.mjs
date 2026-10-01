@@ -896,8 +896,6 @@ try {
     "Membership lock barrier leaves no RUNNING time for an inactive member",
     deactivateRaceRow?.active === false && deactivateRaceRunning === 0,
   );
-  void deactivateRaceStart;
-  void deactivateRaceResult;
 
   const reassignRaceJob = await createJob(businessA, customerA);
   const reassignRaceScheduled = await scheduleWithAck(reassignRaceJob.id, {
