@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CopyDirectionsLinkButton } from "@/components/today/copy-directions-link-button";
 import { OwnerDayRouteAppointmentForm } from "@/components/today/owner-day-route-appointment-form";
+import { OwnerDayRouteAppointmentNoticeForm } from "@/components/today/owner-day-route-appointment-notice";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   ownerDayRouteMapsTruncationNote,
   type OwnerDayRouteView,
 } from "@/lib/owner-day-route";
+import type { OwnerDayRouteAppointmentNoticePreview } from "@/lib/owner-day-route-appointment-notice";
 
 function dayHref(dateIso: string) {
   return `${OWNER_DAY_ROUTE_PATH}?date=${dateIso}`;
@@ -32,11 +34,13 @@ export function OwnerDayRouteView({
   previousDateIso,
   nextDateIso,
   canChangeAppointment = false,
+  appointmentNotices = {},
 }: {
   view: OwnerDayRouteView;
   previousDateIso: string;
   nextDateIso: string;
   canChangeAppointment?: boolean;
+  appointmentNotices?: Record<string, OwnerDayRouteAppointmentNoticePreview>;
 }) {
   const truncationNote = ownerDayRouteMapsTruncationNote(view.maps);
 
@@ -174,6 +178,12 @@ export function OwnerDayRouteView({
                     date={formatISODateInTimeZone(stop.scheduledAt, view.timeZone)}
                     time={formatZonedTimeInput(stop.scheduledAt, view.timeZone)}
                     snapshot={stop.scheduleSnapshot}
+                  />
+                ) : null}
+                {canChangeAppointment && appointmentNotices[stop.jobId] ? (
+                  <OwnerDayRouteAppointmentNoticeForm
+                    notice={appointmentNotices[stop.jobId]}
+                    timeZone={view.timeZone}
                   />
                 ) : null}
               </article>

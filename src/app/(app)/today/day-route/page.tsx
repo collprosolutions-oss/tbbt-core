@@ -4,6 +4,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { requireManagementPageAccess } from "@/lib/access";
 import { loadOwnerDayRoute } from "@/lib/owner-day-route";
+import { loadOwnerDayRouteAppointmentNotices } from "@/lib/owner-day-route-appointment-notice-ops";
 import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate, parseScheduleDate } from "@/lib/schedule";
 
@@ -24,6 +25,10 @@ export default async function OwnerDayRoutePage({
     date: params.date,
     timeZone: access.workspace.business.timezone,
   });
+  const appointmentNotices = await loadOwnerDayRouteAppointmentNotices(prisma, access, {
+    jobIds: view.stops.map((stop) => stop.jobId),
+    timeZone: view.timeZone,
+  });
   const day = parseScheduleDate(params.date, view.timeZone);
   const previousDateIso = formatISODate(addDays(day, -1, view.timeZone), view.timeZone);
   const nextDateIso = formatISODate(addDays(day, 1, view.timeZone), view.timeZone);
@@ -39,6 +44,7 @@ export default async function OwnerDayRoutePage({
         previousDateIso={previousDateIso}
         nextDateIso={nextDateIso}
         canChangeAppointment={access.workspace.role === "OWNER"}
+        appointmentNotices={appointmentNotices}
       />
     </PageContainer>
   );
