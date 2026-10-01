@@ -153,7 +153,18 @@ try {
       parseServiceAreaLabelParts("Reno, Washoe County").city === "" &&
       parseServiceAreaLabelParts("89501").city === "" &&
       parseServiceAreaLabelParts(",NV").city === "" &&
-      parseServiceAreaLabelParts("Reno,").city === "",
+      parseServiceAreaLabelParts("Reno,").city === "" &&
+      parseServiceAreaLabelParts("Reno NV").city === "" &&
+      parseServiceAreaLabelParts("Reno-Sparks").city === "" &&
+      parseServiceAreaLabelParts("Northern Nevada").city === "" &&
+      parseServiceAreaLabelParts("Reno or Sparks").city === "",
+  );
+  check(
+    "Official hyphenated and multi-word cities still parse",
+    parseServiceAreaLabelParts("Winston-Salem, NC").city === "Winston-Salem" &&
+      parseServiceAreaLabelParts("Winston-Salem, NC").region === "NC" &&
+      parseServiceAreaLabelParts("Salt Lake City").city === "Salt Lake City" &&
+      parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers",
   );
   check(
     "A free-text region is never stored from the label",

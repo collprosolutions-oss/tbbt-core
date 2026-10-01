@@ -116,9 +116,9 @@ export function WebsiteSetupForm({
           />
           <p className="text-xs text-muted-foreground">
             Shown on the public site. A label like Reno or Reno, NV also
-            records that city for intake matching. Lists or phrases such as
-            Reno and Sparks stay as display copy until you add cities in
-            Settings → Service Area.
+            records that city for intake matching. State-less or mixed text
+            such as Reno NV, Reno-Sparks, or Greater Reno area stays
+            display-only until you add cities in Settings → Service Area.
           </p>
         </div>
 
