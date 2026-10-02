@@ -1043,7 +1043,11 @@ function SectionBody(props: SettingsWorkspaceProps) {
               Customers, properties, requests, estimates (with totals), jobs (with property links),
               invoices, payments, invoice credits, expenses, time cards, reviews, campaigns,
               project-document references, and settings for this workspace only. OWNER and ADMIN
-              can download this ZIP; it is not size-capped. Secrets omitted. Invoice, payment,
+              can download this ZIP. Matching rows are read in a RepeatableRead snapshot,
+              then vault files download after that snapshot commits, with an estimated-bytes
+              cap checked while reading; an oversized workspace fails
+              instead of omitting records or growing until the process runs out of memory.
+              Secrets omitted. Invoice, payment,
               credit, and expense CSVs are accountant-ready recorded TBBT truth.
             </p>
           </div>
