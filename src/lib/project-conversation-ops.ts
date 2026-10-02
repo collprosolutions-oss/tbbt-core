@@ -16,6 +16,7 @@ import {
 } from "@/lib/communications/engine";
 import { getOrCreateCustomerThread, touchCommunicationThread } from "@/lib/communications/thread";
 import { consentContextSnapshot } from "@/lib/communications/consent";
+import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging";
 import { isUsableEmail } from "@/lib/mail";
 import {
   MAX_PROJECT_CONVERSATION_MESSAGES,
@@ -297,11 +298,112 @@ export async function sendProjectConversationOwnerReply(
   if (!projectConversationHandymanEligible(job)) {
     return { ok: false, failureReason: PROJECT_CONVERSATION_ACTIVE_JOB_MESSAGE };
   }
+  if (input.browserBusinessId && input.browserBusinessId !== access.businessId) {
+    return {
+      ok: false,
+      communicationId: null,
+      threadId: null,
+      status: "BLOCKED",
+      channel: input.channel,
+      provider: "none",
+      reused: false,
+      failureReason: "Browser businessId never authorizes a send.",
+    };
+  }
 
+  const reserved = await reserveProjectConversationOwnerReply(db, {
+    access,
+    jobId: job.id,
+    businessId: job.businessId,
+    customerId,
+    channel: input.channel,
+    body,
+    subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
+    idempotencyKey: input.idempotencyKey,
+  });
+  if (!reserved.ok) {
+    return { ok: false, failureReason: reserved.failureReason };
+  }
+  if (reserved.alreadySent) {
+    return {
+      ok: true,
+      communicationId: reserved.communicationId,
+      threadId: reserved.threadId,
+      status: reserved.status,
+      channel: input.channel,
+      provider: reserved.provider,
+      reused: true,
+      failureReason: reserved.failureReason,
+    };
+  }
+
+  return composeCustomerCommunication(db, access, {
+    customerId,
+    channel: input.channel,
+    purpose: PROJECT_CONVERSATION_PURPOSE,
+    subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
+    body,
+    relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
+    relatedId: job.id,
+    idempotencyKey: input.idempotencyKey,
+    browserBusinessId: input.browserBusinessId,
+    resumeCommunicationId: reserved.resume ? reserved.communicationId : null,
+  });
+}
+
+const OWNER_REPLY_CLAIM_STATUS = "READY" as const;
+
+async function reserveProjectConversationOwnerReply(
+  db: PrismaClient,
+  input: {
+    access: BusinessAccess;
+    jobId: string;
+    businessId: string;
+    customerId: string;
+    channel: string;
+    body: string;
+    subject: string;
+    idempotencyKey: string;
+  },
+): Promise<
+  | { ok: false; failureReason: string }
+  | {
+      ok: true;
+      alreadySent: true;
+      communicationId: string;
+      threadId: string | null;
+      status: CommunicationSendResult["status"];
+      provider: string;
+      failureReason: string | null;
+    }
+  | { ok: true; alreadySent: false; communicationId: string; resume: boolean }
+> {
   return db.$transaction(async (tx) => {
-    const locked = await lockTenantOwnedJob(tx, job.businessId, job.id);
-    if (!locked || locked.businessId !== job.businessId) {
+    const locked = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+    if (!locked || locked.businessId !== input.businessId) {
       return { ok: false, failureReason: PROJECT_CONVERSATION_JOB_REQUIRED_MESSAGE };
+    }
+
+    const existing = await tx.customerCommunication.findFirst({
+      where: { businessId: input.businessId, idempotencyKey: input.idempotencyKey },
+      select: {
+        id: true,
+        status: true,
+        threadId: true,
+        provider: true,
+        failureReason: true,
+      },
+    });
+    if (existing && isAcceptedCustomerMessageStatus(existing.status)) {
+      return {
+        ok: true,
+        alreadySent: true,
+        communicationId: existing.id,
+        threadId: existing.threadId,
+        status: existing.status as CommunicationSendResult["status"],
+        provider: existing.provider,
+        failureReason: existing.failureReason,
+      };
     }
 
     const used = await countProjectConversationMessages(
@@ -309,21 +411,103 @@ export async function sendProjectConversationOwnerReply(
       locked.businessId,
       locked.id,
     );
-    if (used >= MAX_PROJECT_CONVERSATION_MESSAGES) {
+    const existingOccupiesSlot = Boolean(
+      existing &&
+        existing.status !== "BLOCKED" &&
+        existing.status !== "FAILED",
+    );
+    if (used >= MAX_PROJECT_CONVERSATION_MESSAGES && !existingOccupiesSlot) {
       return { ok: false, failureReason: PROJECT_CONVERSATION_BOUND_MESSAGE };
     }
+    if (existing) {
+      return {
+        ok: true,
+        alreadySent: false,
+        communicationId: existing.id,
+        resume: false,
+      };
+    }
 
-    return composeCustomerCommunication(tx, access, {
-      customerId,
-      channel: input.channel,
-      purpose: PROJECT_CONVERSATION_PURPOSE,
-      subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
-      body,
-      relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
-      relatedId: job.id,
-      idempotencyKey: input.idempotencyKey,
-      browserBusinessId: input.browserBusinessId,
+    const customer = await tx.customer.findFirst({
+      where: { id: input.customerId, businessId: input.businessId },
+      select: { id: true, name: true },
     });
+    if (!customer) {
+      return { ok: false, failureReason: PROJECT_CONVERSATION_CUSTOMER_REQUIRED_MESSAGE };
+    }
+    const thread = await getOrCreateCustomerThread(tx, {
+      businessId: input.businessId,
+      customerId: customer.id,
+      title: customer.name,
+    });
+
+    try {
+      const created = await tx.customerCommunication.create({
+        data: {
+          businessId: input.businessId,
+          customerId: customer.id,
+          threadId: thread?.id ?? null,
+          direction: "OUTBOUND",
+          channel: input.channel,
+          purpose: PROJECT_CONVERSATION_PURPOSE,
+          subject: input.subject,
+          relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
+          relatedId: input.jobId,
+          idempotencyKey: input.idempotencyKey,
+          bodySnapshot: input.body,
+          status: OWNER_REPLY_CLAIM_STATUS,
+          provider: "none",
+          initiatedByMembershipId: input.access.workspace.membership?.id ?? null,
+          attemptedAt: new Date(),
+        },
+        select: { id: true },
+      });
+      return {
+        ok: true,
+        alreadySent: false,
+        communicationId: created.id,
+        resume: true,
+      };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        const raced = await tx.customerCommunication.findFirst({
+          where: {
+            businessId: input.businessId,
+            idempotencyKey: input.idempotencyKey,
+          },
+          select: {
+            id: true,
+            status: true,
+            threadId: true,
+            provider: true,
+            failureReason: true,
+          },
+        });
+        if (raced && isAcceptedCustomerMessageStatus(raced.status)) {
+          return {
+            ok: true,
+            alreadySent: true,
+            communicationId: raced.id,
+            threadId: raced.threadId,
+            status: raced.status as CommunicationSendResult["status"],
+            provider: raced.provider,
+            failureReason: raced.failureReason,
+          };
+        }
+        if (raced) {
+          return {
+            ok: true,
+            alreadySent: false,
+            communicationId: raced.id,
+            resume: false,
+          };
+        }
+      }
+      throw error;
+    }
   });
 }
 

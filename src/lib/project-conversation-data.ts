@@ -72,11 +72,17 @@ export type OwnerProjectConversationReview = {
   messages: ProjectConversationMessage[];
 };
 
+const PROJECT_CONVERSATION_COUNTED_STATUSES_EXCLUDED = [
+  "BLOCKED",
+  "FAILED",
+] as const;
+
 function conversationWhere(businessId: string, jobId: string) {
   return {
     businessId,
     relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
     relatedId: jobId,
+    status: { notIn: [...PROJECT_CONVERSATION_COUNTED_STATUSES_EXCLUDED] },
     OR: [
       {
         direction: "INBOUND",

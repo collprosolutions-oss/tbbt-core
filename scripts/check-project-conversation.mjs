@@ -235,8 +235,16 @@ check(
     );
     const lockIdx = ownerReplySrc.indexOf("lockTenantOwnedJob");
     const countIdx = ownerReplySrc.indexOf("countProjectConversationMessages");
-    const composeIdx = ownerReplySrc.indexOf("composeCustomerCommunication");
-    return lockIdx >= 0 && countIdx > lockIdx && composeIdx > countIdx;
+    const claimIdx = ownerReplySrc.indexOf('status: OWNER_REPLY_CLAIM_STATUS');
+    const composeIdx = ownerReplySrc.indexOf("composeCustomerCommunication(db,");
+    return (
+      lockIdx >= 0 &&
+      countIdx > lockIdx &&
+      claimIdx > countIdx &&
+      composeIdx > claimIdx &&
+      ownerReplySrc.includes("resumeCommunicationId") &&
+      !ownerReplySrc.includes("composeCustomerCommunication(tx,")
+    );
   })(),
 );
 check(
@@ -267,7 +275,8 @@ check(
 check(
   "Conversation reads keep SYSTEM/MANUAL/PHONE job updates out of both views",
   dataSrc.includes("PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS") &&
-    dataSrc.includes("channel: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS] }"),
+    dataSrc.includes("channel: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS] }") &&
+    dataSrc.includes('status: { notIn: [...PROJECT_CONVERSATION_COUNTED_STATUSES_EXCLUDED] }'),
 );
 check(
   "Inputs are bounded and HTML is escaped at the HTML boundary",
@@ -343,7 +352,12 @@ try {
 
   const prisma = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
   const fakeEmails = [];
+  const emailDelayMsByKey = new Map();
   setCommunicationEmailSender(async (input) => {
+    const delayMs = emailDelayMsByKey.get(input.idempotencyKey);
+    if (delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
     fakeEmails.push(input);
     return { id: `fake-email:${input.idempotencyKey}` };
   });
@@ -907,6 +921,50 @@ try {
       ownerAfterHidden?.messages.some((row) => row.id === first.communicationId) === true,
   );
 
+  const failedCapJob = await createHandyJob(businessA.id, { name: "FailedCap" });
+  await prisma.customerCommunication.create({
+    data: {
+      businessId: businessA.id,
+      customerId: failedCapJob.customer.id,
+      direction: "OUTBOUND",
+      channel: "EMAIL",
+      purpose: "JOB_UPDATE",
+      relatedType: "JOB",
+      relatedId: failedCapJob.job.id,
+      idempotencyKey: `blocked:${randomUUID()}`,
+      bodySnapshot: "Blocked owner attempt should not eat the cap",
+      status: "BLOCKED",
+      provider: "test",
+    },
+  });
+  await prisma.customerCommunication.create({
+    data: {
+      businessId: businessA.id,
+      customerId: failedCapJob.customer.id,
+      direction: "OUTBOUND",
+      channel: "EMAIL",
+      purpose: "JOB_UPDATE",
+      relatedType: "JOB",
+      relatedId: failedCapJob.job.id,
+      idempotencyKey: `failed:${randomUUID()}`,
+      bodySnapshot: "Failed owner attempt should not eat the cap",
+      status: "FAILED",
+      provider: "test",
+    },
+  });
+  const failedCapReview = await loadOwnerProjectConversationReview(
+    prisma,
+    ownerA,
+    failedCapJob.job.id,
+  );
+  check(
+    "BLOCKED and FAILED owner attempts do not occupy the conversation cap",
+    failedCapReview?.remaining === MAX_PROJECT_CONVERSATION_MESSAGES &&
+      failedCapReview.messages.every(
+        (row) => row.status !== "BLOCKED" && row.status !== "FAILED",
+      ),
+  );
+
   console.log("\nCONCURRENT REPLIES — same key sends once; different keys stay ordered");
   const raceAttempt = randomUUID();
   const raceKey = composeIdempotencyKey({
@@ -1016,6 +1074,106 @@ try {
       orderedIds.length === 2 &&
       orderedIds[0] === expectedOrder[0] &&
       orderedIds[1] === expectedOrder[1],
+  );
+
+  console.log("\nSLOW PROVIDER — lock never spans the send");
+  const slowJob = await createHandyJob(businessA.id, { name: "Slow" });
+  const slowAttempt = randomUUID();
+  const slowKey = composeIdempotencyKey({
+    channel: "EMAIL",
+    purpose: "JOB_UPDATE",
+    customerId: slowJob.customer.id,
+    attemptId: slowAttempt,
+  });
+  emailDelayMsByKey.set(slowKey, 6200);
+  const slowStarted = Date.now();
+  const slowReply = await sendProjectConversationOwnerReply(prisma, ownerA, {
+    jobId: slowJob.job.id,
+    channel: "EMAIL",
+    body: "Slow provider reply",
+    subject: "Project conversation",
+    idempotencyKey: slowKey,
+  });
+  const slowElapsedMs = Date.now() - slowStarted;
+  const slowRetry = await sendProjectConversationOwnerReply(prisma, ownerA, {
+    jobId: slowJob.job.id,
+    channel: "EMAIL",
+    body: "Slow provider retry should not send again",
+    subject: "Project conversation",
+    idempotencyKey: slowKey,
+  });
+  emailDelayMsByKey.delete(slowKey);
+  const slowRows = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, idempotencyKey: slowKey },
+  });
+  const slowSends = fakeEmails.filter((row) => row.idempotencyKey === slowKey);
+  check(
+    "A provider slower than the Prisma transaction timeout still persists one sent row",
+    slowElapsedMs >= 6200 &&
+      slowReply.ok === true &&
+      slowReply.status === "SENT" &&
+      slowReply.reused === false &&
+      slowRows.length === 1 &&
+      slowRows[0].status === "SENT" &&
+      slowSends.length === 1,
+  );
+  check(
+    "Retry of the same slow-provider attempt does not send again",
+    slowRetry.ok === true &&
+      slowRetry.reused === true &&
+      slowRetry.communicationId === slowReply.communicationId &&
+      slowSends.length === 1 &&
+      slowRows.length === 1,
+  );
+
+  console.log("\nEIGHT SAME-KEY REPLIES — one send, one new row, bound holds");
+  const eightJob = await createHandyJob(businessA.id, { name: "Eight" });
+  for (let index = 0; index < 19; index += 1) {
+    const posted = await submitPortalProjectConversation(prisma, {
+      token: eightJob.job.projectToken,
+      body: `Eight prefill ${index + 1}`,
+      attemptId: randomUUID(),
+    });
+    if (!posted.ok) {
+      throw new Error(posted.error);
+    }
+  }
+  const eightAttempt = randomUUID();
+  const eightKey = composeIdempotencyKey({
+    channel: "EMAIL",
+    purpose: "JOB_UPDATE",
+    customerId: eightJob.customer.id,
+    attemptId: eightAttempt,
+  });
+  const eightInput = {
+    jobId: eightJob.job.id,
+    channel: "EMAIL",
+    body: "Eight concurrent same-key reply",
+    subject: "Project conversation",
+    idempotencyKey: eightKey,
+  };
+  const eightResults = await Promise.all(
+    Array.from({ length: 8 }, () => sendProjectConversationOwnerReply(prisma, ownerA, eightInput)),
+  );
+  const eightConversationCount = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "JOB",
+      relatedId: eightJob.job.id,
+      status: { notIn: ["BLOCKED", "FAILED"] },
+    },
+  });
+  const eightKeyRows = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, idempotencyKey: eightKey },
+  });
+  const eightSends = fakeEmails.filter((row) => row.idempotencyKey === eightKey);
+  check(
+    "Eight concurrent same-key OWNER replies at 19 messages stay at 20 rows and one send",
+    eightConversationCount === 20 &&
+      eightKeyRows.length === 1 &&
+      eightSends.length === 1 &&
+      eightResults.some((row) => row.ok && row.status === "SENT") &&
+      eightResults.every((row) => row.communicationId === eightKeyRows[0].id),
   );
 
   console.log("\nBOUND — conversation refuses a 21st message");
