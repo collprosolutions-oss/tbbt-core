@@ -137,8 +137,8 @@ check("scheduleJob / assignJobMember / startJob remain job actions",
     jobActionSrc.includes("export async function startJob"),
 );
 check(
-  "Financial complete still owns completeJobAndSendInvoice",
-  completeSrc.includes("export async function completeJobAndSendInvoice"),
+  "Financial complete still owns completeJobAndDraftInvoice",
+  completeSrc.includes("export async function completeJobAndDraftInvoice"),
 );
 check("Time tracking still owns clockInTime", timeSrc.includes("export async function clockInTime"));
 check(
@@ -186,7 +186,7 @@ try {
     await import("@/lib/appointment-confirmation");
   const { evaluateStartJob } = await import("@/lib/job-lifecycle");
   const { clockInTime, approveTimesheetWeek, TimeCardError } = await import("@/lib/time-card-ops");
-  const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+  const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
     "@/lib/complete-job-invoice"
   );
   const {
@@ -752,15 +752,15 @@ try {
   );
   notePhysical("Field / owner job photos against real Cloudflare R2");
 
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: job.id,
     businessName: businessA.name,
     actorMembershipId: ownerMem.id,
   });
-  check("completeJobAndSendInvoice succeeded", completed.ok === true);
+  check("completeJobAndDraftInvoice succeeded", completed.ok === true);
   if (!completed.ok) {
-    throw new Error(`completeJobAndSendInvoice failed: ${completed.error}`);
+    throw new Error(`completeJobAndDraftInvoice failed: ${completed.error}`);
   }
   check("Complete created an invoice", completed.invoiceCreated === true);
   check("Complete left the invoice as a draft", completed.newlySent === false && completed.invoiceStatus === "DRAFT");
@@ -773,7 +773,7 @@ try {
   noteAutomated("Complete Job left a draft; explicit sendDraftInvoiceIfNeeded sent it");
   notePhysical("Real invoice email/SMS to the customer");
 
-  const completedReplay = await completeJobAndSendInvoice(prisma, {
+  const completedReplay = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: job.id,
     businessName: businessA.name,

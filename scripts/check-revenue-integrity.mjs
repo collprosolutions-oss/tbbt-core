@@ -20,7 +20,7 @@ const {
   persistDraftInvoiceFromCompletedJob,
   persistDraftInvoiceTestHooks,
 } = await import("@/lib/invoice-carry-forward");
-const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
   "@/lib/complete-job-invoice"
 );
 const {
@@ -505,7 +505,7 @@ try {
     total: 100,
     description: "Keypad / Electronic Deadbolt Replacement",
   });
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
@@ -528,7 +528,7 @@ try {
   const earlyCoAfter = await prisma.changeOrder.findUniqueOrThrow({ where: { id: earlyCo.id } });
   check("approved CO at complete time is attached to the original invoice", earlyCoAfter.invoiceId === original.id);
 
-  const retry = await completeJobAndSendInvoice(prisma, {
+  const retry = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
@@ -614,7 +614,7 @@ try {
     jobId: work.job.id,
   });
   check("foreign business cannot persist an invoice for this job", foreignPersist.ok === false);
-  const foreignComplete = await completeJobAndSendInvoice(prisma, {
+  const foreignComplete = await completeJobAndDraftInvoice(prisma, {
     businessId: businessB.id,
     jobId: work.job.id,
     businessName: businessB.name,

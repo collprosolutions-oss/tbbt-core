@@ -360,7 +360,7 @@ export function buildBsosRecommendations(facts: BsosFacts): BsosRecommendation[]
       title: "Bill completed jobs that still have unbilled work",
       kind: "recommendation",
       priority: 7,
-      why: "A completed job has approved work that is not covered by a sent or paid invoice. Field completion does not send invoices.",
+      why: "A completed job has approved work that is not covered by a sent or paid invoice. Field completion does not send invoices. Owner Complete Job leaves a draft until Send.",
       facts: [
         {
           key: "unbilled-completed-jobs",

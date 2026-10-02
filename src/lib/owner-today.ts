@@ -34,7 +34,7 @@ export const OWNER_TODAY_CREATE_INVOICE_LABEL = "Create & send invoice";
 export const OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL =
   "Create & send balance invoice";
 export const OWNER_TODAY_FIELD_COMPLETION_COPY =
-  "Field completion does not send an invoice. Creating and sending an invoice remains an owner/admin action.";
+  "Field completion does not send an invoice. Owner Complete Job leaves a draft — press Send when ready.";
 
 export type DateRangeLike = { start: Date; end: Date };
 

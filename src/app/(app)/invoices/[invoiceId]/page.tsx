@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
+import { COMPLETE_JOB_DRAFT_INVOICE_MESSAGE } from "@/lib/complete-job-copy";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
@@ -325,7 +326,7 @@ export default async function InvoicePage({
           ) : null}
           <p>
             {isDraft
-              ? "Mark this invoice sent once you've delivered it to the customer."
+              ? COMPLETE_JOB_DRAFT_INVOICE_MESSAGE
               : isSent
                 ? dueIsZero
                   ? "Recorded payments already cover this invoice. Mark it paid when you are ready to close it."

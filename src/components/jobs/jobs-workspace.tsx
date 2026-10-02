@@ -6,6 +6,8 @@ import { Camera, ExternalLink, FileText, Mail, MapPin, Phone, Receipt, UserCog }
 import { AssignJobMemberForm, type EligibleMember } from "@/components/jobs/assign-job-member-form";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
+import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
+import { COMPLETE_JOB_DRAFT_INVOICE_MESSAGE } from "@/lib/complete-job-copy";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
@@ -539,12 +541,22 @@ function JobDetailsPanel({
         {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
         {isCompleted ? (
           job.invoice ? (
-            <Button asChild>
-              <Link href={`/invoices/${job.invoice.id}`}>
-                <Receipt className="size-4" />
-                Open Invoice
-              </Link>
-            </Button>
+            <div className="flex flex-col gap-2">
+              {job.invoice.status === "DRAFT" ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    {COMPLETE_JOB_DRAFT_INVOICE_MESSAGE}
+                  </p>
+                  <MarkInvoiceSentButton invoiceId={job.invoice.id} />
+                </>
+              ) : null}
+              <Button asChild>
+                <Link href={`/invoices/${job.invoice.id}`}>
+                  <Receipt className="size-4" />
+                  Open Invoice
+                </Link>
+              </Button>
+            </div>
           ) : (
             <CreateInvoiceButton jobId={job.id} />
           )

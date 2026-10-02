@@ -25,7 +25,7 @@ const {
   shouldShowPayDeposit,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
-const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
   "@/lib/complete-job-invoice"
 );
 const {
@@ -789,7 +789,7 @@ try {
       projectToken: randomUUID(),
     },
   });
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.business.id,
     jobId: job.id,
     businessName: businessA.business.name,

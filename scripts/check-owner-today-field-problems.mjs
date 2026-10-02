@@ -159,7 +159,7 @@ check(
     OWNER_TODAY_CREATE_INVOICE_LABEL === "Create & send invoice" &&
     OWNER_TODAY_CREATE_BALANCE_INVOICE_LABEL === "Create & send balance invoice" &&
     OWNER_TODAY_FIELD_COMPLETION_COPY.includes(
-      "Creating and sending an invoice remains an owner/admin action",
+      "Owner Complete Job leaves a draft — press Send when ready",
     ),
 );
 check(

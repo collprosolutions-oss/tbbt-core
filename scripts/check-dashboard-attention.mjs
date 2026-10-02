@@ -152,7 +152,7 @@ check(
     todayPageSrc.includes("OWNER_TODAY_FIELD_COMPLETION_COPY") &&
     OWNER_TODAY_FIELD_COMPLETION_COPY.includes("Field completion does not send an invoice") &&
     OWNER_TODAY_FIELD_COMPLETION_COPY.includes(
-      "Creating and sending an invoice remains an owner/admin action",
+      "Owner Complete Job leaves a draft — press Send when ready",
     ) &&
     !todayPageSrc.includes("Completing a job does not send money documents"),
 );
@@ -181,8 +181,8 @@ check(
       fieldJobActionSrc,
     ) &&
     !todayPageSrc.includes("completeAssignedJob") &&
-    !todayPageSrc.includes("completeJobAndSendInvoice") &&
-    !todayHelperSrc.includes("completeJobAndSendInvoice"),
+    !todayPageSrc.includes("completeJobAndDraftInvoice") &&
+    !todayHelperSrc.includes("completeJobAndDraftInvoice"),
 );
 check(
   "Today copy/open actions use owned job/customer refs",

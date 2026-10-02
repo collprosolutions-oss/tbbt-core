@@ -281,7 +281,7 @@ try {
     "@/app/actions/change-order"
   );
   const { approveChangeOrder } = await import("@/app/actions/public-change-order");
-  const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+  const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
     "@/lib/complete-job-invoice"
   );
   const { createInvoiceFromJob, markInvoicePaid } = await import("@/app/actions/invoice");
@@ -988,7 +988,7 @@ try {
   const foreignComplete = await completeNativeAssignedJob(prisma, ownerBNative.access, jobId);
   check("Tenant B cannot complete tenant A's job", foreignComplete.ok === false);
 
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId,
     businessName: businessA.name,
@@ -1024,7 +1024,7 @@ try {
       closeMoney(fieldChangeOrder.total, PINNED_FIELD_CHANGE_ORDER_TOTAL) &&
       closeMoney(originalInvoice.total, PINNED_ORIGINAL_INVOICE_TOTAL),
   );
-  const replayComplete = await completeJobAndSendInvoice(prisma, {
+  const replayComplete = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId,
     businessName: businessA.name,

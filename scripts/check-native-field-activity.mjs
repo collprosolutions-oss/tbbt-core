@@ -133,7 +133,7 @@ check(
     activityOpsSrc.includes("requireSaasOperatingEntitlement") &&
     startRouteSrc.includes("startNativeAssignedActivityTime") &&
     stopRouteSrc.includes("stopNativeAssignedActivityTime") &&
-    !activityOpsSrc.includes("completeJobAndSendInvoice") &&
+    !activityOpsSrc.includes("completeJobAndDraftInvoice") &&
     !activityOpsSrc.includes("startJobWithRunningTimeSafetyInTransaction"),
 );
 check(

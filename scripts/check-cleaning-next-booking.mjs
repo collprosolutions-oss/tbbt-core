@@ -178,7 +178,7 @@ check(
   opsSrc.includes("tx.job.create") &&
     !opsSrc.includes("invoice.create") &&
     !opsSrc.includes("persistDraftInvoice") &&
-    !opsSrc.includes("completeJobAndSendInvoice") &&
+    !opsSrc.includes("completeJobAndDraftInvoice") &&
     !opsSrc.includes("notifyCustomer") &&
     !opsSrc.includes("emitAndProcessBusinessEvent") &&
     !opsSrc.includes("projectRecurrenceOccurrences") &&

@@ -346,7 +346,9 @@ export function JobScreen({
               </Text>
             </Pressable>
           ) : job.status === "COMPLETED" ? (
-            <Text style={styles.body}>This job is complete.</Text>
+            <Text style={styles.body}>
+              This job is complete. The owner will review and send the invoice when ready.
+            </Text>
           ) : job.completeAction.reason && !job.startAction.available && !job.startAction.reason ? (
             <Text style={styles.notice}>{job.completeAction.reason}</Text>
           ) : null}

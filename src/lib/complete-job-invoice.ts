@@ -11,6 +11,10 @@
  * control stays on the Work Order Complete Job action.
  */
 import type { PrismaClient } from "@prisma/client";
+import {
+  COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  completeJobDraftInvoiceHref,
+} from "@/lib/complete-job-copy";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import {
@@ -63,6 +67,25 @@ export type SendDraftInvoiceResult =
       warning?: string;
     }
   | { ok: false; error: string; status?: string };
+
+export type OwnerCompleteJobSuccessState = {
+  message: string;
+  invoiceId: string;
+  invoiceHref: string;
+};
+
+export function ownerCompleteJobSuccessState(
+  result: Extract<CompleteJobInvoiceResult, { ok: true }>,
+): OwnerCompleteJobSuccessState {
+  return {
+    message:
+      result.invoiceStatus === "DRAFT"
+        ? COMPLETE_JOB_DRAFT_INVOICE_MESSAGE
+        : "Job completed.",
+    invoiceId: result.invoiceId,
+    invoiceHref: completeJobDraftInvoiceHref(result.invoiceId),
+  };
+}
 
 /** A customer notification is only attempted on a fresh DRAFT → SENT flip. */
 export function invoiceSendShouldNotify(status: string): boolean {
@@ -249,7 +272,7 @@ async function notifyCustomerInvoiceReady(
   return { sent: true };
 }
 
-export async function completeJobAndSendInvoice(
+export async function completeJobAndDraftInvoice(
   db: PrismaClient,
   input: {
     businessId: string;
