@@ -87,6 +87,27 @@ async function lockStorageAccountRow(
   return tx.businessStorageAccount.findUniqueOrThrow({ where: { id: accountId } });
 }
 
+async function lockPendingAssetRow(
+  tx: Prisma.TransactionClient,
+  input: { businessId: string; assetId: string },
+) {
+  await tx.$queryRaw`
+    SELECT id FROM "StoredAsset"
+    WHERE id = ${input.assetId} AND "businessId" = ${input.businessId}
+    FOR UPDATE
+  `;
+}
+
+/** Account row first, then the PENDING asset. The opposite order deadlocks finalize against abort/expiry. */
+async function lockAccountThenPendingAsset(
+  tx: Prisma.TransactionClient,
+  input: { accountId: string; businessId: string; assetId: string },
+) {
+  const account = await lockStorageAccountRow(tx, input.accountId);
+  await lockPendingAssetRow(tx, input);
+  return account;
+}
+
 async function releasePendingReservationInTx(
   tx: Prisma.TransactionClient,
   accountId: string,
@@ -231,8 +252,14 @@ async function releaseExpiredReservations(
   });
   if (expired.length === 0) return;
   const claimed = await db.$transaction(async (tx) => {
+    const accountIds = [...new Set(expired.map((row) => row.storageAccountId))].sort();
+    for (const accountId of accountIds) {
+      // LOCK_ACCOUNT_BEFORE_ASSET: expiry must match finalize (account, then asset).
+      await lockStorageAccountRow(tx, accountId);
+    }
     const won: typeof expired = [];
-    for (const row of expired) {
+    for (const row of [...expired].sort((left, right) => (left.id < right.id ? -1 : 1))) {
+      await lockPendingAssetRow(tx, { businessId, assetId: row.id });
       const updated = await tx.storedAsset.updateMany({
         where: { id: row.id, businessId, status: "PENDING" },
         data: { status: "FAILED", deletedAt: now },
@@ -426,6 +453,12 @@ export async function abortManagedUpload(
   if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: abort must match finalize (account, then asset).
+    await lockAccountThenPendingAsset(tx, {
+      accountId: existing.storageAccountId,
+      businessId,
+      assetId: existing.id,
+    });
     const updated = await tx.storedAsset.updateMany({
       where: { id: existing.id, businessId, status: "PENDING" },
       data: { status: "FAILED", deletedAt: now },
@@ -554,7 +587,11 @@ export async function finalizeManagedUpload(
 
   const result = await deps.db.$transaction(async (tx) => {
     await options?.beforeClaim?.(tx);
-    const lockedAccount = await lockStorageAccountRow(tx, asset.storageAccountId);
+    const lockedAccount = await lockAccountThenPendingAsset(tx, {
+      accountId: asset.storageAccountId,
+      businessId,
+      assetId: asset.id,
+    });
     const { resolveEffectiveStorageLimitBytes } = await import("@/lib/product-entitlements/limits");
     const limitBytes = await resolveEffectiveStorageLimitBytes(
       tx,

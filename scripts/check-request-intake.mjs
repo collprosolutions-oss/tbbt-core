@@ -49,7 +49,7 @@ const {
   sortedStoredAssetIds,
   UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
 } = await import("@/lib/business-storage/request-photos");
-const { authorizeManagedUpload, finalizeManagedUpload } = await import(
+const { abortManagedUpload, authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
 );
 const {
@@ -274,6 +274,208 @@ if (process.env.REQUEST_INTAKE_QUOTA_MUTATION === "1") {
     process.exit(ok ? 0 : 1);
   } catch (error) {
     console.error("FAIL - near-limit quota mutation child threw", error);
+    process.exit(1);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+function deadlockText(error) {
+  return [
+    error?.code,
+    error?.meta?.code,
+    error?.cause?.code,
+    error?.message,
+    error?.cause?.message,
+    String(error ?? ""),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isDeadlockError(error) {
+  return /40P01|deadlock detected|P2034/i.test(deadlockText(error));
+}
+
+function runPsqlOnTestDb(datasourceUrl, sql) {
+  const psqlUrl = new URL(datasourceUrl);
+  psqlUrl.searchParams.delete("schema");
+  return new Promise((resolve) => {
+    const child = spawn("psql", [psqlUrl.toString(), "-v", "ON_ERROR_STOP=1", "-c", sql], {
+      encoding: "utf8",
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      err += chunk;
+    });
+    child.on("close", (code) => {
+      resolve({
+        status: code === 0 ? "fulfilled" : "rejected",
+        reason: new Error(`${err}\n${out}`),
+        code,
+        err,
+        out,
+      });
+    });
+  });
+}
+
+async function holdAccountAndRace({ datasourceUrl, accountId, left, right }) {
+  const hold = runPsqlOnTestDb(
+    datasourceUrl,
+    [
+      "BEGIN;",
+      `SELECT id FROM "BusinessStorageAccount" WHERE id = '${accountId}' FOR UPDATE;`,
+      "SELECT pg_sleep(0.5);",
+      "COMMIT;",
+    ].join("\n"),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const raced = await Promise.allSettled([left(), right()]);
+  const held = await hold;
+  return { raced, held };
+}
+
+async function runHeldAccountFinalizeRaces({
+  prisma,
+  provider,
+  PrismaClient,
+  datasourceUrl,
+}) {
+  async function runOne(kind) {
+    const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+    const biz = await seedTightStorageBusiness(prisma, {
+      slug: `lock-${kind}-${suffix}`,
+      name: `Lock ${kind}`,
+      usedBytes: 0,
+      limitBytes: 1_000_000,
+    });
+    const deps = {
+      db: prisma,
+      provider,
+      bucketName: "tbbt-request-photos",
+      defaultLimitBytes: 1_000_000,
+    };
+    const body = Buffer.alloc(NEAR_LIMIT_PHOTO);
+    const authorized = await authorizeManagedUpload(deps, biz.id, {
+      category: "JOB_PHOTO",
+      purpose: "field-job-photo",
+      originalFilename: `${kind}-pending.png`,
+      mimeType: "image/png",
+      fileSizeBytes: NEAR_LIMIT_PHOTO,
+      visibility: "PRIVATE",
+    });
+    await provider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body,
+      contentType: "image/png",
+    });
+    if (kind === "sweep") {
+      await prisma.storedAsset.update({
+        where: { id: authorized.asset.id },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+    }
+    const before = await prisma.businessStorageAccount.findUniqueOrThrow({
+      where: { businessId: biz.id },
+    });
+    const leftClient = new PrismaClient({ datasourceUrl });
+    const rightClient = new PrismaClient({ datasourceUrl });
+    try {
+      const { raced, held } = await holdAccountAndRace({
+        datasourceUrl,
+        accountId: authorized.account.id,
+        left: () =>
+          finalizeManagedUpload({ ...deps, db: leftClient }, biz.id, authorized.asset.id),
+        right: () =>
+          kind === "abort"
+            ? abortManagedUpload({ ...deps, db: rightClient }, biz.id, authorized.asset.id)
+            : authorizeManagedUpload({ ...deps, db: rightClient }, biz.id, {
+                category: "JOB_PHOTO",
+                purpose: "field-job-photo",
+                originalFilename: `${kind}-trigger.png`,
+                mimeType: "image/png",
+                fileSizeBytes: NEAR_LIMIT_PHOTO,
+                visibility: "PRIVATE",
+              }),
+      });
+      const after = await prisma.businessStorageAccount.findUniqueOrThrow({
+        where: { businessId: biz.id },
+      });
+      const row = await prisma.storedAsset.findUniqueOrThrow({
+        where: { id: authorized.asset.id },
+      });
+      const deadlockSeen = [held, ...raced].some(
+        (item) =>
+          item.status === "rejected" &&
+          (isDeadlockError(item.reason) ||
+            /40P01|deadlock detected/i.test(`${item.err ?? ""} ${item.out ?? ""} ${item.reason ?? ""}`)),
+      );
+      const used = Number(after.storageUsedBytes);
+      const reserved = Number(after.storageReservedBytes);
+      const usedBefore = Number(before.storageUsedBytes);
+      const reservedBefore = Number(before.storageReservedBytes);
+      const ready = row.status === "READY";
+      const failed = row.status === "FAILED";
+      const quotaOk = ready
+        ? used === usedBefore + NEAR_LIMIT_PHOTO &&
+          reserved === reservedBefore - NEAR_LIMIT_PHOTO + (kind === "sweep" ? NEAR_LIMIT_PHOTO : 0)
+        : failed
+          ? used === usedBefore &&
+            reserved === reservedBefore - NEAR_LIMIT_PHOTO + (kind === "sweep" ? NEAR_LIMIT_PHOTO : 0)
+          : false;
+      return {
+        kind,
+        deadlockSeen,
+        ready,
+        failed,
+        used,
+        reserved,
+        quotaOk,
+        oneOutcome: (ready && !failed) || (!ready && failed),
+      };
+    } finally {
+      await leftClient.$disconnect();
+      await rightClient.$disconnect();
+    }
+  }
+  const abortRace = await runOne("abort");
+  const sweepRace = await runOne("sweep");
+  return { abortRace, sweepRace };
+}
+
+if (process.env.REQUEST_INTAKE_LOCK_ORDER_MUTATION === "1") {
+  const require = createRequire(import.meta.url);
+  const { PrismaClient } = require("@prisma/client");
+  const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+  const provider = new MemoryStorageProvider();
+  try {
+    const result = await runHeldAccountFinalizeRaces({
+      prisma,
+      provider,
+      PrismaClient,
+      datasourceUrl: process.env.DATABASE_URL,
+    });
+    const ok =
+      !result.abortRace.deadlockSeen &&
+      !result.sweepRace.deadlockSeen &&
+      result.abortRace.oneOutcome &&
+      result.sweepRace.oneOutcome &&
+      result.abortRace.quotaOk &&
+      result.sweepRace.quotaOk;
+    if (!ok) {
+      console.error(
+        `FAIL - held-account lock races abortDeadlock=${result.abortRace.deadlockSeen} sweepDeadlock=${result.sweepRace.deadlockSeen} abortReady=${result.abortRace.ready} sweepReady=${result.sweepRace.ready}`,
+      );
+    }
+    process.exit(ok ? 0 : 1);
+  } catch (error) {
+    console.error("FAIL - held-account lock mutation child threw", error);
     process.exit(1);
   } finally {
     await prisma.$disconnect();
@@ -641,13 +843,32 @@ const finalizeManagedSrc = storageServiceSrc.slice(
 check(
   "Finalize re-checks entitled quota under the account lock before charging used bytes",
   finalizeManagedSrc.indexOf("await options?.beforeClaim") <
-    finalizeManagedSrc.indexOf("lockStorageAccountRow") &&
-    finalizeManagedSrc.indexOf("lockStorageAccountRow") <
+    finalizeManagedSrc.indexOf("lockAccountThenPendingAsset") &&
+    finalizeManagedSrc.indexOf("lockAccountThenPendingAsset") <
       finalizeManagedSrc.indexOf("hasEnoughStorage") &&
     finalizeManagedSrc.includes("failPendingAssetAndReleaseReservation") &&
     finalizeManagedSrc.includes('kind: "quota"') &&
     finalizeManagedSrc.includes("pendingReservationBytesToRelease") &&
     storageServiceSrc.includes("width: 0"),
+);
+const abortManagedSrc = storageServiceSrc.slice(
+  storageServiceSrc.indexOf("export async function abortManagedUpload"),
+  storageServiceSrc.indexOf("export type DiscardReadyManagedUploadMatch"),
+);
+const expireReservationsSrc = storageServiceSrc.slice(
+  storageServiceSrc.indexOf("async function releaseExpiredReservations"),
+  storageServiceSrc.indexOf("export type AuthorizeManagedUploadOptions"),
+);
+check(
+  "Abort and expiry sweep lock the storage account before the PENDING asset",
+  abortManagedSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
+    abortManagedSrc.indexOf("lockAccountThenPendingAsset") <
+      abortManagedSrc.indexOf("storedAsset.updateMany") &&
+    expireReservationsSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
+    expireReservationsSrc.indexOf("lockStorageAccountRow") <
+      expireReservationsSrc.indexOf("storedAsset.updateMany") &&
+    expireReservationsSrc.indexOf("lockPendingAssetRow") <
+      expireReservationsSrc.indexOf("storedAsset.updateMany"),
 );
 check(
   "Public request photo finalize is slug-authorized and ignores browser businessId",
@@ -2850,6 +3071,88 @@ try {
       legacyFinalizeAfter.reserved === 0 &&
       legacyFinalizeAfter.used === legacyFinalizeBefore.used + NEAR_LIMIT_PHOTO,
   );
+
+  const heldAccountRaces = await runHeldAccountFinalizeRaces({
+    prisma,
+    provider,
+    PrismaClient,
+    datasourceUrl: testUrl,
+  });
+  check(
+    "Held-account finalize+abort and finalize+sweep do not deadlock and keep one quota outcome",
+    !heldAccountRaces.abortRace.deadlockSeen &&
+      !heldAccountRaces.sweepRace.deadlockSeen &&
+      heldAccountRaces.abortRace.oneOutcome &&
+      heldAccountRaces.sweepRace.oneOutcome &&
+      heldAccountRaces.abortRace.quotaOk &&
+      heldAccountRaces.sweepRace.quotaOk,
+  );
+
+  const lockOrderBackupPath = `/tmp/tbbt-service-lock-order-bak-${randomUUID()}.ts`;
+  const lockOrderOriginal = readFileSync(servicePath, "utf8");
+  const abortAccountFirstBlock = `    // LOCK_ACCOUNT_BEFORE_ASSET: abort must match finalize (account, then asset).
+    await lockAccountThenPendingAsset(tx, {
+      accountId: existing.storageAccountId,
+      businessId,
+      assetId: existing.id,
+    });
+`;
+  const expireAccountFirstBlock = `    const accountIds = [...new Set(expired.map((row) => row.storageAccountId))].sort();
+    for (const accountId of accountIds) {
+      // LOCK_ACCOUNT_BEFORE_ASSET: expiry must match finalize (account, then asset).
+      await lockStorageAccountRow(tx, accountId);
+    }
+    const won: typeof expired = [];
+    for (const row of [...expired].sort((left, right) => (left.id < right.id ? -1 : 1))) {
+      await lockPendingAssetRow(tx, { businessId, assetId: row.id });
+`;
+  const expireAccountFirstRestore = `    const won: typeof expired = [];
+    for (const row of expired) {
+`;
+  copyFileSync(servicePath, lockOrderBackupPath);
+  try {
+    check(
+      "Lock-order mutation setup finds account-before-asset abort and expiry locks",
+      lockOrderOriginal.includes(abortAccountFirstBlock) &&
+        lockOrderOriginal.includes(expireAccountFirstBlock),
+    );
+    writeFileSync(
+      servicePath,
+      lockOrderOriginal
+        .replace(abortAccountFirstBlock, "")
+        .replace(expireAccountFirstBlock, expireAccountFirstRestore),
+    );
+    const lockChild = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", fileURLToPath(import.meta.url)],
+      {
+        env: { ...process.env, REQUEST_INTAKE_LOCK_ORDER_MUTATION: "1", DATABASE_URL: testUrl },
+        encoding: "utf8",
+        timeout: 120_000,
+      },
+    );
+    check(
+      "Reverting abort/expiry to asset-first locks deadlocks held-account finalize races",
+      lockChild.status !== 0 &&
+        /abortDeadlock=true|sweepDeadlock=true|deadlock/i.test(
+          `${lockChild.stdout ?? ""}\n${lockChild.stderr ?? ""}`,
+        ),
+    );
+    if (
+      lockChild.status === 0 ||
+      !/abortDeadlock=true|sweepDeadlock=true|deadlock/i.test(
+        `${lockChild.stdout ?? ""}\n${lockChild.stderr ?? ""}`,
+      )
+    ) {
+      console.error((lockChild.stdout || "").slice(-2000));
+      console.error((lockChild.stderr || "").slice(-1000));
+    }
+  } finally {
+    writeFileSync(servicePath, lockOrderOriginal);
+    const restoredLock = spawnSync("cmp", [servicePath, lockOrderBackupPath]);
+    check("service.ts restored after lock-order mutation", restoredLock.status === 0);
+    unlinkSync(lockOrderBackupPath);
+  }
 
   const releaseOnce = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
     originalFilename: "release-once.png",
