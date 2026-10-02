@@ -180,7 +180,8 @@ check(
     payInvoice.includes("if (pending)") &&
     payDeposit.includes("OnceSubmitButton") &&
     payDeposit.includes("if (pending)") &&
-    onceSubmit.includes("setPending(true)"),
+    onceSubmit.includes("setPending(true)") &&
+    onceSubmit.includes("window.setTimeout(() => setPending(true), 0)"),
 );
 check(
   "Fake Stripe checkout stays on the local test page",
