@@ -153,7 +153,7 @@ const NY = "America/New_York";
 const LA = "America/Los_Angeles";
 const dayIso = "2026-09-28";
 const morning = new Date("2026-09-28T13:00:00.000Z"); // 9:00 AM ET
-const afternoon = new Date("2026-09-28T18:00:00.000Z"); // 2:00 PM ET
+const afternoon = new Date("2026-09-28T15:00:00.000Z"); // 11:00 AM ET
 const laterStart = parseScheduleStart(dayIso, "16:00", NY);
 const overlapStart = parseScheduleStart(dayIso, "09:30", NY);
 const pickupOverlapStart = parseScheduleStart(dayIso, "09:00", NY);
@@ -553,7 +553,7 @@ try {
     "Recorded-order route puts the moved stop after the afternoon job",
     Boolean(lateStop && earlyStop) &&
       (lateStop?.sequence ?? 0) < (earlyStop?.sequence ?? 0) &&
-      lateStop?.appointmentWindowLabel?.includes("2:00") === true &&
+      lateStop?.appointmentWindowLabel?.includes("11:00") === true &&
       earlyStop?.appointmentWindowLabel?.includes("4:00") === true,
   );
   const refreshedAddresses = extractOwnerDayRouteMapsAddresses(refreshed.maps.href);
@@ -599,17 +599,20 @@ try {
 
   const currentEarly = await prisma.job.findFirst({ where: { id: earlyJob.id } });
   const concurrentSnapshot = scheduleSnapshotFromJob(currentEarly);
+  // 14:00 / 15:00 stay clear of the 11:00 afternoon stop: that job occupies
+  // 11:00-12:00, plus the 30-minute buffer, and this stop still carries a
+  // 45-minute pickup. 11:00/12:00 would both be occupancy rejections.
   const [first, second] = await Promise.allSettled([
     changeOwnerDayRouteAppointment(prisma, ownerAccess, {
       jobId: earlyJob.id,
       date: dayIso,
-      time: "11:00",
+      time: "14:00",
       snapshot: concurrentSnapshot,
     }),
     changeOwnerDayRouteAppointment(prisma, ownerAccess, {
       jobId: earlyJob.id,
       date: dayIso,
-      time: "12:00",
+      time: "15:00",
       snapshot: concurrentSnapshot,
     }),
   ]);
@@ -624,7 +627,7 @@ try {
       concurrentLosses[0]?.reason instanceof Error &&
       dayRouteAppointmentErrorMessage(concurrentLosses[0].reason, "") ===
         DAY_ROUTE_APPOINTMENT_STALE_MESSAGE &&
-      (winnerIso === "2026-09-28T15:00:00.000Z" || winnerIso === "2026-09-28T16:00:00.000Z"),
+      (winnerIso === "2026-09-28T18:00:00.000Z" || winnerIso === "2026-09-28T19:00:00.000Z"),
   );
   const lateAfterConcurrent = await prisma.job.findFirst({ where: { id: lateJob.id } });
   check(

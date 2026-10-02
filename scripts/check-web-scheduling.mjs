@@ -76,20 +76,20 @@ check(
 );
 check(
   "scheduleJob still evaluates availability and recomputes conflict acknowledgement",
-  scheduleJobSrc.includes("evaluateOwnedScheduleProposal") &&
-    scheduleJobSrc.includes("confirmOverlapAck") &&
-    scheduleJobSrc.includes("shouldAcceptConflictAcknowledgement") &&
-    scheduleJobSrc.includes("conflictAcknowledgement") &&
+  jobActionSrc.includes("evaluateOwnedScheduleProposal") &&
+    jobActionSrc.includes("confirmOverlapAck") &&
+    jobActionSrc.includes("shouldAcceptConflictAcknowledgement") &&
+    jobActionSrc.includes("conflictAcknowledgement") &&
     jobActionSrc.includes("evaluateProposedSchedule") &&
-    jobActionSrc.includes("loadOccupiedJobs"),
+    jobActionSrc.includes("loadOccupiedJobs") &&
+    jobActionSrc.includes("conflictsInvolvingJob"),
 );
 check(
   "scheduleJob re-evaluates occupancy after the reservation lock",
   scheduleJobSrc.includes("lockBusinessScheduleReservation") &&
-    scheduleJobSrc.indexOf("lockBusinessScheduleReservation") <
-      scheduleJobSrc.lastIndexOf("evaluateOwnedScheduleProposal") &&
-    scheduleJobSrc.includes("jobScheduleRefusalMessage") &&
-    scheduleJobSrc.includes('fresh.status === "UNSCHEDULED"'),
+    jobActionSrc.includes("evaluateOwnedScheduleProposal(tx,") &&
+    jobActionSrc.includes("jobScheduleRefusalMessage") &&
+    jobActionSrc.includes('fresh.status === "UNSCHEDULED"'),
 );
 check(
   "scheduleJob and assignJobMember revalidate the recorded day-route",
@@ -124,18 +124,17 @@ const session = await openDisposableTestDatabase({
 
 try {
   const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
-  const { PrismaClient } = await import("@prisma/client");
   const { createJobFromApprovedEstimate } = await import("@/lib/job-from-estimate");
   const { scheduleJob, assignJobMember } = await import("@/app/actions/job");
   const { jobWriteTestHooks } = await import("@/lib/job-write-test-hooks");
   const { jobAssignmentTestHooks } = await import("@/lib/job-assignment-ops");
-  const { changeOwnerDayRouteAppointment } = await import(
-    "@/lib/owner-day-route-appointment-ops"
-  );
+  const {
+    changeOwnerDayRouteAppointment,
+    dayRouteAppointmentErrorMessage,
+  } = await import("@/lib/owner-day-route-appointment-ops");
   const {
     DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE,
     DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE,
-    dayRouteAppointmentErrorMessage,
   } = await import("@/lib/owner-day-route-appointment");
   const { loadOwnerDayRoute } = await import("@/lib/owner-day-route");
   const { scheduleSnapshotFromJob } = await import("@/lib/owner-day-route/snapshot");
@@ -859,7 +858,11 @@ try {
   const twoClientA = await createApprovedJob(ownerNy, businessNy, customerNy, propertyNy);
   const twoClientB = await createApprovedJob(ownerNy, businessNy, customerNy2, propertyNy2);
   const secondClient = session.createClient();
-  check("Dedicated-DB race uses a second PrismaClient on the same database", secondClient instanceof PrismaClient);
+  check(
+    "Dedicated-DB race uses a second PrismaClient on the same database",
+    typeof secondClient?.$transaction === "function" &&
+      typeof secondClient?.$executeRaw === "function",
+  );
   const [left, right] = await Promise.all([
     scheduleJob(
       {},

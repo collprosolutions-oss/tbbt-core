@@ -65,7 +65,11 @@ import {
   WorkforceValidationError,
 } from "@/lib/workforce";
 import { laterJobsHurtByMove } from "@/lib/workforce-capacity";
-import { describeConflicts, detectScheduleConflicts } from "@/lib/workforce-conflicts";
+import {
+  conflictsInvolvingJob,
+  describeConflicts,
+  detectScheduleConflicts,
+} from "@/lib/workforce-conflicts";
 import {
   loadCapacityJobs,
   loadSchedulingPolicy,
@@ -230,6 +234,7 @@ async function evaluateOwnedScheduleProposal(
     existing: capacityJobs.filter((row) => row.id !== input.job.id),
     membershipId: input.job.assignedMembershipId,
   });
+  const relevantConflicts = conflictsInvolvingJob(conflicts, input.job.id);
   const warning =
     (hasScheduleWarning(evaluation)
       ? describeScheduleWarning(
@@ -239,7 +244,7 @@ async function evaluateOwnedScheduleProposal(
           settings,
           input.timeZone,
         )
-      : null) ?? describeConflicts(conflicts);
+      : null) ?? describeConflicts(relevantConflicts);
   const currentAck = conflictAcknowledgement({
     jobId: input.job.id,
     start: input.start,
@@ -247,8 +252,8 @@ async function evaluateOwnedScheduleProposal(
     pickupMinutes: input.pickupDurationMinutes,
     assignedMembershipId: input.job.assignedMembershipId,
     conflicts: warning
-      ? conflicts.length > 0
-        ? conflicts
+      ? relevantConflicts.length > 0
+        ? relevantConflicts
         : [{ kind: "AVAILABILITY", jobId: input.job.id, severity: "WARNING" }]
       : [],
   });
