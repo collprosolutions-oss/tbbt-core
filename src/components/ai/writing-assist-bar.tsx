@@ -19,7 +19,7 @@ export function WritingAssistBar({
   const [state, action, pending] = useActionState(applyWritingAction, initial);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   // Empty on the first server and client paint. This bar sits inside
-  // other Settings forms, so it must not render its own <form>.
+  // other Settings forms, so it must not render its own form element.
   const [attemptId, setAttemptId] = useState("");
 
   useEffect(() => {

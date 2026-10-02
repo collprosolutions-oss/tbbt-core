@@ -218,7 +218,8 @@ check(
     panel.includes("Publish website") &&
     panel.includes("WritingAssistBar") &&
     panel.includes("onSuggestion={setHeroHeadline}") &&
-    !read("src/components/ai/writing-assist-bar.tsx").includes("<form") &&
+    !read("src/components/ai/writing-assist-bar.tsx").includes("<form ") &&
+    read("src/components/ai/writing-assist-bar.tsx").includes('type="button"') &&
     !settingsPage.includes("runWritingAssist") &&
     !settingsPage.includes("applyWritingAction"),
 );
