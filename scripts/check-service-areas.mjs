@@ -8,6 +8,8 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -28,14 +30,22 @@ const {
   qualifyServiceAddress,
   publicServiceCityPath,
   resolvePublicLocalPage,
+  serviceAreaCities,
   slugifyLocalPagePart,
 } = await import("@/lib/service-areas");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
-const { upsertServiceArea, setServiceAreaEnabled, ServiceAreaError } = await import(
-  "@/lib/service-area-ops"
-);
+const { loadPublicBusiness } = await import("@/lib/public-site-data");
+const {
+  listServiceAreas,
+  setServiceAreaEnabled,
+  ServiceAreaError,
+  syncPrimaryCityServiceAreaFromLabel,
+  upsertServiceArea,
+} = await import("@/lib/service-area-ops");
 const { createMarketingCampaign } = await import("@/lib/marketing-ops");
 const { nextContentStatus } = await import("@/lib/marketing");
+
+const mutationChild = Boolean(process.env.SERVICE_AREA_PARSER_MUTATION_CHILD);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -169,6 +179,39 @@ try {
       parseServiceAreaLabelParts("Winston-Salem, NC").region === "NC" &&
       parseServiceAreaLabelParts("Salt Lake City").city === "Salt Lake City" &&
       parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers",
+  );
+  check(
+    "Washington, PA and Indiana, PA parse as single cities, not states",
+    parseServiceAreaLabelParts("Washington, PA").city === "Washington" &&
+      parseServiceAreaLabelParts("Washington, PA").region === "PA" &&
+      parseServiceAreaLabelParts("Indiana, PA").city === "Indiana" &&
+      parseServiceAreaLabelParts("Indiana, PA").region === "PA",
+  );
+  check(
+    "Bare Washington / Indiana stay display-only",
+    parseServiceAreaLabelParts("Washington").city === "" &&
+      parseServiceAreaLabelParts("Indiana").city === "",
+  );
+  check(
+    "Reno. and Sparks NV. stay display-only junk punctuation",
+    parseServiceAreaLabelParts("Reno.").city === "" &&
+      parseServiceAreaLabelParts("Sparks NV.").city === "",
+  );
+  check(
+    "Broad marketing prose does not infer a city or region",
+    parseServiceAreaLabelParts("Serving homeowners across Western Pennsylvania").city === "" &&
+      parseServiceAreaLabelParts("Greater Reno area").city === "" &&
+      parseServiceAreaLabelParts("Northern Nevada, NV").city === "" &&
+      parseServiceAreaLabelParts("New York, NY").city === "",
+  );
+  check(
+    "Same-state and district labels stay display-only",
+    parseServiceAreaLabelParts("Nevada, NV").city === "" &&
+      parseServiceAreaLabelParts("Texas, TX").city === "" &&
+      parseServiceAreaLabelParts("Florida, FL").city === "" &&
+      parseServiceAreaLabelParts("Washington, WA").city === "" &&
+      parseServiceAreaLabelParts("Indiana, IN").city === "" &&
+      parseServiceAreaLabelParts("Washington, DC").city === "",
   );
   check(
     "A free-text region is never stored from the label",
@@ -396,6 +439,372 @@ try {
   const betaCampaigns = await prisma.marketingCampaign.findMany({ where: { businessId: businessB.id } });
   check("Business B does not see A's campaigns", betaCampaigns.length === 1 && betaCampaigns[0].id === campaignB.id);
 
+  console.log("\nDB — #249 city-list and public-intake proofs");
+
+  function toConfiguredAreas(rows) {
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      label: row.label,
+      city: row.city,
+      region: row.region,
+      postalCode: row.postalCode,
+      enabled: row.enabled,
+      travelAdjustment:
+        row.travelAdjustment == null
+          ? null
+          : typeof row.travelAdjustment === "number"
+            ? row.travelAdjustment
+            : row.travelAdjustment.toNumber(),
+      minimumAdjustment:
+        row.minimumAdjustment == null
+          ? null
+          : typeof row.minimumAdjustment === "number"
+            ? row.minimumAdjustment
+            : row.minimumAdjustment.toNumber(),
+      notes: row.notes,
+    }));
+  }
+
+  function officialPaCityProofSafe(result) {
+    return Boolean(
+      result.created &&
+        result.areaCount === 1 &&
+        result.city === result.expectedCity &&
+        result.region === "PA" &&
+        result.cities.length === 1 &&
+        result.cities[0] === result.expectedCity &&
+        result.publicCities.length === 1 &&
+        result.publicCities[0] === result.expectedCity &&
+        result.qualification === "IN_AREA" &&
+        result.storedQualification === "IN_AREA" &&
+        result.otherQualification === "OUTSIDE_PREFERRED" &&
+        result.intakeOk === true &&
+        result.otherTenantCities.includes(result.expectedCity) === false,
+    );
+  }
+
+  function displayOnlyLabelSafe(result) {
+    return Boolean(
+      result.created === false &&
+        result.updated === false &&
+        result.areaCount === 0 &&
+        result.cities.length === 0 &&
+        result.publicCities.length === 0 &&
+        result.qualification === "UNKNOWN" &&
+        result.storedQualification === "UNKNOWN" &&
+        result.intakeOk === true,
+    );
+  }
+
+  async function proveOfficialPaCity(label, expectedCity, otherAccess) {
+    const token = randomUUID().slice(0, 8);
+    const business = await prisma.business.create({
+      data: {
+        name: `${expectedCity} Areas`,
+        slug: `${expectedCity.toLowerCase()}-areas-${token}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const ownerUser = await prisma.user.create({
+      data: {
+        name: `${expectedCity} Owner`,
+        email: `${expectedCity.toLowerCase()}-owner-${token}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, "OWNER", membership.id);
+    const sync = await syncPrimaryCityServiceAreaFromLabel(prisma, access, label);
+    const areas = await listServiceAreas(prisma, business.id);
+    const cities = serviceAreaCities(areas);
+    const publicSite = await loadPublicBusiness(business.slug, prisma);
+    const publicCities = publicSite?.configuredCities ?? [];
+    const qualification = qualifyServiceAddress(areas, { city: expectedCity });
+    const otherCity = expectedCity === "Washington" ? "Indiana" : "Washington";
+    const otherQualification = qualifyServiceAddress(areas, { city: otherCity });
+    const intake = await createPublicServiceRequest(prisma, {
+      slug: business.slug,
+      name: `${expectedCity} Homeowner`,
+      email: `${expectedCity.toLowerCase()}-intake-${token}@example.com`,
+      phone: "",
+      address: "",
+      streetAddress: "10 Main St",
+      city: expectedCity,
+      region: "PA",
+      postalCode: expectedCity === "Washington" ? "15301" : "15701",
+      notes: "Need a repair",
+      catalogItemIds: [],
+      includeOther: true,
+      otherDescription: "Repair",
+      configuredAreas: toConfiguredAreas(areas),
+    });
+    let storedQualification = null;
+    if (intake.ok) {
+      const request = await prisma.serviceRequest.findFirst({
+        where: { id: intake.requestId },
+        select: { serviceAreaQualification: true, businessId: true },
+      });
+      storedQualification = request?.serviceAreaQualification ?? null;
+      check(
+        `${label} intake stays on its tenant`,
+        request?.businessId === business.id,
+      );
+    }
+    const otherTenantAreas = await listServiceAreas(prisma, otherAccess.businessId);
+    const otherTenantCities = serviceAreaCities(otherTenantAreas);
+    return {
+      expectedCity,
+      created: sync.created,
+      areaCount: areas.length,
+      city: areas[0]?.city ?? null,
+      region: areas[0]?.region ?? null,
+      cities,
+      publicCities,
+      qualification: qualification.qualification,
+      otherQualification: otherQualification.qualification,
+      storedQualification,
+      intakeOk: intake.ok,
+      otherTenantCities,
+      access,
+      businessId: business.id,
+    };
+  }
+
+  async function proveDisplayOnlyLabel(label) {
+    const token = randomUUID().slice(0, 8);
+    const slugLabel = label.replace(/[^a-zA-Z]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "junk";
+    const business = await prisma.business.create({
+      data: {
+        name: `Display ${slugLabel}`,
+        slug: `display-${slugLabel}-${token}`,
+        tradeCode: "HANDYMAN",
+        publicServiceAreaLabel: label,
+      },
+    });
+    const ownerUser = await prisma.user.create({
+      data: {
+        name: `Display Owner ${token}`,
+        email: `display-owner-${token}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, "OWNER", membership.id);
+    const sync = await syncPrimaryCityServiceAreaFromLabel(prisma, access, label);
+    const areas = await listServiceAreas(prisma, business.id);
+    const cities = serviceAreaCities(areas);
+    const publicSite = await loadPublicBusiness(business.slug, prisma);
+    const publicCities = publicSite?.configuredCities ?? [];
+    const qualification = qualifyServiceAddress(areas, { city: "Reno" });
+    const intake = await createPublicServiceRequest(prisma, {
+      slug: business.slug,
+      name: "Display Homeowner",
+      email: `display-intake-${token}@example.com`,
+      phone: "",
+      address: "",
+      streetAddress: "200 Second St",
+      city: "Reno",
+      region: "NV",
+      postalCode: "89501",
+      notes: "Probe",
+      catalogItemIds: [],
+      includeOther: true,
+      otherDescription: "Probe",
+      configuredAreas: toConfiguredAreas(areas),
+    });
+    let storedQualification = null;
+    if (intake.ok) {
+      const request = await prisma.serviceRequest.findFirst({
+        where: { id: intake.requestId },
+        select: { serviceAreaQualification: true, businessId: true },
+      });
+      storedQualification = request?.serviceAreaQualification ?? null;
+      check(
+        `${JSON.stringify(label)} intake stays UNKNOWN on its tenant`,
+        request?.businessId === business.id && storedQualification === "UNKNOWN",
+      );
+    }
+    const saved = await prisma.business.findUnique({
+      where: { id: business.id },
+      select: { publicServiceAreaLabel: true },
+    });
+    return {
+      label,
+      labelSaved: saved?.publicServiceAreaLabel === label,
+      created: sync.created,
+      updated: sync.updated,
+      areaCount: areas.length,
+      cities,
+      publicCities,
+      qualification: qualification.qualification,
+      storedQualification,
+      intakeOk: intake.ok,
+      businessId: business.id,
+    };
+  }
+
+  const washington = await proveOfficialPaCity("Washington, PA", "Washington", ownerB);
+  const indiana = await proveOfficialPaCity("Indiana, PA", "Indiana", ownerA);
+  check(
+    "Washington, PA writes CITY Washington and qualifies public intake IN_AREA",
+    officialPaCityProofSafe(washington),
+  );
+  check(
+    "Indiana, PA writes CITY Indiana and qualifies public intake IN_AREA",
+    officialPaCityProofSafe(indiana),
+  );
+  check(
+    "Washington city list does not leak Indiana, and Indiana city list does not leak Washington",
+    washington.cities.includes("Indiana") === false &&
+      indiana.cities.includes("Washington") === false &&
+      washington.otherTenantCities.includes("Washington") === false &&
+      indiana.otherTenantCities.includes("Indiana") === false,
+  );
+  const washingtonOnIndiana = await prisma.serviceArea.findMany({
+    where: { businessId: indiana.businessId, city: "Washington" },
+  });
+  const indianaOnWashington = await prisma.serviceArea.findMany({
+    where: { businessId: washington.businessId, city: "Indiana" },
+  });
+  check(
+    "Tenant isolation: neither PA city row is stored on the other tenant",
+    washingtonOnIndiana.length === 0 && indianaOnWashington.length === 0,
+  );
+  const washingtonArea = await prisma.serviceArea.findFirst({
+    where: { businessId: washington.businessId },
+  });
+  try {
+    await setServiceAreaEnabled(prisma, ownerB, {
+      areaId: washingtonArea?.id ?? "missing-washington-area",
+      enabled: false,
+    });
+    check("Business B cannot disable Washington, PA on the other tenant", false);
+  } catch {
+    check("Business B cannot disable Washington, PA on the other tenant", true);
+  }
+
+  const displayOnlyLabels = [
+    "Reno.",
+    "Sparks NV.",
+    "Greater Reno area",
+    "Serving homeowners across Western Pennsylvania",
+    "Washington",
+    "Indiana",
+    "Nevada, NV",
+    "Texas, TX",
+    "Washington, WA",
+    "Washington, DC",
+  ];
+  const displayOnlyResults = [];
+  for (const label of displayOnlyLabels) {
+    const result = await proveDisplayOnlyLabel(label);
+    displayOnlyResults.push(result);
+    check(
+      `${JSON.stringify(label)} stays display-only and writes no CITY row`,
+      result.labelSaved === true && displayOnlyLabelSafe(result),
+    );
+  }
+  check(
+    "Reno. and Sparks NV. do not invent public city-list rows",
+    displayOnlyResults
+      .filter((row) => row.label === "Reno." || row.label === "Sparks NV.")
+      .every((row) => row.areaCount === 0 && row.publicCities.length === 0),
+  );
+  const statewideCityListEmpty = displayOnlyResults
+    .filter((row) =>
+      ["Nevada, NV", "Texas, TX", "Washington, WA", "Washington, DC"].includes(row.label),
+    )
+    .every(
+      (row) =>
+        row.areaCount === 0 &&
+        row.publicCities.length === 0 &&
+        displayOnlyLabelSafe(row),
+    );
+  check(
+    "Nevada, NV / Texas, TX / Washington, WA / Washington, DC write no CITY row and leave configuredCities empty",
+    statewideCityListEmpty,
+  );
+  check(
+    "Every ambiguous or junk label kept display copy and an empty city list",
+    displayOnlyResults.every((row) => row.labelSaved && displayOnlyLabelSafe(row)),
+  );
+
+  console.log("\nDB — state-named labels do not rewrite existing ServiceArea rows");
+  const preserveToken = randomUUID().slice(0, 8);
+  const preserveBiz = await prisma.business.create({
+    data: {
+      name: `Preserve PA ${preserveToken}`,
+      slug: `preserve-pa-${preserveToken}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const preserveUser = await prisma.user.create({
+    data: {
+      name: `Preserve Owner ${preserveToken}`,
+      email: `preserve-pa-${preserveToken}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const preserveMem = await prisma.membership.create({
+    data: { userId: preserveUser.id, businessId: preserveBiz.id, role: "OWNER" },
+  });
+  const preserveAccess = makeAccess(preserveBiz.id, "OWNER", preserveMem.id);
+  const washingtonWa = await upsertServiceArea(prisma, preserveAccess, {
+    kind: "CITY",
+    label: "Washington",
+    city: "Washington",
+    region: "WA",
+  });
+  const indianaBare = await upsertServiceArea(prisma, preserveAccess, {
+    kind: "CITY",
+    label: "Indiana",
+    city: "Indiana",
+  });
+  const washingtonSync = await syncPrimaryCityServiceAreaFromLabel(
+    prisma,
+    preserveAccess,
+    "Washington, PA",
+  );
+  const indianaSync = await syncPrimaryCityServiceAreaFromLabel(
+    prisma,
+    preserveAccess,
+    "Indiana, PA",
+  );
+  const washingtonAfter = await prisma.serviceArea.findUnique({
+    where: { id: washingtonWa.id },
+  });
+  const indianaAfter = await prisma.serviceArea.findUnique({
+    where: { id: indianaBare.id },
+  });
+  const preserveCount = await prisma.serviceArea.count({
+    where: { businessId: preserveBiz.id },
+  });
+  check(
+    "Washington, PA does not rewrite an existing Washington/WA row",
+    washingtonSync.created === false &&
+      washingtonSync.updated === false &&
+      washingtonAfter?.region === "WA" &&
+      washingtonAfter.city === "Washington" &&
+      washingtonAfter.label === "Washington",
+  );
+  check(
+    "Indiana, PA does not fill region on an existing Indiana/null row",
+    indianaSync.created === false &&
+      indianaSync.updated === false &&
+      indianaAfter?.region == null &&
+      indianaAfter?.city === "Indiana" &&
+      indianaAfter.label === "Indiana",
+  );
+  check(
+    "State-named PA labels do not add a second Washington or Indiana CITY row",
+    preserveCount === 2,
+  );
+
   console.log(failures === 0 ? "\nAll service-area checks passed." : `\n${failures} service-area check(s) failed.`);
 } finally {
   await prisma.$disconnect();
@@ -411,6 +820,57 @@ try {
     await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
   } finally {
     await cleanup.$disconnect();
+  }
+}
+
+if (!mutationChild && failures === 0) {
+  console.log("\nMUTATION-REVERT — each fix fails a real check when reverted");
+  const childScript = fileURLToPath(new URL("./check-service-areas.mjs", import.meta.url));
+  const mutations = [
+    {
+      label: "state-named City, ST rejected again",
+      file: "src/lib/service-areas.ts",
+      search:
+        "    if (isStatewideCommaLabel(city, region)) return empty; // STATE_NAMED_CITY_DIFFERENT_REGION",
+      replace: "    if (isStateOrCompassState(city)) return empty;",
+    },
+    {
+      label: "same-state and DC labels parse as cities",
+      file: "src/lib/service-areas.ts",
+      search: '  return region === ownCode || region === "DC"; // STATEWIDE_OWN_CODE_OR_DC',
+      replace: "  return false;",
+    },
+    {
+      label: "state-named labels rewrite existing CITY rows",
+      file: "src/lib/service-area-ops.ts",
+      search:
+        "    if (isUsStateName(parts.city)) {\n      return { created: false, updated: false }; // STATE_NAMED_CITY_KEEP_EXISTING_ROW\n    }\n",
+      replace: "",
+    },
+  ];
+  for (const mutation of mutations) {
+    const target = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(target, "utf8");
+    if (!original.includes(mutation.search)) {
+      check(`mutation-revert setup finds ${mutation.label}`, false);
+      continue;
+    }
+    writeFileSync(target, original.replace(mutation.search, mutation.replace));
+    try {
+      const child = spawnSync(process.execPath, ["--experimental-strip-types", childScript], {
+        env: { ...process.env, SERVICE_AREA_PARSER_MUTATION_CHILD: "1" },
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+      const failed = child.status !== 0;
+      check(`mutation-revert ${mutation.label} fails a real check`, failed);
+      if (!failed) {
+        console.error((child.stdout || "").slice(-2000));
+        console.error((child.stderr || "").slice(-1000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
   }
 }
 
