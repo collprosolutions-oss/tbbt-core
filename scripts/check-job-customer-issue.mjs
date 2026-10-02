@@ -105,6 +105,44 @@ async function expectThrow(label, fn, predicate) {
   }
 }
 
+function jobCallbackStatements(sql) {
+  return String(sql)
+    .split(";")
+    .map((part) =>
+      part
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("--"))
+        .join("\n")
+        .trim(),
+    )
+    .filter((part) => part && /"JobCallback"/.test(part));
+}
+
+function diffDatabaseToSchema(databaseUrl) {
+  const result = spawnSync(
+    "npx",
+    [
+      "prisma",
+      "migrate",
+      "diff",
+      "--from-url",
+      databaseUrl,
+      "--to-schema-datamodel",
+      join(root, "prisma/schema.prisma"),
+      "--script",
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+    },
+  );
+  const output = result.stdout ?? "";
+  if (result.status !== 0) {
+    throw new Error(result.stderr || output || `prisma migrate diff exited ${result.status}`);
+  }
+  return output;
+}
+
 function createWriteBarrier(expected, timeoutMs) {
   let arrived = 0;
   let released = false;
@@ -222,26 +260,24 @@ check(
     !mergeSrc.includes("JobCustomerIssue") &&
     !mergeSrc.includes("jobCustomerIssue"),
 );
+const jobCallbackModel = schemaSrc.slice(
+  schemaSrc.indexOf("model JobCallback {"),
+  schemaSrc.indexOf("model JobCallbackEvent"),
+);
 check(
   "ONE queue: JobCallback is extended additively; no parallel issue models",
   schemaSrc.includes("model JobCallback") &&
     schemaSrc.includes("model JobCallbackEvent") &&
     schemaSrc.includes("model JobCallbackAttachment") &&
-    schemaSrc.includes("ownerNotes") &&
-    /category\s+String\?/.test(schemaSrc) &&
-    /ownerNotes\s+String\?/.test(
-      schemaSrc.slice(
-        schemaSrc.indexOf("model JobCallback {"),
-        schemaSrc.indexOf("model JobCallbackEvent"),
-      ),
-    ) &&
+    /category\s+String\?/.test(jobCallbackModel) &&
+    /ownerNotes\s+String\s+@default\(""\)/.test(jobCallbackModel) &&
     !schemaSrc.includes("model JobCustomerIssue") &&
     !schemaSrc.includes("model JobCustomerIssueEvent") &&
     !schemaSrc.includes("model JobCustomerIssueAttachment") &&
     schemaSrc.includes("Application code must never update or delete an existing row") &&
     migrationSrc.includes('ALTER TABLE "JobCallback"') &&
     migrationSrc.includes('ADD COLUMN IF NOT EXISTS "category"') &&
-    migrationSrc.includes('ADD COLUMN IF NOT EXISTS "ownerNotes"') &&
+    migrationSrc.includes('ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT NOT NULL DEFAULT') &&
     migrationSrc.includes('CREATE TABLE IF NOT EXISTS "JobCallbackAttachment"') &&
     migrationSrc.includes("20261002180000") &&
     !migrationSrc.includes('CREATE TABLE IF NOT EXISTS "JobCustomerIssue"') &&
@@ -346,6 +382,11 @@ try {
   check(
     "Dedicated local disposable database opened",
     Boolean(session.testDbName?.startsWith("tbbt_job_customer_issue_")),
+  );
+  const pushDiff = diffDatabaseToSchema(session.testUrl);
+  check(
+    "migrate diff after db push has no JobCallback change",
+    jobCallbackStatements(pushDiff).length === 0,
   );
 
   const suffix = randomUUID().slice(0, 8);
@@ -1306,6 +1347,40 @@ try {
 } finally {
   if (previewSession) {
     await previewSession.cleanup();
+  }
+}
+
+console.log("\nSCHEMA DRIFT — migrate deploy matches JobCallback schema");
+let migrateSession;
+try {
+  migrateSession = await openDisposableTestDatabase({
+    databaseUrl: baseUrl,
+    namePrefix: "tbbt_job_callback_migrate",
+    pushSchema: false,
+    setProcessEnv: true,
+  });
+  const deploy = spawnSync("npx", ["prisma", "migrate", "deploy"], {
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_URL: migrateSession.testUrl },
+  });
+  check(
+    "Fresh migrate deploy succeeded",
+    deploy.status === 0,
+  );
+  if (deploy.status !== 0) {
+    console.error(deploy.stderr || deploy.stdout);
+  }
+  const deployDiff = diffDatabaseToSchema(migrateSession.testUrl);
+  check(
+    "migrate diff after migrate deploy has no JobCallback change",
+    jobCallbackStatements(deployDiff).length === 0,
+  );
+} catch (error) {
+  console.error(error);
+  failed += 1;
+} finally {
+  if (migrateSession) {
+    await migrateSession.cleanup();
   }
 }
 
