@@ -251,20 +251,28 @@ check(
     !requestPhotosSrc.includes("STORAGE_PENDING_TTL_MS") &&
     requestPhotosSrc.includes("stampUnattachedRequestPhotoExpiry"),
 );
+const lockFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("export async function lockStoredAssetRowForUpdate"),
+  requestPhotosSrc.indexOf("export type PublicRequestFallbackPhotoFile"),
+);
 const claimFnSrc = requestPhotosSrc.slice(
   requestPhotosSrc.indexOf("async function claimUnattachedRequestPhotoInTx"),
+  requestPhotosSrc.indexOf("export async function rememberAttachedPublicRequestPhotos"),
 );
-const leftoverReleaseIdx = publicIntakeSrc.indexOf("releaseUnattachedPublicRequestPhotos");
+const leftoverReleaseIdx = publicIntakeSrc.indexOf("await releaseUnattachedPublicRequestPhotos");
 const leftoverTryIdx = publicIntakeSrc.lastIndexOf("try {", leftoverReleaseIdx);
 const leftoverCatchIdx = publicIntakeSrc.indexOf("} catch (error) {", leftoverReleaseIdx);
 const leftoverOkIdx = publicIntakeSrc.indexOf("return { ok: true, requestId: written.requestId }", leftoverReleaseIdx);
+const attachLockIdx = publicIntakeSrc.indexOf("await lockStoredAssetRowForUpdate");
+const attachInsertIdx = publicIntakeSrc.indexOf("serviceRequestPhoto.createMany");
 check(
   "Claim and intake attach take a StoredAsset row lock before READY->FAILED or insert",
-  claimFnSrc.includes("lockStoredAssetRowForUpdate") &&
-    claimFnSrc.includes("FOR UPDATE") &&
-    claimFnSrc.indexOf("FOR UPDATE") < claimFnSrc.indexOf('status: "FAILED"') &&
-    publicIntakeSrc.includes("lockStoredAssetRowForUpdate") &&
-    publicIntakeSrc.includes("FOR UPDATE") === false &&
+  lockFnSrc.includes("FROM \"StoredAsset\"") &&
+    lockFnSrc.includes("FOR UPDATE") &&
+    claimFnSrc.includes("lockStoredAssetRowForUpdate") &&
+    claimFnSrc.indexOf("lockStoredAssetRowForUpdate") < claimFnSrc.indexOf('status: "FAILED"') &&
+    attachLockIdx > -1 &&
+    attachInsertIdx > attachLockIdx &&
     publicIntakeSrc.includes("PublicRequestPhotoUnavailableError"),
 );
 check(
