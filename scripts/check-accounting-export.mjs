@@ -17,10 +17,13 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 const { CAPABILITIES, roleHasCapability } = await import("@/lib/authorization");
 const {
   ACCOUNTING_EXPENSE_HEADERS,
+  ACCOUNTING_EXPORT_AUDIT_AREA,
+  ACCOUNTING_EXPORT_AUDIT_KEY,
   ACCOUNTING_INVOICE_HEADERS,
   ACCOUNTING_PAYMENT_HEADERS,
   PAYMENT_BASIS,
   accountingExpensesCsv,
+  accountingExportAuditPayload,
   accountingInvoicesCsv,
   accountingPaymentsCsv,
   accountingInvoicePaymentTotals,
@@ -32,7 +35,11 @@ const {
   invoiceCountByJobId,
   loadAccountingExportSource,
   paymentsAllocatedToInvoice,
+  recordAccountingExportAudit,
+  runAccountingExportDownload,
 } = await import("@/lib/accounting-export");
+const { ForbiddenError } = await import("@/lib/authorization");
+const { isSecretSettingKey } = await import("@/lib/settings");
 const { buildBusinessExportZip } = await import("@/lib/business-export");
 const { invoiceNumberFromId, jobReferenceFromId } = await import("@/lib/invoice-document");
 const { attachEstimatePaymentsToInvoice } = await import("@/lib/project-payments");
@@ -190,6 +197,23 @@ check(
     accountingSrc.includes("canExportBusinessData") &&
     accountingSrc.includes("buildAccountingExportZip") &&
     !accountingRouteSrc.includes("requireSaasOperatingEntitlement"),
+);
+check(
+  "Successful accounting download writes one SettingsAuditLog row; the route does not write a second",
+  accountingSrc.includes("recordAccountingExportAudit") &&
+    accountingSrc.includes("writeSettingsAuditLog") &&
+    accountingSrc.includes("await recordAccountingExportAudit") &&
+    ACCOUNTING_EXPORT_AUDIT_AREA === "data-export" &&
+    ACCOUNTING_EXPORT_AUDIT_KEY === "accountingExport" &&
+    !isSecretSettingKey(ACCOUNTING_EXPORT_AUDIT_KEY) &&
+    accountingExportAuditPayload({ filename: "tbbt-accounting-demo-2026-10-02.zip" }).filename ===
+      "tbbt-accounting-demo-2026-10-02.zip" &&
+    Object.keys(accountingExportAuditPayload({ filename: "tbbt-accounting-demo-2026-10-02.zip" })).join(",") ===
+      "filename" &&
+    accountingRouteSrc.includes("runAccountingExportDownload") &&
+    !accountingRouteSrc.includes("recordAccountingExportAudit") &&
+    !accountingRouteSrc.includes("writeSettingsAuditLog") &&
+    !accountingRouteSrc.includes("buildAccountingExportZip"),
 );
 check(
   "Settings Data / Export offers the accounting ZIP on the existing surface",
@@ -1037,6 +1061,164 @@ try {
       zipNameGeneralPurposeFlag("invoices.csv") === 0 &&
       unicodeZip.readUInt16LE(6) === ZIP_UTF8_NAME_FLAG &&
       unicodeZip.includes(Buffer.from(unicodeEntryName, "utf8")),
+  );
+
+  console.log("\nDB — accounting download audit is metadata-only and success-only");
+  const ownerUserA = await prisma.user.create({
+    data: { name: "Olivia", email: `owner-acc-${randomUUID()}@example.com`, passwordHash: "hashed-owner" },
+  });
+  const adminUserA = await prisma.user.create({
+    data: { name: "Ada", email: `admin-acc-${randomUUID()}@example.com`, passwordHash: "hashed-admin" },
+  });
+  const memberUserA = await prisma.user.create({
+    data: { name: "Mia", email: `member-acc-${randomUUID()}@example.com`, passwordHash: "hashed-member" },
+  });
+  const ownerUserB = await prisma.user.create({
+    data: { name: "Bea", email: `beta-acc-${randomUUID()}@example.com`, passwordHash: "hashed-beta" },
+  });
+  const ownerMemA = await prisma.membership.create({
+    data: { userId: ownerUserA.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const adminMemA = await prisma.membership.create({
+    data: { userId: adminUserA.id, businessId: businessA.id, role: "ADMIN" },
+  });
+  const memberMemA = await prisma.membership.create({
+    data: { userId: memberUserA.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const ownerMemB = await prisma.membership.create({
+    data: { userId: ownerUserB.id, businessId: businessB.id, role: "OWNER" },
+  });
+  const makeAccess = (businessId, role, membershipId) => ({
+    businessId,
+    workspace: { role, membership: { id: membershipId } },
+  });
+  const ownerAccessA = makeAccess(businessA.id, "OWNER", ownerMemA.id);
+  const adminAccessA = makeAccess(businessA.id, "ADMIN", adminMemA.id);
+  const memberAccessA = makeAccess(businessA.id, "MEMBER", memberMemA.id);
+  const ownerAccessB = makeAccess(businessB.id, "OWNER", ownerMemB.id);
+  const missingAccess = makeAccess(`missing-${randomUUID()}`, "OWNER", ownerMemA.id);
+
+  const previewCount = await prisma.settingsAuditLog.count({
+    where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  await buildAccountingExportZip(prisma, businessA.id);
+  await loadAccountingExportSource(prisma, businessA.id);
+  const afterPreview = await prisma.settingsAuditLog.count({
+    where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Preview/build writes no accountingExport audit row and is not a download",
+    previewCount === 0 && afterPreview === 0,
+  );
+
+  const memberDownload = await runAccountingExportDownload(prisma, memberAccessA);
+  const afterMember = await prisma.settingsAuditLog.count({
+    where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "MEMBER download is 403, returns no ZIP, and writes no audit",
+    memberDownload.ok === false &&
+      memberDownload.status === 403 &&
+      memberDownload.error === "Forbidden" &&
+      !("bytes" in memberDownload) &&
+      !("filename" in memberDownload) &&
+      afterMember === 0,
+  );
+  let memberAuditThrew = false;
+  try {
+    await recordAccountingExportAudit(prisma, memberAccessA, { filename: "tbbt-accounting-blocked.zip" });
+  } catch (error) {
+    memberAuditThrew = error instanceof ForbiddenError;
+  }
+  check("MEMBER cannot record an accounting export audit", memberAuditThrew && afterMember === 0);
+
+  const failedDownload = await runAccountingExportDownload(prisma, missingAccess);
+  const afterFailed = await prisma.settingsAuditLog.count({
+    where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Failed generation is 500, returns no ZIP, and writes no audit",
+    failedDownload.ok === false &&
+      failedDownload.status === 500 &&
+      failedDownload.error === "Export failed" &&
+      !("bytes" in failedDownload) &&
+      !("filename" in failedDownload) &&
+      afterFailed === 0,
+  );
+
+  const ownerDownload = await runAccountingExportDownload(prisma, ownerAccessA);
+  const adminDownload = await runAccountingExportDownload(prisma, adminAccessA);
+  const otherDownload = await runAccountingExportDownload(prisma, ownerAccessB);
+  check(
+    "OWNER and ADMIN downloads succeed on the runAccountingExportDownload path",
+    ownerDownload.ok === true &&
+      ownerDownload.status === 200 &&
+      Buffer.isBuffer(ownerDownload.bytes) &&
+      ownerDownload.filename.startsWith("tbbt-accounting-") &&
+      adminDownload.ok === true &&
+      otherDownload.ok === true,
+  );
+  const auditsA = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+    orderBy: { changedAt: "asc" },
+  });
+  const auditsB = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessB.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  const ownerRow = auditsA.find((row) => row.changedByMembershipId === ownerMemA.id);
+  const adminRow = auditsA.find((row) => row.changedByMembershipId === adminMemA.id);
+  const ownerPayload = ownerRow ? JSON.parse(ownerRow.newValue) : null;
+  const adminPayload = adminRow ? JSON.parse(adminRow.newValue) : null;
+  const forbiddenAuditText = [
+    customerA.name,
+    customerA.email,
+    customerB.name,
+    "Beta Only Customer",
+    stripeSessionId,
+    stripeIntentId,
+    recordedPayment.note,
+    activeExpense.description,
+    "142.68",
+    "Home Depot",
+    "invoices.csv",
+    "PK\u0003\u0004",
+  ];
+  check(
+    "Each successful download writes exactly one tenant-scoped accountingExport row",
+    auditsA.length === 2 &&
+      Boolean(ownerRow) &&
+      Boolean(adminRow) &&
+      !auditsA.some((row) => row.changedByMembershipId === memberMemA.id) &&
+      auditsB.length === 1 &&
+      auditsB[0].changedByMembershipId === ownerMemB.id &&
+      ownerRow.settingArea === ACCOUNTING_EXPORT_AUDIT_AREA &&
+      ownerRow.previousValue === "null" &&
+      adminRow.settingArea === ACCOUNTING_EXPORT_AUDIT_AREA,
+  );
+  check(
+    "Accounting download audit stores filename metadata only — no customer, account, or file contents",
+    ownerDownload.ok === true &&
+      adminDownload.ok === true &&
+      ownerPayload?.filename === ownerDownload.filename &&
+      adminPayload?.filename === adminDownload.filename &&
+      Object.keys(ownerPayload ?? {}).join(",") === "filename" &&
+      Object.keys(adminPayload ?? {}).join(",") === "filename" &&
+      JSON.stringify(ownerPayload) ===
+        JSON.stringify(accountingExportAuditPayload({ filename: ownerDownload.filename })) &&
+      auditsA.every((row) => forbiddenAuditText.every((value) => !row.newValue.includes(value))) &&
+      !auditsB[0].newValue.includes(customerA.name) &&
+      !auditsB[0].newValue.includes(customerA.email),
+  );
+
+  const secondOwner = await runAccountingExportDownload(prisma, ownerAccessA);
+  const afterSecond = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "A second successful OWNER download writes exactly one additional audit row",
+    secondOwner.ok === true &&
+      afterSecond.length === 3 &&
+      afterSecond.filter((row) => row.changedByMembershipId === ownerMemA.id).length === 2,
   );
 } finally {
   await prisma.$disconnect();
