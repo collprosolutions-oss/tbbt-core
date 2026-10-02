@@ -157,9 +157,10 @@ try {
     !marketingDataSrc.includes("WithAi") && !marketingDataSrc.includes("runAiTask"),
   );
   check(
-    "Marketing Generate AI actions exist and stay DRAFT",
-    generatePanelSrc.includes("Generate AI variations") &&
-      generatePanelSrc.includes("Generated copy remains DRAFT"),
+    "Marketing AI draft request is OWNER-only and stays reviewable",
+    generatePanelSrc.includes("Request content draft") &&
+      generatePanelSrc.includes("MARKETING_AI_UNAVAILABLE_LABEL") &&
+      generatePanelSrc.includes("MARKETING_AI_DRAFT_REVIEW_ONLY_MESSAGE"),
   );
   const previousAiEnv = process.env.TBBT_MARKETING_AI_PROVIDER;
   process.env.TBBT_MARKETING_AI_PROVIDER = "openai";

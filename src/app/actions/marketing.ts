@@ -8,14 +8,7 @@
 import { revalidatePath } from "next/cache";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductAccess } from "@/lib/saas-billing/enforce";
-import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { isAiAttemptId } from "@/lib/ai/types";
-import {
-  campaignIdeasWithAi,
-  draftMarketingVariationsWithAi,
-  weeklyMarketingPlanWithAi,
-} from "@/lib/ai/marketing";
-import { loadMarketingSource } from "@/lib/marketing-data";
+import { requestOwnerMarketingContentDraft } from "@/lib/marketing-ai-draft";
 import {
   advanceMarketingContentStatus,
   approveMarketingStudioPackage,
@@ -30,6 +23,8 @@ import {
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
 import {
+  MARKETING_AI_UNAVAILABLE_LABEL,
+  OWNER_MARKETING_AI_DRAFT_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
   STUDIO_APPROVED_INTERNAL_MESSAGE,
   STUDIO_PLANNED_DAY_SAVED_MESSAGE,
@@ -52,9 +47,11 @@ export type MarketingAiActionState = {
   error?: string;
   message?: string;
   text?: string;
-  mode?: "AI" | "TEMPLATE";
+  mode?: "AI" | "UNAVAILABLE";
   task?: string;
   inProgress?: boolean;
+  contentId?: string;
+  unavailable?: boolean;
 };
 
 export type MarketingExportState = {
@@ -330,46 +327,31 @@ export async function generateMarketingAiAction(
 ): Promise<MarketingAiActionState> {
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
-    requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
-    const task = readString(formData, "marketingAiTask");
+    if (access.workspace.role !== "OWNER") {
+      return { error: OWNER_MARKETING_AI_DRAFT_MESSAGE };
+    }
     const attemptId = readString(formData, "attemptId");
-    if (!isAiAttemptId(attemptId)) return { error: "Retry that request from the form." };
-    const source = await loadMarketingSource(prisma, access.businessId, new Date(), access.workspace.role);
-    const actor = {
-      businessId: access.businessId,
-      membershipId: access.workspace.membership.id,
-      userId: access.workspace.user.id,
+    const result = await requestOwnerMarketingContentDraft(prisma, access, { attemptId });
+    if (result.status === "UNAVAILABLE") {
+      return {
+        message: MARKETING_AI_UNAVAILABLE_LABEL,
+        mode: "UNAVAILABLE",
+        task: "MARKETING_DRAFT",
+        unavailable: true,
+      };
+    }
+    if (result.inProgress) {
+      return { message: result.message, task: "MARKETING_DRAFT", inProgress: true };
+    }
+    revalidateMarketing();
+    return {
+      message: result.message,
+      text: result.text,
+      mode: result.status === "COMPLETED" ? "AI" : undefined,
+      task: "MARKETING_DRAFT",
+      contentId: result.contentId ?? undefined,
     };
-    const key = `marketing:${task}:${access.businessId}:${attemptId}`;
-    const facts = source.recordedActivity;
-    if (task === "WEEKLY_PLAN") {
-      const result = await weeklyMarketingPlanWithAi(prisma, actor, facts, key);
-      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
-      return { message: result.message, text: result.text, mode: result.mode, task };
-    }
-    if (task === "CAMPAIGN_IDEAS") {
-      const result = await campaignIdeasWithAi(prisma, actor, facts, key);
-      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
-      return { message: result.message, text: result.text, mode: result.mode, task };
-    }
-    if (task === "MARKETING_DRAFT") {
-      const result = await draftMarketingVariationsWithAi(
-        prisma,
-        actor,
-        {
-          contentType: "COMPLETED_JOB",
-          businessName: facts.businessName,
-          workPerformed: facts.workPerformed,
-          photoCount: facts.photoCount,
-          city: facts.city,
-        },
-        key,
-      );
-      if (result.status === "PENDING") return { message: result.message, task, inProgress: true };
-      return { message: result.message, text: result.text, mode: result.mode, task };
-    }
-    return { error: "Choose a marketing AI task." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "That marketing draft could not be generated." };
+    return { error: marketingErrorMessage(error, "That marketing draft could not be generated.") };
   }
 }

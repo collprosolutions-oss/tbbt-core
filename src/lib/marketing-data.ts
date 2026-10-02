@@ -20,6 +20,7 @@ import {
   STUDIO_APPROVAL_QUEUE_STATUS,
   STUDIO_CONTENT_CALENDAR_LIMIT,
   WEEKLY_STUDIO_APPROVAL_QUEUE_MESSAGE,
+  marketingAiDraftStatusLabel,
   parseStudioPublicationDay,
   presentStudioContentCalendar,
   studioApprovalQueueMeta,
@@ -30,6 +31,7 @@ import {
   loadStudioWeeklyReminderState,
   presentStudioWeeklyReminderForViewer,
 } from "@/lib/marketing-studio-reminder";
+import { isAiProviderConnected } from "@/lib/ai/config";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
@@ -475,6 +477,10 @@ export async function loadMarketingSource(
         paidInvoices: invoices.length,
         note: "Recorded TBBT activity only. Channel analytics are not connected.",
       },
+    },
+    aiDraft: {
+      configured: isAiProviderConnected(),
+      statusLabel: marketingAiDraftStatusLabel(),
     },
   };
 }

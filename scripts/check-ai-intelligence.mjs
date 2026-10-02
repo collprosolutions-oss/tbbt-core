@@ -145,15 +145,14 @@ try {
   const generatePanelSrc = readFileSync(new URL("../src/components/marketing/generate-ai-panel.tsx", import.meta.url), "utf8");
   const marketingActionSrc = readFileSync(new URL("../src/app/actions/marketing.ts", import.meta.url), "utf8");
   check(
-    "Owner Generate actions are explicit and display model output",
+    "Owner Generate actions request one bounded draft through the canonical provider",
     marketingPageSrc.includes("loadMarketingSource(prisma, access.businessId)") &&
-      generatePanelSrc.includes("Generate AI variations") &&
-      generatePanelSrc.includes("Generate weekly plan") &&
-      generatePanelSrc.includes("Generate campaign ideas") &&
+      generatePanelSrc.includes("Request content draft") &&
+      generatePanelSrc.includes("MARKETING_AI_UNAVAILABLE_LABEL") &&
       generatePanelSrc.includes('name="attemptId"') &&
       marketingActionSrc.includes("generateMarketingAiAction") &&
-      marketingActionSrc.includes("weeklyMarketingPlanWithAi") &&
-      marketingActionSrc.includes("result.text") &&
+      marketingActionSrc.includes("requestOwnerMarketingContentDraft") &&
+      marketingActionSrc.includes("OWNER_MARKETING_AI_DRAFT_MESSAGE") &&
       marketingAiSrc.includes('mode: result.connected && result.status === "COMPLETED"'),
   );
   const coachFormSrc = readFileSync(new URL("../src/components/bsos/coach-form.tsx", import.meta.url), "utf8");

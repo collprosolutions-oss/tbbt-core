@@ -67,7 +67,7 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
 
         <FounderRegion id="opportunities">
           {area === "grow" || area === "overview" || area === "completed-jobs" ? (
-            <OpportunityBody area={area} source={source} />
+            <OpportunityBody area={area} source={source} viewerRole={viewerRole} />
           ) : null}
         </FounderRegion>
 
@@ -128,9 +128,11 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
 function OpportunityBody({
   area,
   source,
+  viewerRole,
 }: {
   area: MarketingArea;
   source: MarketingWorkspaceProps["source"];
+  viewerRole: MarketingWorkspaceProps["viewerRole"];
 }) {
   if (area === "grow") {
     return (
@@ -155,11 +157,14 @@ function OpportunityBody({
           <CardHeader>
             <CardTitle>Marketing intelligence drafts</CardTitle>
             <CardDescription>
-              Recorded jobs, photos, reviews, service areas, and campaigns. Opening this page stays template-only. Generate AI actions call the provider only after an explicit owner click. Social accounts stay Not Connected. Generated content remains DRAFT.
+              Recorded jobs, photos, reviews, service areas, and campaigns. Opening this page stays template-only. An OWNER can request one bounded content draft from the canonical AI provider. Social accounts stay Not Connected. Generated content remains a reviewable DRAFT.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <GenerateMarketingAiPanel />
+            <GenerateMarketingAiPanel
+              configured={source.aiDraft.configured}
+              viewerRole={viewerRole}
+            />
             <p className="text-muted-foreground">{source.activityPlan.message}</p>
             <ul className="space-y-1">
               {source.activityPlan.items.map((item) => (

@@ -310,9 +310,24 @@ export const INVALID_STORYBOARD_MESSAGE =
 export const INVALID_SHOT_LIST_MESSAGE =
   "Enter a valid shot list. Use a JSON array of shots with a shot name or purpose.";
 
+export const MARKETING_AI_UNAVAILABLE_LABEL = "Unavailable";
+
+export const OWNER_MARKETING_AI_DRAFT_MESSAGE =
+  "Requesting an AI content draft requires the OWNER role. The result stays a reviewable DRAFT. TBBT will not publish, post, or send a customer message.";
+
+export const MARKETING_AI_DRAFT_SAVED_MESSAGE =
+  "AI content draft saved for review. It has not been published, posted, or sent.";
+
+export const MARKETING_AI_DRAFT_REVIEW_ONLY_MESSAGE =
+  "Generated copy remains a reviewable DRAFT. TBBT will not publish a website page, post to a social channel, or send a customer message.";
+
 /** External AI is not connected. Template drafts still work. */
 export function marketingAiAssistAvailable(): boolean {
   return providerAssistAvailable();
+}
+
+export function marketingAiDraftStatusLabel(configured = providerAssistAvailable()) {
+  return configured ? "Connected" : MARKETING_AI_UNAVAILABLE_LABEL;
 }
 
 export function parseMarketingDate(raw: string | undefined): Date | null {
