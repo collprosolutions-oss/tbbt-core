@@ -7,9 +7,12 @@
  * or provider failure must not roll back that write.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { after } from "next/server";
 import { isRequestPathSchemaUnavailableError } from "@/lib/request-path-schema";
 import {
   NATIVE_PUSH_MAX_ATTEMPTS,
+  NATIVE_PUSH_SEND_TIMEOUT_MS,
+  NATIVE_PUSH_TEST_FLUSH_ENV,
   getNativePushPendingStaleMs,
 } from "@/lib/native-push/config";
 import {
@@ -53,24 +56,71 @@ export type NativePushNotifyResult = {
   sentCount: number;
 };
 
-const pendingNotifies: Promise<unknown>[] = [];
+const testPendingNotifies: Promise<unknown>[] = [];
 
-export function enqueueNativePushNotify(work: () => Promise<unknown>) {
-  const promise = Promise.resolve()
+function runNotifyWork(work: () => Promise<unknown>) {
+  return Promise.resolve()
     .then(work)
     .catch(() => undefined);
-  pendingNotifies.push(promise);
-  return promise;
+}
+
+function nativePushTestFlushEnabled() {
+  return process.env[NATIVE_PUSH_TEST_FLUSH_ENV] === "1";
+}
+
+export function enqueueNativePushNotify(work: () => Promise<unknown>) {
+  if (nativePushTestFlushEnabled()) {
+    const promise = runNotifyWork(work);
+    testPendingNotifies.push(promise);
+    return promise;
+  }
+  after(() => runNotifyWork(work));
 }
 
 export async function flushNativePushNotifies() {
-  const pending = pendingNotifies.splice(0);
+  if (!nativePushTestFlushEnabled()) return;
+  const pending = testPendingNotifies.splice(0);
   if (pending.length === 0) return;
   await Promise.all(pending);
 }
 
 function uniqueViolation(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+async function withTimeout<T>(ms: number, work: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Push send timed out.")), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function withDeliveryHeartbeat<T>(
+  db: Db,
+  deliveryId: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const intervalMs = Math.max(10, Math.floor(getNativePushPendingStaleMs() / 3));
+  const touch = () =>
+    db.$executeRaw`
+      UPDATE "NativePushDelivery" SET "updatedAt" = NOW() WHERE id = ${deliveryId} AND status = 'PENDING'
+    `.catch(() => undefined);
+  await touch();
+  const timer = setInterval(() => {
+    void touch();
+  }, intervalMs);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 async function loadActorRole(db: Db, businessId: string, actorMembershipId: string) {
@@ -325,6 +375,13 @@ async function deliverToOptedInDevices(
       membershipId: input.membershipId,
       optedIn: true,
       revokedAt: null,
+      sessionId: { not: null },
+      session: {
+        is: {
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      },
     },
   });
   if (devices.length === 0) {
@@ -338,32 +395,40 @@ async function deliverToOptedInDevices(
   let sentCount = 0;
   let lastError: string | null = null;
   let lastProviderMessageId: string | null = claimed.delivery.providerMessageId;
-  for (const device of devices) {
-    try {
-      const result = await provider.send({
-        businessId: input.businessId,
-        membershipId: input.membershipId,
-        jobId: input.jobId,
-        kind: input.kind,
-        deviceId: device.id,
-        tokenLast4: device.tokenLast4,
-        deviceToken: device.deviceToken,
-        payload: input.payload,
+  try {
+    await withDeliveryHeartbeat(db, claimed.delivery.id, async () => {
+      await withTimeout(NATIVE_PUSH_SEND_TIMEOUT_MS, async () => {
+        for (const device of devices) {
+          try {
+            const result = await provider.send({
+              businessId: input.businessId,
+              membershipId: input.membershipId,
+              jobId: input.jobId,
+              kind: input.kind,
+              deviceId: device.id,
+              tokenLast4: device.tokenLast4,
+              deviceToken: device.deviceToken,
+              payload: input.payload,
+            });
+            if (result.ok) {
+              sentCount += 1;
+              lastProviderMessageId = result.providerMessageId;
+            } else {
+              lastError = result.error;
+            }
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : "Push provider failed.";
+          }
+        }
       });
-      if (result.ok) {
-        sentCount += 1;
-        lastProviderMessageId = result.providerMessageId;
-      } else {
-        lastError = result.error;
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "Push provider failed.";
-    }
+    });
+  } catch (error) {
+    lastError = error instanceof Error ? error.message : "Push provider failed.";
   }
 
   if (sentCount > 0) {
-    await db.nativePushDelivery.update({
-      where: { id: claimed.delivery.id },
+    const settled = await db.nativePushDelivery.updateMany({
+      where: { id: claimed.delivery.id, status: "PENDING" },
       data: {
         status: "SENT",
         provider: provider.id,
@@ -372,11 +437,14 @@ async function deliverToOptedInDevices(
         payloadSnapshot: input.payload,
       },
     });
-    return { status: "SENT", deliveryId: claimed.delivery.id, sentCount };
+    if (settled.count === 1) {
+      return { status: "SENT", deliveryId: claimed.delivery.id, sentCount };
+    }
+    return { status: "SUPPRESSED", deliveryId: claimed.delivery.id, reason: "in-flight", sentCount: 0 };
   }
 
-  await db.nativePushDelivery.update({
-    where: { id: claimed.delivery.id },
+  await db.nativePushDelivery.updateMany({
+    where: { id: claimed.delivery.id, status: "PENDING" },
     data: {
       status: "FAILED",
       provider: provider.id,

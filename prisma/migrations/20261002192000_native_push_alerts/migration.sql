@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS "NativePushDevice" (
     "deviceToken" TEXT NOT NULL,
     "optedIn" BOOLEAN NOT NULL DEFAULT false,
     "revokedAt" TIMESTAMP(3),
+    "sessionId" TEXT,
     "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -28,6 +29,9 @@ CREATE INDEX IF NOT EXISTS "NativePushDevice_businessId_membershipId_idx"
   ON "NativePushDevice"("businessId", "membershipId");
 CREATE INDEX IF NOT EXISTS "NativePushDevice_membershipId_revokedAt_idx"
   ON "NativePushDevice"("membershipId", "revokedAt");
+ALTER TABLE "NativePushDevice" ADD COLUMN IF NOT EXISTS "sessionId" TEXT;
+CREATE INDEX IF NOT EXISTS "NativePushDevice_sessionId_idx"
+  ON "NativePushDevice"("sessionId");
 
 CREATE TABLE IF NOT EXISTS "NativePushDelivery" (
     "id" TEXT NOT NULL,
@@ -79,6 +83,14 @@ BEGIN
     ALTER TABLE "NativePushDevice"
       ADD CONSTRAINT "NativePushDevice_userId_fkey"
       FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'NativePushDevice_sessionId_fkey'
+  ) THEN
+    ALTER TABLE "NativePushDevice"
+      ADD CONSTRAINT "NativePushDevice_sessionId_fkey"
+      FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint

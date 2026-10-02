@@ -7,6 +7,9 @@ export const DISCONNECTED_NATIVE_PUSH_PROVIDER = "disconnected";
 export const FAKE_NATIVE_PUSH_PROVIDER = "fake";
 export const NATIVE_PUSH_MAX_ATTEMPTS = 3;
 export const NATIVE_PUSH_PENDING_STALE_MS = 30_000;
+/** Well below the stale PENDING reclaim window so a hung send fails first. */
+export const NATIVE_PUSH_SEND_TIMEOUT_MS = 5_000;
+export const NATIVE_PUSH_TEST_FLUSH_ENV = "TBBT_NATIVE_PUSH_TEST_FLUSH";
 
 let pendingStaleMs = NATIVE_PUSH_PENDING_STALE_MS;
 

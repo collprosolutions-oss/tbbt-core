@@ -25,6 +25,7 @@ export const NATIVE_PUSH_MEMBERSHIP_INACTIVE = "That workspace is not available.
 export const NATIVE_PUSH_DEVICE_NOT_OWNED = "That device is not on this workspace.";
 export const NATIVE_PUSH_TOKEN_REQUIRED = "A device token is required.";
 export const NATIVE_PUSH_PLATFORM_REQUIRED = "Choose a device platform.";
+export const NATIVE_PUSH_DEVICE_TOKEN_HEADER = "x-tbbt-device-token";
 
 export type NativePushDeviceSummary = {
   id: string;
@@ -371,6 +372,26 @@ export async function revokeNativePushDevice(
     }
   }
   return listNativePushPreference(db, access, { token });
+}
+
+export async function revokeNativePushDevicesForSessions(
+  db: Db,
+  sessionIds: string[],
+) {
+  if (sessionIds.length === 0) return;
+  if (!(await nativePushDeviceTablePresent(db))) {
+    return;
+  }
+  await db.nativePushDevice.updateMany({
+    where: {
+      sessionId: { in: sessionIds },
+      revokedAt: null,
+    },
+    data: {
+      optedIn: false,
+      revokedAt: new Date(),
+    },
+  });
 }
 
 export async function revokeActiveNativePushDevicesForMembership(

@@ -32,6 +32,7 @@ register(new URL("./estimate-options-test-loader.mjs", import.meta.url), import.
 process.env.TZ = process.env.TZ || "America/New_York";
 process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER =
   process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER || "fake";
+process.env.TBBT_NATIVE_PUSH_TEST_FLUSH = "1";
 
 const { writeAssignedMembershipAndLaneWindows } = await import("@/lib/job-assignment-ops");
 const { writeTeamMemberActive } = await import("@/lib/team-member-active-ops");
@@ -40,8 +41,11 @@ const {
   NATIVE_PUSH_ALERT_DISCLAIMER,
   NATIVE_PUSH_DEVICE_NOT_OWNED,
   NATIVE_PUSH_FORBIDDEN_PAYLOAD_KEYS,
+  NATIVE_PUSH_DEVICE_TOKEN_HEADER,
   NATIVE_PUSH_MAX_ATTEMPTS,
   NATIVE_PUSH_MEMBERSHIP_INACTIVE,
+  NATIVE_PUSH_PENDING_STALE_MS,
+  NATIVE_PUSH_SEND_TIMEOUT_MS,
   assignmentAlertIdempotencyKey,
   buildNativePushAlertPayload,
   createFakeNativePushProvider,
@@ -64,7 +68,8 @@ const {
 } = await import("@/lib/native-push");
 const { isMaterialAppointmentChange } = await import("@/lib/appointment-confirmation");
 const { hashToken } = await import("@/lib/auth-crypto");
-const { revokeNativeSession } = await import("@/lib/native-session");
+const { resolveNativeSession, revokeNativeSession } = await import("@/lib/native-session");
+const { revokeOtherSessionsOp, revokeSessionOp } = await import("@/lib/account-security");
 
 let passed = 0;
 let failed = 0;
@@ -82,10 +87,10 @@ function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
 
-function fieldAccess({ userId, businessId, membershipId, role, name, email }) {
+function fieldAccess({ userId, businessId, membershipId, role, name, email, sessionId }) {
   return {
     userId,
-    sessionId: "native-push-session",
+    sessionId: sessionId ?? "native-push-session",
     viewer: { id: userId, name, email, role },
     workspace: { businessId, businessName: "Alpha", membershipId, role },
     businessId,
@@ -95,9 +100,8 @@ function fieldAccess({ userId, businessId, membershipId, role, name, email }) {
 
 const schema = readRepo("prisma/schema.prisma");
 const migration = readRepo("prisma/migrations/20261002192000_native_push_alerts/migration.sql");
-const sessionMigration = readRepo(
-  "prisma/migrations/20261002193000_native_push_device_session/migration.sql",
-);
+const routeSrc = readRepo("src/app/api/native/v1/push-devices/route.ts");
+const accountSecuritySrc = readRepo("src/lib/account-security.ts");
 const configSrc = readRepo("src/lib/native-push/config.ts");
 const payloadSrc = readRepo("src/lib/native-push/payload.ts");
 const notifySrc = readRepo("src/lib/native-push/notify.ts");
@@ -135,14 +139,18 @@ check(
     schema.includes("@@unique([businessId, idempotencyKey])") &&
     schema.includes("sessionId") &&
     schema.includes("never include a customer address or access code") &&
-    sessionMigration.includes("20261002193000") &&
-    sessionMigration.includes('ADD COLUMN IF NOT EXISTS "sessionId"') &&
-    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(sessionMigration),
+    migration.includes('"sessionId" TEXT') &&
+    migration.includes('ADD COLUMN IF NOT EXISTS "sessionId"') &&
+    migration.includes("NativePushDevice_sessionId_fkey") &&
+    !migration.includes("20261002193000") &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration),
 );
 check(
   "Request-path schema helper does not ship unused ensure SQL",
   !schemaSrc.includes("NATIVE_PUSH_ENSURE_SQL") &&
-    schemaSrc.includes("assertRequiredTablesExist"),
+    schemaSrc.includes("assertRequiredTablesExist") &&
+    schemaSrc.includes("assertRequiredColumnsExist") &&
+    schemaSrc.includes("sessionId"),
 );
 check(
   "Fake adapter cannot enable in Vercel production",
@@ -184,11 +192,35 @@ check(
     notifySrc.includes("attemptCount: { lt: NATIVE_PUSH_MAX_ATTEMPTS }") &&
     notifySrc.includes('reason: "max-attempts"') &&
     configSrc.includes("NATIVE_PUSH_MAX_ATTEMPTS = 3") &&
+    configSrc.includes("NATIVE_PUSH_PENDING_STALE_MS = 30_000") &&
+    configSrc.includes("NATIVE_PUSH_SEND_TIMEOUT_MS = 5_000") &&
+    notifySrc.includes('from "next/server"') &&
+    notifySrc.includes("after(") &&
+    notifySrc.includes("withDeliveryHeartbeat") &&
+    notifySrc.includes("sessionId: { not: null }") &&
+    scheduleSrc.includes("enqueueNativePushNotify") &&
     devicesSrc.includes("thisDeviceOptedIn") &&
-    todaySrc.includes("thisDeviceOptedIn") &&
-    sessionSrc.includes("nativePushDevice.updateMany") &&
+    todaySrc.includes("preference?.thisDeviceOptedIn") &&
+    !/preference\?\.optedIn/.test(todaySrc) &&
+    sessionSrc.includes("revokeNativePushDevicesForSessions") &&
+    accountSecuritySrc.includes("revokeNativePushDevicesForSessions") &&
     appSrc.includes("signOutNative(session.token).catch") &&
-    NATIVE_PUSH_MAX_ATTEMPTS === 3,
+    NATIVE_PUSH_MAX_ATTEMPTS === 3 &&
+    NATIVE_PUSH_PENDING_STALE_MS > 0 &&
+    NATIVE_PUSH_PENDING_STALE_MS > NATIVE_PUSH_SEND_TIMEOUT_MS,
+);
+check(
+  "NATIVE_PUSH_PENDING_STALE_MS default is not 0",
+  NATIVE_PUSH_PENDING_STALE_MS > 0 && NATIVE_PUSH_PENDING_STALE_MS >= 30_000,
+);
+check(
+  "Native app drives the toggle from thisDeviceOptedIn, not membership optedIn",
+  todaySrc.includes("preference?.thisDeviceOptedIn") &&
+    !/preference\?\.optedIn/.test(todaySrc) &&
+    nativeApi.includes(NATIVE_PUSH_DEVICE_TOKEN_HEADER) &&
+    !nativeApi.includes("?token=") &&
+    routeSrc.includes("NATIVE_PUSH_DEVICE_TOKEN_HEADER") &&
+    !routeSrc.includes("searchParams.get(\"token\")"),
 );
 check(
   "Native UI and owner settings stay informational; no Expo push SDK",
@@ -298,6 +330,19 @@ try {
     data: { userId: betaUser.id, businessId: businessB.id, role: "MEMBER" },
   });
 
+  async function createUserSession(userId) {
+    return prisma.session.create({
+      data: {
+        tokenHash: hashToken(`native-push-session-${userId}-${randomUUID()}`),
+        userId,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+  }
+  const sessionA = await createUserSession(memberAUser.id);
+  const sessionB = await createUserSession(memberBUser.id);
+  const sessionBeta = await createUserSession(betaUser.id);
+
   const accessA = fieldAccess({
     userId: memberAUser.id,
     businessId: businessA.id,
@@ -305,6 +350,7 @@ try {
     role: "MEMBER",
     name: memberAUser.name,
     email: memberAUser.email,
+    sessionId: sessionA.id,
   });
   const accessB = fieldAccess({
     userId: memberBUser.id,
@@ -313,6 +359,7 @@ try {
     role: "MEMBER",
     name: memberBUser.name,
     email: memberBUser.email,
+    sessionId: sessionB.id,
   });
   const accessBeta = fieldAccess({
     userId: betaUser.id,
@@ -321,6 +368,7 @@ try {
     role: "MEMBER",
     name: betaUser.name,
     email: betaUser.email,
+    sessionId: sessionBeta.id,
   });
 
   const tokenA = `device-token-ava-${randomUUID()}`;
@@ -699,6 +747,129 @@ try {
     revokedSession === true && sessionDevice?.revokedAt != null && sessionDevice?.optedIn === false,
   );
 
+  const expiredRaw = `expired-session-${randomUUID()}`;
+  const expiredSession = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(expiredRaw),
+      userId: memberAUser.id,
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const expiredToken = `device-token-expired-${randomUUID()}`;
+  await registerNativePushDevice(
+    prisma,
+    { ...accessA, sessionId: expiredSession.id },
+    { token: expiredToken, platform: "test", optedIn: true },
+  );
+  const expireJob = await createHandymanJob("expired-session");
+  fake.sent.length = 0;
+  await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: expireJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const expiredResolved = await resolveNativeSession(prisma, expiredRaw);
+  const expiredDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(expiredToken),
+    },
+  });
+  check(
+    "Expired session device is not selected for assignment alerts",
+    fake.sent.length === 1 &&
+      fake.sent[0].deviceToken === tokenA &&
+      !fake.sent.some((row) => row.deviceToken === expiredToken),
+  );
+  check(
+    "resolveNativeSession revokes devices before deleting an expired session",
+    expiredResolved === null &&
+      expiredDevice?.revokedAt != null &&
+      expiredDevice?.optedIn === false,
+  );
+
+  const otherRaw = `other-session-${randomUUID()}`;
+  const otherSession = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(otherRaw),
+      userId: memberAUser.id,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  const otherToken = `device-token-other-${randomUUID()}`;
+  await registerNativePushDevice(
+    prisma,
+    { ...accessA, sessionId: otherSession.id },
+    { token: otherToken, platform: "test", optedIn: true },
+  );
+  const revokedOthers = await revokeOtherSessionsOp(prisma, {
+    userId: memberAUser.id,
+    currentSessionId: sessionA.id,
+  });
+  const otherDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(otherToken),
+    },
+  });
+  const currentDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(tokenA),
+    },
+  });
+  const othersJob = await createHandymanJob("revoke-others");
+  fake.sent.length = 0;
+  await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: othersJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  check("revokeOtherSessionsOp revokes at least the extra session", revokedOthers >= 1);
+  check(
+    "Revoke-others leaves the current-session device live and revokes the lost-phone device",
+    otherDevice?.revokedAt != null &&
+      otherDevice?.optedIn === false &&
+      currentDevice?.revokedAt == null &&
+      currentDevice?.optedIn === true,
+  );
+  check(
+    "Revoke-others does not send to the revoked device",
+    fake.sent.length === 1 && fake.sent[0].deviceToken === tokenA,
+  );
+
+  const targetedRaw = `targeted-session-${randomUUID()}`;
+  const targetedSession = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(targetedRaw),
+      userId: memberAUser.id,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  const targetedToken = `device-token-targeted-${randomUUID()}`;
+  await registerNativePushDevice(
+    prisma,
+    { ...accessA, sessionId: targetedSession.id },
+    { token: targetedToken, platform: "test", optedIn: true },
+  );
+  await revokeSessionOp(prisma, {
+    userId: memberAUser.id,
+    sessionId: targetedSession.id,
+    currentSessionId: sessionA.id,
+  });
+  const targetedDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(targetedToken),
+    },
+  });
+  check(
+    "revokeSessionOp revokes devices on that session",
+    targetedDevice?.revokedAt != null && targetedDevice?.optedIn === false,
+  );
+
   const selfAssignJob = await createHandymanJob("self-assign");
   fake.sent.length = 0;
   const selfAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
@@ -902,6 +1073,38 @@ try {
     "Stale PENDING reclaim sends once and keeps one delivery row",
     fake.sent.length === 1 && staleDeliveries.length === 1 && staleDeliveries[0].status === "SENT",
   );
+
+  const overlapJob = await createHandymanJob("overlap-stale");
+  await prisma.job.update({
+    where: { id: overlapJob.id },
+    data: { assignedMembershipId: memberA.id },
+  });
+  setNativePushPendingStaleMs(50);
+  fake.sent.length = 0;
+  fake.sendCalls = 0;
+  fake.setSendDelayMs(400);
+  const overlapArgs = {
+    businessId: businessA.id,
+    jobId: overlapJob.id,
+    previousMembershipId: null,
+    nextMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  };
+  const overlapFirst = notifyHandymanJobAssigned(prisma, overlapArgs);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const overlapSecond = notifyHandymanJobAssigned(session.createClient(), overlapArgs);
+  await Promise.all([overlapFirst, overlapSecond]);
+  const overlapDeliveries = await prisma.nativePushDelivery.findMany({
+    where: { jobId: overlapJob.id, kind: "JOB_ASSIGNED" },
+  });
+  check(
+    "Heartbeat keeps a live send from being reclaimed after the stale window",
+    fake.sent.length === 1 &&
+      fake.sendCalls === 1 &&
+      overlapDeliveries.length === 1 &&
+      overlapDeliveries[0].status === "SENT",
+  );
+  fake.setSendDelayMs(0);
   setNativePushPendingStaleMs(null);
 
   const raceClients = [prisma, session.createClient(), session.createClient()];
@@ -1092,6 +1295,39 @@ try {
     "Alerts to a deactivated membership are suppressed",
     fake.sent.length === 0,
   );
+
+  const missingColumnRaw = `missing-column-session-${randomUUID()}`;
+  await prisma.session.create({
+    data: {
+      tokenHash: hashToken(missingColumnRaw),
+      userId: memberBUser.id,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "NativePushDevice" DROP COLUMN IF EXISTS "sessionId"`,
+  );
+  resetNativePushSchemaEnsure();
+  const missingColumnRegister = await registerNativePushDevice(prisma, accessB, {
+    token: `device-token-missing-col-${randomUUID()}`,
+    platform: "test",
+    optedIn: true,
+  });
+  const missingColumnList = await listNativePushPreference(prisma, accessB, { token: tokenB });
+  let missingColumnSignOutThrew = false;
+  try {
+    await revokeNativeSession(prisma, missingColumnRaw);
+  } catch {
+    missingColumnSignOutThrew = true;
+  }
+  check(
+    "Missing sessionId column register/list return 503 without throwing",
+    missingColumnRegister.ok === false &&
+      missingColumnRegister.status === 503 &&
+      missingColumnList.ok === false &&
+      missingColumnList.status === 503,
+  );
+  check("Missing sessionId column sign-out does not throw", missingColumnSignOutThrew === false);
 
   const missingJob = await createHandymanJob("missing-table");
   await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "NativePushDelivery" CASCADE`);

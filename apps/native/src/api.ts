@@ -131,15 +131,20 @@ export async function signOutNative(token: string) {
   }).catch(() => undefined);
 }
 
+export const NATIVE_PUSH_DEVICE_TOKEN_HEADER = "x-tbbt-device-token";
+
 export async function loadNativePushPreference(
   token: string,
   deviceToken?: string,
 ): Promise<NativePushPreferencePayload | NativeApiError> {
-  const query = deviceToken ? `?token=${encodeURIComponent(deviceToken)}` : "";
+  const headers = authHeaders(token);
+  if (deviceToken) {
+    headers[NATIVE_PUSH_DEVICE_TOKEN_HEADER] = deviceToken;
+  }
   return requestNativeJson<NativePushPreferencePayload>(
-    `/api/native/v1/push-devices${query}`,
+    "/api/native/v1/push-devices",
     {
-      headers: authHeaders(token),
+      headers,
     },
     "Job alerts are not available.",
   );

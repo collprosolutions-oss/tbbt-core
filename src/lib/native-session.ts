@@ -119,6 +119,8 @@ export async function resolveNativeSession(
 
   if (!session || session.expiresAt < new Date() || session.revokedAt) {
     if (session && session.expiresAt < new Date() && !session.revokedAt) {
+      const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+      await revokeNativePushDevicesForSessions(db, [session.id]);
       await db.session.delete({ where: { id: session.id } }).catch(() => undefined);
     }
     return null;
@@ -143,13 +145,8 @@ export async function revokeNativeSession(db: PrismaClient, token: string | null
     where: { id: session.id },
     data: { revokedAt: new Date() },
   });
-  const { nativePushDeviceTablePresent } = await import("@/lib/native-push/schema");
-  if (await nativePushDeviceTablePresent(db)) {
-    await db.nativePushDevice.updateMany({
-      where: { sessionId: session.id, revokedAt: null },
-      data: { optedIn: false, revokedAt: new Date() },
-    });
-  }
+  const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+  await revokeNativePushDevicesForSessions(db, [session.id]);
   return true;
 }
 

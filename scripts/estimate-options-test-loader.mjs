@@ -18,6 +18,9 @@ export async function resolve(specifier, context, nextResolve) {
   if (specifier === "next/headers") {
     return { shortCircuit: true, url: new URL("./mocks/next-headers.mjs", here).href };
   }
+  if (specifier === "next/server") {
+    return { shortCircuit: true, url: new URL("./mocks/next-server.mjs", here).href };
+  }
   if (specifier.startsWith("next/") && !specifier.endsWith(".js")) {
     return nextResolve(`${specifier}.js`, context);
   }

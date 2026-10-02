@@ -58,6 +58,14 @@ export async function revokeOtherSessionsOp(
   db: Db,
   input: { userId: string; currentSessionId: string },
 ) {
+  const others = await db.session.findMany({
+    where: {
+      userId: input.userId,
+      id: { not: input.currentSessionId },
+      revokedAt: null,
+    },
+    select: { id: true },
+  });
   const result = await db.session.updateMany({
     where: {
       userId: input.userId,
@@ -66,6 +74,11 @@ export async function revokeOtherSessionsOp(
     },
     data: { revokedAt: new Date() },
   });
+  const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+  await revokeNativePushDevicesForSessions(
+    db,
+    others.map((row) => row.id),
+  );
   return result.count;
 }
 
@@ -85,6 +98,8 @@ export async function revokeSessionOp(
   if (session.revokedAt) {
     return session;
   }
+  const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+  await revokeNativePushDevicesForSessions(db, [session.id]);
   return db.session.update({
     where: { id: session.id },
     data: { revokedAt: new Date() },

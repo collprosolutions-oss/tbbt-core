@@ -5,6 +5,7 @@ import {
   registerNativePushDevice,
   revokeNativePushDevice,
   updateNativePushDeviceOptIn,
+  NATIVE_PUSH_DEVICE_TOKEN_HEADER,
   NATIVE_PUSH_JSON_MAX_BYTES,
   NATIVE_PUSH_TOKEN_REQUIRED,
 } from "@/lib/native-push/devices";
@@ -40,8 +41,7 @@ export async function GET(request: Request) {
   if (!resolved.ok) {
     return nativeJson({ error: resolved.error }, resolved.status);
   }
-  const url = new URL(request.url);
-  const token = url.searchParams.get("token") ?? url.searchParams.get("deviceToken");
+  const token = request.headers.get(NATIVE_PUSH_DEVICE_TOKEN_HEADER);
   const result = await listNativePushPreference(prisma, resolved.access, { token });
   if (!result.ok) {
     return nativeJson({ error: result.error }, result.status);
