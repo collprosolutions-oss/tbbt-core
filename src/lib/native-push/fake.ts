@@ -17,10 +17,12 @@ export type FakeNativePushProvider = NativePushProvider & {
   failNext: boolean;
   throwNext: boolean;
   failAlways: boolean;
+  hangNext: boolean;
   sendDelayMs: number;
   setFailNext(value: boolean): void;
   setThrowNext(value: boolean): void;
   setFailAlways(value: boolean): void;
+  setHangNext(value: boolean): void;
   setSendDelayMs(ms: number): void;
 };
 
@@ -35,6 +37,7 @@ export function createFakeNativePushProvider(): FakeNativePushProvider {
     failNext: false,
     throwNext: false,
     failAlways: false,
+    hangNext: false,
     sendDelayMs: 0,
     setFailNext(value) {
       provider.failNext = value;
@@ -45,11 +48,18 @@ export function createFakeNativePushProvider(): FakeNativePushProvider {
     setFailAlways(value) {
       provider.failAlways = value;
     },
+    setHangNext(value) {
+      provider.hangNext = value;
+    },
     setSendDelayMs(ms) {
       provider.sendDelayMs = ms;
     },
     async send(input: NativePushSendInput): Promise<NativePushSendResult> {
       provider.sendCalls += 1;
+      if (provider.hangNext) {
+        provider.hangNext = false;
+        await new Promise(() => undefined);
+      }
       if (provider.sendDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, provider.sendDelayMs));
       }

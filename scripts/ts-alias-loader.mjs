@@ -25,5 +25,8 @@ export async function resolve(specifier, context, nextResolve) {
     const target = existsSync(fileURLToPath(fileTarget)) ? fileTarget : indexTarget;
     return nextResolve(target.href, context);
   }
+  if (specifier === "next/server") {
+    return { shortCircuit: true, url: new URL("./mocks/next-server.mjs", import.meta.url).href };
+  }
   return nextResolve(specifier, context);
 }

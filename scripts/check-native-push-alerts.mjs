@@ -67,7 +67,7 @@ const {
   setNativePushProvider,
 } = await import("@/lib/native-push");
 const { isMaterialAppointmentChange } = await import("@/lib/appointment-confirmation");
-const { hashToken } = await import("@/lib/auth-crypto");
+const { createSecureToken, hashToken } = await import("@/lib/auth-crypto");
 const { resolveNativeSession, revokeNativeSession } = await import("@/lib/native-session");
 const { revokeOtherSessionsOp, revokeSessionOp } = await import("@/lib/account-security");
 
@@ -112,6 +112,10 @@ const deactivateSrc = readRepo("src/lib/team-member-active-ops.ts");
 const scheduleSrc = readRepo("src/app/actions/job.ts");
 const dayRouteSrc = readRepo("src/lib/owner-day-route-appointment-ops.ts");
 const sessionSrc = readRepo("src/lib/native-session.ts");
+const loaderSrc = readRepo("scripts/ts-alias-loader.mjs");
+const passwordResetSrc = readRepo("src/lib/password-reset.ts");
+const authSrc = readRepo("src/lib/auth.ts");
+const fakeSrc = readRepo("src/lib/native-push/fake.ts");
 const nativeApi = readRepo("apps/native/src/api.ts");
 const todaySrc = readRepo("apps/native/src/screens/TodayScreen.tsx");
 const appSrc = readRepo("apps/native/App.tsx");
@@ -208,6 +212,27 @@ check(
     NATIVE_PUSH_MAX_ATTEMPTS === 3 &&
     NATIVE_PUSH_PENDING_STALE_MS > 0 &&
     NATIVE_PUSH_PENDING_STALE_MS > NATIVE_PUSH_SEND_TIMEOUT_MS,
+);
+check(
+  "ts-alias-loader mocks next/server so notify.ts can load in Node suites",
+  loaderSrc.includes('specifier === "next/server"') &&
+    loaderSrc.includes("./mocks/next-server.mjs"),
+);
+check(
+  "after() outside a request scope falls back to fire-and-forget",
+  notifySrc.includes("try {") &&
+    notifySrc.includes("after(() => runNotifyWork(work))") &&
+    notifySrc.includes("void runNotifyWork(work)"),
+);
+check(
+  "Password reset and getSessionUser revoke devices before deleting sessions",
+  passwordResetSrc.includes("revokeNativePushDevicesForSessions") &&
+    passwordResetSrc.indexOf("revokeNativePushDevicesForSessions") <
+      passwordResetSrc.indexOf("session.deleteMany") &&
+    authSrc.includes("revokeNativePushDevicesForSessions") &&
+    authSrc.indexOf("revokeNativePushDevicesForSessions") < authSrc.indexOf("session.delete") &&
+    fakeSrc.includes("setHangNext") &&
+    notifySrc.includes("withTimeout(NATIVE_PUSH_SEND_TIMEOUT_MS"),
 );
 check(
   "NATIVE_PUSH_PENDING_STALE_MS default is not 0",
@@ -868,6 +893,143 @@ try {
   check(
     "revokeSessionOp revokes devices on that session",
     targetedDevice?.revokedAt != null && targetedDevice?.optedIn === false,
+  );
+
+  const resetUser = await prisma.user.create({
+    data: { name: "Reset Worker", email: "reset@native-push.example", passwordHash: "x" },
+  });
+  const resetMembership = await prisma.membership.create({
+    data: { userId: resetUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const resetSession = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(`reset-session-${randomUUID()}`),
+      userId: resetUser.id,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  const resetDeviceToken = `device-token-reset-${randomUUID()}`;
+  await registerNativePushDevice(
+    prisma,
+    {
+      ...fieldAccess({
+        userId: resetUser.id,
+        businessId: businessA.id,
+        membershipId: resetMembership.id,
+        role: "MEMBER",
+        name: resetUser.name,
+        email: resetUser.email,
+        sessionId: resetSession.id,
+      }),
+    },
+    { token: resetDeviceToken, platform: "test", optedIn: true },
+  );
+  const resetRaw = createSecureToken();
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: resetUser.id,
+      tokenHash: hashToken(resetRaw),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    },
+  });
+  const { completePasswordResetOp } = await import("@/lib/password-reset");
+  const resetResult = await completePasswordResetOp(prisma, {
+    token: resetRaw,
+    password: "new-password-9",
+    confirmPassword: "new-password-9",
+  });
+  const resetDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: resetMembership.id,
+      tokenHash: hashNativePushDeviceToken(resetDeviceToken),
+    },
+  });
+  check(
+    "Password reset revokes devices before deleting sessions",
+    resetResult.ok === true &&
+      (await prisma.session.count({ where: { userId: resetUser.id } })) === 0 &&
+      resetDevice?.revokedAt != null &&
+      resetDevice?.optedIn === false,
+  );
+
+  const authExpireRaw = createSecureToken();
+  const authExpireUser = await prisma.user.create({
+    data: { name: "Expire Worker", email: "expire@native-push.example", passwordHash: "x" },
+  });
+  const authExpireMembership = await prisma.membership.create({
+    data: { userId: authExpireUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const authExpireSession = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(authExpireRaw),
+      userId: authExpireUser.id,
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const authExpireToken = `device-token-auth-expire-${randomUUID()}`;
+  await registerNativePushDevice(
+    prisma,
+    fieldAccess({
+      userId: authExpireUser.id,
+      businessId: businessA.id,
+      membershipId: authExpireMembership.id,
+      role: "MEMBER",
+      name: authExpireUser.name,
+      email: authExpireUser.email,
+      sessionId: authExpireSession.id,
+    }),
+    { token: authExpireToken, platform: "test", optedIn: true },
+  );
+  const { getSessionUser, SESSION_COOKIE } = await import("@/lib/auth");
+  const { setTestCookies } = await import("next/headers");
+  setTestCookies({ [SESSION_COOKIE]: authExpireRaw });
+  const expiredSessionUser = await getSessionUser();
+  const authExpireDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: authExpireMembership.id,
+      tokenHash: hashNativePushDeviceToken(authExpireToken),
+    },
+  });
+  check(
+    "getSessionUser revokes devices before deleting an expired session",
+    expiredSessionUser === null &&
+      authExpireDevice?.revokedAt != null &&
+      authExpireDevice?.optedIn === false,
+  );
+  setTestCookies({});
+
+  const hangJob = await createHandymanJob("hanging-provider");
+  await prisma.job.update({
+    where: { id: hangJob.id },
+    data: { assignedMembershipId: memberA.id },
+  });
+  fake.sent.length = 0;
+  fake.setHangNext(true);
+  const hangStarted = Date.now();
+  const hangResult = await Promise.race([
+    notifyHandymanJobAssigned(prisma, {
+      businessId: businessA.id,
+      jobId: hangJob.id,
+      previousMembershipId: null,
+      nextMembershipId: memberA.id,
+      actorMembershipId: ownerMembership.id,
+    }),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ status: "HUNG", sentCount: 0 }), 7_000),
+    ),
+  ]);
+  const hangElapsed = Date.now() - hangStarted;
+  const hangDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: hangJob.id, kind: "JOB_ASSIGNED" },
+  });
+  fake.setHangNext(false);
+  check(
+    "Hanging provider fails within ~5s instead of hanging forever",
+    hangResult.status === "FAILED" &&
+      String(hangResult.reason ?? "").includes("timed out") &&
+      hangElapsed >= 4_000 &&
+      hangElapsed < 7_000 &&
+      hangDelivery?.status === "FAILED",
   );
 
   const selfAssignJob = await createHandymanJob("self-assign");

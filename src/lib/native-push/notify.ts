@@ -74,7 +74,11 @@ export function enqueueNativePushNotify(work: () => Promise<unknown>) {
     testPendingNotifies.push(promise);
     return promise;
   }
-  after(() => runNotifyWork(work));
+  try {
+    after(() => runNotifyWork(work));
+  } catch {
+    void runNotifyWork(work);
+  }
 }
 
 export async function flushNativePushNotifies() {

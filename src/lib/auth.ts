@@ -83,6 +83,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
   if (!session || session.expiresAt < new Date() || session.revokedAt) {
     if (session && session.expiresAt < new Date() && !session.revokedAt) {
+      const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+      await revokeNativePushDevicesForSessions(prisma, [session.id]);
       await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     }
     return null;
