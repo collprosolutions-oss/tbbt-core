@@ -28,7 +28,6 @@ if (generateEarly.status !== 0) {
 }
 
 register(new URL("./estimate-options-test-loader.mjs", import.meta.url), import.meta.url);
-register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 process.env.TZ = process.env.TZ || "America/New_York";
 process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER =
@@ -367,6 +366,15 @@ try {
       alphaDevices.length === 1 &&
       alphaDevices[0].businessId === businessA.id &&
       !betaHasAlphaToken,
+  );
+  const restoredA = await registerNativePushDevice(prisma, accessA, {
+    token: tokenA,
+    platform: "test",
+    optedIn: true,
+  });
+  check(
+    "Assignee can reclaim a token after another membership registers the same hash",
+    restoredA.ok && restoredA.preference.thisDeviceOptedIn === true,
   );
   check(
     "Preference payloads never include the raw token or an address",
