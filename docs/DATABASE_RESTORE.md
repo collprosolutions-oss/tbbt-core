@@ -59,7 +59,7 @@ These are the steps the proof script runs. They are safe only against
 4. Dump **that disposable database only**:
 
    ```bash
-   pg_dump --dbname "$SOURCE_URL" --format=custom --no-owner --no-acl \
+   pg_dump --dbname "$SOURCE_URL" --format=custom --compress=0 --no-owner --no-acl \
      --file /tmp/handyman-source.dump
    ```
 
@@ -81,7 +81,12 @@ These are the steps the proof script runs. They are safe only against
 8. Drop both disposable databases and the dump file.
 
 Helpers: `scripts/lib/local-postgres-backup.mjs`. They call
-`assertSafeLocalDatabaseEnvironment` before `pg_dump` / `pg_restore`.
+`assertSafeLocalDatabaseEnvironment` before `pg_dump` / `pg_restore`,
+refuse any URL fragment (WHATWG-local URLs such as
+`postgresql://127.0.0.1:54321#@evil.invalid:5999/x` are not safe for
+libpq), and refuse any database name that does not start with
+`tbbt_handy_restore_`. They cannot dump or restore the shared
+localhost `tbbt` database.
 
 ## Missing dependencies after a database restore
 
@@ -92,7 +97,7 @@ A successful Postgres restore is **not** a full business recovery.
 | Tenant rows and foreign keys | Yes | Proven by the drill. |
 | Invoice / payment / credit amounts | Yes | Remaining due is recomputed from restored rows. |
 | `StoredAsset` metadata and `storageKey` | Yes | Pointers only. |
-| Fake in-process private-storage bytes | No | The dump is checked for the file sentinel and must not contain it. |
+| Fake in-process private-storage bytes | No | Bytes live only in the process `MemoryStorageProvider`. The drill converts the custom dump to uncompressed dump SQL (`pg_restore -f -`) and scans that text. A positive control first writes the same sentinel into a `JobPhoto.caption` and shows that scan **fails** (the sentinel is present). The real dump, where the sentinel exists only as in-memory file bytes, does not contain it. After restore the **same** fake store still holds the original bytes — storage is process-local and separate from Postgres. A brand-new empty memory map is not the proof. |
 | Cloudflare R2 object bytes | **No** | Database restore does not recreate R2 bytes. Restore the bucket (or copy objects) separately. |
 | Production `DATABASE_URL` / hosted Postgres | Out of scope | This repo’s restore helpers refuse non-local hosts. |
 | `R2_*`, Stripe, Resend, Twilio secrets | No | Live in the host environment, not the dump. |

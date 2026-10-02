@@ -27,7 +27,12 @@ import {
   openDisposableTestDatabase,
 } from "./disposable-test-database.mjs";
 import {
+  HANDYMAN_RESTORE_DATABASE_PREFIX,
+  RestoreDatabaseNameRefusedError,
   dumpLocalDatabase,
+  dumpPlainSqlContains,
+  libpqUrlForLocalBackup,
+  readCustomDumpPlainSql,
   restoreLocalDatabase,
 } from "./lib/local-postgres-backup.mjs";
 
@@ -266,6 +271,12 @@ check(
     restoreFn.indexOf("backupEnv(databaseUrl, \"pg_restore\")") < restoreFn.indexOf('findPostgresTool("pg_restore")') &&
     backupSrc.includes("function backupEnv") &&
     backupSrc.includes("libpqUrlForLocalBackup") &&
+    backupSrc.includes("parsed.hash = \"\"") &&
+    backupSrc.includes("must not include a URL fragment") &&
+    backupSrc.includes("HANDYMAN_RESTORE_DATABASE_PREFIX") &&
+    backupSrc.includes("assertHandymanRestoreDatabaseName") &&
+    backupSrc.includes("--compress=0") &&
+    backupSrc.includes("readCustomDumpPlainSql") &&
     backupSrc.includes("Never dump Production") &&
     backupSrc.includes("metadata only"),
 );
@@ -274,7 +285,10 @@ check(
   selfSrc.includes("never connects to or dumps Production") &&
     selfSrc.includes("not recreate object-storage bytes") &&
     selfSrc.includes("FILE_BYTE_SENTINEL") &&
-    selfSrc.includes("MemoryStorageProvider"),
+    selfSrc.includes("MemoryStorageProvider") &&
+    selfSrc.includes("dumpPlainSqlContains") &&
+    selfSrc.includes("Positive control") &&
+    selfSrc.includes("Same fake store still holds the original bytes"),
 );
 check(
   "Recovery notes record exact local steps and missing object-storage bytes",
@@ -283,6 +297,10 @@ check(
     docsSrc.includes("does not recreate R2 bytes") &&
     docsSrc.includes("Missing dependencies") &&
     docsSrc.includes("npm run test:handyman-database-restore") &&
+    docsSrc.includes("uncompressed dump SQL") &&
+    docsSrc.includes("positive control") &&
+    docsSrc.includes("tbbt_handy_restore_") &&
+    !docsSrc.includes("The dump is checked for the file sentinel and must not contain it") &&
     !docsSrc.includes("pg_dump Production") &&
     !docsSrc.includes("dump the production database"),
 );
@@ -318,6 +336,79 @@ check(
     );
   }
   check("Remote dump/restore never start a Postgres client tool", dumpReached === false && restoreReached === false);
+}
+
+{
+  const hashBypass = "postgresql://127.0.0.1:54321#@evil.invalid:5999/x";
+  let emitted = "";
+  let hashDumpReached = false;
+  let hashRestoreReached = false;
+  try {
+    emitted = libpqUrlForLocalBackup(hashBypass, "pg_dump");
+    check("hash-fragment URL is refused by libpqUrlForLocalBackup", false);
+  } catch (error) {
+    check(
+      "hash-fragment URL postgresql://127.0.0.1:54321#@evil.invalid:5999/x is refused",
+      error instanceof RemoteDatabaseRefusedError &&
+        /fragment/i.test(error.message) &&
+        !emitted &&
+        !String(error.message).includes("evil.invalid"),
+    );
+  }
+  try {
+    dumpLocalDatabase({ databaseUrl: hashBypass, outputPath: "/tmp/should-not-write-hash.dump" });
+    hashDumpReached = true;
+  } catch (error) {
+    check(
+      "dumpLocalDatabase refuses the hash-fragment bypass URL before pg_dump",
+      error instanceof RemoteDatabaseRefusedError && /fragment/i.test(error.message),
+    );
+  }
+  try {
+    restoreLocalDatabase({ databaseUrl: hashBypass, inputPath: "/tmp/should-not-exist-hash.dump" });
+    hashRestoreReached = true;
+  } catch (error) {
+    check(
+      "restoreLocalDatabase refuses the hash-fragment bypass URL before pg_restore",
+      error instanceof RemoteDatabaseRefusedError && /fragment/i.test(error.message),
+    );
+  }
+  check(
+    "Hash-fragment dump/restore never start a Postgres client tool",
+    hashDumpReached === false && hashRestoreReached === false,
+  );
+}
+
+{
+  const unprefixed = "postgresql://tbbt:tbbt@127.0.0.1:5432/tbbt";
+  let dumpUnprefixed = false;
+  let restoreUnprefixed = false;
+  try {
+    dumpLocalDatabase({ databaseUrl: unprefixed, outputPath: "/tmp/should-not-dump-tbbt.dump" });
+    dumpUnprefixed = true;
+  } catch (error) {
+    check(
+      "dump refuses a localhost DB whose name is not tbbt_handy_restore_",
+      error instanceof RestoreDatabaseNameRefusedError &&
+        error.databaseName === "tbbt" &&
+        error.message.includes(HANDYMAN_RESTORE_DATABASE_PREFIX),
+    );
+  }
+  try {
+    restoreLocalDatabase({ databaseUrl: unprefixed, inputPath: "/tmp/should-not-restore-tbbt.dump" });
+    restoreUnprefixed = true;
+  } catch (error) {
+    check(
+      "restore refuses a localhost DB whose name is not tbbt_handy_restore_",
+      error instanceof RestoreDatabaseNameRefusedError &&
+        error.databaseName === "tbbt" &&
+        error.message.includes(HANDYMAN_RESTORE_DATABASE_PREFIX),
+    );
+  }
+  check(
+    "Non-prefixed localhost dump/restore never start a Postgres client tool",
+    dumpUnprefixed === false && restoreUnprefixed === false,
+  );
 }
 
 const baseUrl = process.env.DATABASE_URL;
@@ -585,12 +676,28 @@ try {
       Buffer.from(sourceObject.body).equals(fileBody),
   );
 
+  const leakDumpPath = join(dumpDir, "sentinel-in-caption.dump");
+  await prisma.jobPhoto.update({
+    where: { id: sourceSnap.file.photoId },
+    data: { caption: FILE_BYTE_SENTINEL },
+  });
+  dumpLocalDatabase({ databaseUrl: source.testUrl, outputPath: leakDumpPath });
+  check(
+    "Positive control: uncompressed dump SQL contains a sentinel stored in a text column",
+    dumpPlainSqlContains(leakDumpPath, FILE_BYTE_SENTINEL),
+  );
+  await prisma.jobPhoto.update({
+    where: { id: sourceSnap.file.photoId },
+    data: { caption: "Private after photo metadata" },
+  });
+
   dumpLocalDatabase({ databaseUrl: source.testUrl, outputPath: dumpPath });
   const dumpBytes = readFileSync(dumpPath);
+  const realPlain = readCustomDumpPlainSql(dumpPath);
   check("Local custom-format dump was written", dumpBytes.byteLength > 0);
   check(
-    "Database dump does not contain the fake private-file bytes",
-    !dumpBytes.includes(FILE_BYTE_SENTINEL),
+    "Uncompressed dump SQL contains storageKey metadata but not the private-file byte sentinel",
+    realPlain.includes(sourceSnap.file.storageKey) && !realPlain.includes(FILE_BYTE_SENTINEL),
   );
 
   target = await openDisposableTestDatabase({
@@ -603,8 +710,7 @@ try {
 
   console.log("\nRESTORE — second empty disposable database, metadata only");
   const restoredSnap = await snapshotHandymanBusiness(restored, business.id);
-  const restoredProvider = new MemoryStorageProvider();
-  const restoredObject = await restoredProvider.getObject({
+  const sameStoreAfterRestore = await provider.getObject({
     bucket: "tbbt-restore-drill-fake",
     key: restoredSnap.file.storageKey,
   });
@@ -639,11 +745,14 @@ try {
       restoredSnap.invoice.remainingDue === REMAINING_DUE,
   );
   check(
-    "Restored private-file metadata and JobPhoto reference match; object bytes were not recreated",
+    "Restored private-file metadata and JobPhoto reference match",
     JSON.stringify(restoredSnap.file) === JSON.stringify(sourceSnap.file) &&
       restoredPublic?.storageKey === sourceSnap.file.storageKey &&
-      restoredPublic?.fileSizeBytes === fileBody.byteLength &&
-      restoredObject === null,
+      restoredPublic?.fileSizeBytes === fileBody.byteLength,
+  );
+  check(
+    "Same fake store still holds the original bytes after DB restore — storage is process-local and separate",
+    sameStoreAfterRestore?.body && Buffer.from(sameStoreAfterRestore.body).equals(fileBody),
   );
   check(
     "Other-tenant customer stayed on the other business after restore",
