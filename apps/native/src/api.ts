@@ -1,4 +1,5 @@
 import { nativeApiUrl } from "./config";
+import { isLostAssignment, isSessionExpired } from "./recovery";
 import type {
   NativeFieldActivityType,
   NativeJobDetail,
@@ -21,6 +22,12 @@ export type NativeApiError = {
   challengeToken?: string;
 };
 
+export const NATIVE_NETWORK_ERROR =
+  "Couldn't reach the server. Check your connection and try again.";
+
+export const NATIVE_CHECKLIST_OFFLINE_MESSAGE =
+  "Couldn't reach the server — your changes are still saved on this phone.";
+
 async function parseJson(response: Response) {
   const text = await response.text();
   if (!text) return {};
@@ -41,51 +48,72 @@ function authHeaders(token?: string | null): Record<string, string> {
   return headers;
 }
 
+function jsonHeaders(token?: string | null): Record<string, string> {
+  return {
+    ...authHeaders(token),
+    "Content-Type": "application/json",
+  };
+}
+
+export async function requestNativeJson<T>(
+  path: string,
+  init: RequestInit,
+  fallbackError: string,
+  networkError = NATIVE_NETWORK_ERROR,
+): Promise<T | NativeApiError> {
+  try {
+    const response = await fetch(nativeApiUrl(path), init);
+    const body = await parseJson(response);
+    if (!response.ok) {
+      return {
+        error: typeof body.error === "string" ? body.error : fallbackError,
+        status: response.status,
+        totpRequired: body.totpRequired === true,
+        challengeToken:
+          typeof body.challengeToken === "string" ? body.challengeToken : undefined,
+      };
+    }
+    return body as T;
+  } catch {
+    return { error: networkError };
+  }
+}
+
+export { isLostAssignment, isSessionExpired };
+
 export async function signInNative(input: {
   email: string;
   password: string;
   challengeToken?: string;
   totpCode?: string;
 }): Promise<NativeSessionPayload | NativeApiError> {
-  const response = await fetch(nativeApiUrl("/api/native/v1/session"), {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
+  return requestNativeJson<NativeSessionPayload>(
+    "/api/native/v1/session",
+    {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        challengeToken: input.challengeToken,
+        totpCode: input.totpCode,
+      }),
     },
-    body: JSON.stringify({
-      email: input.email,
-      password: input.password,
-      challengeToken: input.challengeToken,
-      totpCode: input.totpCode,
-    }),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error: typeof body.error === "string" ? body.error : "Sign in failed.",
-      totpRequired: body.totpRequired === true,
-      challengeToken: typeof body.challengeToken === "string" ? body.challengeToken : undefined,
-    };
-  }
-  return body as unknown as NativeSessionPayload;
+    "Sign in failed.",
+  );
 }
 
 export async function loadNativeSession(token: string): Promise<
   | { viewer: NativeViewer; workspace: NativeWorkspace }
   | NativeApiError
 > {
-  const response = await fetch(nativeApiUrl("/api/native/v1/session"), {
-    headers: authHeaders(token),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error: typeof body.error === "string" ? body.error : "Session expired.",
-      status: response.status,
-    };
-  }
-  return body as { viewer: NativeViewer; workspace: NativeWorkspace };
+  return requestNativeJson<{ viewer: NativeViewer; workspace: NativeWorkspace }>(
+    "/api/native/v1/session",
+    {
+      headers: authHeaders(token),
+    },
+    "Session expired.",
+  );
 }
 
 export async function signOutNative(token: string) {
@@ -96,27 +124,25 @@ export async function signOutNative(token: string) {
 }
 
 export async function loadNativeToday(token: string): Promise<NativeTodayPayload | NativeApiError> {
-  const response = await fetch(nativeApiUrl("/api/native/v1/today"), {
-    headers: authHeaders(token),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "Today is not available." };
-  }
-  return body as unknown as NativeTodayPayload;
+  return requestNativeJson<NativeTodayPayload>(
+    "/api/native/v1/today",
+    {
+      headers: authHeaders(token),
+    },
+    "Today is not available.",
+  );
 }
 
 export async function loadNativeTimeCards(
   token: string,
 ): Promise<NativeTimeCardsPayload | NativeApiError> {
-  const response = await fetch(nativeApiUrl("/api/native/v1/time-cards"), {
-    headers: authHeaders(token),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "Time cards are not available." };
-  }
-  return body as unknown as NativeTimeCardsPayload;
+  return requestNativeJson<NativeTimeCardsPayload>(
+    "/api/native/v1/time-cards",
+    {
+      headers: authHeaders(token),
+    },
+    "Time cards are not available.",
+  );
 }
 
 export async function requestNativeTimeCorrection(
@@ -133,39 +159,28 @@ export async function requestNativeTimeCorrection(
   | { timeCards: NativeTimeCardsPayload; request: { id: string; status: string; timeEntryId: string }; message: string }
   | NativeApiError
 > {
-  const response = await fetch(nativeApiUrl("/api/native/v1/time-cards/corrections"), {
-    method: "POST",
-    headers: {
-      ...authHeaders(token),
-      "Content-Type": "application/json",
+  return requestNativeJson(
+    "/api/native/v1/time-cards/corrections",
+    {
+      method: "POST",
+      headers: jsonHeaders(token),
+      body: JSON.stringify(input),
     },
-    body: JSON.stringify(input),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error: typeof body.error === "string" ? body.error : "That correction could not be requested.",
-    };
-  }
-  return body as unknown as {
-    timeCards: NativeTimeCardsPayload;
-    request: { id: string; status: string; timeEntryId: string };
-    message: string;
-  };
+    "That correction could not be requested.",
+  );
 }
 
 export async function loadNativeJob(
   token: string,
   jobId: string,
 ): Promise<{ job: NativeJobDetail } | NativeApiError> {
-  const response = await fetch(nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}`), {
-    headers: authHeaders(token),
-  });
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That job is not available." };
-  }
-  return body as unknown as { job: NativeJobDetail };
+  return requestNativeJson<{ job: NativeJobDetail }>(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}`,
+    {
+      headers: authHeaders(token),
+    },
+    "That job is not available.",
+  );
 }
 
 export async function startNativeJob(
@@ -175,48 +190,30 @@ export async function startNativeJob(
   | { job: NativeJobDetail; alreadyStarted: boolean; alreadyRunningTime: boolean }
   | NativeApiError
 > {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/start`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/start`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: "{}",
     },
+    "That job could not be started.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That job could not be started." };
-  }
-  return body as unknown as {
-    job: NativeJobDetail;
-    alreadyStarted: boolean;
-    alreadyRunningTime: boolean;
-  };
 }
 
 export async function stopNativeJobRunningTime(
   token: string,
   jobId: string,
 ): Promise<{ job: NativeJobDetail; alreadyStopped: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-time`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-time`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: "{}",
     },
+    "That job time could not be stopped.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That job time could not be stopped." };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyStopped: boolean };
 }
 
 export async function startNativeActivityTime(
@@ -227,29 +224,15 @@ export async function startNativeActivityTime(
   | { job: NativeJobDetail; alreadyStarted: boolean; alreadyRunningTime: boolean }
   | NativeApiError
 > {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/start-activity`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/start-activity`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify({ activityType }),
     },
+    "That time could not be started.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string" ? body.error : "That time could not be started.",
-    };
-  }
-  return body as unknown as {
-    job: NativeJobDetail;
-    alreadyStarted: boolean;
-    alreadyRunningTime: boolean;
-  };
 }
 
 export async function stopNativeActivityTime(
@@ -257,51 +240,31 @@ export async function stopNativeActivityTime(
   jobId: string,
   activityType: NativeFieldActivityType,
 ): Promise<{ job: NativeJobDetail; alreadyStopped: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-activity`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/stop-activity`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify({ activityType }),
     },
+    "That time could not be stopped.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string" ? body.error : "That time could not be stopped.",
-    };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyStopped: boolean };
 }
 
 export async function completeNativeJob(
   token: string,
   jobId: string,
 ): Promise<{ job: NativeJobDetail; alreadyCompleted: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/complete`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/complete`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: "{}",
     },
+    "That job could not be completed.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That job could not be completed." };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyCompleted: boolean };
 }
-
-export const NATIVE_CHECKLIST_OFFLINE_MESSAGE =
-  "Couldn't reach the server — your changes are still saved on this phone.";
 
 export async function syncNativeJobChecklistDraft(
   token: string,
@@ -330,6 +293,7 @@ export async function syncNativeJobChecklistDraft(
           typeof body.error === "string"
             ? body.error
             : "Those checklist changes could not be synced.",
+        status: response.status,
       };
     }
     return body as unknown as { job: NativeJobDetail; alreadySynced: boolean };
@@ -365,6 +329,7 @@ export async function recordNativeJobProblem(
           typeof body.error === "string"
             ? body.error
             : "That problem report could not be recorded.",
+        status: response.status,
       };
     }
     return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
@@ -383,27 +348,15 @@ export async function recordNativeJobPickupItem(
     pickupExceptionNote?: string | null;
   },
 ): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/pickup`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/pickup`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify(input),
     },
+    "That pickup item could not be recorded.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error:
-        typeof body.error === "string"
-          ? body.error
-          : "That pickup item could not be recorded.",
-    };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
 export async function recordNativeJobVisit(
@@ -411,24 +364,15 @@ export async function recordNativeJobVisit(
   jobId: string,
   outcomeStatus: NativeVisitOutcomeStatus,
 ): Promise<{ job: NativeJobDetail; alreadyRecorded: boolean } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/visit`),
+  return requestNativeJson(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/visit`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify({ outcomeStatus }),
     },
+    "That visit outcome could not be recorded.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return {
-      error: typeof body.error === "string" ? body.error : "That visit outcome could not be recorded.",
-    };
-  }
-  return body as unknown as { job: NativeJobDetail; alreadyRecorded: boolean };
 }
 
 export async function authorizeNativeJobPhoto(
@@ -436,22 +380,15 @@ export async function authorizeNativeJobPhoto(
   jobId: string,
   input: { originalFilename: string; mimeType: string; fileSizeBytes: number },
 ): Promise<NativeJobPhotoAuthorizePayload | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/authorize`),
+  return requestNativeJson<NativeJobPhotoAuthorizePayload>(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/authorize`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify(input),
     },
+    "That photo could not be uploaded. Try again.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That photo could not be uploaded. Try again." };
-  }
-  return body as unknown as NativeJobPhotoAuthorizePayload;
 }
 
 export async function finalizeNativeJobPhoto(
@@ -459,22 +396,15 @@ export async function finalizeNativeJobPhoto(
   jobId: string,
   input: { assetId: string; stage: NativeJobPhotoStage; caption?: string },
 ): Promise<{ job: NativeJobDetail } | NativeApiError> {
-  const response = await fetch(
-    nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/finalize`),
+  return requestNativeJson<{ job: NativeJobDetail }>(
+    `/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/finalize`,
     {
       method: "POST",
-      headers: {
-        ...authHeaders(token),
-        "Content-Type": "application/json",
-      },
+      headers: jsonHeaders(token),
       body: JSON.stringify(input),
     },
+    "That photo could not be uploaded. Try again.",
   );
-  const body = await parseJson(response);
-  if (!response.ok) {
-    return { error: typeof body.error === "string" ? body.error : "That photo could not be uploaded. Try again." };
-  }
-  return body as unknown as { job: NativeJobDetail };
 }
 
 export async function abortNativeJobPhoto(
@@ -484,10 +414,7 @@ export async function abortNativeJobPhoto(
 ) {
   await fetch(nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/photos/abort`), {
     method: "POST",
-    headers: {
-      ...authHeaders(token),
-      "Content-Type": "application/json",
-    },
+    headers: jsonHeaders(token),
     body: JSON.stringify({ assetId }),
   }).catch(() => undefined);
 }

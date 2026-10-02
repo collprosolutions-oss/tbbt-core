@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -9,7 +9,8 @@ import {
   Text,
   View,
 } from "react-native";
-import { isApiError, loadNativeToday } from "../api";
+import { isApiError, isLostAssignment, isSessionExpired, loadNativeToday } from "../api";
+import { applyLostAssignment, nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
 import type {
   NativeAssignedStopsMaps,
   NativeJobSummary,
@@ -99,6 +100,7 @@ export function TodayScreen({
   workspace,
   onOpenJob,
   onOpenTimeCards,
+  onSessionExpired,
   onSignOut,
 }: {
   token: string;
@@ -106,31 +108,49 @@ export function TodayScreen({
   workspace: NativeWorkspace;
   onOpenJob: (jobId: string) => void;
   onOpenTimeCards: () => void;
+  onSessionExpired: () => void;
   onSignOut: () => void;
 }) {
   const [payload, setPayload] = useState<NativeTodayPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const requestGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = nextNativeRequestGeneration(requestGeneration.current);
+    requestGeneration.current = generation;
     setRefreshing(true);
     try {
       const result = await loadNativeToday(token);
+      if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
       if (isApiError(result)) {
+        if (isSessionExpired(result)) {
+          onSessionExpired();
+          return;
+        }
         setError(result.error);
+        if (isLostAssignment(result)) {
+          setPayload((current) => applyLostAssignment(current, result));
+        }
         return;
       }
       setPayload(result);
       setError(null);
     } catch {
+      if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
       setError("Could not load Today.");
     } finally {
-      setRefreshing(false);
+      if (shouldApplyNativeResponse(requestGeneration.current, generation)) {
+        setRefreshing(false);
+      }
     }
-  }, [token]);
+  }, [onSessionExpired, token]);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
+    };
   }, [refresh]);
 
   return (
@@ -150,7 +170,19 @@ export function TodayScreen({
       <Pressable onPress={onOpenTimeCards} style={styles.timeCards}>
         <Text style={styles.timeCardsLabel}>Time cards</Text>
       </Pressable>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <>
+          <Text style={styles.error}>{error}</Text>
+          <Pressable
+            onPress={() => {
+              void refresh();
+            }}
+            style={styles.timeCards}
+          >
+            <Text style={styles.timeCardsLabel}>Retry</Text>
+          </Pressable>
+        </>
+      ) : null}
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload ? (
         <>
