@@ -1,9 +1,13 @@
 /**
- * Verified inbound Twilio Voice webhook → Communications missed-call log.
+ * Verified inbound Twilio Voice webhook → existing missed-call log →
+ * #288 receptionist / OWNER disposition (joined path).
  *
- * Fake provider POSTs only. Proves signature verification, tenant/number
- * mapping, forged requests, retries, and OWNER disposition races. Does
- * not place calls, send messages, or store recordings / call content.
+ * Fake signed Voice POSTs and fake outbound SMS/email providers only.
+ * Retries and later provider events must stay one PhoneInteraction and
+ * one callback action item, must not reopen CLOSED, and must not call
+ * or message the customer. Also proves number-to-business mapping,
+ * wrong signatures, tenant isolation, and a disposition racing webhook
+ * replay. Does not add a second phone log or answering product.
  *
  * Uses a dedicated local disposable database.
  *
@@ -31,6 +35,9 @@ const previous = {
   TWILIO_MESSAGING_SERVICE_SID: process.env.TWILIO_MESSAGING_SERVICE_SID,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
   TBBT_CUSTOMER_MESSAGING_ADAPTER: process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER,
+  TBBT_EMAIL_ADAPTER: process.env.TBBT_EMAIL_ADAPTER,
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
+  EMAIL_FROM: process.env.EMAIL_FROM,
   NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
   VERCEL_ENV: process.env.VERCEL_ENV,
 };
@@ -48,8 +55,11 @@ process.env.TWILIO_ACCOUNT_SID = TEST_ACCOUNT_SID;
 process.env.TWILIO_AUTH_TOKEN = TEST_AUTH_TOKEN;
 delete process.env.TWILIO_MESSAGING_SERVICE_SID;
 delete process.env.TWILIO_FROM_NUMBER;
-delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
 delete process.env.VERCEL_ENV;
+process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER = "fake";
+process.env.TBBT_EMAIL_ADAPTER = "fake";
+process.env.RESEND_API_KEY = "re_test_voice_joined";
+process.env.EMAIL_FROM = "TBBT <voice-joined@example.com>";
 process.env.NEXT_PUBLIC_APP_URL = "http://voice-webhook.test";
 
 let failures = 0;
@@ -65,6 +75,17 @@ function restoreEnv() {
   for (const [key, value] of Object.entries(previous)) {
     if (value == null) delete process.env[key];
     else process.env[key] = value;
+  }
+}
+
+async function restoreProviders() {
+  try {
+    const { resetCommunicationEmailSender } = await import("@/lib/communications");
+    const { resetCustomerMessagingProvider } = await import("@/lib/customer-messaging");
+    resetCommunicationEmailSender();
+    resetCustomerMessagingProvider();
+  } catch {
+    // Suites that fail before module import still restore env below.
   }
 }
 
@@ -95,6 +116,20 @@ async function seedBusiness(prisma, name, operationalSmsNumber) {
       passwordHash: "x",
     },
   });
+  const adminUser = await prisma.user.create({
+    data: {
+      name: `${name} Admin`,
+      email: `${name.toLowerCase().replace(/\s+/g, ".")}.admin.${randomUUID().slice(0, 8)}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const memberUser = await prisma.user.create({
+    data: {
+      name: `${name} Member`,
+      email: `${name.toLowerCase().replace(/\s+/g, ".")}.member.${randomUUID().slice(0, 8)}@example.com`,
+      passwordHash: "x",
+    },
+  });
   const business = await prisma.business.create({
     data: {
       name,
@@ -105,10 +140,18 @@ async function seedBusiness(prisma, name, operationalSmsNumber) {
   const membership = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
   });
+  const adminMembership = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: business.id, role: "ADMIN" },
+  });
+  const memberMembership = await prisma.membership.create({
+    data: { userId: memberUser.id, businessId: business.id, role: "MEMBER" },
+  });
   return {
     business,
     membership,
     access: makeAccess(business.id, "OWNER", membership.id, ownerUser.id),
+    adminAccess: makeAccess(business.id, "ADMIN", adminMembership.id, adminUser.id),
+    memberAccess: makeAccess(business.id, "MEMBER", memberMembership.id, memberUser.id),
   };
 }
 
@@ -137,17 +180,57 @@ await withDisposableTestDatabase(
   },
   async ({ prisma }) => {
     const {
+      COMMUNICATIONS_PERMISSION_ERROR,
+      PHONE_INTERACTION_CLOSED_STATUS,
+      RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+      RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
+      RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+      RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
       VOICE_WEBHOOK_PATH,
       VOICE_WEBHOOK_REJECT_TWIML,
       VOICE_WEBHOOK_IGNORED_CONTENT_PARAMS,
+      executeReceptionistDispositionAction,
       handleInboundVoiceWebhookRequest,
       isVoiceWebhookPath,
       isTwilioVoiceWebhookConfigured,
+      loadReceptionistRecoveryCenter,
       parseInboundVoiceWebhook,
-      voiceMissedCallIdempotencyKey,
       recordReceptionistCallbackDisposition,
+      setCommunicationEmailSender,
+      voiceMissedCallIdempotencyKey,
     } = await import("@/lib/communications");
-    const { twilioRequestSignature } = await import("@/lib/customer-messaging");
+    const {
+      createFakeCustomerMessagingProvider,
+      setCustomerMessagingProvider,
+      twilioRequestSignature,
+    } = await import("@/lib/customer-messaging");
+    const { createFakeTransactionalEmailSender } = await import("@/lib/mail-fake");
+
+    const fakeSms = createFakeCustomerMessagingProvider();
+    const fakeEmail = createFakeTransactionalEmailSender();
+    setCustomerMessagingProvider(fakeSms);
+    setCommunicationEmailSender(fakeEmail.send.bind(fakeEmail));
+
+    async function outboundTraffic(businessId) {
+      const rows = await prisma.customerCommunication.findMany({
+        where: {
+          businessId,
+          OR: [
+            { channel: { in: ["SMS", "EMAIL"] } },
+            { direction: "OUTBOUND" },
+          ],
+        },
+      });
+      return {
+        rows,
+        smsSent: fakeSms.sent.length,
+        emailSent: fakeEmail.sent.length,
+      };
+    }
+
+    function noAutomaticCustomerContact(traffic) {
+      return traffic.smsSent === 0 && traffic.emailSent === 0 && traffic.rows.length === 0;
+    }
 
     function signedRequest(params, { signature, url } = {}) {
       const body = formBody(params);
@@ -208,6 +291,15 @@ await withDisposableTestDatabase(
     check(
       "Voice webhook is configured from the official Auth Token pair",
       isTwilioVoiceWebhookConfigured() === true,
+    );
+    check(
+      "Joined path reuses the existing phone log and OWNER disposition; it is not a second answering product",
+      webhookSrc.includes("recordMissedOrManualCall") &&
+        webhookSrc.includes("voiceMissedCallIdempotencyKey") &&
+        !webhookSrc.includes("createPhoneLog") &&
+        !webhookSrc.includes("answering") &&
+        routeSrc.includes("handleInboundVoiceWebhookRequest") &&
+        missedCallSrc.includes("PHONE_LOG_PRESERVE_CLOSED"),
     );
 
     const tenantA = await seedBusiness(prisma, "Voice Alpha", "5550001000");
@@ -559,6 +651,273 @@ await withDisposableTestDatabase(
         racedActions.length === 1 &&
         racedActions[0].status === "DONE",
     );
+    const racedCenter = await loadReceptionistRecoveryCenter(prisma, tenantA.access);
+    check(
+      "Disposition racing webhook replay leaves the recovery queue without that callback item",
+      !racedCenter.queue.some((item) => item.id === racedPhone.id),
+    );
+
+    console.log("\nJOINED PATH — signed Voice webhook → missed-call log → receptionist/OWNER");
+    const hmacParams = voiceParams({
+      To: "+15550001000",
+      From: "+15551112222",
+      CallSid: `CA${"b".repeat(32)}`,
+    });
+    const wrongUrlSigned = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(hmacParams, {
+        signature: twilioRequestSignature(
+          TEST_AUTH_TOKEN,
+          "http://evil.test/api/communications/voice-webhook",
+          hmacParams,
+        ),
+      }),
+    );
+    const wrongTokenSigned = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(hmacParams, {
+        signature: twilioRequestSignature("other-voice-token", WEBHOOK_URL, hmacParams),
+      }),
+    );
+    check(
+      "HMAC of the wrong URL or auth token is rejected without a log",
+      wrongUrlSigned.status === 400 &&
+        wrongTokenSigned.status === 400 &&
+        (await prisma.phoneInteraction.count({
+          where: { idempotencyKey: voiceMissedCallIdempotencyKey(hmacParams.CallSid) },
+        })) === 0,
+    );
+
+    const joinedSid = `CA${"e".repeat(32)}`;
+    const formattedTo = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(
+        voiceParams({
+          CallSid: joinedSid,
+          To: "+1 (555) 000-1000",
+          From: "+1 (555) 111-2222",
+          CallStatus: "ringing",
+        }),
+      ),
+    );
+    const joinedPhone = await prisma.phoneInteraction.findFirst({
+      where: {
+        businessId: tenantA.business.id,
+        idempotencyKey: voiceMissedCallIdempotencyKey(joinedSid),
+      },
+    });
+    const joinedAction = joinedPhone?.followUpActionItemId
+      ? await prisma.businessActionItem.findFirst({
+          where: { id: joinedPhone.followUpActionItemId, businessId: tenantA.business.id },
+        })
+      : null;
+    const ownerCenter = await loadReceptionistRecoveryCenter(prisma, tenantA.access);
+    const queuedJoined = ownerCenter.queue.find((item) => item.id === joinedPhone?.id);
+    const tenantBCenterBefore = await loadReceptionistRecoveryCenter(prisma, tenantB.access);
+    check(
+      "Formatted To/From still map onto the owning tenant and existing customer",
+      formattedTo.status === 200 &&
+        joinedPhone?.customerId === customerA.id &&
+        joinedPhone?.status === "CALLBACK_NEEDED" &&
+        joinedPhone?.callbackNeeded === true &&
+        joinedPhone?.kind === "MISSED_CALL" &&
+        Boolean(joinedAction) &&
+        joinedAction.status === "OPEN",
+    );
+    check(
+      "Receptionist recovery queue shows the voice-logged callback for OWNER",
+      Boolean(queuedJoined) &&
+        queuedJoined.source === "PHONE_INTERACTION" &&
+        queuedJoined.canRecordDisposition === true &&
+        queuedJoined.customerKnown === true &&
+        queuedJoined.customer?.id === customerA.id &&
+        ownerCenter.recordedCallbackNeededCount >= 1,
+    );
+    check(
+      "Tenant B recovery queue does not include tenant A's voice-logged callback",
+      !tenantBCenterBefore.queue.some((item) => item.id === joinedPhone?.id),
+    );
+
+    let memberCenterDenied = false;
+    try {
+      await loadReceptionistRecoveryCenter(prisma, tenantA.memberAccess);
+    } catch (error) {
+      memberCenterDenied = error?.name === "ForbiddenError";
+    }
+    const memberDisposition = await executeReceptionistDispositionAction(
+      prisma,
+      tenantA.memberAccess,
+      { phoneInteractionId: joinedPhone.id },
+    );
+    const foreignDisposition = await recordReceptionistCallbackDisposition(prisma, tenantB.access, {
+      phoneInteractionId: joinedPhone.id,
+    });
+    const spoofedBrowser = await recordReceptionistCallbackDisposition(prisma, tenantA.access, {
+      phoneInteractionId: joinedPhone.id,
+      browserBusinessId: tenantB.business.id,
+    });
+    check("MEMBER cannot load the office recovery queue for a voice-logged callback", memberCenterDenied);
+    check(
+      "MEMBER cannot dispose a voice-logged callback",
+      memberDisposition.error === COMMUNICATIONS_PERMISSION_ERROR,
+    );
+    check(
+      "Foreign tenant cannot dispose another tenant's voice-logged callback",
+      foreignDisposition.ok === false &&
+        foreignDisposition.failureReason === RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
+    );
+    check(
+      "Browser businessId never authorizes disposition of a voice-logged callback",
+      spoofedBrowser.ok === false &&
+        spoofedBrowser.failureReason === RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+    );
+    check(
+      "Rejected disposition attempts left the callback OPEN",
+      (await prisma.phoneInteraction.findFirst({ where: { id: joinedPhone.id } }))?.status ===
+        "CALLBACK_NEEDED" &&
+        (await prisma.businessActionItem.findFirst({ where: { id: joinedAction.id } }))?.status ===
+          "OPEN",
+    );
+
+    const retryJoined = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(
+        voiceParams({
+          CallSid: joinedSid,
+          To: "+15550001000",
+          From: "+15551112222",
+          CallStatus: "no-answer",
+        }),
+      ),
+    );
+    const laterBusy = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(
+        voiceParams({
+          CallSid: joinedSid,
+          To: "+15550001000",
+          From: "+15551112222",
+          CallStatus: "busy",
+        }),
+      ),
+    );
+    const [joinedLeft, joinedRight] = await Promise.all([
+      handleInboundVoiceWebhookRequest(
+        prisma,
+        signedRequest(
+          voiceParams({
+            CallSid: joinedSid,
+            To: "+15550001000",
+            From: "+15551112222",
+            CallStatus: "canceled",
+          }),
+        ),
+      ),
+      handleInboundVoiceWebhookRequest(
+        prisma,
+        signedRequest(
+          voiceParams({
+            CallSid: joinedSid,
+            To: "+15550001000",
+            From: "+15551112222",
+            CallStatus: "canceled",
+          }),
+        ),
+      ),
+    ]);
+    const joinedPhonesAfterRetry = await prisma.phoneInteraction.findMany({
+      where: {
+        businessId: tenantA.business.id,
+        idempotencyKey: voiceMissedCallIdempotencyKey(joinedSid),
+      },
+    });
+    const joinedActionsAfterRetry = await prisma.businessActionItem.findMany({
+      where: {
+        businessId: tenantA.business.id,
+        recommendationKey: `phone-callback:${voiceMissedCallIdempotencyKey(joinedSid)}`,
+      },
+    });
+    const retryCenter = await loadReceptionistRecoveryCenter(prisma, tenantA.access);
+    check(
+      "Retries and later provider events keep one log, one callback item, and one recovery row",
+      retryJoined.status === 200 &&
+        laterBusy.status === 200 &&
+        joinedLeft.status === 200 &&
+        joinedRight.status === 200 &&
+        joinedPhonesAfterRetry.length === 1 &&
+        joinedActionsAfterRetry.length === 1 &&
+        joinedPhonesAfterRetry[0].status === "CALLBACK_NEEDED" &&
+        retryCenter.queue.filter((item) => item.id === joinedPhone.id).length === 1,
+    );
+
+    const ownerDisposition = await executeReceptionistDispositionAction(prisma, tenantA.access, {
+      phoneInteractionId: joinedPhone.id,
+    });
+    const afterOwner = await prisma.phoneInteraction.findFirst({
+      where: { id: joinedPhone.id, businessId: tenantA.business.id },
+    });
+    const afterOwnerAction = await prisma.businessActionItem.findFirst({
+      where: { id: joinedAction.id, businessId: tenantA.business.id },
+    });
+    const afterOwnerEvent = await prisma.receptionistEvent.findFirst({
+      where: {
+        businessId: tenantA.business.id,
+        phoneInteractionId: joinedPhone.id,
+        kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+      },
+    });
+    const afterOwnerCenter = await loadReceptionistRecoveryCenter(prisma, tenantA.access);
+    check(
+      "OWNER disposition closes the voice-logged callback without sending a message",
+      !ownerDisposition.error &&
+        ownerDisposition.message?.includes("No call or message was sent") &&
+        afterOwner?.status === PHONE_INTERACTION_CLOSED_STATUS &&
+        afterOwner?.callbackNeeded === false &&
+        afterOwnerAction?.status === "DONE" &&
+        afterOwnerEvent?.status === RECEPTIONIST_MANUAL_DISPOSITION_STATUS &&
+        !afterOwnerCenter.queue.some((item) => item.id === joinedPhone.id),
+    );
+
+    const afterClosedReplay = await handleInboundVoiceWebhookRequest(
+      prisma,
+      signedRequest(
+        voiceParams({
+          CallSid: joinedSid,
+          To: "+1 (555) 000-1000",
+          From: "+15551112222",
+          CallStatus: "no-answer",
+        }),
+      ),
+    );
+    const closedReplayPhone = await prisma.phoneInteraction.findFirst({
+      where: { id: joinedPhone.id, businessId: tenantA.business.id },
+    });
+    const closedReplayActions = await prisma.businessActionItem.findMany({
+      where: {
+        businessId: tenantA.business.id,
+        recommendationKey: `phone-callback:${voiceMissedCallIdempotencyKey(joinedSid)}`,
+      },
+    });
+    const closedReplayCenter = await loadReceptionistRecoveryCenter(prisma, tenantA.access);
+    const closedReplayTraffic = await outboundTraffic(tenantA.business.id);
+    const tenantBTraffic = await outboundTraffic(tenantB.business.id);
+    check(
+      "A later signed provider event does not reopen CLOSED or return the item to the queue",
+      afterClosedReplay.status === 200 &&
+        closedReplayPhone?.status === "CLOSED" &&
+        closedReplayPhone?.callbackNeeded === false &&
+        closedReplayActions.length === 1 &&
+        closedReplayActions[0].status === "DONE" &&
+        !closedReplayCenter.queue.some((item) => item.id === joinedPhone.id),
+    );
+    check(
+      "Joined path never calls or messages the customer through fake outbound providers",
+      noAutomaticCustomerContact(closedReplayTraffic) &&
+        noAutomaticCustomerContact(tenantBTraffic) &&
+        (await prisma.customerCommunication.count({
+          where: { businessId: tenantA.business.id, channel: "PHONE", direction: "INBOUND" },
+        })) >= 1,
+    );
 
     const token = process.env.TWILIO_AUTH_TOKEN;
     delete process.env.TWILIO_AUTH_TOKEN;
@@ -572,7 +931,10 @@ await withDisposableTestDatabase(
       disconnected.status === 404 && disconnected.body.includes("Not found."),
     );
   },
-).finally(restoreEnv);
+).finally(async () => {
+  await restoreProviders();
+  restoreEnv();
+});
 
 if (failures) {
   console.error(`\n${failures} voice missed-call webhook check(s) failed.`);
