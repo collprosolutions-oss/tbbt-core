@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { isUsStateName } from "@/lib/service-address";
 import {
   isServiceAreaKind,
   parseOptionalMoney,
@@ -134,6 +135,11 @@ export async function upsertServiceArea(
  * the label is exactly one city plus an optional 2-letter US state.
  * Ambiguous labels stay as publicServiceAreaLabel only. Does not delete
  * or re-enable an owner-disabled area.
+ *
+ * Existing-row decision: state-named cities (Washington, Indiana) never
+ * rewrite a stored CITY row. A later Washington, PA label must not change
+ * Washington/WA or fill Indiana/null. Reno-style labels may still add a
+ * missing 2-letter region on an existing non-state city.
  */
 export async function syncPrimaryCityServiceAreaFromLabel(
   db: Db,
@@ -161,6 +167,9 @@ export async function syncPrimaryCityServiceAreaFromLabel(
     orderBy: { createdAt: "asc" },
   });
   if (existing) {
+    if (isUsStateName(parts.city)) {
+      return { created: false, updated: false }; // STATE_NAMED_CITY_KEEP_EXISTING_ROW
+    }
     if (!parts.region || (existing.region ?? null) === parts.region) {
       return { created: false, updated: false };
     }

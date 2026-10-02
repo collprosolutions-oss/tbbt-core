@@ -74,14 +74,26 @@ function isStateOrCompassState(city: string) {
   return isCompassState(city);
 }
 
+function usStateCodeForName(name: string) {
+  const match = US_STATES.find(
+    (state) => state.name.toLowerCase() === name.trim().toLowerCase(),
+  );
+  return match?.code ?? null;
+}
+
 /**
- * Comma form "City, ST" may use a single-word state name as the city
- * (Washington, PA / Indiana, PA). Multi-word official state names and
- * compass regions stay display-only so they cannot become CITY rows.
+ * Comma form stays display-only for statewide labels: compass regions,
+ * multi-word official state names, a state name paired with its own
+ * code (Nevada, NV / Washington, WA), and Washington, DC. A single-word
+ * state name plus a DIFFERENT state code (Washington, PA / Indiana, PA)
+ * is a city.
  */
-function isRegionNamedCity(city: string) {
+function isStatewideCommaLabel(city: string, region: string) {
+  if (isCompassState(city)) return true;
   if (isUsStateName(city) && /\s/.test(city)) return true;
-  return isCompassState(city);
+  const ownCode = usStateCodeForName(city);
+  if (!ownCode) return false;
+  return region === ownCode || region === "DC"; // STATEWIDE_OWN_CODE_OR_DC
 }
 
 function hasTrailingStateToken(city: string) {
@@ -116,10 +128,11 @@ function isUsableCityToken(city: string) {
  * Mt. Pleasant) remain allowed because the city token still starts and
  * ends with a letter.
  *
- * State-named city decision: Washington, PA and Indiana, PA are one city
- * plus a 2-letter state. Bare state names (Washington, Indiana) stay
- * display-only. Multi-word official state names (New York, North Carolina)
- * and compass regions (Northern Nevada) stay display-only. Broad marketing
+ * State-named city decision: a single-word state name parses as a city
+ * only when the region is a DIFFERENT US state (Washington, PA /
+ * Indiana, PA). The named state's own code (Nevada, NV / Washington, WA
+ * / Indiana, IN), Washington, DC, bare state names, multi-word official
+ * state names, and compass regions stay display-only. Broad marketing
  * prose is never turned into geography.
  */
 export function parseServiceAreaLabelParts(label: string): {
@@ -151,7 +164,7 @@ export function parseServiceAreaLabelParts(label: string): {
       return empty;
     }
     region = regionRaw.toUpperCase();
-    if (isRegionNamedCity(city)) return empty;
+    if (isStatewideCommaLabel(city, region)) return empty; // STATE_NAMED_CITY_DIFFERENT_REGION
   }
   if (!city || NON_CITY_LABEL_WORD.test(city) || !isUsableCityToken(city)) {
     return empty;

@@ -8,6 +8,8 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -42,6 +44,8 @@ const {
 } = await import("@/lib/service-area-ops");
 const { createMarketingCampaign } = await import("@/lib/marketing-ops");
 const { nextContentStatus } = await import("@/lib/marketing");
+
+const mutationChild = Boolean(process.env.SERVICE_AREA_PARSER_MUTATION_CHILD);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -201,15 +205,18 @@ try {
       parseServiceAreaLabelParts("New York, NY").city === "",
   );
   check(
+    "Same-state and district labels stay display-only",
+    parseServiceAreaLabelParts("Nevada, NV").city === "" &&
+      parseServiceAreaLabelParts("Texas, TX").city === "" &&
+      parseServiceAreaLabelParts("Florida, FL").city === "" &&
+      parseServiceAreaLabelParts("Washington, WA").city === "" &&
+      parseServiceAreaLabelParts("Indiana, IN").city === "" &&
+      parseServiceAreaLabelParts("Washington, DC").city === "",
+  );
+  check(
     "A free-text region is never stored from the label",
     parseServiceAreaLabelParts("Reno, Washoe County").region === null &&
       parseServiceAreaLabelParts("Reno, Sparks, Carson City").region === null,
-  );
-  const washingtonParse = parseServiceAreaLabelParts("Washington, PA");
-  const flippedWashington = { ...washingtonParse, city: "Pennsylvania" };
-  check(
-    "Mutation: swapping Washington, PA to a state name fails the official-city check",
-    !(flippedWashington.city === "Washington" && flippedWashington.region === "PA"),
   );
   check(
     "Unknown when no areas are configured",
@@ -680,18 +687,6 @@ try {
   } catch {
     check("Business B cannot disable Washington, PA on the other tenant", true);
   }
-  check(
-    "Mutation: dropping the Washington CITY row fails the official-city checker",
-    !officialPaCityProofSafe({
-      ...washington,
-      created: false,
-      areaCount: 0,
-      cities: [],
-      publicCities: [],
-      qualification: "UNKNOWN",
-      storedQualification: "UNKNOWN",
-    }),
-  );
 
   const displayOnlyLabels = [
     "Reno.",
@@ -700,6 +695,10 @@ try {
     "Serving homeowners across Western Pennsylvania",
     "Washington",
     "Indiana",
+    "Nevada, NV",
+    "Texas, TX",
+    "Washington, WA",
+    "Washington, DC",
   ];
   const displayOnlyResults = [];
   for (const label of displayOnlyLabels) {
@@ -716,21 +715,94 @@ try {
       .filter((row) => row.label === "Reno." || row.label === "Sparks NV.")
       .every((row) => row.areaCount === 0 && row.publicCities.length === 0),
   );
+  const statewideCityListEmpty = displayOnlyResults
+    .filter((row) =>
+      ["Nevada, NV", "Texas, TX", "Washington, WA", "Washington, DC"].includes(row.label),
+    )
+    .every(
+      (row) =>
+        row.areaCount === 0 &&
+        row.publicCities.length === 0 &&
+        displayOnlyLabelSafe(row),
+    );
+  check(
+    "Nevada, NV / Texas, TX / Washington, WA / Washington, DC write no CITY row and leave configuredCities empty",
+    statewideCityListEmpty,
+  );
   check(
     "Every ambiguous or junk label kept display copy and an empty city list",
     displayOnlyResults.every((row) => row.labelSaved && displayOnlyLabelSafe(row)),
   );
+
+  console.log("\nDB — state-named labels do not rewrite existing ServiceArea rows");
+  const preserveToken = randomUUID().slice(0, 8);
+  const preserveBiz = await prisma.business.create({
+    data: {
+      name: `Preserve PA ${preserveToken}`,
+      slug: `preserve-pa-${preserveToken}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const preserveUser = await prisma.user.create({
+    data: {
+      name: `Preserve Owner ${preserveToken}`,
+      email: `preserve-pa-${preserveToken}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const preserveMem = await prisma.membership.create({
+    data: { userId: preserveUser.id, businessId: preserveBiz.id, role: "OWNER" },
+  });
+  const preserveAccess = makeAccess(preserveBiz.id, "OWNER", preserveMem.id);
+  const washingtonWa = await upsertServiceArea(prisma, preserveAccess, {
+    kind: "CITY",
+    label: "Washington",
+    city: "Washington",
+    region: "WA",
+  });
+  const indianaBare = await upsertServiceArea(prisma, preserveAccess, {
+    kind: "CITY",
+    label: "Indiana",
+    city: "Indiana",
+  });
+  const washingtonSync = await syncPrimaryCityServiceAreaFromLabel(
+    prisma,
+    preserveAccess,
+    "Washington, PA",
+  );
+  const indianaSync = await syncPrimaryCityServiceAreaFromLabel(
+    prisma,
+    preserveAccess,
+    "Indiana, PA",
+  );
+  const washingtonAfter = await prisma.serviceArea.findUnique({
+    where: { id: washingtonWa.id },
+  });
+  const indianaAfter = await prisma.serviceArea.findUnique({
+    where: { id: indianaBare.id },
+  });
+  const preserveCount = await prisma.serviceArea.count({
+    where: { businessId: preserveBiz.id },
+  });
   check(
-    "Mutation: a junk Reno. CITY row fails the display-only checker",
-    !displayOnlyLabelSafe({
-      ...displayOnlyResults[0],
-      created: true,
-      areaCount: 1,
-      cities: ["Reno"],
-      publicCities: ["Reno"],
-      qualification: "IN_AREA",
-      storedQualification: "IN_AREA",
-    }),
+    "Washington, PA does not rewrite an existing Washington/WA row",
+    washingtonSync.created === false &&
+      washingtonSync.updated === false &&
+      washingtonAfter?.region === "WA" &&
+      washingtonAfter.city === "Washington" &&
+      washingtonAfter.label === "Washington",
+  );
+  check(
+    "Indiana, PA does not fill region on an existing Indiana/null row",
+    indianaSync.created === false &&
+      indianaSync.updated === false &&
+      indianaAfter?.region == null &&
+      indianaAfter?.city === "Indiana" &&
+      indianaAfter.label === "Indiana",
+  );
+  check(
+    "State-named PA labels do not add a second Washington or Indiana CITY row",
+    preserveCount === 2,
   );
 
   console.log(failures === 0 ? "\nAll service-area checks passed." : `\n${failures} service-area check(s) failed.`);
@@ -748,6 +820,57 @@ try {
     await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
   } finally {
     await cleanup.$disconnect();
+  }
+}
+
+if (!mutationChild && failures === 0) {
+  console.log("\nMUTATION-REVERT — each fix fails a real check when reverted");
+  const childScript = fileURLToPath(new URL("./check-service-areas.mjs", import.meta.url));
+  const mutations = [
+    {
+      label: "state-named City, ST rejected again",
+      file: "src/lib/service-areas.ts",
+      search:
+        "    if (isStatewideCommaLabel(city, region)) return empty; // STATE_NAMED_CITY_DIFFERENT_REGION",
+      replace: "    if (isStateOrCompassState(city)) return empty;",
+    },
+    {
+      label: "same-state and DC labels parse as cities",
+      file: "src/lib/service-areas.ts",
+      search: '  return region === ownCode || region === "DC"; // STATEWIDE_OWN_CODE_OR_DC',
+      replace: "  return false;",
+    },
+    {
+      label: "state-named labels rewrite existing CITY rows",
+      file: "src/lib/service-area-ops.ts",
+      search:
+        "    if (isUsStateName(parts.city)) {\n      return { created: false, updated: false }; // STATE_NAMED_CITY_KEEP_EXISTING_ROW\n    }\n",
+      replace: "",
+    },
+  ];
+  for (const mutation of mutations) {
+    const target = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(target, "utf8");
+    if (!original.includes(mutation.search)) {
+      check(`mutation-revert setup finds ${mutation.label}`, false);
+      continue;
+    }
+    writeFileSync(target, original.replace(mutation.search, mutation.replace));
+    try {
+      const child = spawnSync(process.execPath, ["--experimental-strip-types", childScript], {
+        env: { ...process.env, SERVICE_AREA_PARSER_MUTATION_CHILD: "1" },
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+      const failed = child.status !== 0;
+      check(`mutation-revert ${mutation.label} fails a real check`, failed);
+      if (!failed) {
+        console.error((child.stdout || "").slice(-2000));
+        console.error((child.stderr || "").slice(-1000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
   }
 }
 
