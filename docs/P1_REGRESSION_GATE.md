@@ -37,17 +37,17 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
 - Node. `package.json` runs `scripts/check-production-migrate.mjs`
   with plain `node`. Every other listed script runs with
   `node --experimental-strip-types`. The gate follows that.
-- `TZ=America/New_York` is forced on every child. Native sign-in
-  throttle, Saturday same-week approval, and Field start proofs in
-  `scripts/check-native-field-api.mjs` and `scripts/check-time-cards.mjs`
-  pass on current `origin/main` only when Node `TZ=America/New_York`
-  AND the local test Postgres session timezone is UTC (the Postgres
-  default; production). With Postgres set to `America/New_York`,
-  `check-time-cards` "Approval of the Saturday week is refused while
-  the crossing entry remains" and two `check-native-field-api`
-  throttle assertions fail on main and on this branch even with Node
-  `TZ=America/New_York`. The older line-number list in this paragraph
-  is stale and must not be treated as a current failure catalog.
+- `TZ=America/New_York` is forced on every child. A DB-backed domain
+  also `SET timezone = 'UTC'`, `ALTER ROLE CURRENT_USER SET timezone
+  = 'UTC'`, and refuses to start unless a fresh connection reports
+  `SHOW timezone` = `UTC`. That pair is Node `TZ=America/New_York`
+  AND Postgres session timezone UTC (Postgres default; production).
+  The gate fails fast with a clear message if `SHOW timezone` is not
+  UTC after that set. Do not treat a UTC-only pass as proof that the
+  helpers are session-timezone safe.
+- Native sign-in throttle, Saturday same-week approval, and Field
+  start proofs were matrix-verified (see below). The older
+  line-number list that used to live in this bullet is stale.
   `scripts/check-appointment-confirmation.mjs` "Field start has no
   owner override" (lines 92-95) is a separate stale static assertion
   that already fails on main: it expects
@@ -128,3 +128,87 @@ the domain `scripts` list only after the coding PR creates them.
 ### native-active-membership
 
 - `scripts/check-p1-native-deactivate-after-token.mjs` — deactivate-after-token-issue tests across all native write routes
+
+## Timezone matrix (verified beyond UTC-only)
+
+Local disposable Postgres. Role timezone set with
+`ALTER ROLE tbbt SET timezone = '…'` and checked with `SHOW timezone`
+on a new connection. Cells are Node `TZ` × Postgres session timezone.
+
+Suites: `check-time-cards.mjs`, `check-native-field-api.mjs`,
+`check-time-correction-requests.mjs`, `check-payroll.mjs`,
+`check-native-field-activity.mjs` (full 4×3).
+`check-native-time-cards.mjs` on five representative cells.
+
+### Storage probe
+
+Prisma Client `DateTime` writes of `2026-09-20T02:00:00.000Z` into
+`TIMESTAMP(3)` (no time zone) round-trip unchanged under UTC, NY, and
+LA sessions (`shiftMs = 0`). The same instant written through
+`$queryRaw` `${Date}` shifts by the session offset: `0` under UTC,
+`-4h` under `America/New_York`, `-7h` under `America/Los_Angeles`.
+
+### Suite cells (pass/fail counts)
+
+`ok/fail` are `ok  -` / `FAIL -` lines. Exit 0 is a pass.
+
+| Suite | Node TZ | PG session | Result |
+| --- | --- | --- | --- |
+| time-cards | any of NY, UTC, LA, Auckland | UTC | 229/0 pass |
+| time-cards | any of those four | NY or LA | 94/1 fail — `Approval of the Saturday week is refused while the crossing entry remains` |
+| native-field-api | any of those four | UTC | 130/0 pass |
+| native-field-api | any of those four | NY or LA | 128/2 fail — the two `NativeSignInThrottle` assertions |
+| time-correction | all 12 cells | all 12 | 60/0 pass |
+| native-field-activity | all 12 cells | all 12 | 49/0 pass |
+| native-time-cards | NY×UTC, NY×NY, UTC×NY, LA×NY, Auckland×UTC | | 57/0 pass |
+| payroll | NY | UTC, NY, or LA | 60/0 pass |
+| payroll | UTC or Auckland | any | exit 1 (throws `There is no time to approve for this week`) |
+| payroll | LA | any | 22/1 fail — `Approved TimesheetWeek is included` |
+
+Field start (`Unconfirmed appointment refuses Start job`) passed in
+every native-field-api cell. The Saturday/throttle failures depend on
+Postgres session timezone, not Node `TZ`.
+
+### LA business / DST (Node `TZ=America/New_York`, business `America/Los_Angeles`)
+
+JS week math is independent of Postgres and Node:
+
+- LA Sat 2026-09-19 22:00–Sun 02:00 crosses the LA Sunday week
+  (`2026-09-13T07:00:00.000Z` / `2026-09-20T07:00:00.000Z`).
+- 2026-03-08 (spring-forward) 00:00 and 03:30 stay in the Mar 8 week.
+- 2026-11-01 (fall-back) 00:00 and 01:30 stay in the Nov 1 week.
+
+Prisma Client persists the LA crossing instants with `shiftMs = 0`
+under UTC, NY, and LA sessions. `approveTimesheetWeek` refuses that
+Saturday week under Postgres UTC. Under Postgres NY or LA it throws
+`There is no time to approve for this week` because
+`lockWorkerWeekTimeEntries` `$queryRaw` Date binds miss the row.
+
+### Real application defects (not fixed here)
+
+Production session timezone is UTC, so these do not fire in
+production today. They are silent session-tz dependencies.
+
+1. `src/lib/native-session-limits.ts:146-149` — `$queryRaw` INSERT
+   binds JS `Date` values into `TIMESTAMP(3)` without time zone
+   (`prisma/migrations/20260927200000_native_sign_in_throttle/migration.sql:10-11`).
+   A non-UTC session stores session-local wall time. Prisma then
+   reads it as UTC.
+2. `src/lib/native-session-limits.ts:119` —
+   `row.expiresAt <= new Date()` then treats the shifted expiry as
+   already past, so five wrong passwords do not lock.
+3. `src/lib/time-card-ops.ts:280-281` — `$queryRaw`
+   `"startedAt" < ${end} AND ("endedAt" IS NULL OR "endedAt" > ${start})`
+   binds week bounds through the same session conversion. Crossing
+   Saturday entries are omitted from the lock/load set, so
+   `approveTimesheetWeek` can approve (or find no rows) instead of
+   refusing `WEEK_BOUNDARY_CROSSING_ERROR`.
+
+Prisma Client writes of the same columns do not shift. Request paths
+that pass a business IANA zone into `weekRange` / `startOfWeek` are
+Node-TZ safe. `startOfDay` / `startOfWeek` without a timezone
+(`src/lib/schedule.ts:56-58` and `:92-95`) fall back to Node local
+time; production pages pass a timezone. `check-payroll.mjs:245`
+calls `weekRange(new Date())` with no zone — that payroll matrix
+failure is a test artifact, not a payroll production bug.
+

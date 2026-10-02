@@ -171,6 +171,8 @@ check(
 console.log("\nSTATIC — audited verifiers import the shared harness");
 const guardSrc = read("scripts/lib/local-database-guard.mjs");
 const harnessSrc = read("scripts/disposable-test-database.mjs");
+const gateSrc = read("scripts/run-p1-gate.mjs");
+const sessionTzSrc = read("scripts/lib/postgres-session-timezone.mjs");
 check(
   "Harness and #238 share scripts/lib/local-database-guard.mjs",
   harnessSrc.includes('from "./lib/local-database-guard.mjs"') &&
@@ -178,6 +180,16 @@ check(
     guardSrc.includes("alternateDatabaseEnvProblem") &&
     guardSrc.includes("hostaddr") &&
     guardSrc.includes("must not repeat query parameter"),
+);
+check(
+  "P1 gate sets and asserts Postgres session timezone UTC before DB children",
+  gateSrc.includes('from "./lib/postgres-session-timezone.mjs"') &&
+    gateSrc.includes("assertPostgresSessionTimezoneUtc") &&
+    sessionTzSrc.includes('REQUIRED_POSTGRES_SESSION_TIMEZONE = "UTC"') &&
+    sessionTzSrc.includes("SET timezone") &&
+    sessionTzSrc.includes("ALTER ROLE CURRENT_USER SET timezone") &&
+    sessionTzSrc.includes("SHOW timezone") &&
+    sessionTzSrc.includes("P1 gate requires Postgres session timezone"),
 );
 const defaultOpsSrc = harnessSrc.slice(
   harnessSrc.indexOf("function defaultOperations()"),
