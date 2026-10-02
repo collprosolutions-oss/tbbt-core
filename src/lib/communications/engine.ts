@@ -241,6 +241,7 @@ export async function composeCustomerCommunication(
         failureReason: eligibility.ownerReason,
         last4: eligibility.last4,
         fingerprint: eligibility.fingerprint,
+        resumeCommunicationId: input.resumeCommunicationId,
         consentContext: consentContextSnapshot({
           smsConsentStatus: customer.smsConsentStatus,
           emailAvailable: isUsableEmail(customer.email),
@@ -360,18 +361,32 @@ async function recordNonProviderAttempt(
     failureReason: string | null;
     last4: string | null;
     fingerprint: string | null;
+    resumeCommunicationId?: string | null;
     consentContext: string;
   },
 ): Promise<CommunicationSendResult> {
-  const existing = await db.customerCommunication.findFirst({
-    where: {
-      businessId: input.access.businessId,
-      idempotencyKey: input.idempotencyKey,
-    },
-  });
-  if (existing) {
+  const existing =
+    (input.resumeCommunicationId
+      ? await db.customerCommunication.findFirst({
+          where: {
+            id: input.resumeCommunicationId,
+            businessId: input.access.businessId,
+            idempotencyKey: input.idempotencyKey,
+          },
+        })
+      : null) ??
+    (await db.customerCommunication.findFirst({
+      where: {
+        businessId: input.access.businessId,
+        idempotencyKey: input.idempotencyKey,
+      },
+    }));
+  if (
+    existing &&
+    (isAcceptedCustomerMessageStatus(existing.status) || existing.status === "SENT")
+  ) {
     return {
-      ok: isAcceptedCustomerMessageStatus(existing.status) || existing.status === "SENT",
+      ok: true,
       communicationId: existing.id,
       threadId: existing.threadId,
       status: existing.status as CustomerMessageStatus,
@@ -382,31 +397,38 @@ async function recordNonProviderAttempt(
     };
   }
 
-  let created;
+  const rowData = {
+    businessId: input.access.businessId,
+    customerId: input.customerId,
+    threadId: input.threadId,
+    direction: "OUTBOUND",
+    channel: input.channel,
+    purpose: input.purpose,
+    subject: input.subject,
+    relatedType: input.relatedType ?? null,
+    relatedId: input.relatedId ?? null,
+    idempotencyKey: input.idempotencyKey,
+    destinationLast4: input.last4,
+    destinationFingerprint: input.fingerprint,
+    consentContext: input.consentContext,
+    bodySnapshot: input.body,
+    status: input.status,
+    provider: input.provider,
+    failureReason: input.failureReason,
+    initiatedByMembershipId: membershipIdOf(input.access),
+    attemptedAt: new Date(),
+  };
+
+  let row;
   try {
-    created = await db.customerCommunication.create({
-      data: {
-        businessId: input.access.businessId,
-        customerId: input.customerId,
-        threadId: input.threadId,
-        direction: "OUTBOUND",
-        channel: input.channel,
-        purpose: input.purpose,
-        subject: input.subject,
-        relatedType: input.relatedType ?? null,
-        relatedId: input.relatedId ?? null,
-        idempotencyKey: input.idempotencyKey,
-        destinationLast4: input.last4,
-        destinationFingerprint: input.fingerprint,
-        consentContext: input.consentContext,
-        bodySnapshot: input.body,
-        status: input.status,
-        provider: input.provider,
-        failureReason: input.failureReason,
-        initiatedByMembershipId: membershipIdOf(input.access),
-        attemptedAt: new Date(),
-      },
-    });
+    if (existing) {
+      row = await db.customerCommunication.update({
+        where: { id: existing.id },
+        data: rowData,
+      });
+    } else {
+      row = await db.customerCommunication.create({ data: rowData });
+    }
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const raced = await db.customerCommunication.findFirst({
@@ -415,9 +437,9 @@ async function recordNonProviderAttempt(
           idempotencyKey: input.idempotencyKey,
         },
       });
-      if (raced) {
+      if (raced && (isAcceptedCustomerMessageStatus(raced.status) || raced.status === "SENT")) {
         return {
-          ok: isAcceptedCustomerMessageStatus(raced.status) || raced.status === "SENT",
+          ok: true,
           communicationId: raced.id,
           threadId: raced.threadId,
           status: raced.status as CustomerMessageStatus,
@@ -427,8 +449,16 @@ async function recordNonProviderAttempt(
           failureReason: raced.failureReason,
         };
       }
+      if (raced) {
+        row = await db.customerCommunication.update({
+          where: { id: raced.id },
+          data: rowData,
+        });
+      }
     }
-    return blocked("The communication record could not be saved.", input.channel);
+    if (!row) {
+      return blocked("The communication record could not be saved.", input.channel);
+    }
   }
   if (input.threadId) {
     await touchCommunicationThread(db, {
@@ -437,14 +467,14 @@ async function recordNonProviderAttempt(
     });
   }
   return {
-    ok: isAcceptedCustomerMessageStatus(created.status) || created.status === "SENT",
-    communicationId: created.id,
+    ok: isAcceptedCustomerMessageStatus(row.status) || row.status === "SENT",
+    communicationId: row.id,
     threadId: input.threadId,
-    status: created.status as CustomerMessageStatus,
+    status: row.status as CustomerMessageStatus,
     channel: input.channel,
-    provider: created.provider,
-    reused: false,
-    failureReason: created.failureReason,
+    provider: row.provider,
+    reused: Boolean(existing),
+    failureReason: row.failureReason,
   };
 }
 
