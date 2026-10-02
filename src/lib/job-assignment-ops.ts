@@ -127,11 +127,11 @@ export async function writeAssignedMembershipAndLaneWindows(
         if (!lockedJob) {
           throw new TimeCardError("That job could not be found.");
         }
+        await input.afterJobLocked?.(tx, lockedJob);
         const assignmentRefusal = jobAssignmentRefusalMessage(lockedJob.status);
         if (assignmentRefusal) {
           throw new TimeCardError(assignmentRefusal);
         }
-        await input.afterJobLocked?.(tx, lockedJob);
         await applyAssignedMembershipChangeInTransaction(tx, {
           businessId: input.businessId,
           job: input.job,
