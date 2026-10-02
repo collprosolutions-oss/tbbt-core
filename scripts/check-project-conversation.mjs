@@ -45,6 +45,7 @@ const {
   createFakeCustomerMessagingProvider,
   setCustomerMessagingProvider,
 } = await import("@/lib/customer-messaging");
+const { smsBlockFailureReason } = await import("@/lib/customer-messaging/eligibility");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog/codes");
 const {
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
@@ -186,6 +187,7 @@ const portalActionSrc = read("src/app/actions/portal-project-conversation.ts");
 const ownerActionSrc = read("src/app/actions/project-conversation.ts");
 const portalFormSrc = read("src/components/portal/project-conversation-card.tsx");
 const ownerPanelSrc = read("src/components/jobs/project-conversation-panel.tsx");
+const engineSrc = read("src/lib/communications/engine.ts");
 const portalPageSrc = read("src/app/p/[token]/page.tsx");
 const jobPageSrc = read("src/app/(app)/jobs/[jobId]/page.tsx");
 const packageSrc = read("package.json");
@@ -226,6 +228,26 @@ check(
     !jobPageSrc.includes("composeCustomerCommunication") &&
     !jobPageSrc.includes("sendProjectConversationOwnerReply(") &&
     !portalPageSrc.includes("submitPortalProjectConversation("),
+);
+check(
+  "SMS blocked compose updates a reserved READY row instead of leaving it",
+  (() => {
+    const recordSrc = engineSrc.slice(
+      engineSrc.indexOf("async function recordNonProviderAttempt"),
+    );
+    const smsBlockedSrc = engineSrc.slice(
+      engineSrc.indexOf('if (input.channel === "SMS")'),
+      engineSrc.indexOf("attemptCustomerSms"),
+    );
+    return (
+      smsBlockedSrc.includes("recordNonProviderAttempt") &&
+      smsBlockedSrc.includes("resumeCommunicationId: input.resumeCommunicationId") &&
+      smsBlockedSrc.includes('status: "BLOCKED"') &&
+      smsBlockedSrc.includes('provider: "none"') &&
+      recordSrc.includes("customerCommunication.update") &&
+      recordSrc.includes("failureReason: input.failureReason")
+    );
+  })(),
 );
 check(
   "OWNER reply serializes the bound check under the job lock",
@@ -792,6 +814,112 @@ try {
     smsReply.ok === true &&
       ["ACCEPTED", "SENT", "QUEUED"].includes(smsReply.status) &&
       fakeSms.sent.some((row) => row.body === "Running a little late."),
+  );
+
+  console.log("\nSMS BLOCKED — reserved READY rows finalize to BLOCKED and do not eat the cap");
+  const smsSendsBeforeBlocked = fakeSms.sent.length;
+  const blockedSmsCases = [
+    {
+      name: "REVOKED",
+      options: { name: "Revoked Sms", smsConsentStatus: "REVOKED" },
+      reason: smsBlockFailureReason("revoked_consent"),
+    },
+    {
+      name: "UNKNOWN",
+      options: { name: "Unknown Sms", smsConsentStatus: "UNKNOWN" },
+      reason: smsBlockFailureReason("unknown_consent"),
+    },
+    {
+      name: "no-phone",
+      options: { name: "No Phone Sms", phone: null },
+      reason: smsBlockFailureReason("missing_phone"),
+    },
+  ];
+  for (const blockedCase of blockedSmsCases) {
+    const fixture = await createHandyJob(businessA.id, blockedCase.options);
+    const attempt = randomUUID();
+    const key = composeIdempotencyKey({
+      channel: "SMS",
+      purpose: "JOB_UPDATE",
+      customerId: fixture.customer.id,
+      attemptId: attempt,
+    });
+    const result = await sendProjectConversationOwnerReply(prisma, ownerA, {
+      jobId: fixture.job.id,
+      channel: "SMS",
+      body: `${blockedCase.name} should stay blocked`,
+      idempotencyKey: key,
+    });
+    const rows = await prisma.customerCommunication.findMany({
+      where: { businessId: businessA.id, idempotencyKey: key },
+    });
+    const review = await loadOwnerProjectConversationReview(prisma, ownerA, fixture.job.id);
+    check(
+      `OWNER SMS to a ${blockedCase.name} customer leaves one BLOCKED row with the reason`,
+      result.ok === false &&
+        result.status === "BLOCKED" &&
+        result.failureReason === blockedCase.reason &&
+        result.provider === "none" &&
+        rows.length === 1 &&
+        rows[0].status === "BLOCKED" &&
+        rows[0].failureReason === blockedCase.reason &&
+        rows[0].provider === "none" &&
+        review?.remaining === MAX_PROJECT_CONVERSATION_MESSAGES &&
+        review.messages.every((row) => row.id !== rows[0].id),
+    );
+  }
+  check(
+    "Blocked OWNER SMS replies do not call the messaging provider",
+    fakeSms.sent.length === smsSendsBeforeBlocked,
+  );
+
+  const overflowBlockedJob = await createHandyJob(businessA.id, {
+    name: "Blocked Overflow",
+    smsConsentStatus: "REVOKED",
+  });
+  for (let index = 0; index < 22; index += 1) {
+    const blocked = await sendProjectConversationOwnerReply(prisma, ownerA, {
+      jobId: overflowBlockedJob.job.id,
+      channel: "SMS",
+      body: `Blocked overflow ${index + 1}`,
+      idempotencyKey: composeIdempotencyKey({
+        channel: "SMS",
+        purpose: "JOB_UPDATE",
+        customerId: overflowBlockedJob.customer.id,
+        attemptId: randomUUID(),
+      }),
+    });
+    if (blocked.status !== "BLOCKED") {
+      throw new Error(`Expected blocked overflow ${index + 1} to stay BLOCKED`);
+    }
+  }
+  const overflowEmailKey = composeIdempotencyKey({
+    channel: "EMAIL",
+    purpose: "JOB_UPDATE",
+    customerId: overflowBlockedJob.customer.id,
+    attemptId: randomUUID(),
+  });
+  const overflowEmail = await sendProjectConversationOwnerReply(prisma, ownerA, {
+    jobId: overflowBlockedJob.job.id,
+    channel: "EMAIL",
+    body: "Email after blocked SMS still sends",
+    subject: "Project conversation",
+    idempotencyKey: overflowEmailKey,
+  });
+  const overflowReview = await loadOwnerProjectConversationReview(
+    prisma,
+    ownerA,
+    overflowBlockedJob.job.id,
+  );
+  check(
+    "More than 20 blocked SMS attempts still allow an EMAIL reply",
+    overflowEmail.ok === true &&
+      overflowEmail.status === "SENT" &&
+      overflowEmail.reused === false &&
+      fakeEmails.some((row) => row.idempotencyKey === overflowEmailKey) &&
+      overflowReview?.messages.length === 1 &&
+      overflowReview.messages[0].id === overflowEmail.communicationId &&
+      overflowReview.remaining === MAX_PROJECT_CONVERSATION_MESSAGES - 1,
   );
 
   const browserForged = await sendProjectConversationOwnerReply(prisma, ownerA, {
