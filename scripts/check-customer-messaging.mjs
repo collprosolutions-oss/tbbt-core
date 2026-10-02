@@ -123,6 +123,13 @@ const {
   withTransactionalOptOutFooter,
 } = await import("@/lib/customer-messaging");
 
+delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
+delete process.env.VERCEL_ENV;
+delete process.env.TWILIO_ACCOUNT_SID;
+delete process.env.TWILIO_AUTH_TOKEN;
+delete process.env.TWILIO_MESSAGING_SERVICE_SID;
+delete process.env.TWILIO_FROM_NUMBER;
+
 let failures = 0;
 function check(label, condition) {
   if (condition) {
@@ -404,7 +411,7 @@ try {
       opsSrc.includes("completeCustomerMessagingWebhookEvent") &&
       opsSrc.includes("customerMessageDeliveryTestHooks") &&
       inboundSrc.includes('return "pending"') &&
-      inboundSrc.includes("Leftover"),
+      inboundSrc.includes("leftover"),
   );
   check(
     "PROPERTY and PHONE_INTERACTION related records stay tenant-scoped",
@@ -2303,7 +2310,7 @@ try {
   const staleFake = createFakeCustomerMessagingProvider("whsec_msg_test");
   setCustomerMessagingProvider(staleFake);
   const staleKey = `sms:stale-recipient:${randomUUID()}`;
-  const staleClaim = await prisma.customerCommunication.create({
+  const staleRecipientClaim = await prisma.customerCommunication.create({
     data: {
       businessId: alpha.business.id,
       customerId: customerA.id,
@@ -2328,7 +2335,7 @@ try {
     relatedId: jobA.id,
     idempotencyKey: staleKey,
     body: "On my way.",
-    resumeCommunicationId: staleClaim.id,
+    resumeCommunicationId: staleRecipientClaim.id,
   }));
   check(
     "Resumed claim with a changed destination is blocked",
@@ -2348,11 +2355,11 @@ try {
     idempotencyKey: `sms:delivery-leftover:${randomUUID()}`,
     body: "Following up on your estimate.",
   }));
-  const leftoverWriteError = new Error("forced leftover delivery write failure");
+  const leftoverDeliveryWriteError = new Error("forced leftover delivery write failure");
   customerMessageDeliveryTestHooks.beforeStatusWrite = () => {
-    throw leftoverWriteError;
+    throw leftoverDeliveryWriteError;
   };
-  const leftoverFirst = await Promise.allSettled([
+  const leftoverDeliveryFirst = await Promise.allSettled([
     applyCustomerMessageDeliveryUpdate(prisma, {
       provider: "fake",
       providerMessageId: deliverySend.providerMessageId,
@@ -2363,31 +2370,31 @@ try {
   customerMessageDeliveryTestHooks.beforeStatusWrite = undefined;
   check(
     "First failed-delivery write throws after the pending claim",
-    leftoverFirst[0].status === "rejected" && leftoverFirst[0].reason === leftoverWriteError,
+    leftoverDeliveryFirst[0].status === "rejected" && leftoverDeliveryFirst[0].reason === leftoverDeliveryWriteError,
   );
   const stillAccepted = await getCustomerCommunication(prisma, {
     businessId: alpha.business.id,
     communicationId: deliverySend.communicationId,
   });
   check("Leftover failed-delivery claim did not mark the SMS failed", stillAccepted.status === "ACCEPTED");
-  const leftoverRetry = await applyCustomerMessageDeliveryUpdate(prisma, {
+  const leftoverDeliveryRetry = await applyCustomerMessageDeliveryUpdate(prisma, {
     provider: "fake",
     providerMessageId: deliverySend.providerMessageId,
     status: "FAILED",
     failureReason: "21610",
   });
-  const afterLeftover = await getCustomerCommunication(prisma, {
+  const afterLeftoverDelivery = await getCustomerCommunication(prisma, {
     businessId: alpha.business.id,
     communicationId: deliverySend.communicationId,
   });
   check(
     "Retry of the leftover FAILED delivery applies once",
-    leftoverRetry.applied === true &&
-      leftoverRetry.reason === "updated" &&
-      afterLeftover.status === "FAILED" &&
-      afterLeftover.failureReason === "21610",
+    leftoverDeliveryRetry.applied === true &&
+      leftoverDeliveryRetry.reason === "updated" &&
+      afterLeftoverDelivery.status === "FAILED" &&
+      afterLeftoverDelivery.failureReason === "21610",
   );
-  const leftoverThird = await applyCustomerMessageDeliveryUpdate(prisma, {
+  const leftoverDeliveryThird = await applyCustomerMessageDeliveryUpdate(prisma, {
     provider: "fake",
     providerMessageId: deliverySend.providerMessageId,
     status: "FAILED",
@@ -2395,7 +2402,7 @@ try {
   });
   check(
     "A third leftover FAILED delivery is idempotent",
-    leftoverThird.applied === true && leftoverThird.reason === "idempotent",
+    leftoverDeliveryThird.applied === true && leftoverDeliveryThird.reason === "idempotent",
   );
 
   const destinationLeak = await prisma.customerCommunication.findMany({
