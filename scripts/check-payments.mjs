@@ -699,6 +699,7 @@ try {
   check(
     "Fake checkout URL is the local Stripe test page",
     fakeSrc.includes("/payments/test-checkout") &&
+      fakeSrc.includes("randomUUID()") &&
       !fakeSrc.includes("https://checkout.stripe.test/pay/"),
   );
   check(
@@ -805,6 +806,18 @@ try {
       "allowlisted account can open checkout without a prior in-memory setChargesEnabled",
       listedCheckout.connectedAccountId === "acct_test_portal_ready" &&
         listedCheckout.amountCents === 30000,
+    );
+    const listedCheckout2 = await allowProvider.createInvoiceCheckoutSession({
+      ...checkoutInput,
+      connectedAccountId: "acct_test_portal_ready",
+      invoiceId: "inv_listed_2",
+    });
+    check(
+      "fake checkout session ids are unique so a leftover cs_test_1 cannot skip apply",
+      listedCheckout.id !== listedCheckout2.id &&
+        listedCheckout.id.startsWith("cs_test_") &&
+        listedCheckout.id !== "cs_test_1" &&
+        listedCheckout2.id !== "cs_test_1",
     );
     const created = await allowProvider.createConnectedAccount({
       businessId: "biz_disabled",

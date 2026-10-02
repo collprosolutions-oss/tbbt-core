@@ -186,6 +186,7 @@ check(
   fakeSrc.includes("FAKE_STRIPE_TEST_CHECKOUT_PATH") &&
     fakeSrc.includes("/payments/test-checkout") &&
     !fakeSrc.includes("https://checkout.stripe.test/pay/") &&
+    fakeSrc.includes("randomUUID()") &&
     testCheckoutPage.includes("STRIPE_TEST_CHECKOUT_HEADING") &&
     testCheckoutLib.includes("Stripe test checkout") &&
     testCheckoutLib.includes("No real card is charged"),
@@ -972,9 +973,15 @@ await withDisposableTestDatabase(
         );
         const afterPay = await fetch(completeTo, { redirect: "manual" });
         const afterPayBody = await afterPay.text();
+        const paidInvoice = await prisma.invoice.findFirst({
+          where: { jobId: unpaidJob.id, businessId: businessA.id },
+          select: { status: true },
+        });
         check(
           "Returned portal no longer offers Pay Invoice for the paid test checkout",
-          afterPay.status === 200 && !afterPayBody.includes("Pay Invoice"),
+          afterPay.status === 200 &&
+            paidInvoice?.status === "PAID" &&
+            !afterPayBody.includes("Pay Invoice —"),
         );
       }
       const cancelJob = await prisma.job.create({
@@ -1027,6 +1034,9 @@ await withDisposableTestDatabase(
       );
       check("Unknown test-checkout session is not found", staleCheckout.status === 404);
     } finally {
+      if (failed > 0 && serverOutput) {
+        console.error("next start output:\n" + serverOutput.slice(-4000));
+      }
       serverProcess.kill("SIGTERM");
     }
   },

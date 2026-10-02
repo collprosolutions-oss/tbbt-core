@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
 import type {
   CheckoutSessionResult,
@@ -116,7 +117,7 @@ export function createFakePaymentProvider(): FakePaymentProvider {
       throw new Error("Connected account is not payment-ready.");
     }
     sessionSeq += 1;
-    const id = `cs_test_${sessionSeq}`;
+    const id = `cs_test_${sessionSeq}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const result: FakeCheckoutSession = {
       id,
       url: fakeStripeTestCheckoutUrl(id, input.successUrl),
