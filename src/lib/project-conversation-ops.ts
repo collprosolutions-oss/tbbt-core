@@ -290,7 +290,8 @@ export async function sendProjectConversationOwnerReply(
     return { ok: false, failureReason: PROJECT_CONVERSATION_JOB_REQUIRED_MESSAGE };
   }
   access.assertOwned(job);
-  if (!job.customerId) {
+  const customerId = job.customerId;
+  if (!customerId) {
     return { ok: false, failureReason: PROJECT_CONVERSATION_CUSTOMER_REQUIRED_MESSAGE };
   }
   if (!projectConversationHandymanEligible(job)) {
@@ -313,7 +314,7 @@ export async function sendProjectConversationOwnerReply(
     }
 
     return composeCustomerCommunication(tx, access, {
-      customerId: job.customerId,
+      customerId,
       channel: input.channel,
       purpose: PROJECT_CONVERSATION_PURPOSE,
       subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
