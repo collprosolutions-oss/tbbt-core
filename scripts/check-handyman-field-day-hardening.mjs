@@ -234,15 +234,31 @@ check(
 const deactivateFnSrc = teamSrc.slice(
   teamSrc.indexOf("export async function setTeamMemberActive"),
 );
+const activeOpsSrc = readRepo("src/lib/team-member-active-ops.ts");
+const applyAssignSrc = assignOpsSrc.slice(
+  assignOpsSrc.indexOf("export async function applyAssignedMembershipChangeInTransaction"),
+);
 check(
-  "Deactivation locks the Membership row before closing time or flipping active",
-  deactivateFnSrc.includes('SELECT id FROM "Membership"') &&
-    deactivateFnSrc.includes("FOR UPDATE") &&
-    deactivateFnSrc.indexOf("FOR UPDATE") <
-      deactivateFnSrc.indexOf("closeRunningTimeForMembershipInTransaction") &&
-    deactivateFnSrc.indexOf("closeRunningTimeForMembershipInTransaction") <
-      deactivateFnSrc.indexOf("data: { active }") &&
-    teamSrc.includes("MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON"),
+  "Deactivation uses the #251 lock order: reservation, then Jobs, then Membership",
+  deactivateFnSrc.includes("writeTeamMemberActive") &&
+    activeOpsSrc.includes("lockBusinessScheduleReservation") &&
+    activeOpsSrc.includes("lockJobsForMembershipClockClose") &&
+    activeOpsSrc.includes("lockTenantOwnedMemberships") &&
+    activeOpsSrc.indexOf("lockBusinessScheduleReservation") <
+      activeOpsSrc.indexOf("lockJobsForMembershipClockClose") &&
+    activeOpsSrc.indexOf("lockJobsForMembershipClockClose") <
+      activeOpsSrc.indexOf("lockTenantOwnedMemberships") &&
+    activeOpsSrc.indexOf("lockTenantOwnedMemberships") <
+      activeOpsSrc.indexOf("closeRunningTimeForMembershipInTransaction") &&
+    activeOpsSrc.indexOf("closeRunningTimeForMembershipInTransaction") <
+      activeOpsSrc.indexOf("data: { active: input.active }") &&
+    activeOpsSrc.includes("MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON"),
+);
+check(
+  "Reassignment locks Membership rows after the Job and before assignedMembershipId changes",
+  applyAssignSrc.indexOf("lockTenantOwnedMemberships") >= 0 &&
+    applyAssignSrc.indexOf("lockTenantOwnedMemberships") <
+      applyAssignSrc.indexOf("assignedMembershipId: nextAssignee"),
 );
 check(
   "This verifier imports those production modules instead of a parallel fake",
