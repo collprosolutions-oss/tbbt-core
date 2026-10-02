@@ -53,6 +53,7 @@ const {
   loadSaasBillingSnapshot,
   loadSaasEntitlement,
   requireSaasOperatingEntitlement,
+  resolveSaasEntitlement,
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
   SaasSubscriptionRequiredError,
@@ -156,6 +157,25 @@ check(
     settingsWorkspaceSrc.includes('SaasSubscribeButton planCode="FOUNDER"'),
 );
 check(
+  "Converted/canceled leftover trial days do not resurrect operating access",
+  entitlementSrc.includes("trialStillHonored") &&
+    entitlementSrc.includes("founderConvertedAt") &&
+    entitlementSrc.includes("isSaasTerminatedStatus(status)") &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: {
+        status: "canceled",
+        trialStartedAt: new Date("2026-09-20T12:00:00.000Z"),
+        trialEndsAt: new Date("2026-10-20T12:00:00.000Z"),
+        founderEligible: false,
+        founderConvertedAt: new Date("2026-09-21T12:00:00.000Z"),
+        founderEligibilityEndedAt: new Date("2026-09-22T12:00:00.000Z"),
+        legacyExempt: false,
+      },
+      now: new Date("2026-09-23T12:00:00.000Z"),
+    }).state === "subscription_required",
+);
+check(
   "Cancellation and export stay outside the operating-write gate",
   enforceSrc.includes("data export") &&
     entitlementSrc.includes("data export") &&
@@ -177,8 +197,8 @@ check(
     fixtureSrc.includes("sk_test_") &&
     fixtureSrc.includes("generateTestHeaderString") &&
     fixtureSrc.includes('export const SAAS_CHECKOUT_PURPOSE = "tbbt_saas_subscription"') &&
-    !fixtureSrc.includes("sk_live_") &&
-    !checkSrc.includes("sk_live_"),
+    !/sk_live_[A-Za-z0-9]/.test(fixtureSrc) &&
+    !/sk_live_[A-Za-z0-9]/.test(checkSrc),
 );
 
 const provider = createFakeSaasBillingProvider();

@@ -342,6 +342,39 @@ check(
     resolveSaasEntitlement({ slug: "new-co", row: trialRow, now: windowStart }).canOperate === true,
 );
 check(
+  "A declined first payment during the live trial does not end operating access",
+  resolveSaasEntitlement({
+    slug: "new-co",
+    row: { ...trialRow, status: "incomplete" },
+    now: windowStart,
+  }).state === "trial_active",
+);
+check(
+  "Cancel after Founder conversion does not resurrect leftover trial days",
+  resolveSaasEntitlement({
+    slug: "new-co",
+    row: {
+      ...trialRow,
+      status: "canceled",
+      founderConvertedAt: windowStart,
+      founderEligibilityEndedAt: windowStart,
+      founderEligible: false,
+    },
+    now: windowStart,
+  }).state === "subscription_required" &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: {
+        ...trialRow,
+        status: "canceled",
+        founderConvertedAt: windowStart,
+        founderEligibilityEndedAt: windowStart,
+        founderEligible: false,
+      },
+      now: windowStart,
+    }).canOperate === false,
+);
+check(
   "Expired unpaid trial receives subscription-required entitlement",
   resolveSaasEntitlement({
     slug: "new-co",
