@@ -135,11 +135,13 @@ async function loadOwnedIssue(db: Db, access: BusinessAccess, issueId: string) {
   if (!issueId) {
     throw new JobCustomerIssueError(JOB_CUSTOMER_ISSUE_UNKNOWN_MESSAGE);
   }
-  return access.assertOwned(
-    await db.jobCustomerIssue.findFirst({
-      where: { id: issueId, ...access.scope },
-    }),
-  );
+  const row = await db.jobCustomerIssue.findFirst({
+    where: { id: issueId, ...access.scope },
+  });
+  if (!row) {
+    throw new JobCustomerIssueError(JOB_CUSTOMER_ISSUE_UNKNOWN_MESSAGE);
+  }
+  return access.assertOwned(row);
 }
 
 async function requireOwnedLockedJob(
