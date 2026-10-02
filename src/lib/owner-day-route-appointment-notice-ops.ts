@@ -241,14 +241,48 @@ function assertReviewedRecipient(
   }
 }
 
-function assertRecordedChange(job: NoticeJob) {
+function recordedRescheduleKey(
+  jobId: string,
+  appointmentProposalId: number | null | undefined,
+) {
+  return `${jobId}:${appointmentProposalId ?? 0}`;
+}
+
+async function loadRecordedRescheduleKeys(
+  db: NoticeDb,
+  businessId: string,
+  jobs: readonly { id: string; appointmentProposalId?: number | null }[],
+) {
+  const jobIds = jobs.map((job) => job.id).filter(Boolean);
+  if (jobIds.length === 0) return new Set<string>();
+  const rows = await db.jobAppointmentEvent.findMany({
+    where: {
+      businessId,
+      jobId: { in: jobIds },
+      eventType: "APPOINTMENT_RESCHEDULED",
+    },
+    select: { jobId: true, appointmentProposalId: true },
+  });
+  return new Set(
+    rows.map((row) => recordedRescheduleKey(row.jobId, row.appointmentProposalId)),
+  );
+}
+
+function jobHasRecordedReschedule(
+  job: { id: string; appointmentProposalId?: number | null },
+  keys: ReadonlySet<string>,
+) {
+  return keys.has(recordedRescheduleKey(job.id, job.appointmentProposalId));
+}
+
+function assertRecordedChange(job: NoticeJob, recordedReschedule: boolean) {
   if (job.status === "COMPLETED" || job.status === "CANCELLED" || !job.scheduledAt || !job.customer?.id) {
     throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE);
   }
   if ((job.appointmentProposalId ?? 0) <= 0) {
     throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE);
   }
-  if (!recordedDayRouteAppointmentNoticeEligible(job)) {
+  if (!recordedDayRouteAppointmentNoticeEligible(job, { recordedReschedule })) {
     if (alreadyNotified(job) || !customerNotificationNeeded({
       scheduledAt: job.scheduledAt,
       appointmentProposalId: job.appointmentProposalId ?? 0,
@@ -330,12 +364,16 @@ export async function previewOwnerDayRouteAppointmentNotice(
   );
   if (!sameBusinessJob(job, access.businessId)) return null;
   const flags = await loadNoticeChannelFlags(db, access.businessId);
-  const claims = await loadNoticeClaims(db, access.businessId, [job]);
+  const [claims, recordedReschedules] = await Promise.all([
+    loadNoticeClaims(db, access.businessId, [job]),
+    loadRecordedRescheduleKeys(db, access.businessId, [job]),
+  ]);
   return buildOwnerDayRouteAppointmentNoticePreview({
     job: noticeJobAsPreviewJob(job),
     snapshot: scheduleSnapshotFromJob(job),
     timeZone: input.timeZone,
     businessId: access.businessId,
+    recordedReschedule: jobHasRecordedReschedule(job, recordedReschedules),
     claim: claims.get(dayRouteAppointmentNoticeIdempotencyKey(job.id, job.appointmentProposalId ?? 0)) ?? null,
     ...flags,
   });
@@ -357,7 +395,10 @@ export async function loadOwnerDayRouteAppointmentNotices(
     }),
     loadNoticeChannelFlags(db, access.businessId),
   ]);
-  const claims = await loadNoticeClaims(db, access.businessId, jobs);
+  const [claims, recordedReschedules] = await Promise.all([
+    loadNoticeClaims(db, access.businessId, jobs),
+    loadRecordedRescheduleKeys(db, access.businessId, jobs),
+  ]);
 
   const notices: Record<string, OwnerDayRouteAppointmentNoticePreview> = {};
   for (const job of jobs) {
@@ -367,6 +408,7 @@ export async function loadOwnerDayRouteAppointmentNotices(
       snapshot: scheduleSnapshotFromJob(job),
       timeZone: input.timeZone,
       businessId: access.businessId,
+      recordedReschedule: jobHasRecordedReschedule(job, recordedReschedules),
       claim: claims.get(dayRouteAppointmentNoticeIdempotencyKey(job.id, job.appointmentProposalId ?? 0)) ?? null,
       ...flags,
     });
@@ -594,7 +636,9 @@ export async function sendOwnerDayRouteAppointmentNotice(
     if (!sameBusinessJob(job, access.businessId)) {
       throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_FOREIGN_MESSAGE);
     }
-    assertRecordedChange(job);
+    const recordedReschedules = await loadRecordedRescheduleKeys(db, access.businessId, [job]);
+    const recordedReschedule = jobHasRecordedReschedule(job, recordedReschedules);
+    assertRecordedChange(job, recordedReschedule);
     assertCurrentSnapshot(job, review);
 
     const proposalId = job.appointmentProposalId ?? 0;
@@ -617,6 +661,7 @@ export async function sendOwnerDayRouteAppointmentNotice(
       snapshot: scheduleFieldsFromNoticeReview(review),
       timeZone,
       businessId: access.businessId,
+      recordedReschedule,
       ...flags,
     });
     if (!preview?.offerSend || !preview.channel || !preview.destinationFingerprint) {
@@ -656,7 +701,12 @@ export async function sendOwnerDayRouteAppointmentNotice(
       if (!fresh) {
         throw new DayRouteAppointmentNoticeError(DAY_ROUTE_APPOINTMENT_NOTICE_STALE_MESSAGE);
       }
-      assertRecordedChange(fresh);
+      const freshRecordedReschedules = await loadRecordedRescheduleKeys(
+        tx,
+        access.businessId,
+        [fresh],
+      );
+      assertRecordedChange(fresh, jobHasRecordedReschedule(fresh, freshRecordedReschedules));
       assertCurrentSnapshot(fresh, review);
       assertReviewedRecipient(fresh, review, flags);
       if ((fresh.appointmentProposalId ?? 0) !== proposalId) {

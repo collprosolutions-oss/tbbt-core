@@ -241,11 +241,28 @@ function noticeSendInput(preview, overrides = {}) {
   };
 }
 
+async function recordRescheduleEvent(job) {
+  if ((job.appointmentProposalId ?? 0) <= 0) return job;
+  await prisma.jobAppointmentEvent.create({
+    data: {
+      businessId: job.businessId,
+      jobId: job.id,
+      eventType: "APPOINTMENT_RESCHEDULED",
+      appointmentProposalId: job.appointmentProposalId,
+      scheduledAt: job.scheduledAt,
+      scheduledDurationMinutes: job.scheduledDurationMinutes,
+      actorKind: "OWNER",
+    },
+  });
+  return job;
+}
+
 async function markRecordedChange(jobId) {
-  return prisma.job.update({
+  const job = await prisma.job.update({
     where: { id: jobId },
     data: { appointmentProposalId: { increment: 1 } },
   });
+  return recordRescheduleEvent(job);
 }
 
 async function insertNoticeClaim(job, input) {
@@ -362,7 +379,9 @@ check(
     !/[\r\n]/.test(buildDayRouteAppointmentNoticeSubject("Alpha\r\nNotice")) &&
     !noticeSrc.includes("has been rescheduled") &&
     noticeSrc.includes("recordedDayRouteAppointmentNoticeEligible") &&
-    noticeSrc.includes('job.status === "CANCELLED"'),
+    noticeSrc.includes("recordedReschedule") &&
+    noticeSrc.includes('job.status === "CANCELLED"') &&
+    opsSrc.includes("APPOINTMENT_RESCHEDULED"),
 );
 
 try {
@@ -702,6 +721,20 @@ try {
       projectToken: randomUUID(),
     },
   });
+
+  for (const seeded of [
+    recipientJob,
+    cancelledJob,
+    concurrentEmailJob,
+    concurrentSmsJob,
+    staleCasesJob,
+    recoverEmailJob,
+    freshReadyJob,
+    staleParallelEmailJob,
+    staleParallelSmsJob,
+  ]) {
+    await recordRescheduleEvent(seeded);
+  }
 
   console.log("\nTEST — page load, preview, and reschedule never send");
   sentEmails.length = 0;
