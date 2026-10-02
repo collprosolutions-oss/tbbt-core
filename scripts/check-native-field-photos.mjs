@@ -107,6 +107,7 @@ const photosUiSrc = readRepo("apps/native/src/screens/JobPhotosSection.tsx");
 const photoRulesSrc = readRepo("apps/native/src/photo-rules.ts");
 const docsSrc = readRepo("docs/NATIVE_FIELD.md");
 const serviceSrc = readRepo("src/lib/business-storage/service.ts");
+const fieldJobPhotoSrc = readRepo("src/lib/business-storage/field-job-photos.ts");
 
 console.log("\nSTATIC — Reuse private storage, caps, and capture/review UI");
 check(
@@ -137,11 +138,13 @@ check(
 );
 check(
   "Refused finalize discards only this job's unattached private field-job-photo",
-  photoOpsSrc.includes("discardReadyManagedUpload") &&
+  photoOpsSrc.includes("releaseUnpersistedJobPhoto") &&
     photoOpsSrc.includes("releaseUnpersistedFinalizedPhoto") &&
     photoOpsSrc.includes("FIELD_JOB_PHOTO_PURPOSE") &&
     photoOpsSrc.includes('purpose !== FIELD_JOB_PHOTO_PURPOSE') &&
-    (photoOpsSrc.split("releaseUnpersistedFinalizedPhoto").length - 1) === 2 &&
+    (photoOpsSrc.split("releaseUnpersistedFinalizedPhoto").length - 1) >= 3 &&
+    fieldJobPhotoSrc.includes("discardReadyManagedUpload") &&
+    fieldJobPhotoSrc.includes("export async function releaseUnpersistedJobPhoto") &&
     serviceSrc.includes("export async function discardReadyManagedUpload") &&
     serviceSrc.includes("jobId: match.jobId") &&
     serviceSrc.includes("category: match.category") &&

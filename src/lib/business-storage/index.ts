@@ -93,6 +93,7 @@ export {
 export {
   FIELD_JOB_PHOTO_MAX_BYTES,
   FIELD_JOB_PHOTO_PURPOSE,
+  MANAGEMENT_JOB_PHOTO_PURPOSE,
   abortAssignedFieldJobPhoto,
   abortManagementJobPhoto,
   authorizeAssignedFieldJobPhoto,
@@ -104,7 +105,18 @@ export {
   persistReadyJobPhoto,
   putAssignedFieldJobPhotoFromBytes,
   putManagementJobPhotoFromBytes,
+  releaseUnpersistedJobPhoto,
 } from "@/lib/business-storage/field-job-photos";
+export {
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
+  abortPublicRequestPhoto,
+  authorizePublicRequestPhoto,
+  finalizePublicRequestPhoto,
+  putPublicRequestPhotoFromBytes,
+  releaseExpiredUnattachedPublicRequestPhotos,
+  releaseUnattachedPublicRequestPhotos,
+  rememberAttachedPublicRequestPhotos,
+} from "@/lib/business-storage/request-photos";
 export {
   PROJECT_DOCUMENT_PURPOSE,
   PROJECT_DOCUMENT_RECEIVED_COPY,

@@ -15,13 +15,11 @@ import {
   FIELD_JOB_PHOTO_PURPOSE,
   inspectFieldJobPhotoUpload,
   persistReadyJobPhoto,
+  releaseUnpersistedJobPhoto,
 } from "@/lib/business-storage/field-job-photos";
 import { isBusinessStorageConfigured } from "@/lib/business-storage/config";
 import { authorizePrivateStoredAssetDownload } from "@/lib/business-storage/private-serve";
-import {
-  discardReadyManagedUpload,
-  finalizeManagedUpload,
-} from "@/lib/business-storage/service";
+import { finalizeManagedUpload } from "@/lib/business-storage/service";
 import {
   StorageAccessError,
   StorageError,
@@ -268,23 +266,17 @@ function storageDeps(db: PrismaClient, storage?: NativePhotoStorageDeps) {
 }
 
 async function releaseUnpersistedFinalizedPhoto(
-  db: PrismaClient,
   deps: ReturnType<typeof storageDeps>,
   businessId: string,
   jobId: string,
   assetId: string,
 ) {
-  const persisted = await db.jobPhoto.findFirst({
-    where: { businessId, storedAssetId: assetId },
-    select: { id: true },
-  });
-  if (persisted) return;
-  await discardReadyManagedUpload(deps, businessId, assetId, {
+  await releaseUnpersistedJobPhoto(deps, {
+    businessId,
     jobId,
-    category: "JOB_PHOTO",
+    assetId,
     purpose: FIELD_JOB_PHOTO_PURPOSE,
-    visibility: "PRIVATE",
-  }).catch(() => undefined);
+  });
 }
 
 function requireStorage(storage?: NativePhotoStorageDeps): NativeAssignedJobPhotoFailure | null {
@@ -362,9 +354,26 @@ export async function finalizeNativeAssignedJobPhoto(
   }
 
   const deps = storageDeps(db, storage);
+  const candidate = await db.storedAsset.findFirst({
+    where: {
+      id: input.assetId,
+      businessId: access.businessId,
+      jobId: assigned.jobId,
+      category: "JOB_PHOTO",
+      purpose: FIELD_JOB_PHOTO_PURPOSE,
+      visibility: "PRIVATE",
+    },
+  });
+  if (!candidate || (candidate.status !== "PENDING" && candidate.status !== "READY")) {
+    return { ok: false, status: 400, error: "That photo is not a private field job photo." };
+  }
+
   let asset;
   try {
-    asset = await finalizeManagedUpload(deps, access.businessId, input.assetId);
+    asset =
+      candidate.status === "READY"
+        ? candidate
+        : await finalizeManagedUpload(deps, access.businessId, candidate.id);
   } catch (error) {
     return photoError(error);
   }
@@ -374,6 +383,7 @@ export async function finalizeNativeAssignedJobPhoto(
     asset.purpose !== FIELD_JOB_PHOTO_PURPOSE ||
     asset.jobId !== assigned.jobId
   ) {
+    await releaseUnpersistedFinalizedPhoto(deps, access.businessId, assigned.jobId, asset.id);
     return { ok: false, status: 400, error: "That photo is not a private field job photo." };
   }
 
@@ -417,7 +427,6 @@ export async function finalizeNativeAssignedJobPhoto(
 
     if (!written.ok) {
       await releaseUnpersistedFinalizedPhoto(
-        db,
         deps,
         access.businessId,
         assigned.jobId,
@@ -426,6 +435,12 @@ export async function finalizeNativeAssignedJobPhoto(
       return written;
     }
   } catch (error) {
+    await releaseUnpersistedFinalizedPhoto(
+      deps,
+      access.businessId,
+      assigned.jobId,
+      input.assetId,
+    );
     return photoError(error);
   }
 

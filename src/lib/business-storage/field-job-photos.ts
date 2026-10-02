@@ -8,6 +8,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   abortManagedUpload,
   authorizeManagedUpload,
+  discardReadyManagedUpload,
   finalizeManagedUpload,
   resolveStorageProvider,
   type StorageServiceDeps,
@@ -24,6 +25,7 @@ import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export const FIELD_JOB_PHOTO_MAX_BYTES = REQUEST_PHOTO_MAX_BYTES;
 export const FIELD_JOB_PHOTO_PURPOSE = "field-job-photo";
+export const MANAGEMENT_JOB_PHOTO_PURPOSE = "management-job-photo";
 
 export {
   inspectRequestPhotoUpload as inspectFieldJobPhotoUpload,
@@ -66,6 +68,73 @@ export function jobPhotoSrc(photo: {
     return privateAssetPath(photo.storedAssetId);
   }
   return photo.url;
+}
+
+async function loadOwnedJobPhotoCandidate(
+  db: PrismaClient,
+  input: {
+    businessId: string;
+    jobId: string;
+    assetId: string;
+    purpose: string;
+  },
+) {
+  return db.storedAsset.findFirst({
+    where: {
+      id: input.assetId,
+      businessId: input.businessId,
+      jobId: input.jobId,
+      category: "JOB_PHOTO",
+      purpose: input.purpose,
+      visibility: "PRIVATE",
+    },
+  });
+}
+
+function isPrivateJobPhotoForJob(
+  asset: {
+    visibility: string;
+    category: string;
+    jobId: string | null;
+    purpose: string | null;
+  },
+  jobId: string,
+  purpose: string,
+) {
+  return (
+    asset.visibility === "PRIVATE" &&
+    asset.category === "JOB_PHOTO" &&
+    asset.jobId === jobId &&
+    asset.purpose === purpose
+  );
+}
+
+/**
+ * Releases a READY job photo that never became a JobPhoto row.
+ * Abort stays PENDING-only so a successful persist cannot be undone
+ * from the abort route.
+ */
+export async function releaseUnpersistedJobPhoto(
+  deps: StorageServiceDeps,
+  input: {
+    businessId: string;
+    jobId: string;
+    assetId: string;
+    purpose: string;
+  },
+) {
+  const persisted = await deps.db.jobPhoto.findFirst({
+    where: { businessId: input.businessId, storedAssetId: input.assetId },
+    select: { id: true },
+  });
+  if (persisted) return { released: false as const };
+  await discardReadyManagedUpload(deps, input.businessId, input.assetId, {
+    jobId: input.jobId,
+    category: "JOB_PHOTO",
+    purpose: input.purpose,
+    visibility: "PRIVATE",
+  }).catch(() => undefined);
+  return { released: true as const };
 }
 
 export async function authorizeAssignedFieldJobPhoto(
@@ -128,25 +197,46 @@ export async function finalizeAssignedFieldJobPhoto(
     await options.afterInitialRead();
   }
 
-  const asset = await finalizeManagedUpload(deps, field.businessId, input.assetId);
-  if (
-    asset.visibility !== "PRIVATE" ||
-    asset.category !== "JOB_PHOTO" ||
-    asset.jobId !== job.id
-  ) {
+  const candidate = await loadOwnedJobPhotoCandidate(deps.db, {
+    businessId: field.businessId,
+    jobId: job.id,
+    assetId: input.assetId,
+    purpose: FIELD_JOB_PHOTO_PURPOSE,
+  });
+  if (!candidate) {
     throw new StorageError("That photo is not a private field job photo.");
   }
 
-  return deps.db.$transaction(async (tx) => {
-    const locked = await lockTenantOwnedJob(tx, field.businessId, job.id);
-    if (!locked || locked.assignedMembershipId !== field.membershipId) {
-      throw new StorageAccessError(NOT_ASSIGNED_ERROR);
-    }
-    if (!(await exactActiveMembershipHeld(tx, field))) {
-      throw new StorageAccessError(NOT_ASSIGNED_ERROR);
-    }
-    return persistReadyJobPhoto(tx, field.businessId, locked.id, asset, input.stage, input.caption);
-  });
+  const asset =
+    candidate.status === "READY"
+      ? candidate
+      : candidate.status === "PENDING"
+        ? await finalizeManagedUpload(deps, field.businessId, candidate.id)
+        : null;
+  if (!asset || !isPrivateJobPhotoForJob(asset, job.id, FIELD_JOB_PHOTO_PURPOSE)) {
+    throw new StorageError("That photo is not a private field job photo.");
+  }
+
+  try {
+    return await deps.db.$transaction(async (tx) => {
+      const locked = await lockTenantOwnedJob(tx, field.businessId, job.id);
+      if (!locked || locked.assignedMembershipId !== field.membershipId) {
+        throw new StorageAccessError(NOT_ASSIGNED_ERROR);
+      }
+      if (!(await exactActiveMembershipHeld(tx, field))) {
+        throw new StorageAccessError(NOT_ASSIGNED_ERROR);
+      }
+      return persistReadyJobPhoto(tx, field.businessId, locked.id, asset, input.stage, input.caption);
+    });
+  } catch (error) {
+    await releaseUnpersistedJobPhoto(deps, {
+      businessId: field.businessId,
+      jobId: job.id,
+      assetId: asset.id,
+      purpose: FIELD_JOB_PHOTO_PURPOSE,
+    });
+    throw error;
+  }
 }
 
 export async function abortAssignedFieldJobPhoto(
@@ -286,7 +376,7 @@ export async function authorizeManagementJobPhoto(
 
   return authorizeManagedUpload(deps, management.businessId, {
     category: "JOB_PHOTO",
-    purpose: "management-job-photo",
+    purpose: MANAGEMENT_JOB_PHOTO_PURPOSE,
     originalFilename: inspection.fileName,
     mimeType: inspection.mimeType,
     fileSizeBytes: inspection.fileSizeBytes,
@@ -312,23 +402,44 @@ export async function finalizeManagementJobPhoto(
     throw new StorageAccessError(NOT_FOUND_ERROR);
   }
 
-  const asset = await finalizeManagedUpload(deps, management.businessId, input.assetId);
-  if (
-    asset.visibility !== "PRIVATE" ||
-    asset.category !== "JOB_PHOTO" ||
-    asset.jobId !== job.id
-  ) {
+  const candidate = await loadOwnedJobPhotoCandidate(deps.db, {
+    businessId: management.businessId,
+    jobId: job.id,
+    assetId: input.assetId,
+    purpose: MANAGEMENT_JOB_PHOTO_PURPOSE,
+  });
+  if (!candidate) {
     throw new StorageError("That photo is not a private job photo.");
   }
 
-  return persistReadyJobPhoto(
-    deps.db,
-    management.businessId,
-    job.id,
-    asset,
-    input.stage,
-    input.caption,
-  );
+  const asset =
+    candidate.status === "READY"
+      ? candidate
+      : candidate.status === "PENDING"
+        ? await finalizeManagedUpload(deps, management.businessId, candidate.id)
+        : null;
+  if (!asset || !isPrivateJobPhotoForJob(asset, job.id, MANAGEMENT_JOB_PHOTO_PURPOSE)) {
+    throw new StorageError("That photo is not a private job photo.");
+  }
+
+  try {
+    return await persistReadyJobPhoto(
+      deps.db,
+      management.businessId,
+      job.id,
+      asset,
+      input.stage,
+      input.caption,
+    );
+  } catch (error) {
+    await releaseUnpersistedJobPhoto(deps, {
+      businessId: management.businessId,
+      jobId: job.id,
+      assetId: asset.id,
+      purpose: MANAGEMENT_JOB_PHOTO_PURPOSE,
+    });
+    throw error;
+  }
 }
 
 export async function abortManagementJobPhoto(

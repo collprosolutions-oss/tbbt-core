@@ -2,20 +2,24 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   abortManagedUpload,
   authorizeManagedUpload,
+  bestEffortCleanupOwnedObject,
   finalizeManagedUpload,
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
 import { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-rules";
 import { privateAssetPath } from "@/lib/business-storage/keys";
-import { StorageError } from "@/lib/business-storage/types";
+import { STORAGE_PENDING_TTL_MS, StorageError } from "@/lib/business-storage/types";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
 
 export { inspectRequestPhotoUpload, requestPhotoMaxBytesLabel } from "@/lib/business-storage/request-photo-rules";
 
+export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
 const NOT_PRIVATE_REQUEST_PHOTO = "That photo is not a private request photo.";
 const REQUEST_PHOTO_CANNOT_BE_PUBLISHED = "Request photos cannot be published.";
+
+type Db = PrismaClient | Prisma.TransactionClient;
 
 export type PublicRequestFallbackPhotoFile = {
   name: string;
@@ -27,6 +31,150 @@ export type PublicRequestFallbackPhotoFile = {
 export function remainingIntakePhotoSlots(attachedCount: number) {
   const recorded = Number.isFinite(attachedCount) ? Math.max(0, Math.floor(attachedCount)) : 0;
   return Math.max(0, MAX_INTAKE_PHOTOS - recorded);
+}
+
+async function claimUnattachedRequestPhotoInTx(
+  tx: Db,
+  businessId: string,
+  assetId: string,
+  now: Date,
+) {
+  const referenced = await tx.serviceRequestPhoto.findFirst({
+    where: { storedAssetId: assetId, businessId },
+    select: { id: true },
+  });
+  if (referenced) return null;
+  const asset = await tx.storedAsset.findFirst({
+    where: {
+      id: assetId,
+      businessId,
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      category: "CUSTOMER_PHOTO",
+      visibility: "PRIVATE",
+    },
+    include: { storageAccount: true },
+  });
+  if (!asset || asset.status !== "READY") return null;
+  const updated = await tx.storedAsset.updateMany({
+    where: {
+      id: asset.id,
+      businessId,
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      status: "READY",
+    },
+    data: { status: "FAILED", deletedAt: now, publicPath: null },
+  });
+  if (updated.count !== 1) return null;
+  if (asset.fileSizeBytes > 0) {
+    await tx.businessStorageAccount.update({
+      where: { id: asset.storageAccountId },
+      data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
+    });
+  }
+  return {
+    bucket: asset.storageAccount.bucketName,
+    storageKey: asset.storageKey,
+  };
+}
+
+export async function rememberAttachedPublicRequestPhotos(
+  tx: {
+    storedAsset: {
+      updateMany: (args: {
+        where: {
+          id: { in: string[] };
+          businessId: string;
+          purpose: string;
+          status: string;
+        };
+        data: { expiresAt: Date | null };
+      }) => Promise<unknown>;
+    };
+  },
+  businessId: string,
+  assetIds: string[],
+) {
+  const ids = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return;
+  await tx.storedAsset.updateMany({
+    where: {
+      id: { in: ids },
+      businessId,
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      status: "READY",
+    },
+    data: { expiresAt: null },
+  });
+}
+
+export async function releaseUnattachedPublicRequestPhotos(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetIds: string[],
+) {
+  const ids = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return { released: 0 };
+  const now = deps.now?.() ?? new Date();
+  const claimed = await deps.db.$transaction(async (tx) => {
+    const won: Array<{ bucket: string; storageKey: string }> = [];
+    for (const id of ids) {
+      const object = await claimUnattachedRequestPhotoInTx(tx, businessId, id, now);
+      if (object) won.push(object);
+    }
+    return won;
+  });
+  for (const object of claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, object);
+  }
+  return { released: claimed.length };
+}
+
+export async function releaseExpiredUnattachedPublicRequestPhotos(
+  deps: StorageServiceDeps,
+  businessId: string,
+) {
+  const now = deps.now?.() ?? new Date();
+  const expired = await deps.db.storedAsset.findMany({
+    where: {
+      businessId,
+      status: "READY",
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      category: "CUSTOMER_PHOTO",
+      visibility: "PRIVATE",
+      expiresAt: { lte: now },
+      serviceRequestPhotos: { none: {} },
+    },
+    select: { id: true },
+  });
+  if (expired.length === 0) return { released: 0 };
+  return releaseUnattachedPublicRequestPhotos(
+    deps,
+    businessId,
+    expired.map((row) => row.id),
+  );
+}
+
+async function stampUnattachedRequestPhotoExpiry(
+  deps: StorageServiceDeps,
+  businessId: string,
+  assetId: string,
+) {
+  const now = deps.now?.() ?? new Date();
+  const referenced = await deps.db.serviceRequestPhoto.findFirst({
+    where: { storedAssetId: assetId, businessId },
+    select: { id: true },
+  });
+  if (referenced) return;
+  await deps.db.storedAsset.updateMany({
+    where: {
+      id: assetId,
+      businessId,
+      status: "READY",
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      expiresAt: null,
+    },
+    data: { expiresAt: new Date(now.getTime() + STORAGE_PENDING_TTL_MS) },
+  });
 }
 
 function isPrivateUnpublishedCustomerPhoto(asset: {
@@ -74,9 +222,10 @@ export async function authorizePublicRequestPhoto(
   if (!inspection.ok) {
     throw new StorageError(inspection.error);
   }
+  await releaseExpiredUnattachedPublicRequestPhotos(deps, business.id);
   return authorizeManagedUpload(deps, business.id, {
     category: "CUSTOMER_PHOTO",
-    purpose: "public-request-photo",
+    purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
     originalFilename: inspection.fileName,
     mimeType: inspection.mimeType,
     fileSizeBytes: inspection.fileSizeBytes,
@@ -107,7 +256,10 @@ export async function finalizePublicRequestPhoto(
     throw new StorageError(NOT_PRIVATE_REQUEST_PHOTO);
   }
   if (candidate.status === "READY") {
-    return candidate;
+    await stampUnattachedRequestPhotoExpiry(deps, business.id, candidate.id);
+    return deps.db.storedAsset.findFirstOrThrow({
+      where: { id: candidate.id, businessId: business.id },
+    });
   }
 
   const now = deps.now?.() ?? new Date();
@@ -118,7 +270,11 @@ export async function finalizePublicRequestPhoto(
     throw new StorageError(NOT_PRIVATE_REQUEST_PHOTO);
   }
 
-  return finalizeManagedUpload(deps, business.id, assetId);
+  const asset = await finalizeManagedUpload(deps, business.id, assetId);
+  await stampUnattachedRequestPhotoExpiry(deps, business.id, asset.id);
+  return deps.db.storedAsset.findFirstOrThrow({
+    where: { id: asset.id, businessId: business.id },
+  });
 }
 
 export async function abortPublicRequestPhoto(
@@ -249,6 +405,11 @@ export async function attachRemainingPublicRequestFallbackPhotos(
           storedAssetId: photo.storedAssetId,
         })),
       });
+      await rememberAttachedPublicRequestPhotos(
+        tx,
+        business.id,
+        uploaded.map((photo) => photo.storedAssetId),
+      );
 
       return {
         attached: uploaded.length,

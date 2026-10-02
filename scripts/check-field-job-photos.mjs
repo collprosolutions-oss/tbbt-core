@@ -87,6 +87,16 @@ function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
+async function accountSnapshot(businessId) {
+  const account = await prisma.businessStorageAccount.findUnique({
+    where: { businessId },
+  });
+  return {
+    used: Number(account?.storageUsedBytes ?? 0),
+    reserved: Number(account?.storageReservedBytes ?? 0),
+  };
+}
+
 const fieldActionSrc = readRepo("src/app/actions/field-job.ts");
 const fieldFormSrc = readRepo("src/components/field/add-field-job-photo-form.tsx");
 const fieldPhotoLibSrc = readRepo("src/lib/business-storage/field-job-photos.ts");
@@ -111,6 +121,14 @@ check(
       finalizeAssignedFnSrc.indexOf("exactActiveMembershipHeld") &&
     finalizeAssignedFnSrc.indexOf("exactActiveMembershipHeld") <
       finalizeAssignedFnSrc.indexOf("persistReadyJobPhoto"),
+);
+check(
+  "Refused assigned finalize matches the candidate job photo before READY and discards an unpersisted READY asset",
+  finalizeAssignedFnSrc.includes("loadOwnedJobPhotoCandidate") &&
+    finalizeAssignedFnSrc.includes("FIELD_JOB_PHOTO_PURPOSE") &&
+    finalizeAssignedFnSrc.includes("releaseUnpersistedJobPhoto") &&
+    fieldPhotoLibSrc.includes("discardReadyManagedUpload") &&
+    fieldPhotoLibSrc.includes("export async function releaseUnpersistedJobPhoto"),
 );
 check(
   "Field photo actions never accept a File or Vercel Blob upload helper",
@@ -612,6 +630,7 @@ try {
     },
   });
   const deactivateField = { businessId: businessA.id, membershipId: deactivateMem.id };
+  const beforeDeactivate = await accountSnapshot(businessA.id);
   const deactivateAuth = await authorizeAssignedFieldJobPhoto(deps, deactivateField, {
     jobId: deactivateJob.id,
     originalFilename: "deactivate.jpg",
@@ -661,12 +680,140 @@ try {
     where: { id: deactivateJob.id, businessId: businessA.id },
     select: { assignedMembershipId: true },
   });
+  const deactivateAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: deactivateAuth.asset.id },
+  });
+  const afterDeactivate = await accountSnapshot(businessA.id);
+  const deactivateObjectGone = !(await provider.objectExists({
+    bucket: deactivateAuth.account.bucketName,
+    key: deactivateAuth.asset.storageKey,
+  }));
   check(
     "Refused deactivated finalize writes no JobPhoto and leaves assignment intact",
     photosAfterDeactivate === photosBeforeDeactivate &&
       photosAfterDeactivate === 0 &&
       deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
   );
+  check(
+    "Refused deactivated finalize leaves no READY orphan or charged storage",
+    deactivateAsset.status === "FAILED" &&
+      afterDeactivate.used === beforeDeactivate.used &&
+      afterDeactivate.reserved === beforeDeactivate.reserved &&
+      deactivateObjectGone,
+  );
+
+  const reassignJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: memberMem.id,
+    },
+  });
+  const beforeReassign = await accountSnapshot(businessA.id);
+  const reassignAuth = await authorizeAssignedFieldJobPhoto(deps, assignedField, {
+    jobId: reassignJob.id,
+    originalFilename: "reassign.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  await provider.putObject({
+    bucket: reassignAuth.account.bucketName,
+    key: reassignAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await expectThrow(
+    "Finalize after mid-flight reassignment is refused",
+    () =>
+      finalizeAssignedFieldJobPhoto(
+        deps,
+        assignedField,
+        {
+          jobId: reassignJob.id,
+          assetId: reassignAuth.asset.id,
+          stage: "BEFORE",
+        },
+        {
+          afterInitialRead: async () => {
+            await prisma.job.update({
+              where: { id: reassignJob.id },
+              data: { assignedMembershipId: otherMem.id },
+            });
+          },
+        },
+      ),
+    (error) => error instanceof StorageAccessError && error.message.includes("isn't assigned"),
+  );
+  const reassignAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: reassignAuth.asset.id },
+  });
+  const reassignPhoto = await prisma.jobPhoto.findFirst({
+    where: { storedAssetId: reassignAuth.asset.id, businessId: businessA.id },
+  });
+  const afterReassign = await accountSnapshot(businessA.id);
+  check(
+    "Reassignment refusal leaves no JobPhoto, READY orphan, or charged storage",
+    reassignPhoto == null &&
+      reassignAsset.status === "FAILED" &&
+      afterReassign.used === beforeReassign.used &&
+      afterReassign.reserved === beforeReassign.reserved &&
+      !(await provider.objectExists({
+        bucket: reassignAuth.account.bucketName,
+        key: reassignAuth.asset.storageKey,
+      })),
+  );
+
+  const secondAssignedJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      projectToken: randomUUID(),
+      status: "IN_PROGRESS",
+      assignedMembershipId: memberMem.id,
+    },
+  });
+  const beforeCross = await accountSnapshot(businessA.id);
+  const jobAAuth = await authorizeAssignedFieldJobPhoto(deps, assignedField, {
+    jobId: assignedJob.id,
+    originalFilename: "job-a.jpg",
+    mimeType: "image/jpeg",
+    fileSizeBytes: jpeg.byteLength,
+  });
+  await provider.putObject({
+    bucket: jobAAuth.account.bucketName,
+    key: jobAAuth.asset.storageKey,
+    body: jpeg,
+    contentType: "image/jpeg",
+  });
+  await expectThrow(
+    "Finalize on job B cannot consume a job A pending photo",
+    () =>
+      finalizeAssignedFieldJobPhoto(deps, assignedField, {
+        jobId: secondAssignedJob.id,
+        assetId: jobAAuth.asset.id,
+        stage: "BEFORE",
+      }),
+    (error) => error instanceof StorageError && error.message.includes("not a private field job photo"),
+  );
+  const crossAsset = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: jobAAuth.asset.id },
+  });
+  const afterCross = await accountSnapshot(businessA.id);
+  check(
+    "Cross-job finalize leaves the pending job A photo uncharged and not READY",
+    crossAsset.status === "PENDING" &&
+      crossAsset.jobId === assignedJob.id &&
+      afterCross.used === beforeCross.used &&
+      afterCross.reserved === beforeCross.reserved + jpeg.byteLength,
+  );
+  await abortAssignedFieldJobPhoto(deps, assignedField, {
+    jobId: assignedJob.id,
+    assetId: jobAAuth.asset.id,
+  });
 
   const saved = await putAssignedFieldJobPhotoFromBytes(deps, assignedField, {
     jobId: assignedJob.id,

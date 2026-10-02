@@ -3,6 +3,11 @@ import { parseLeadSource, PUBLIC_DEFAULT_LEAD_SOURCE } from "@/lib/lead-attribut
 import { qualifyServiceAddress, serviceAreaCities } from "@/lib/service-areas";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
+  rememberAttachedPublicRequestPhotos,
+  releaseUnattachedPublicRequestPhotos,
+} from "@/lib/business-storage/request-photos";
+import type { StorageProvider } from "@/lib/business-storage/types";
+import {
   CUSTOMER_REPORTED_MEASUREMENT,
   catalogAsksMeasurements,
   resolveCatalogIntakeConfig,
@@ -25,7 +30,7 @@ import {
   type CustomerIdentityRecord,
   type IntakeIdentityReview,
 } from "@/lib/customer-identity";
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { smsConsentFromPublicOptIn } from "@/lib/customer-messaging/opt-in";
 import {
   findReusableLegacyProperty,
@@ -69,6 +74,15 @@ import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 import { claimPublicIntakeSubmission } from "@/lib/public-intake-submission";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
+
+/**
+ * Test-only storage provider for leftover request-photo cleanup.
+ * Production never sets this; leftover deletes then use configured R2.
+ */
+export const publicIntakeStorageTestHooks: {
+  provider?: StorageProvider;
+  bucketName?: string;
+} = {};
 
 export {
   claimPublicIntakeSubmission,
@@ -412,6 +426,17 @@ export type PublicIntakeTx = {
       }>;
     }) => Promise<unknown>;
   };
+  storedAsset: {
+    updateMany: (args: {
+      where: {
+        id: { in: string[] };
+        businessId: string;
+        purpose: string;
+        status: string;
+      };
+      data: { expiresAt: Date | null };
+    }) => Promise<unknown>;
+  };
   serviceRequestMeasurement: {
     createMany: (args: {
       data: Array<{
@@ -699,10 +724,9 @@ async function createPublicServiceRequestInner(
     workAreaAnswers.push(checked.answer);
   }
 
-  const photoAssetIds = [...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean))].slice(
-    0,
-    MAX_INTAKE_PHOTOS,
-  );
+  const photoAssetIds = [
+    ...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean)),
+  ];
 
   const labels = requestedWorkLabels({
     items: parsed.tasks.map((task) =>
@@ -810,7 +834,7 @@ async function createPublicServiceRequestInner(
       : [];
 
   try {
-    const requestId = await db.$transaction(async (tx) => {
+    const written = await db.$transaction(async (tx) => {
       if (repeatVisitSourceJobId) {
         const existingRepeat = await tx.serviceRequest.findFirst({
           where: {
@@ -819,7 +843,7 @@ async function createPublicServiceRequestInner(
           },
           select: { id: true },
         });
-        if (existingRepeat) return existingRepeat.id;
+        if (existingRepeat) return { requestId: existingRepeat.id, leftoverAssetIds: [] as string[] };
       }
 
       if (submissionId) {
@@ -831,7 +855,7 @@ async function createPublicServiceRequestInner(
           },
           select: { id: true },
         });
-        if (existing) return existing.id;
+        if (existing) return { requestId: existing.id, leftoverAssetIds: [] as string[] };
       }
 
       let identityReview: IntakeIdentityReview | null = null;
@@ -1084,10 +1108,28 @@ async function createPublicServiceRequestInner(
         });
       }
 
-      return request.id;
+      const attachedAssetIds = photoRows
+        .map((row) => row.storedAssetId)
+        .filter((id): id is string => Boolean(id));
+      await rememberAttachedPublicRequestPhotos(tx, business.id, attachedAssetIds);
+      const leftoverAssetIds = ownedPhotoIds.filter((id) => !attachedAssetIds.includes(id));
+
+      return { requestId: request.id, leftoverAssetIds };
     });
 
-    return { ok: true, requestId };
+    if (written.leftoverAssetIds.length > 0) {
+      await releaseUnattachedPublicRequestPhotos(
+        {
+          db: db as PrismaClient,
+          provider: publicIntakeStorageTestHooks.provider,
+          bucketName: publicIntakeStorageTestHooks.bucketName,
+        },
+        business.id,
+        written.leftoverAssetIds,
+      );
+    }
+
+    return { ok: true, requestId: written.requestId };
   } catch (error) {
     if (
       repeatVisitSourceJobId &&

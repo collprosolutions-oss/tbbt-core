@@ -15,6 +15,7 @@ const {
   createPublicServiceRequest,
   publicIntakeSubmissionLockKey,
   publicIntakeTestHooks,
+  publicIntakeStorageTestHooks,
 } = await import("@/lib/public-intake");
 const { INTAKE_SUBMISSION_MARKER } = await import("@/lib/work-area-intake");
 const {
@@ -33,6 +34,7 @@ const {
   finalizePublicRequestPhoto,
   putPublicRequestPhotoFromBytes,
   remainingIntakePhotoSlots,
+  releaseExpiredUnattachedPublicRequestPhotos,
 } = await import("@/lib/business-storage/request-photos");
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
@@ -224,6 +226,14 @@ check(
 );
 
 const publicIntakeSrc = readRepo("src/lib/public-intake.ts");
+check(
+  "Intake attach clears request-photo expiry and releases unattached extras",
+  publicIntakeSrc.includes("rememberAttachedPublicRequestPhotos") &&
+    publicIntakeSrc.includes("releaseUnattachedPublicRequestPhotos") &&
+    publicIntakeSrc.includes("leftoverAssetIds") &&
+    requestPhotosSrc.includes("releaseExpiredUnattachedPublicRequestPhotos") &&
+    requestPhotosSrc.includes("stampUnattachedRequestPhotoExpiry"),
+);
 const submissionLockSrc = readRepo("src/lib/public-intake-submission.ts");
 const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
 const submissionLockIdx = submissionClaimSlice.indexOf("claimPublicIntakeSubmission");
@@ -398,6 +408,8 @@ const storageDeps = {
   provider,
   bucketName: "tbbt-request-photos",
 };
+publicIntakeStorageTestHooks.provider = provider;
+publicIntakeStorageTestHooks.bucketName = storageDeps.bucketName;
 
 try {
   console.log("\nDB — Photos, measurements, and existing request compatibility");
@@ -1382,6 +1394,78 @@ try {
     oversizedRetryError instanceof StorageError &&
       oversizedRetry?.status === "FAILED" &&
       oversizedRetry.publicPath == null,
+  );
+
+  console.log("\nDB — Abandoned and overflow request photos release quota");
+  const abandonedBefore = await accountSnapshot(business.id);
+  const abandoned = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "abandoned-never-submitted.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const abandonedAfterUpload = await accountSnapshot(business.id);
+  check(
+    "Unattached finalized request photo keeps a pending-attachment expiry",
+    abandoned.status === "READY" &&
+      abandoned.expiresAt != null &&
+      abandonedAfterUpload.used === abandonedBefore.used + pngBytes.length &&
+      abandonedAfterUpload.reserved === abandonedBefore.reserved,
+  );
+  await prisma.storedAsset.update({
+    where: { id: abandoned.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const expiredCleanup = await releaseExpiredUnattachedPublicRequestPhotos(
+    storageDeps,
+    business.id,
+  );
+  const abandonedAfter = await reloadAsset(abandoned.id);
+  const abandonedAccount = await accountSnapshot(business.id);
+  check(
+    "Expired unattached request photo is uncharged and removed from storage",
+    expiredCleanup.released >= 1 &&
+      abandonedAfter?.status === "FAILED" &&
+      abandonedAccount.used === abandonedBefore.used &&
+      abandonedAccount.reserved === abandonedBefore.reserved &&
+      !(await provider.objectExists({
+        bucket: storageDeps.bucketName,
+        key: abandoned.storageKey,
+      })),
+  );
+
+  const overflowBefore = await accountSnapshot(business.id);
+  const overflowPhotos = [];
+  for (let index = 0; index < MAX_INTAKE_PHOTOS + 2; index += 1) {
+    overflowPhotos.push(
+      await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+        originalFilename: `overflow-${index}.png`,
+        mimeType: "image/png",
+        body: pngBytes,
+      }),
+    );
+  }
+  const overflowCreated = await createRequestWithPhotoIds(
+    "Overflow Photos",
+    `overflow-${randomUUID()}@example.com`,
+    overflowPhotos.map((row) => row.id),
+  );
+  const overflowAttachedIds = new Set(
+    overflowCreated.photos.map((row) => row.storedAssetId),
+  );
+  const overflowLeftover = [];
+  for (const asset of overflowPhotos) {
+    const row = await reloadAsset(asset.id);
+    if (!overflowAttachedIds.has(asset.id)) overflowLeftover.push(row);
+  }
+  const overflowAfter = await accountSnapshot(business.id);
+  check(
+    "Submitting more than MAX_INTAKE_PHOTOS attaches the cap and releases extras",
+    overflowCreated.created.ok === true &&
+      overflowCreated.photos.length === MAX_INTAKE_PHOTOS &&
+      overflowLeftover.length === 2 &&
+      overflowLeftover.every((row) => row?.status === "FAILED") &&
+      overflowAfter.used === overflowBefore.used + MAX_INTAKE_PHOTOS * pngBytes.length &&
+      overflowAfter.reserved === overflowBefore.reserved,
   );
 
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");
