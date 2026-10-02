@@ -27,6 +27,10 @@ import {
   StorageAccessError,
   StorageError,
 } from "@/lib/business-storage/types";
+import {
+  missingProjectDocumentReviewSchema,
+  recordedProjectDocumentReviewLabel,
+} from "@/lib/project-document-review";
 
 export const PROJECT_DOCUMENT_PURPOSE = "project-portal-document";
 export const PROJECT_DOCUMENT_RECEIVED_COPY = "Received. Private to the business.";
@@ -148,11 +152,36 @@ async function lockJobForProjectDocument(
   return row;
 }
 
+async function projectDocumentIdsNeedingReplacement(
+  db: Db,
+  input: { businessId: string; jobId: string },
+) {
+  // Presence probe only. A Prisma findMany P2021 aborts an open Postgres
+  // transaction (25P02), so authorize's beforeCreate cannot recover.
+  const probe = await db.$queryRaw<Array<{ present: boolean }>>`SELECT to_regclass('"ProjectDocumentReview"') IS NOT NULL AS present`;
+  if (!probe[0]?.present) return [];
+  try {
+    const rows = await db.projectDocumentReview.findMany({
+      where: {
+        businessId: input.businessId,
+        jobId: input.jobId,
+        status: "NEEDS_REPLACEMENT",
+      },
+      select: { storedAssetId: true },
+    });
+    return rows.map((row) => row.storedAssetId);
+  } catch (error) {
+    if (missingProjectDocumentReviewSchema(error)) return [];
+    throw error;
+  }
+}
+
 export async function countActiveProjectDocuments(
   db: Db,
   input: { businessId: string; jobId: string; now?: Date },
 ) {
   const now = input.now ?? new Date();
+  const needingReplacement = await projectDocumentIdsNeedingReplacement(db, input);
   return db.storedAsset.count({
     where: {
       businessId: input.businessId,
@@ -161,6 +190,9 @@ export async function countActiveProjectDocuments(
       purpose: PROJECT_DOCUMENT_PURPOSE,
       visibility: "PRIVATE",
       deletedAt: null,
+      ...(needingReplacement.length > 0
+        ? { id: { notIn: needingReplacement } }
+        : {}),
       OR: [
         { status: "READY" },
         {
@@ -351,6 +383,13 @@ const PROJECT_DOCUMENT_SELECT = {
   businessId: true,
 } as const;
 
+export type ProjectDocumentReviewFields = {
+  reviewStatus: string | null;
+  reviewStatusLabel: string;
+  reviewReason: string | null;
+  decidedAt: Date | null;
+};
+
 export type ProjectDocumentReviewItem = {
   id: string;
   originalFilename: string;
@@ -358,15 +397,45 @@ export type ProjectDocumentReviewItem = {
   fileSizeBytes: number;
   createdAt: Date;
   reviewHref: string;
-};
+} & ProjectDocumentReviewFields;
 
-function toReviewItem(asset: {
-  id: string;
-  originalFilename: string;
-  mimeType: string;
-  fileSizeBytes: number;
-  createdAt: Date;
-}): ProjectDocumentReviewItem {
+function emptyReviewFields(): ProjectDocumentReviewFields {
+  return {
+    reviewStatus: null,
+    reviewStatusLabel: recordedProjectDocumentReviewLabel(null),
+    reviewReason: null,
+    decidedAt: null,
+  };
+}
+
+function toReviewFields(review?: {
+  status: string;
+  reason: string | null;
+  decidedAt: Date;
+} | null): ProjectDocumentReviewFields {
+  if (!review) return emptyReviewFields();
+  return {
+    reviewStatus: review.status,
+    reviewStatusLabel: recordedProjectDocumentReviewLabel(review.status),
+    reviewReason: review.reason,
+    decidedAt: review.decidedAt,
+  };
+}
+
+function toReviewItem(
+  asset: {
+    id: string;
+    originalFilename: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    createdAt: Date;
+  },
+  review?: {
+    status: string;
+    reason: string | null;
+    decidedAt: Date;
+  } | null,
+): ProjectDocumentReviewItem {
   return {
     id: asset.id,
     originalFilename: asset.originalFilename,
@@ -374,6 +443,7 @@ function toReviewItem(asset: {
     fileSizeBytes: asset.fileSizeBytes,
     createdAt: asset.createdAt,
     reviewHref: privateAssetPath(asset.id),
+    ...toReviewFields(review),
   };
 }
 
@@ -382,7 +452,43 @@ export type ProjectDocumentReceiptItem = {
   originalFilename: string;
   fileSizeBytes: number;
   createdAt: Date;
-};
+} & ProjectDocumentReviewFields;
+
+async function loadProjectDocumentReviewsByAssetId(
+  db: Db,
+  input: { businessId: string; jobId: string; storedAssetIds: string[] },
+) {
+  if (input.storedAssetIds.length === 0) {
+    return new Map<
+      string,
+      { status: string; reason: string | null; decidedAt: Date }
+    >();
+  }
+  try {
+    const rows = await db.projectDocumentReview.findMany({
+      where: {
+        businessId: input.businessId,
+        jobId: input.jobId,
+        storedAssetId: { in: input.storedAssetIds },
+      },
+      select: {
+        storedAssetId: true,
+        status: true,
+        reason: true,
+        decidedAt: true,
+      },
+    });
+    return new Map(rows.map((row) => [row.storedAssetId, row]));
+  } catch (error) {
+    if (missingProjectDocumentReviewSchema(error)) {
+      return new Map<
+        string,
+        { status: string; reason: string | null; decidedAt: Date }
+      >();
+    }
+    throw error;
+  }
+}
 
 async function listReadyPrivateProjectDocuments(
   db: Db,
@@ -415,14 +521,21 @@ export async function listProjectDocumentsForPortal(db: Db, token: string) {
     businessId: job.businessId,
     jobId: job.id,
   });
-  return rows.map(
-    (row): ProjectDocumentReceiptItem => ({
+  const reviews = await loadProjectDocumentReviewsByAssetId(db, {
+    businessId: job.businessId,
+    jobId: job.id,
+    storedAssetIds: rows.map((row) => row.id),
+  });
+  return rows.map((row): ProjectDocumentReceiptItem => {
+    const review = reviews.get(row.id);
+    return {
       id: row.id,
       originalFilename: row.originalFilename,
       fileSizeBytes: row.fileSizeBytes,
       createdAt: row.createdAt,
-    }),
-  );
+      ...toReviewFields(review),
+    };
+  });
 }
 
 /**
@@ -442,5 +555,10 @@ export async function listProjectDocumentsForOwnerReview(
     businessId: job.businessId,
     jobId: job.id,
   });
-  return rows.map(toReviewItem);
+  const reviews = await loadProjectDocumentReviewsByAssetId(db, {
+    businessId: job.businessId,
+    jobId: job.id,
+    storedAssetIds: rows.map((row) => row.id),
+  });
+  return rows.map((row) => toReviewItem(row, reviews.get(row.id)));
 }

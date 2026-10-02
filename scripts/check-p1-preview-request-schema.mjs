@@ -44,6 +44,17 @@ const {
 const { loadScheduleCalendarSubscriptionStatus } = await import(
   "@/lib/schedule-calendar-subscription"
 );
+const {
+  countActiveProjectDocuments,
+  listProjectDocumentsForOwnerReview,
+  listProjectDocumentsForPortal,
+} = await import("@/lib/business-storage/project-documents");
+const { recordProjectDocumentReview } = await import(
+  "@/lib/project-document-review-ops"
+);
+const { PROJECT_DOCUMENT_REVIEW_UNAVAILABLE_MESSAGE } = await import(
+  "@/lib/project-document-review"
+);
 const { requireWorkspace } = await import("@/lib/workspace-request");
 const {
   ensureBusinessPublicContactSchema,
@@ -281,6 +292,35 @@ check(
     missingJobReassignmentRequestSchema({ code: "P2022" }) &&
     !missingJobReassignmentRequestSchema({ code: "P2002" }) &&
     JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE.includes("not available yet"),
+);
+const projectDocumentReviewDataSrc = readRepo(
+  "src/lib/business-storage/project-documents.ts",
+);
+const projectDocumentReviewOpsSrc = readRepo(
+  "src/lib/project-document-review-ops.ts",
+);
+const projectDocumentReviewActionSrc = readRepo(
+  "src/app/actions/project-document-review.ts",
+);
+check(
+  "Project document review request paths do not ensure or CREATE ProjectDocumentReview",
+  projectDocumentReviewDataSrc.includes("missingProjectDocumentReviewSchema") &&
+    projectDocumentReviewDataSrc.includes(
+      "if (missingProjectDocumentReviewSchema(error)) return []",
+    ) &&
+    projectDocumentReviewDataSrc.includes(
+      "if (missingProjectDocumentReviewSchema(error)) {",
+    ) &&
+    projectDocumentReviewDataSrc.includes("to_regclass('\"ProjectDocumentReview\"')") &&
+    !projectDocumentReviewDataSrc.includes("$executeRaw") &&
+    !projectDocumentReviewDataSrc.includes("CREATE TABLE") &&
+    !projectDocumentReviewOpsSrc.includes("$executeRaw") &&
+    !projectDocumentReviewOpsSrc.includes("CREATE TABLE") &&
+    !projectDocumentReviewActionSrc.includes("$executeRaw") &&
+    !projectDocumentReviewActionSrc.includes("CREATE TABLE") &&
+    projectDocumentReviewOpsSrc.includes(
+      "PROJECT_DOCUMENT_REVIEW_UNAVAILABLE_MESSAGE",
+    ),
 );
 check(
   "Historical founder access-repair SQL is classified as forbidden backfill",
@@ -922,6 +962,120 @@ try {
   check(
     "Dropped ScheduleCalendarSubscription stays absent after the request-path load",
     calendarTables.length === 0,
+  );
+
+  console.log("\nDYNAMIC — missing ProjectDocumentReview degrades without DDL");
+  const reviewToken = `preview-pdoc-review-${randomUUID()}`;
+  const reviewJob = await prisma.job.create({
+    data: {
+      businessId: business.id,
+      status: "SCHEDULED",
+      projectToken: reviewToken,
+    },
+  });
+  const reviewAccess = {
+    businessId: business.id,
+    workspace: {
+      role: "OWNER",
+      membership: { id: membership.id },
+      user: { id: owner.id, email: owner.email, name: owner.name },
+      business: { id: business.id, name: business.name },
+    },
+    scope: businessScope(business.id),
+    assertOwned(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+    assertAttachable(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+  };
+  const reviewAccount = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: business.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "preview-pdoc-review",
+      namespacePrefix: `businesses/${business.id}`,
+      storageLimitBytes: 50 * 1024 * 1024,
+    },
+  });
+  const reviewAsset = await prisma.storedAsset.create({
+    data: {
+      businessId: business.id,
+      storageAccountId: reviewAccount.id,
+      jobId: reviewJob.id,
+      category: "DOCUMENT",
+      purpose: "project-portal-document",
+      originalFilename: "preview.pdf",
+      storageKey: `businesses/${business.id}/documents/preview.pdf`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 1024,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "ProjectDocumentReview" CASCADE`);
+  const reviewProbe = instrumentPrisma(prisma);
+  let portalDocs = "threw";
+  let ownerDocs = "threw";
+  let activeCount = "threw";
+  let reviewLoadError = null;
+  try {
+    portalDocs = await listProjectDocumentsForPortal(
+      reviewProbe.client,
+      reviewToken,
+    );
+    ownerDocs = await listProjectDocumentsForOwnerReview(reviewProbe.client, {
+      businessId: business.id,
+      jobId: reviewJob.id,
+    });
+    activeCount = await countActiveProjectDocuments(reviewProbe.client, {
+      businessId: business.id,
+      jobId: reviewJob.id,
+    });
+  } catch (error) {
+    reviewLoadError = error;
+  }
+  let reviewWriteError = null;
+  try {
+    await recordProjectDocumentReview(reviewProbe.client, reviewAccess, {
+      jobId: reviewJob.id,
+      storedAssetId: reviewAsset.id,
+      status: "REVIEWED",
+      expectedStatus: "",
+    });
+  } catch (error) {
+    reviewWriteError = error;
+  }
+  const reviewWrites = recordedWrites(reviewProbe.statements);
+  const reviewTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename = 'ProjectDocumentReview'
+  `;
+  check(
+    "Preview document lists and counts degrade when ProjectDocumentReview is missing",
+    Array.isArray(portalDocs) &&
+      portalDocs.length === 1 &&
+      portalDocs[0]?.reviewStatus === null &&
+      Array.isArray(ownerDocs) &&
+      ownerDocs.length === 1 &&
+      ownerDocs[0]?.reviewStatus === null &&
+      activeCount === 1 &&
+      reviewLoadError === null,
+  );
+  check(
+    "Missing ProjectDocumentReview write fails closed without DDL",
+    reviewWriteError instanceof Error &&
+      reviewWriteError.message === PROJECT_DOCUMENT_REVIEW_UNAVAILABLE_MESSAGE,
+  );
+  check(
+    "Missing ProjectDocumentReview does not run schema DDL or backfill DML",
+    reviewWrites.length === 0,
+  );
+  check(
+    "Dropped ProjectDocumentReview stays absent after the request-path load",
+    reviewTables.length === 0,
   );
 } finally {
   await session.cleanup();

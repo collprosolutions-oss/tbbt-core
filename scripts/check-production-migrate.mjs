@@ -2002,6 +2002,26 @@ check(
     !scheduleCalendarSubscriptionOps.includes("ALTER TABLE"),
 );
 
+const projectDocumentReviewMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261001200000_project_document_review/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Project document review migration is additive and does not alter StoredAsset or Job columns",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(projectDocumentReviewMigration) &&
+    projectDocumentReviewMigration.includes('CREATE TABLE IF NOT EXISTS "ProjectDocumentReview"') &&
+    !projectDocumentReviewMigration.includes('ALTER TABLE "Job"') &&
+    !projectDocumentReviewMigration.includes('ALTER TABLE "StoredAsset"') &&
+    !projectDocumentReviewMigration.includes("ADD COLUMN") &&
+    localNames.includes("20261001200000_project_document_review") &&
+    localNames.includes("20261001180000_job_aftercare_instruction") &&
+    localNames.indexOf("20261001180000_job_aftercare_instruction") <
+      localNames.indexOf("20261001200000_project_document_review"),
+);
+
 const jobMilestonesMigration = readFileSync(
   new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
   "utf8",

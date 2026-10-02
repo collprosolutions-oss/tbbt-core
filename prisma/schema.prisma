@@ -358,6 +358,9 @@ model Business {
   productGrants            BusinessProductGrant[]
   storageAccount           BusinessStorageAccount?
   storedAssets             StoredAsset[]
+  /// OWNER review decisions for private customer project documents.
+  /// Relation only — StoredAsset columns stay unchanged.
+  projectDocumentReviews   ProjectDocumentReview[]
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
   invoiceCheckoutSessions  InvoiceCheckoutSession[]
@@ -739,6 +742,7 @@ model Membership {
   updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
   recordedInvoiceCredits InvoiceCredit[] @relation("InvoiceCreditRecorder")
   scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
+  decidedProjectDocumentReviews ProjectDocumentReview[] @relation("ProjectDocumentReviewDecider")
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1681,6 +1685,9 @@ model Job {
   /// One current aftercare document per Job. Job columns stay unchanged.
   aftercareInstruction    JobAftercareInstruction?
   aftercareEvents         JobAftercareEvent[]
+  /// OWNER review decisions for this Job's private project documents.
+  /// Relation only — Job columns stay unchanged.
+  projectDocumentReviews  ProjectDocumentReview[]
   timeEntries             TimeEntry[]
   expenses                Expense[]
   payments                Payment[]
@@ -1910,11 +1917,39 @@ model StoredAsset {
   websiteGalleryItems  WebsiteGalleryItem[]
   vaultRecords         BusinessVaultRecord[]
   expenseReceipts      Expense[]
+  /// At most one OWNER review decision for a private project document.
+  projectDocumentReview ProjectDocumentReview?
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
   @@index([storageAccountId, status])
   @@index([businessId, visibility, status])
+}
+
+/// OWNER decision for one customer-uploaded private project document.
+/// Recording Reviewed or Needs replacement does not publish the file,
+/// attach it to an invoice, or send a customer message.
+model ProjectDocumentReview {
+  id                    String   @id @default(cuid())
+  businessId            String
+  jobId                 String
+  storedAssetId         String   @unique
+  /// REVIEWED | NEEDS_REPLACEMENT
+  status                String
+  /// Optional short owner reason. Shown on the customer project portal.
+  reason                String?
+  decidedByMembershipId String
+  decidedAt             DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  asset     StoredAsset @relation(fields: [storedAssetId], references: [id], onDelete: Cascade)
+  decidedBy Membership  @relation("ProjectDocumentReviewDecider", fields: [decidedByMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([businessId, jobId])
+  @@index([businessId, storedAssetId])
 }
 
 /// Per-business electronic payment destination. Stores only the
