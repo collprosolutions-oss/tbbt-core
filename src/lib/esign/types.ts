@@ -53,6 +53,7 @@ export type EsignProvider = {
   downloadSignedDocument(requestId: string): Promise<Buffer>;
   verifyCompletionEvent(input: {
     rawJson: string;
+    /** Ignored. event_hash is the documented Dropbox Sign verifier. */
     contentSha256?: string | null;
   }): VerifiedEsignCompletionEvent;
 };

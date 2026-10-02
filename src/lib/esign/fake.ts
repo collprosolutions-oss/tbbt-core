@@ -2,15 +2,12 @@
  * Local/script fake e-sign adapter. Never enabled in Vercel production.
  * Uses the official Dropbox Sign event_hash algorithm so webhook proofs
  * match current provider documentation without sending a real request.
+ * Does not verify Content-Sha256 (that header is not the documented verifier).
  */
 import { randomUUID } from "node:crypto";
 import { getFakeEsignWebhookKey } from "@/lib/esign/config";
-import {
-  dropboxSignContentSha256,
-  dropboxSignEventHash,
-  verifyDropboxSignContentSha256,
-  verifyDropboxSignEventHash,
-} from "@/lib/esign/hmac";
+import { dropboxSignEventHash, verifyDropboxSignEventHash } from "@/lib/esign/hmac";
+import { renderEsignAgreementPdf } from "@/lib/esign/signed-pdf";
 import {
   ESIGN_METADATA_KEYS,
   EsignProviderError,
@@ -45,22 +42,14 @@ function metadataFromRecord(value: unknown): EsignRequestMetadata | null {
   return { businessId, agreementId, versionId, attemptKey, actorMembershipId };
 }
 
-export function buildFakeSignedPdf(input: {
+export async function buildFakeSignedPdf(input: {
+  title?: string;
   businessId: string;
   agreementId: string;
   versionId: string;
   draftContent: string;
 }) {
-  return Buffer.from(
-    [
-      "%PDF-1.4",
-      "fake-esign-signed-document",
-      `businessId=${input.businessId}`,
-      `agreementId=${input.agreementId}`,
-      `versionId=${input.versionId}`,
-      input.draftContent,
-    ].join("\n"),
-  );
+  return renderEsignAgreementPdf(input);
 }
 
 export class FakeEsignProvider implements EsignProvider {
@@ -68,15 +57,21 @@ export class FakeEsignProvider implements EsignProvider {
   private readonly requests = new Map<string, FakeRequest>();
   private failNextCreate = false;
   private processedEventIds = new Set<string>();
+  private createCalls = 0;
 
   reset() {
     this.requests.clear();
     this.failNextCreate = false;
     this.processedEventIds.clear();
+    this.createCalls = 0;
   }
 
   failNextSignatureRequest() {
     this.failNextCreate = true;
+  }
+
+  createdRequestCount() {
+    return this.createCalls;
   }
 
   rememberProcessedEvent(eventId: string) {
@@ -98,11 +93,12 @@ export class FakeEsignProvider implements EsignProvider {
       this.failNextCreate = false;
       throw new EsignProviderError("Fake e-sign provider failed to create the signature request.");
     }
+    this.createCalls += 1;
     const requestId = `fake_sr_${randomUUID().replaceAll("-", "")}`;
     this.requests.set(requestId, {
       requestId,
       input: { ...input },
-      signedPdf: buildFakeSignedPdf(input),
+      signedPdf: await buildFakeSignedPdf(input),
     });
     return { requestId, signingUrl: `https://esign.test/sign/${requestId}` };
   }
@@ -140,14 +136,7 @@ export class FakeEsignProvider implements EsignProvider {
     const eventTime = typeof parsed.event?.event_time === "string" ? parsed.event.event_time : "";
     const eventType = typeof parsed.event?.event_type === "string" ? parsed.event.event_type : "";
     const eventHash = typeof parsed.event?.event_hash === "string" ? parsed.event.event_hash : "";
-    if (
-      !verifyDropboxSignEventHash({ apiKey, eventTime, eventType, eventHash }) ||
-      !verifyDropboxSignContentSha256({
-        apiKey,
-        rawJson: input.rawJson,
-        header: input.contentSha256,
-      })
-    ) {
+    if (!verifyDropboxSignEventHash({ apiKey, eventTime, eventType, eventHash })) {
       throw new EsignProviderError("Invalid e-sign webhook signature.");
     }
     const requestId =
@@ -157,16 +146,6 @@ export class FakeEsignProvider implements EsignProvider {
     const metadata = metadataFromRecord(parsed.signature_request?.metadata);
     if (!requestId || !metadata) {
       throw new EsignProviderError("E-sign webhook is missing the bound request metadata.");
-    }
-    const stored = this.requests.get(requestId);
-    if (stored) {
-      if (
-        stored.input.businessId !== metadata.businessId ||
-        stored.input.agreementId !== metadata.agreementId ||
-        stored.input.versionId !== metadata.versionId
-      ) {
-        throw new EsignProviderError("E-sign webhook metadata does not match the stored request.");
-      }
     }
     const eventId =
       typeof parsed.event?.event_id === "string" && parsed.event.event_id
@@ -232,7 +211,6 @@ export class FakeEsignProvider implements EsignProvider {
     return {
       rawJson,
       payload,
-      contentSha256: dropboxSignContentSha256(apiKey, rawJson),
       eventId: payload.event.event_id,
     };
   }

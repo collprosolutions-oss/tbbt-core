@@ -33,6 +33,8 @@ const { resetEsignProviderCache, getFakeEsignProvider } = await import("@/lib/es
 const { dispatchEsignWebhook, ESIGN_WEBHOOK_HELLO } = await import("@/lib/esign/dispatch");
 const { ESIGN_WEBHOOK_PATH, isEsignWebhookPath } = await import("@/lib/esign/webhook-path");
 const { DROPBOX_SIGN_API_ORIGIN, DROPBOX_SIGN_SEND_PATH } = await import("@/lib/esign/dropbox-sign");
+const { FAKE_ESIGN_DOWNLOADABLE_EVENT, FAKE_ESIGN_SIGNED_EVENT } = await import("@/lib/esign/fake");
+const { esignPdfLooksValid } = await import("@/lib/esign/signed-pdf");
 const { MemoryStorageProvider } = await import("@/lib/business-storage/memory-provider");
 const { ensureBusinessStorageAccount } = await import("@/lib/business-storage/service");
 const {
@@ -148,7 +150,38 @@ const proxySrc = readRepo("src/proxy.ts");
 const opsSrc = readRepo("src/lib/business-protection-ops.ts");
 const workspaceSrc = readRepo("src/components/business-protection/workspace.tsx");
 check("Official event_hash is HMAC-SHA256(api_key, event_time + event_type)", hmacSrc.includes('createHmac("sha256", apiKey)') && hmacSrc.includes("eventTime}${eventType}"));
+check(
+  "Content-Sha256 is not verified (event_hash is the documented verifier)",
+  !hmacSrc.includes("dropboxSignContentSha256") &&
+    !hmacSrc.includes('digest("base64")') &&
+    !fakeSrc.includes("dropboxSignContentSha256") &&
+    !dropboxSrc.includes("verifyDropboxSignContentSha256") &&
+    hmacSrc.includes("event_hash is the documented verifier"),
+);
+check("Live adapter renders a valid PDF, not a %PDF-1.4 text stub", dropboxSrc.includes("renderEsignAgreementPdf") && !dropboxSrc.includes('"%PDF-1.4"'));
 check("Live adapter uses official send and files paths", dropboxSrc.includes(DROPBOX_SIGN_API_ORIGIN) && dropboxSrc.includes(DROPBOX_SIGN_SEND_PATH) && dropboxSrc.includes("/v3/signature_request/files"));
+const sendFn = opsSrc.slice(
+  opsSrc.indexOf("export async function sendAgreementForEsign"),
+  opsSrc.indexOf("export async function completeAgreementFromEsignWebhook"),
+);
+check(
+  "OWNER Send claims SENDING before createSignatureRequest",
+  sendFn.includes('signingMode: ESIGN_SENDING_MODE') &&
+    sendFn.indexOf("ESIGN_SENDING_MODE") < sendFn.indexOf("createSignatureRequest") &&
+    sendFn.includes("releaseClaim"),
+);
+check(
+  "Webhook completion requires the stored signature_request_id",
+  opsSrc.includes("boundEsignRequestId") &&
+    opsSrc.includes("esignSignatureRequestId") &&
+    opsSrc.includes("was not sent through the connected e-sign adapter for this request"),
+);
+check(
+  "Authenticated terminal webhook outcomes return Hello API Event Received",
+  readRepo("src/lib/esign/dispatch.ts").includes('return authenticated("already_complete")') &&
+    readRepo("src/lib/esign/dispatch.ts").includes('return authenticated("request_mismatch")') &&
+    readRepo("src/lib/esign/dispatch.ts").includes("status: 200, hello: true"),
+);
 check("Webhook route returns the official Hello API Event Received body", routeSrc.includes(ESIGN_WEBHOOK_HELLO));
 check("Webhook path is exact", isEsignWebhookPath("/api/esign/webhook") && ESIGN_WEBHOOK_PATH === "/api/esign/webhook" && !isEsignWebhookPath("/api/esign/webhook/extra"));
 check("Auth proxy allows the e-sign webhook without a session", proxySrc.includes("isEsignWebhookPath") && proxySrc.includes("api/esign/webhook"));
@@ -303,6 +336,17 @@ try {
   });
   check("OWNER Send locks the exact version", sent.version.representationStatus === "SENT" && Boolean(sent.version.lockedAt));
   check("OWNER Send records PROVIDER_READY without completing", sent.agreement.lifecycleStatus === "SENT" && sent.agreement.signingMode === "PROVIDER_READY" && !sent.agreement.signedVersionId);
+  const persistedSend = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: failure.id },
+    include: { versions: true },
+  });
+  const persistedVersion = persistedSend.versions.find((row) => row.id === sent.version.id);
+  check(
+    "OWNER Send persists signature_request_id on the business, agreement, and version",
+    Boolean(sent.requestId) &&
+      persistedSend.esignSignatureRequestId === sent.requestId &&
+      persistedVersion?.esignSignatureRequestId === sent.requestId,
+  );
   const lockedText = sent.version.draftContent;
 
   await saveAgreementDraftContent(prisma, ownerA, {
@@ -321,10 +365,9 @@ try {
   const forged = fake.buildSignedWebhookPayload({ requestId: sent.requestId, forged: true });
   const forgedResult = await dispatchEsignWebhook(prisma, {
     rawJson: forged.rawJson,
-    contentSha256: forged.contentSha256,
     storage,
   });
-  check("Forged webhook is rejected", forgedResult.reason === "invalid_signature" && forgedResult.status === 400 && forgedResult.applied === false);
+  check("Forged webhook is rejected", forgedResult.reason === "invalid_signature" && forgedResult.status === 400 && forgedResult.applied === false && forgedResult.hello === false);
   const afterForged = await prisma.businessAgreement.findUniqueOrThrow({ where: { id: failure.id } });
   check(
     "Forged webhook does not complete the agreement",
@@ -345,12 +388,13 @@ try {
   });
   const tenantResult = await dispatchEsignWebhook(prisma, {
     rawJson: tenantSwap.rawJson,
-    contentSha256: tenantSwap.contentSha256,
     storage,
   });
   check(
-    "Cross-tenant webhook metadata is refused",
+    "Cross-tenant webhook metadata is refused with 200 Hello",
     tenantResult.applied === false &&
+      tenantResult.status === 200 &&
+      tenantResult.hello === true &&
       (tenantResult.reason === "tenant_mismatch" || tenantResult.reason === "invalid_payload"),
   );
 
@@ -373,19 +417,28 @@ try {
   });
   const stolenResult = await dispatchEsignWebhook(prisma, {
     rawJson: stolen.rawJson,
-    contentSha256: stolen.contentSha256,
     storage,
   });
+  const afterStolen = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: failure.id },
+  });
   check(
-    "Webhook cannot bind another tenant's request onto this agreement",
+    "Swap of tenant B request id onto tenant A metadata is refused under one valid event_hash",
     stolenResult.applied === false &&
-      (stolenResult.reason === "tenant_mismatch" || stolenResult.reason === "request_mismatch" || stolenResult.reason === "invalid_payload"),
+      stolenResult.reason === "request_mismatch" &&
+      stolenResult.status === 200 &&
+      stolenResult.hello === true,
+  );
+  check(
+    "Swapped request id does not complete agreement A",
+    afterStolen.lifecycleStatus === "SENT" &&
+      !afterStolen.signedVersionId &&
+      afterStolen.esignSignatureRequestId === sent.requestId,
   );
 
   const good = fake.buildSignedWebhookPayload({ requestId: sent.requestId });
   const applied = await dispatchEsignWebhook(prisma, {
     rawJson: good.rawJson,
-    contentSha256: good.contentSha256,
     storage,
   });
   check("Verified webhook completes the sent version", applied.applied === true && applied.hello === true && applied.status === 200);
@@ -403,13 +456,13 @@ try {
     : null;
   check("Stored asset stays private to this business", stored?.businessId === businessA.id && stored?.visibility === "PRIVATE");
   check("Fake signed PDF still contains the sent version id", signedPdf.includes(sent.version.id) && signedPdf.includes(lockedText));
+  check("Provider signed PDF is a valid PDF with xref and trailer", esignPdfLooksValid(signedPdf));
 
   const replay = await dispatchEsignWebhook(prisma, {
     rawJson: good.rawJson,
-    contentSha256: good.contentSha256,
     storage,
   });
-  check("Replay webhook is idempotent", replay.reason === "already_applied" && replay.status === 200 && replay.applied === false);
+  check("Replay webhook is idempotent", replay.reason === "already_applied" && replay.status === 200 && replay.applied === false && replay.hello === true);
   const afterReplay = await prisma.businessAgreementCompletionClaim.findMany({
     where: { agreementId: failure.id },
   });
@@ -469,12 +522,10 @@ try {
   const [first, second] = await Promise.all([
     dispatchEsignWebhook(prisma, {
       rawJson: concurrentPayload.rawJson,
-      contentSha256: concurrentPayload.contentSha256,
       storage,
     }),
     dispatchEsignWebhook(prisma, {
       rawJson: concurrentPayload.rawJson,
-      contentSha256: concurrentPayload.contentSha256,
       storage,
     }),
   ]);
@@ -503,7 +554,6 @@ try {
   const [webhookWin, manualWin] = await Promise.allSettled([
     dispatchEsignWebhook(prisma, {
       rawJson: racePayload.rawJson,
-      contentSha256: racePayload.contentSha256,
       storage,
     }),
     completeAgreementExternally(prisma, ownerA, {
@@ -525,6 +575,106 @@ try {
     webhookWin.status === "fulfilled" || manualWin.status === "fulfilled",
   );
 
+  const quota = await readyNda(prisma, ownerA, "Quota replay NDA");
+  const quotaSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: quota.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  const quotaPdf = fake.getRequest(quotaSend.requestId)?.signedPdf ?? Buffer.from("");
+  const readyBefore = await prisma.storedAsset.count({
+    where: { businessId: businessA.id, status: "READY", purpose: "BUSINESS_VAULT" },
+  });
+  const accountBefore = await prisma.businessStorageAccount.findFirstOrThrow({
+    where: { businessId: businessA.id },
+  });
+  const allSigned = fake.buildSignedWebhookPayload({
+    requestId: quotaSend.requestId,
+    eventType: FAKE_ESIGN_SIGNED_EVENT,
+    eventId: `quota-all-signed-${quotaSend.requestId}`,
+  });
+  const downloadable = fake.buildSignedWebhookPayload({
+    requestId: quotaSend.requestId,
+    eventType: FAKE_ESIGN_DOWNLOADABLE_EVENT,
+    eventId: `quota-downloadable-${quotaSend.requestId}`,
+  });
+  const quotaFirst = await dispatchEsignWebhook(prisma, { rawJson: allSigned.rawJson, storage });
+  const quotaSecond = await dispatchEsignWebhook(prisma, { rawJson: downloadable.rawJson, storage });
+  const quotaReplay = await dispatchEsignWebhook(prisma, { rawJson: downloadable.rawJson, storage });
+  const readyAfter = await prisma.storedAsset.count({
+    where: { businessId: businessA.id, status: "READY", purpose: "BUSINESS_VAULT" },
+  });
+  const accountAfter = await prisma.businessStorageAccount.findFirstOrThrow({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "all_signed + downloadable + replay apply once",
+    quotaFirst.applied === true &&
+      quotaSecond.reason === "already_applied" &&
+      quotaReplay.reason === "already_applied" &&
+      quotaSecond.status === 200 &&
+      quotaReplay.hello === true,
+  );
+  check("Replay and event pair do not create extra READY assets", readyAfter === readyBefore + 1);
+  check(
+    "storageUsedBytes grows by exactly one signed PDF",
+    accountAfter.storageUsedBytes === accountBefore.storageUsedBytes + quotaPdf.byteLength,
+  );
+
+  const raceSendReady = await readyNda(prisma, ownerA, "Concurrent OWNER Send NDA");
+  const sharedSendKey = randomUUID();
+  const createsBefore = fake.createdRequestCount();
+  const leftClient = new PrismaClient({ datasourceUrl: testUrl });
+  const rightClient = new PrismaClient({ datasourceUrl: testUrl });
+  try {
+    const [leftSend, rightSend] = await Promise.all([
+      sendAgreementForEsign(leftClient, ownerA, {
+        agreementId: raceSendReady.id,
+        signerName: "Pat Counterparty",
+        signerEmail: "pat@example.com",
+        sendAttemptKey: sharedSendKey,
+      }),
+      sendAgreementForEsign(rightClient, ownerA, {
+        agreementId: raceSendReady.id,
+        signerName: "Pat Counterparty",
+        signerEmail: "pat@example.com",
+        sendAttemptKey: sharedSendKey,
+      }),
+    ]);
+    const afterConcurrentSend = await prisma.businessAgreement.findUniqueOrThrow({
+      where: { id: raceSendReady.id },
+      include: { versions: true },
+    });
+    check(
+      "Two concurrent OWNER Sends create exactly one provider request",
+      fake.createdRequestCount() === createsBefore + 1 &&
+        Boolean(afterConcurrentSend.esignSignatureRequestId) &&
+        afterConcurrentSend.versions.filter((row) => row.esignSignatureRequestId).length === 1,
+    );
+    const returnedIds = [leftSend.requestId, rightSend.requestId].filter(Boolean);
+    check(
+      "Concurrent sends share at most the one stored request id",
+      returnedIds.every((id) => id === afterConcurrentSend.esignSignatureRequestId),
+    );
+  } finally {
+    await leftClient.$disconnect();
+    await rightClient.$disconnect();
+  }
+
+  const readyVaultAssets = await prisma.storedAsset.findMany({
+    where: { businessId: businessA.id, status: "READY", purpose: "BUSINESS_VAULT" },
+  });
+  const vaultRows = await prisma.businessVaultRecord.findMany({
+    where: { businessId: businessA.id },
+    select: { storedAssetId: true },
+  });
+  const referenced = new Set(vaultRows.map((row) => row.storedAssetId).filter(Boolean));
+  check(
+    "No orphan READY vault assets remain after replay or lost races",
+    readyVaultAssets.every((row) => referenced.has(row.id)),
+  );
+
   await expectError("Foreign owner cannot send this tenant's agreement", () => {
     return sendAgreementForEsign(prisma, ownerB, {
       agreementId: failure.id,
@@ -534,7 +684,7 @@ try {
     });
   }, (error) => error instanceof Error);
 
-  check("No real Dropbox Sign request id was created", ![sent.requestId, concurrentSend.requestId, otherSend.requestId].some((id) => !String(id).startsWith("fake_sr_")));
+  check("No real Dropbox Sign request id was created", ![sent.requestId, concurrentSend.requestId, otherSend.requestId, quotaSend.requestId].some((id) => !String(id).startsWith("fake_sr_")));
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

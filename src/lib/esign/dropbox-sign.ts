@@ -9,16 +9,12 @@
  * DROPBOX_SIGN_API_KEY or call createSignatureRequest here.
  */
 import { getDropboxSignApiKey, getDropboxSignClientId } from "@/lib/esign/config";
-import {
-  verifyDropboxSignContentSha256,
-  verifyDropboxSignEventHash,
-} from "@/lib/esign/hmac";
+import { verifyDropboxSignEventHash } from "@/lib/esign/hmac";
+import { renderEsignAgreementPdf } from "@/lib/esign/signed-pdf";
 import {
   EsignProviderError,
-  type CreateEsignSignatureRequestInput,
   type EsignProvider,
   type EsignRequestMetadata,
-  type EsignSignatureRequestResult,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
 
@@ -49,19 +45,6 @@ function metadataFromRecord(value: unknown): EsignRequestMetadata | null {
   return { businessId, agreementId, versionId, attemptKey, actorMembershipId };
 }
 
-function draftPdf(input: CreateEsignSignatureRequestInput) {
-  return Buffer.from(
-    [
-      "%PDF-1.4",
-      input.title,
-      `businessId=${input.businessId}`,
-      `agreementId=${input.agreementId}`,
-      `versionId=${input.versionId}`,
-      input.draftContent,
-    ].join("\n"),
-  );
-}
-
 export function createDropboxSignEsignProvider(): EsignProvider {
   return {
     id: "dropbox_sign",
@@ -70,6 +53,7 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       if (!apiKey) {
         throw new EsignProviderError("Dropbox Sign is not configured.");
       }
+      const pdf = await renderEsignAgreementPdf(input);
       const form = new FormData();
       form.set("title", input.title);
       form.set("subject", input.title);
@@ -86,7 +70,7 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       form.set("metadata[actorMembershipId]", input.actorMembershipId);
       form.set(
         "files[0]",
-        new Blob([new Uint8Array(draftPdf(input))], { type: "application/pdf" }),
+        new Blob([new Uint8Array(pdf)], { type: "application/pdf" }),
         `${input.agreementId}-v${input.versionNumber}.pdf`,
       );
       if (process.env.VERCEL_ENV !== "production") {
@@ -167,14 +151,7 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       const eventTime = typeof parsed.event?.event_time === "string" ? parsed.event.event_time : "";
       const eventType = typeof parsed.event?.event_type === "string" ? parsed.event.event_type : "";
       const eventHash = typeof parsed.event?.event_hash === "string" ? parsed.event.event_hash : "";
-      if (
-        !verifyDropboxSignEventHash({ apiKey, eventTime, eventType, eventHash }) ||
-        !verifyDropboxSignContentSha256({
-          apiKey,
-          rawJson: input.rawJson,
-          header: input.contentSha256,
-        })
-      ) {
+      if (!verifyDropboxSignEventHash({ apiKey, eventTime, eventType, eventHash })) {
         throw new EsignProviderError("Invalid e-sign webhook signature.");
       }
       if (!DROPBOX_SIGN_COMPLETION_EVENTS.has(eventType)) {

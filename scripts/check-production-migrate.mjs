@@ -2002,6 +2002,24 @@ check(
     !scheduleCalendarSubscriptionOps.includes("ALTER TABLE"),
 );
 
+const esignSignatureRequestIdMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261002193000_esign_signature_request_id/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "E-sign signature_request_id migration is additive and uses the reserved timestamp",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(esignSignatureRequestIdMigration) &&
+    esignSignatureRequestIdMigration.includes('ADD COLUMN IF NOT EXISTS "esignSignatureRequestId"') &&
+    esignSignatureRequestIdMigration.includes("Reserved timestamp 20261002193000") &&
+    localNames.includes("20261002193000_esign_signature_request_id") &&
+    localNames.includes("20261002050000_job_project_link") &&
+    localNames.indexOf("20261002050000_job_project_link") <
+      localNames.indexOf("20261002193000_esign_signature_request_id"),
+);
+
 const projectDocumentReviewMigration = readFileSync(
   new URL(
     "../prisma/migrations/20261001200000_project_document_review/migration.sql",
