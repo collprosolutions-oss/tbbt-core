@@ -1151,16 +1151,25 @@ try {
       !sitemapA.some((url) => url.includes(hostBVerifiedName) || url.includes(businessB.slug)),
   );
 
+  const handlerSnapshotA = dupView.snapshot ?? reView.snapshot;
+  const handlerOriginA = `https://${hostAName}`;
+  const expectedHandlerPathsA = handlerSnapshotA ? publishedSitemapPaths(handlerSnapshotA) : [];
+  if (!expectedHandlerPathsA.includes("/")) {
+    expectedHandlerPathsA.unshift("/");
+  }
+  const expectedHandlerUrlsA = expectedHandlerPathsA.map((path) =>
+    absolutePublicSitemapUrl(businessA.slug, path, handlerOriginA),
+  );
   const handlerSitemapA = await buildPublicSitemap(prisma, hostAName);
   const handlerUrlsA = handlerSitemapA.map((entry) => entry.url);
   check(
     "Published-tenant sitemap handler lists only that tenant's absolute published pages",
-    handlerSitemapA.length > 0 &&
-      handlerUrlsA.every((url) => /^https:\/\//i.test(url) && url.startsWith(`https://${hostAName}`)) &&
-      handlerUrlsA.some((url) => url === `https://${hostAName}/`) &&
-      handlerUrlsA.some((url) => url.includes(`/hire/${businessA.slug}/in/reno/`)) &&
-      !handlerUrlsA.some((url) => url.includes("/in/sparks/")) &&
-      !handlerUrlsA.some((url) => url.includes(businessB.slug) || url.includes("collproreno") || url.startsWith("/")),
+    Boolean(handlerSnapshotA) &&
+      handlerUrlsA.length === expectedHandlerUrlsA.length &&
+      expectedHandlerUrlsA.every((url, index) => handlerUrlsA[index] === url) &&
+      handlerUrlsA.every((url) => /^https:\/\//i.test(url) && url.startsWith(handlerOriginA)) &&
+      handlerUrlsA.some((url) => /\/in\/[^/]+\//.test(url)) &&
+      !handlerUrlsA.some((url) => url.includes(businessB.slug) || url.includes("collproreno") || !url.includes("://")),
   );
 
   const tenantQ = await prisma.business.create({
