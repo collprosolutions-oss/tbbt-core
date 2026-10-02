@@ -11,6 +11,8 @@ import {
   materialsErrorMessage,
   recordPurchaseOperation,
   recordPurchaseOrderReceipt,
+  recordSupplierQuote,
+  selectSupplierQuoteForPurchaseList,
   updateMaterialCatalogItem,
   updatePurchaseListItem,
   updatePurchaseOrderStatus,
@@ -156,6 +158,70 @@ export async function updateCatalogItemAction(
     return { message: "Material updated. Earlier price-history rows were kept." };
   } catch (error) {
     return { error: materialsErrorMessage(error, "That material could not be updated.") };
+  }
+}
+
+export async function recordSupplierQuoteAction(
+  _prev: MaterialsActionState,
+  formData: FormData,
+): Promise<MaterialsActionState> {
+  try {
+    const operating = await requireOperatingProductAccessForForm(
+      PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+    );
+    if (!operating.ok) return { error: operating.error };
+    requireBusinessRole(operating.access, "OWNER");
+    await recordSupplierQuote(prisma, operating.access, {
+      materialId: readString(formData, "materialId"),
+      supplierId: readString(formData, "supplierId"),
+      quotedAt: readString(formData, "quotedAt"),
+      unit: readString(formData, "unit") || "ea",
+      unitPrice: readString(formData, "unitPrice"),
+      quantity: readString(formData, "quantity"),
+      deliveryCost: readString(formData, "deliveryCost") || "0",
+      availability: readString(formData, "availability") || "UNKNOWN",
+      notes: readString(formData, "notes"),
+    });
+    revalidateMaterials([]);
+    return {
+      message:
+        "Supplier quote recorded. Earlier quotes were kept. No retailer was scraped and no order was placed.",
+    };
+  } catch (error) {
+    return { error: materialsErrorMessage(error, "That supplier quote could not be recorded.") };
+  }
+}
+
+export async function selectSupplierQuoteForPurchaseListAction(
+  _prev: MaterialsActionState,
+  formData: FormData,
+): Promise<MaterialsActionState> {
+  try {
+    const jobId = readString(formData, "jobId");
+    const estimateId = readString(formData, "estimateId");
+    const operating = await requireOperatingProductAccessForForm(
+      jobId ? PRODUCT_CAPABILITIES.JOBS_TASKS : PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+    );
+    if (!operating.ok) return { error: operating.error };
+    requireBusinessRole(operating.access, "OWNER");
+    await selectSupplierQuoteForPurchaseList(prisma, operating.access, {
+      purchaseListItemId: readString(formData, "purchaseListItemId"),
+      quoteId: readString(formData, "quoteId"),
+      expectedSelectedQuoteId: readString(formData, "expectedSelectedQuoteId") || null,
+      acceptStale: readChecked(formData, "acceptStale"),
+    });
+    revalidateMaterials([
+      jobId ? `/jobs/${jobId}` : "",
+      estimateId ? `/estimates/${estimateId}` : "",
+    ].filter(Boolean));
+    return {
+      message:
+        "Quote applied to the purchase list. The original quotes and any sent estimate or invoice snapshots were left unchanged. No supplier order was placed.",
+    };
+  } catch (error) {
+    return {
+      error: materialsErrorMessage(error, "That supplier quote could not be applied to the purchase list."),
+    };
   }
 }
 

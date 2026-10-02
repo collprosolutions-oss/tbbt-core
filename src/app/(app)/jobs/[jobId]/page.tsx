@@ -660,6 +660,7 @@ export default async function JobPage({
         canConvertTakeoff={Boolean(job.estimateId)}
         canRecordReceipt={access.workspace.role === "OWNER"}
         canExportSupplierHandoff={access.workspace.role === "OWNER"}
+        canSelectQuote={access.workspace.role === "OWNER"}
       />
 
       {isCompleted ? (

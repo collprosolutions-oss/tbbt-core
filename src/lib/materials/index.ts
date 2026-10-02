@@ -39,6 +39,27 @@ export {
   lockTenantOwnedPurchaseOrderItems,
 } from "@/lib/materials/po-lock";
 export {
+  lockTenantOwnedPurchaseListItem,
+  lockTenantOwnedSupplierQuotes,
+} from "@/lib/materials/quote-lock";
+export {
+  buildSupplierQuoteComparison,
+  compareSupplierQuotes,
+  listSupplierQuotes,
+  MATERIAL_SUPPLIER_QUOTE_SCHEMA_SOURCE,
+  recordSupplierQuote,
+  selectSupplierQuoteForPurchaseList,
+} from "@/lib/materials/quotes";
+export type {
+  RecordSupplierQuoteInput,
+  SelectSupplierQuoteInput,
+} from "@/lib/materials/quotes";
+export {
+  convertMaterialQuoteUnits,
+  materialUnitFactor,
+  normalizeMaterialUnit,
+} from "@/lib/materials/units";
+export {
   purchaseOrderReceiptQuantities,
   purchaseOrderStatusFromReceipts,
 } from "@/lib/materials/receipt-quantities";
@@ -67,11 +88,18 @@ export {
   PURCHASE_ORDER_STATUS_LABELS,
   SUPPLIER_ADAPTER_STATES,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  SUPPLIER_QUOTE_AVAILABILITIES,
+  SUPPLIER_QUOTE_AVAILABILITY_LABELS,
+  SUPPLIER_QUOTE_FRESHNESS,
+  SUPPLIER_QUOTE_FRESHNESS_LABELS,
   canRecordPurchaseOrderReceipt,
+  canSelectSupplierQuoteForPurchaseItem,
   canTransitionPurchaseOrder,
+  classifySupplierQuoteFreshness,
   isMaterialPriceSource,
   isPurchaseItemStatus,
   isPurchaseOrderStatus,
+  isSupplierQuoteAvailability,
   normalizeMaterialName,
   parseReceiptDeliveryQuantity,
   purchaseOrderReceiptFingerprint,
@@ -92,5 +120,8 @@ export type {
   PurchaseItemStatus,
   PurchaseOrderStatus,
   SupplierAdapterState,
+  SupplierQuoteAvailability,
+  SupplierQuoteCompareRow,
+  SupplierQuoteFreshness,
 } from "@/lib/materials/types";
 export { materialEstimateVsActual } from "@/lib/materials/variance";

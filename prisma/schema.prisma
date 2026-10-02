@@ -422,6 +422,7 @@ model Business {
   materialPurchaseOrderItems MaterialPurchaseOrderItem[]
   materialPurchaseOrderReceipts MaterialPurchaseOrderReceipt[]
   materialPurchaseOrderReceiptItems MaterialPurchaseOrderReceiptItem[]
+  materialSupplierQuotes     MaterialSupplierQuote[]
   materialOperationAttempts  MaterialOperationAttempt[]
   vaultRecords             BusinessVaultRecord[]
   agreements               BusinessAgreement[]
@@ -4590,6 +4591,7 @@ model Supplier {
   business          Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
   catalogItems      MaterialCatalogItem[]
   priceHistory      MaterialPriceHistory[]
+  quotes            MaterialSupplierQuote[]
   purchaseListItems MaterialPurchaseListItem[]
   purchaseOrders    MaterialPurchaseOrder[]
   partnerVendorOpportunities PartnerVendorOpportunity[]
@@ -4622,6 +4624,7 @@ model MaterialCatalogItem {
   business          Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   preferredSupplier Supplier?                  @relation(fields: [preferredSupplierId], references: [id], onDelete: SetNull)
   priceHistory      MaterialPriceHistory[]
+  quotes            MaterialSupplierQuote[]
   purchaseListItems MaterialPurchaseListItem[]
 
   @@index([businessId])
@@ -4658,6 +4661,39 @@ model MaterialPriceHistory {
   @@index([supplierId])
   @@index([purchaseListItemId])
   @@index([expenseId])
+}
+
+/// OWNER-recorded dated supplier quote for one catalog material.
+/// Append-only. Application code must never update or delete a row when
+/// a newer quote arrives, a purchase list selects this quote, or a
+/// catalog / SupplierPriceRecord current price changes.
+/// Separate from SupplierPriceRecord (current provider snapshot) and
+/// MaterialPriceHistory (observed / purchased prices). Never scraped,
+/// never a live retailer order, and never copied onto SENT / APPROVED
+/// estimate or invoice snapshots.
+model MaterialSupplierQuote {
+  id                String    @id @default(cuid())
+  businessId        String
+  materialId        String
+  supplierId        String
+  quotedAt          DateTime
+  unit              String
+  unitPrice         Decimal
+  quantity          Decimal
+  deliveryCost      Decimal   @default(0)
+  /// IN_STOCK | LIMITED | BACKORDER | UNAVAILABLE | UNKNOWN
+  availability      String    @default("UNKNOWN")
+  notes             String?
+  createdAt         DateTime  @default(now())
+
+  business          Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  material          MaterialCatalogItem        @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  supplier          Supplier                   @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  selectedOnItems   MaterialPurchaseListItem[]
+
+  @@index([businessId])
+  @@index([materialId, quotedAt])
+  @@index([supplierId])
 }
 
 /// Job / estimate purchasing workflow. Operational tracking only —
@@ -4727,6 +4763,9 @@ model MaterialPurchaseListItem {
   status                    String    @default("NEEDED")
   expenseId                 String?   @unique
   notes                     String?
+  /// OWNER-chosen dated quote. Planning only — never rewrites the quote
+  /// row or any estimate / invoice snapshot.
+  selectedQuoteId           String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -4737,6 +4776,7 @@ model MaterialPurchaseListItem {
   lineItem       LineItem?             @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
   expense        Expense?              @relation(fields: [expenseId], references: [id], onDelete: SetNull)
   pickupRecordedBy Membership?         @relation("PurchaseListItemPickupRecorder", fields: [pickupRecordedByMembershipId], references: [id], onDelete: SetNull)
+  selectedQuote  MaterialSupplierQuote? @relation(fields: [selectedQuoteId], references: [id], onDelete: SetNull)
   priceHistory   MaterialPriceHistory[]
   purchaseOrderItems MaterialPurchaseOrderItem[]
 
@@ -4747,6 +4787,7 @@ model MaterialPurchaseListItem {
   @@index([supplierId])
   @@index([lineItemId])
   @@index([pickupRecordedByMembershipId])
+  @@index([selectedQuoteId])
 }
 
 /// Lightweight operational Purchase Order. Not supplier EDI.

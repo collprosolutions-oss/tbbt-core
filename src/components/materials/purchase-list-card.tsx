@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
+import { SupplierQuoteCompareTable } from "@/components/materials/supplier-quote-compare";
 import {
   PURCHASE_ITEM_STATUSES,
   PURCHASE_ITEM_STATUS_LABELS,
@@ -24,6 +25,7 @@ import {
   PURCHASE_ORDER_TRANSITIONS,
   canRecordPurchaseOrderReceipt,
   isPurchaseOrderStatus,
+  type SupplierQuoteCompareRow,
 } from "@/lib/materials/types";
 
 const initial: MaterialsActionState = {};
@@ -58,7 +60,9 @@ export type PurchaseListItemView = {
   supplierId: string | null;
   supplierName: string | null;
   materialId: string | null;
+  selectedQuoteId: string | null;
   notes: string | null;
+  quotes: SupplierQuoteCompareRow[];
 };
 
 export type PurchaseOrderItemView = {
@@ -123,6 +127,7 @@ export function PurchaseListCard({
   canConvertTakeoff,
   canRecordReceipt,
   canExportSupplierHandoff,
+  canSelectQuote,
 }: {
   estimateId?: string | null;
   jobId?: string | null;
@@ -134,6 +139,7 @@ export function PurchaseListCard({
   canConvertTakeoff?: boolean;
   canRecordReceipt?: boolean;
   canExportSupplierHandoff?: boolean;
+  canSelectQuote?: boolean;
 }) {
   const [convertState, convertAction, converting] = useActionState(
     convertTakeoffToPurchaseListAction,
@@ -213,6 +219,7 @@ export function PurchaseListCard({
                 purchaseListId={purchaseListId ?? ""}
                 jobId={jobId}
                 estimateId={estimateId}
+                canSelectQuote={Boolean(canSelectQuote)}
               />
             ))}
           </div>
@@ -278,12 +285,14 @@ function PurchaseItemForm({
   purchaseListId,
   jobId,
   estimateId,
+  canSelectQuote,
 }: {
   item: PurchaseListItemView;
   suppliers: Array<{ id: string; name: string }>;
   purchaseListId: string;
   jobId?: string | null;
   estimateId?: string | null;
+  canSelectQuote: boolean;
 }) {
   const [state, action, pending] = useActionState(updatePurchaseListItemAction, initial);
   const [purchaseState, purchaseAction, recording] = useActionState(recordPurchaseAction, initial);
@@ -359,7 +368,21 @@ function PurchaseItemForm({
         {" · "}
         Expense {item.financialCost ? formatMoney(item.financialCost) : "not linked"}
         {item.expenseId ? " (no double count)" : ""}
+        {item.selectedQuoteId ? " · quote selected" : ""}
       </p>
+      {item.quotes.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-xs font-medium">Compare dated supplier quotes</p>
+          <SupplierQuoteCompareTable
+            quotes={item.quotes}
+            selectedQuoteId={item.selectedQuoteId}
+            purchaseListItemId={item.id}
+            jobId={jobId}
+            estimateId={estimateId}
+            canSelect={canSelectQuote}
+          />
+        </div>
+      ) : null}
       {item.pickupRequired ? (
         <p className="text-xs text-muted-foreground">
           Field pickup{" "}

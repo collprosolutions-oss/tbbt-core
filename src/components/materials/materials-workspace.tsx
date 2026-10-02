@@ -4,10 +4,12 @@ import { useActionState } from "react";
 import {
   createCatalogItemAction,
   createSupplierAction,
+  recordSupplierQuoteAction,
   updateCatalogItemAction,
   updateSupplierAction,
   type MaterialsActionState,
 } from "@/app/actions/materials";
+import { SupplierQuoteCompareTable } from "@/components/materials/supplier-quote-compare";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +17,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/lib/format";
 import { SUPPLIER_COMMERCE_DISCONNECTED_LIMITATION } from "@/lib/materials/adapter";
-import { SUPPLIER_INTEGRATION_LICENSING_NOTICE } from "@/lib/materials/types";
+import {
+  SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  SUPPLIER_QUOTE_AVAILABILITIES,
+  SUPPLIER_QUOTE_AVAILABILITY_LABELS,
+  type SupplierQuoteCompareRow,
+} from "@/lib/materials/types";
 
 const initial: MaterialsActionState = {};
 
@@ -54,6 +61,7 @@ export type MaterialsCatalogRow = {
     source: string;
     supplierName: string | null;
   }>;
+  quotes: SupplierQuoteCompareRow[];
 };
 
 function FormStatus({ state }: { state: MaterialsActionState }) {
@@ -252,7 +260,8 @@ export function MaterialsWorkspace({
         <CardHeader>
           <CardTitle>Material catalog</CardTitle>
           <CardDescription>
-            Last known cost is current. Price history stays append-only.
+            Last known cost is current. Price history and dated supplier quotes stay
+            append-only. Sent estimates stay frozen.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -316,45 +325,47 @@ function CatalogEditForm({
 }) {
   const [state, action, pending] = useActionState(updateCatalogItemAction, initial);
   return (
-    <form action={action} className="space-y-2 rounded-lg border p-3">
-      <FormStatus state={state} />
-      <input type="hidden" name="materialId" value={item.id} />
-      <div className="grid gap-2 sm:grid-cols-3">
-        <Input name="name" defaultValue={item.name} required />
-        <Input name="sku" defaultValue={item.sku ?? ""} placeholder="SKU" />
-        <Input name="unit" defaultValue={item.unit} />
-        <Input name="packSize" defaultValue={item.packSize ?? ""} placeholder="Pack" />
-        <Input
-          name="lastKnownCost"
-          defaultValue={item.lastKnownCost ?? ""}
-          placeholder="Last known cost"
-        />
-        <select
-          name="preferredSupplierId"
-          defaultValue={item.preferredSupplierId ?? ""}
-          className="h-8 rounded-md border bg-transparent px-2.5 text-sm"
-        >
-          <option value="">No preferred supplier</option>
-          {suppliers
-            .filter((supplier) => supplier.active)
-            .map((supplier) => (
-              <option key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </option>
-            ))}
-        </select>
-      </div>
-      <Input name="category" defaultValue={item.category ?? ""} placeholder="Category" />
-      <Input name="notes" defaultValue={item.notes ?? ""} placeholder="Notes" />
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" name="inactive" value="1" defaultChecked={!item.active} />
-          Inactive
-        </label>
-        <Button type="submit" size="sm" disabled={pending}>
-          {pending ? "Saving…" : "Update material"}
-        </Button>
-      </div>
+    <div className="space-y-2 rounded-lg border p-3">
+      <form action={action} className="space-y-2">
+        <FormStatus state={state} />
+        <input type="hidden" name="materialId" value={item.id} />
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Input name="name" defaultValue={item.name} required />
+          <Input name="sku" defaultValue={item.sku ?? ""} placeholder="SKU" />
+          <Input name="unit" defaultValue={item.unit} />
+          <Input name="packSize" defaultValue={item.packSize ?? ""} placeholder="Pack" />
+          <Input
+            name="lastKnownCost"
+            defaultValue={item.lastKnownCost ?? ""}
+            placeholder="Last known cost"
+          />
+          <select
+            name="preferredSupplierId"
+            defaultValue={item.preferredSupplierId ?? ""}
+            className="h-8 rounded-md border bg-transparent px-2.5 text-sm"
+          >
+            <option value="">No preferred supplier</option>
+            {suppliers
+              .filter((supplier) => supplier.active)
+              .map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+          </select>
+        </div>
+        <Input name="category" defaultValue={item.category ?? ""} placeholder="Category" />
+        <Input name="notes" defaultValue={item.notes ?? ""} placeholder="Notes" />
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="inactive" value="1" defaultChecked={!item.active} />
+            Inactive
+          </label>
+          <Button type="submit" size="sm" disabled={pending}>
+            {pending ? "Saving…" : "Update material"}
+          </Button>
+        </div>
+      </form>
       {item.history.length > 0 ? (
         <ul className="text-xs text-muted-foreground">
           {item.history.slice(0, 5).map((row) => (
@@ -365,6 +376,66 @@ function CatalogEditForm({
           ))}
         </ul>
       ) : null}
+      <RecordSupplierQuoteForm item={item} suppliers={suppliers} />
+      <SupplierQuoteCompareTable quotes={item.quotes} />
+    </div>
+  );
+}
+
+function RecordSupplierQuoteForm({
+  item,
+  suppliers,
+}: {
+  item: MaterialsCatalogRow;
+  suppliers: MaterialsSupplierRow[];
+}) {
+  const [state, action, pending] = useActionState(recordSupplierQuoteAction, initial);
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <form action={action} className="space-y-2 rounded-md border p-2">
+      <FormStatus state={state} />
+      <input type="hidden" name="materialId" value={item.id} />
+      <p className="text-xs text-muted-foreground">
+        Record a dated supplier quote. Earlier quotes stay as entered. TBBT does not
+        scrape retailers or place an order.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <select
+          name="supplierId"
+          required
+          defaultValue={item.preferredSupplierId ?? ""}
+          className="h-8 rounded-md border bg-transparent px-2.5 text-sm"
+        >
+          <option value="">Supplier</option>
+          {suppliers
+            .filter((supplier) => supplier.active)
+            .map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+        </select>
+        <Input name="quotedAt" type="date" defaultValue={today} required />
+        <Input name="unit" defaultValue={item.unit} placeholder="Unit" />
+        <Input name="unitPrice" placeholder="Unit price" required />
+        <Input name="quantity" placeholder="Quoted qty" required />
+        <Input name="deliveryCost" placeholder="Delivery $" defaultValue="0" />
+        <select
+          name="availability"
+          defaultValue="IN_STOCK"
+          className="h-8 rounded-md border bg-transparent px-2.5 text-sm"
+        >
+          {SUPPLIER_QUOTE_AVAILABILITIES.map((availability) => (
+            <option key={availability} value={availability}>
+              {SUPPLIER_QUOTE_AVAILABILITY_LABELS[availability]}
+            </option>
+          ))}
+        </select>
+        <Input name="notes" placeholder="Quote notes" className="sm:col-span-2" />
+      </div>
+      <Button type="submit" size="sm" variant="outline" disabled={pending}>
+        {pending ? "Recording…" : "Record quote"}
+      </Button>
     </form>
   );
 }

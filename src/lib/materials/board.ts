@@ -6,6 +6,7 @@ import { financialMaterialCost } from "@/lib/materials/expense-link";
 import { listMaterialCatalog, listSuppliers } from "@/lib/materials";
 import { listMaterialPriceHistory } from "@/lib/materials/price-history";
 import { ensurePurchaseList, loadPurchaseListBoard } from "@/lib/materials/purchase";
+import { compareSupplierQuotes } from "@/lib/materials/quotes";
 import { materialEstimateVsActual } from "@/lib/materials/variance";
 import type { MaterialsCatalogRow, MaterialsSupplierRow } from "@/components/materials/materials-workspace";
 import { purchaseOrderReceiptQuantities } from "@/lib/materials/receipt-quantities";
@@ -22,7 +23,10 @@ export async function loadMaterialsWorkspaceData(db: PrismaClient, access: Busin
   ]);
   const catalogRows: MaterialsCatalogRow[] = [];
   for (const item of catalog) {
-    const history = await listMaterialPriceHistory(db, access, item.id);
+    const [history, quotes] = await Promise.all([
+      listMaterialPriceHistory(db, access, item.id),
+      compareSupplierQuotes(db, access, { materialId: item.id, targetUnit: item.unit }),
+    ]);
     catalogRows.push({
       id: item.id,
       name: item.name,
@@ -43,6 +47,7 @@ export async function loadMaterialsWorkspaceData(db: PrismaClient, access: Busin
         source: row.source,
         supplierName: row.supplier?.name ?? null,
       })),
+      quotes,
     });
   }
   const supplierRows: MaterialsSupplierRow[] = suppliers.map((supplier) => ({
@@ -75,6 +80,18 @@ export async function loadPurchaseWorkspace(
     materialEstimateVsActual(db, access, input),
     listSuppliers(db, access, true),
   ]);
+  const quoteByMaterial = new Map<string, Awaited<ReturnType<typeof compareSupplierQuotes>>>();
+  for (const item of board?.items ?? []) {
+    if (!item.materialId || quoteByMaterial.has(item.materialId)) continue;
+    quoteByMaterial.set(
+      item.materialId,
+      await compareSupplierQuotes(db, access, {
+        materialId: item.materialId,
+        targetUnit: item.unit,
+        neededQuantity: item.quantityNeeded,
+      }),
+    );
+  }
   const items: PurchaseListItemView[] = (board?.items ?? []).map((item) => {
     const financial = financialMaterialCost(item);
     return {
@@ -103,7 +120,9 @@ export async function loadPurchaseWorkspace(
       supplierId: item.supplierId,
       supplierName: item.supplier?.name ?? null,
       materialId: item.materialId,
+      selectedQuoteId: item.selectedQuoteId,
       notes: item.notes,
+      quotes: item.materialId ? (quoteByMaterial.get(item.materialId) ?? []) : [],
     };
   });
   const orders: PurchaseOrderView[] = (board?.purchaseOrders ?? []).map((order) => ({

@@ -235,3 +235,96 @@ export type MaterialVarianceRow = {
 
 export const SUPPLIER_INTEGRATION_LICENSING_NOTICE =
   "Any production supplier/provider integration requires a signed API agreement or other licensing review. TBBT does not scrape retailers, redistributes no third-party catalog, and must not commercially reuse supplier product data without permission.";
+
+export const SUPPLIER_QUOTE_AVAILABILITIES = [
+  "IN_STOCK",
+  "LIMITED",
+  "BACKORDER",
+  "UNAVAILABLE",
+  "UNKNOWN",
+] as const;
+export type SupplierQuoteAvailability = (typeof SUPPLIER_QUOTE_AVAILABILITIES)[number];
+
+export const SUPPLIER_QUOTE_AVAILABILITY_LABELS: Record<SupplierQuoteAvailability, string> = {
+  IN_STOCK: "In stock",
+  LIMITED: "Limited",
+  BACKORDER: "Backorder",
+  UNAVAILABLE: "Unavailable",
+  UNKNOWN: "Unknown",
+};
+
+export function isSupplierQuoteAvailability(
+  value: unknown,
+): value is SupplierQuoteAvailability {
+  return (
+    typeof value === "string" &&
+    (SUPPLIER_QUOTE_AVAILABILITIES as readonly string[]).includes(value)
+  );
+}
+
+export const SUPPLIER_QUOTE_FRESHNESS = [
+  "current",
+  "recently_checked",
+  "stale",
+] as const;
+export type SupplierQuoteFreshness = (typeof SUPPLIER_QUOTE_FRESHNESS)[number];
+
+export const SUPPLIER_QUOTE_FRESHNESS_LABELS: Record<SupplierQuoteFreshness, string> = {
+  current: "Current",
+  recently_checked: "Recently quoted",
+  stale: "Stale",
+};
+
+/** 24 hours. */
+export const SUPPLIER_QUOTE_CURRENT_MS = 24 * 60 * 60 * 1000;
+/** 7 days. */
+export const SUPPLIER_QUOTE_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function classifySupplierQuoteFreshness(
+  quotedAt: Date | string | null | undefined,
+  now: Date = new Date(),
+): SupplierQuoteFreshness {
+  if (!quotedAt) return "stale";
+  const at = quotedAt instanceof Date ? quotedAt : new Date(quotedAt);
+  if (Number.isNaN(at.getTime())) return "stale";
+  const age = now.getTime() - at.getTime();
+  if (age < 0) return "current";
+  if (age <= SUPPLIER_QUOTE_CURRENT_MS) return "current";
+  if (age <= SUPPLIER_QUOTE_RECENT_MS) return "recently_checked";
+  return "stale";
+}
+
+export const PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES = [
+  "NEEDED",
+  "PLANNED",
+  "ORDERED",
+] as const;
+
+export function canSelectSupplierQuoteForPurchaseItem(status: string) {
+  return (PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES as readonly string[]).includes(status);
+}
+
+export type SupplierQuoteCompareRow = {
+  quoteId: string;
+  supplierId: string;
+  supplierName: string;
+  quotedAt: string;
+  freshness: SupplierQuoteFreshness;
+  freshnessLabel: string;
+  stale: boolean;
+  availability: SupplierQuoteAvailability;
+  availabilityLabel: string;
+  unit: string;
+  unitPrice: string;
+  quantity: string;
+  deliveryCost: string;
+  quoteLandedTotal: string;
+  comparableUnit: string | null;
+  comparableUnitPrice: string | null;
+  comparableQuantity: string | null;
+  neededQuantity: string | null;
+  neededLandedTotal: string | null;
+  conversionLabel: string | null;
+  conversionError: string | null;
+  lowestLanded: boolean;
+};

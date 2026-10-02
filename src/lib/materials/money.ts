@@ -32,6 +32,21 @@ export function decimalMoney(raw: unknown): Prisma.Decimal | null {
   return value ? value.toDecimalPlaces(2) : null;
 }
 
+export function decimalMoneyAllowZero(raw: unknown): Prisma.Decimal | null {
+  const value = parseNonNegativeDecimal(raw);
+  return value ? value.toDecimalPlaces(2) : null;
+}
+
+export function landedCost(
+  quantity: Prisma.Decimal | null | undefined,
+  unitCost: Prisma.Decimal | null | undefined,
+  deliveryCost?: Prisma.Decimal | null,
+) {
+  const material = extendedCost(quantity, unitCost);
+  if (!material) return null;
+  return material.add(deliveryCost ?? new Prisma.Decimal(0)).toDecimalPlaces(2);
+}
+
 export function decimalQuantity(raw: unknown): Prisma.Decimal | null {
   const value = parsePositiveDecimal(raw);
   return value ? value.toDecimalPlaces(4) : null;

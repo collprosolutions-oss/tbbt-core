@@ -1182,6 +1182,7 @@ export default async function EstimateBuilderPage({
         canConvertTakeoff
         canRecordReceipt={access.workspace.role === "OWNER"}
         canExportSupplierHandoff={access.workspace.role === "OWNER"}
+        canSelectQuote={access.workspace.role === "OWNER"}
       />
 
       {estimate.lineItems.length > 0 && composedTerms.length > 0 ? (
