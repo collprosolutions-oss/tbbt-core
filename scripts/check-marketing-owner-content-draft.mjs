@@ -45,6 +45,7 @@ const { MarketingError } = await import("@/lib/marketing-ops");
 const { requestOwnerMarketingContentDraft } = await import("@/lib/ai/marketing");
 const { AI_FAILURE_MESSAGE, shouldRotateAiAttemptId } = await import("@/lib/ai/types");
 const { sanitizeAiText } = await import("@/lib/ai/sanitize");
+const { AI_PENDING_STALE_MS } = await import("@/lib/ai/service");
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -193,7 +194,7 @@ function fakeSecretFailureProvider(calls) {
       return {
         ok: false,
         provider: "fake",
-        error: "upstream rejected key sk-proj-secretvalue123",
+        error: "upstream rejected key sk-proj-secretvalue123 and sk-svcacct-secondkey456",
         retryable: false,
         latencyMs: 1,
       };
@@ -234,12 +235,27 @@ try {
       ownerFnSrc.indexOf("!provider.connected") < ownerFnSrc.indexOf("reserveOwnerMarketingDraftSlot"),
   );
   check(
+    "Job and business are validated before a PENDING reservation",
+    ownerFnSrc.indexOf("assertOwned") > -1 &&
+      ownerFnSrc.indexOf("business.findFirst") > -1 &&
+      ownerFnSrc.indexOf("assertOwned") < ownerFnSrc.indexOf("reserveOwnerMarketingDraftSlot") &&
+      ownerFnSrc.indexOf("business.findFirst") < ownerFnSrc.indexOf("reserveOwnerMarketingDraftSlot"),
+  );
+  check(
+    "Stale PENDING falls through to claim recovery",
+    ownerFnSrc.includes("isFreshOwnerDraftPending") &&
+      marketingAiSrc.includes("AI_PENDING_STALE_MS") &&
+      marketingAiSrc.includes("claimedAt"),
+  );
+  check(
     "Fact fields are marked untrusted for the model",
     ownerFnSrc.includes("untrusted data") && ownerFnSrc.includes("owner note"),
   );
   check(
-    "sk-proj- keys are redacted from stored failure reasons",
-    sanitizeSrc.includes("sk-proj-") &&
+    "sk- keys and the configured API key are redacted from stored failure reasons",
+    sanitizeSrc.includes("sk-[A-Za-z0-9_-]+") &&
+      /SECRET_VALUE_PATTERN[\s\S]*?\/gi/.test(sanitizeSrc) &&
+      sanitizeSrc.includes("readAiApiKey") &&
       serviceSrc.includes("failureReason: sanitizeAiText(completed.error, 400)"),
   );
   check(
@@ -475,7 +491,34 @@ try {
     (error) => error instanceof Error,
   );
   const betaAfterIsolation = await prisma.marketingContent.count({ where: { businessId: businessB.id } });
+  const betaAfterIsolationInteractions = await prisma.aiInteraction.count({
+    where: { businessId: businessB.id },
+  });
   check("Tenant B has no content after using A's job id", betaAfterIsolation === 0);
+  check("Tenant B has no interaction after using A's job id", betaAfterIsolationInteractions === 0);
+
+  const beforeForeignJobInteractions = await prisma.aiInteraction.count({
+    where: { businessId: businessA.id },
+  });
+  const foreignJobCalls = [];
+  await expectError(
+    "OWNER A cannot draft from tenant B's job",
+    () =>
+      requestOwnerMarketingContentDraft(prisma, ownerA, {
+        attemptId: randomUUID(),
+        jobId: betaJob.id,
+        provider: fakeSucceedingProvider(foreignJobCalls, "Should not be stored."),
+        budget: { burstLimit: 1000 },
+      }),
+    (error) => error instanceof Error,
+  );
+  const afterForeignJobInteractions = await prisma.aiInteraction.count({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Rejected foreign jobId leaves no interaction row and uses no slot",
+    afterForeignJobInteractions === beforeForeignJobInteractions && foreignJobCalls.length === 0,
+  );
 
   const successCalls = [];
   const draftText = "Reno faucet repair update from recorded work. Review this draft.";
@@ -554,8 +597,24 @@ try {
       secretCalls.length === 1 &&
       typeof secretRow?.failureReason === "string" &&
       !secretRow.failureReason.includes("sk-proj-secretvalue123") &&
+      !secretRow.failureReason.includes("sk-svcacct-secondkey456") &&
       secretRow.failureReason.includes("[redacted]") &&
       sanitizeAiText("sk-proj-secretvalue123").includes("[redacted]"),
+  );
+
+  const previousConfiguredKey = process.env.TBBT_AI_API_KEY;
+  process.env.TBBT_AI_API_KEY = "literal-configured-key-value-xyz";
+  const twoKeyText = sanitizeAiText(
+    "leaked sk-proj-firstkeyAAA and sk-abc-secondkeyBBB plus literal-configured-key-value-xyz",
+  );
+  if (previousConfiguredKey == null) delete process.env.TBBT_AI_API_KEY;
+  else process.env.TBBT_AI_API_KEY = previousConfiguredKey;
+  check(
+    "Two sk- keys and the configured API key are redacted",
+    twoKeyText.includes("[redacted]") &&
+      !twoKeyText.includes("sk-proj-firstkeyAAA") &&
+      !twoKeyText.includes("sk-abc-secondkeyBBB") &&
+      !twoKeyText.includes("literal-configured-key-value-xyz"),
   );
 
   console.log("\nTEST — Cost bound refuses another provider call");
@@ -678,6 +737,90 @@ try {
     burstCalls.length <= MARKETING_OWNER_DRAFT_BURST_LIMIT &&
       burstResults.filter((row) => row.status === "COMPLETED").length <= MARKETING_OWNER_DRAFT_BURST_LIMIT &&
       burstResults.some((row) => row.status === "UNAVAILABLE" && row.message === MARKETING_OWNER_DRAFT_BURST_BOUNDED_MESSAGE),
+  );
+
+  console.log("\nTEST — Stale PENDING recovery and fresh PENDING replay");
+  const recoverOwner = await prisma.user.create({
+    data: { name: "Recover Owner", email: `recover-draft-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const recoverBusiness = await prisma.business.create({
+    data: {
+      name: "Recover Drafts",
+      slug: `recover-draft-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const recoverMem = await prisma.membership.create({
+    data: { userId: recoverOwner.id, businessId: recoverBusiness.id, role: "OWNER" },
+  });
+  const recoverAccess = makeAccess(recoverBusiness.id, "OWNER", recoverMem.id, recoverOwner.id);
+  const staleAttemptId = randomUUID();
+  const staleClaimedAt = new Date(Date.now() - AI_PENDING_STALE_MS - 1_000);
+  await prisma.aiInteraction.create({
+    data: {
+      businessId: recoverBusiness.id,
+      membershipId: recoverMem.id,
+      userId: recoverOwner.id,
+      taskType: "MARKETING_DRAFT",
+      status: "PENDING",
+      inputSummary: "stale owner draft",
+      idempotencyKey: `marketing:owner-content-draft:${recoverBusiness.id}:${staleAttemptId}`,
+      claimedAt: staleClaimedAt,
+      createdAt: staleClaimedAt,
+    },
+  });
+  const staleCalls = [];
+  const recovered = await requestOwnerMarketingContentDraft(prisma, recoverAccess, {
+    attemptId: staleAttemptId,
+    provider: fakeSucceedingProvider(staleCalls, "Recovered stale owner draft."),
+    budget: { burstLimit: 1000 },
+  });
+  const recoveredRow = await prisma.aiInteraction.findFirst({
+    where: {
+      businessId: recoverBusiness.id,
+      idempotencyKey: `marketing:owner-content-draft:${recoverBusiness.id}:${staleAttemptId}`,
+    },
+  });
+  check(
+    "Stale PENDING is recovered on the same attempt id",
+    recovered.status === "COMPLETED" &&
+      recovered.text === "Recovered stale owner draft." &&
+      staleCalls.length === 1 &&
+      recoveredRow?.status === "COMPLETED" &&
+      recoveredRow.id === recovered.interactionId,
+  );
+
+  const freshAttemptId = randomUUID();
+  await prisma.aiInteraction.create({
+    data: {
+      businessId: recoverBusiness.id,
+      membershipId: recoverMem.id,
+      userId: recoverOwner.id,
+      taskType: "MARKETING_DRAFT",
+      status: "PENDING",
+      inputSummary: "fresh owner draft",
+      idempotencyKey: `marketing:owner-content-draft:${recoverBusiness.id}:${freshAttemptId}`,
+      claimedAt: new Date(),
+    },
+  });
+  const freshCalls = [];
+  const freshPending = await requestOwnerMarketingContentDraft(prisma, recoverAccess, {
+    attemptId: freshAttemptId,
+    provider: fakeSucceedingProvider(freshCalls, "Should not double-call."),
+    budget: { burstLimit: 1000 },
+  });
+  const freshRow = await prisma.aiInteraction.findFirst({
+    where: {
+      businessId: recoverBusiness.id,
+      idempotencyKey: `marketing:owner-content-draft:${recoverBusiness.id}:${freshAttemptId}`,
+    },
+  });
+  check(
+    "Fresh PENDING is not double-called",
+    freshPending.status === "PENDING" &&
+      freshCalls.length === 0 &&
+      freshRow?.status === "PENDING" &&
+      freshRow.id === freshPending.interactionId,
   );
 } finally {
   if (previousAiKey == null) delete process.env.TBBT_AI_API_KEY;
