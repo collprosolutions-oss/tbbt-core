@@ -40,7 +40,9 @@ export async function GET(request: Request) {
   if (!resolved.ok) {
     return nativeJson({ error: resolved.error }, resolved.status);
   }
-  const result = await listNativePushPreference(prisma, resolved.access);
+  const url = new URL(request.url);
+  const token = url.searchParams.get("token") ?? url.searchParams.get("deviceToken");
+  const result = await listNativePushPreference(prisma, resolved.access, { token });
   if (!result.ok) {
     return nativeJson({ error: result.error }, result.status);
   }

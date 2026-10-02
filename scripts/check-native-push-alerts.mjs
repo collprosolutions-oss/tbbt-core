@@ -27,31 +27,45 @@ if (generateEarly.status !== 0) {
   process.exit(generateEarly.status ?? 1);
 }
 
+register(new URL("./estimate-options-test-loader.mjs", import.meta.url), import.meta.url);
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+process.env.TZ = process.env.TZ || "America/New_York";
+process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER =
+  process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER || "fake";
 
 const { writeAssignedMembershipAndLaneWindows } = await import("@/lib/job-assignment-ops");
 const { writeTeamMemberActive } = await import("@/lib/team-member-active-ops");
 const {
   FAKE_NATIVE_PUSH_PROVIDER,
   NATIVE_PUSH_ALERT_DISCLAIMER,
+  NATIVE_PUSH_DEVICE_NOT_OWNED,
   NATIVE_PUSH_FORBIDDEN_PAYLOAD_KEYS,
+  NATIVE_PUSH_MAX_ATTEMPTS,
   NATIVE_PUSH_MEMBERSHIP_INACTIVE,
   assignmentAlertIdempotencyKey,
   buildNativePushAlertPayload,
   createFakeNativePushProvider,
+  flushNativePushNotifies,
+  hashNativePushDeviceToken,
   isFakeNativePushAdapterEnabled,
   isHandymanJobForNativePush,
+  listNativePushPreference,
   nativePushAlertAction,
   nativePushPayloadHasForbiddenFields,
   notifyHandymanJobAssigned,
   notifyHandymanJobRescheduled,
   registerNativePushDevice,
   rescheduleAlertIdempotencyKey,
+  resetNativePushSchemaEnsure,
   retryNativePushDelivery,
   revokeNativePushDevice,
+  setNativePushPendingStaleMs,
   setNativePushProvider,
 } = await import("@/lib/native-push");
 const { isMaterialAppointmentChange } = await import("@/lib/appointment-confirmation");
+const { hashToken } = await import("@/lib/auth-crypto");
+const { revokeNativeSession } = await import("@/lib/native-session");
 
 let passed = 0;
 let failed = 0;
@@ -82,15 +96,22 @@ function fieldAccess({ userId, businessId, membershipId, role, name, email }) {
 
 const schema = readRepo("prisma/schema.prisma");
 const migration = readRepo("prisma/migrations/20261002192000_native_push_alerts/migration.sql");
+const sessionMigration = readRepo(
+  "prisma/migrations/20261002193000_native_push_device_session/migration.sql",
+);
 const configSrc = readRepo("src/lib/native-push/config.ts");
 const payloadSrc = readRepo("src/lib/native-push/payload.ts");
 const notifySrc = readRepo("src/lib/native-push/notify.ts");
+const schemaSrc = readRepo("src/lib/native-push/schema.ts");
+const devicesSrc = readRepo("src/lib/native-push/devices.ts");
 const assignSrc = readRepo("src/lib/job-assignment-ops.ts");
 const deactivateSrc = readRepo("src/lib/team-member-active-ops.ts");
 const scheduleSrc = readRepo("src/app/actions/job.ts");
 const dayRouteSrc = readRepo("src/lib/owner-day-route-appointment-ops.ts");
+const sessionSrc = readRepo("src/lib/native-session.ts");
 const nativeApi = readRepo("apps/native/src/api.ts");
 const todaySrc = readRepo("apps/native/src/screens/TodayScreen.tsx");
+const appSrc = readRepo("apps/native/App.tsx");
 const settingsSrc = readRepo("src/components/settings/settings-workspace.tsx");
 const nativePkg = readRepo("apps/native/package.json");
 const envExample = readRepo(".env.example");
@@ -108,12 +129,21 @@ check(
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migration),
 );
 check(
-  "Schema stores tokens per membership and sanitized deliveries",
+  "Schema stores tokens per membership, session, and sanitized deliveries",
   schema.includes("model NativePushDevice") &&
     schema.includes("model NativePushDelivery") &&
     schema.includes("@@unique([membershipId, tokenHash])") &&
     schema.includes("@@unique([businessId, idempotencyKey])") &&
-    schema.includes("never include a customer address or access code"),
+    schema.includes("sessionId") &&
+    schema.includes("never include a customer address or access code") &&
+    sessionMigration.includes("20261002193000") &&
+    sessionMigration.includes('ADD COLUMN IF NOT EXISTS "sessionId"') &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(sessionMigration),
+);
+check(
+  "Request-path schema helper does not ship unused ensure SQL",
+  !schemaSrc.includes("NATIVE_PUSH_ENSURE_SQL") &&
+    schemaSrc.includes("assertRequiredTablesExist"),
 );
 check(
   "Fake adapter cannot enable in Vercel production",
@@ -141,9 +171,25 @@ check(
   assignSrc.includes("notifyHandymanJobAssigned") &&
     assignSrc.includes("This path never sends a customer") &&
     scheduleSrc.includes("notifyHandymanJobRescheduled") &&
+    scheduleSrc.includes("if (rescheduled)") &&
+    scheduleSrc.includes("enqueueNativePushNotify") &&
     scheduleSrc.includes("isMaterialAppointmentChange") &&
     dayRouteSrc.includes("notifyHandymanJobRescheduled") &&
+    dayRouteSrc.includes("previousScheduledAt") &&
     deactivateSrc.includes("revokeActiveNativePushDevicesForMembership"),
+);
+check(
+  "Claim-before-send, max attempts, and per-device opt-in are wired",
+  notifySrc.includes("P2002") &&
+    notifySrc.includes('status: "FAILED"') &&
+    notifySrc.includes("attemptCount: { lt: NATIVE_PUSH_MAX_ATTEMPTS }") &&
+    notifySrc.includes('reason: "max-attempts"') &&
+    configSrc.includes("NATIVE_PUSH_MAX_ATTEMPTS = 3") &&
+    devicesSrc.includes("thisDeviceOptedIn") &&
+    todaySrc.includes("thisDeviceOptedIn") &&
+    sessionSrc.includes("nativePushDevice.updateMany") &&
+    appSrc.includes("signOutNative(session.token).catch") &&
+    NATIVE_PUSH_MAX_ATTEMPTS === 3,
 );
 check(
   "Native UI and owner settings stay informational; no Expo push SDK",
@@ -186,6 +232,7 @@ assertLocalDatabaseUrl(baseUrl, "native-push-alerts dedicated local database");
 const session = await openDisposableTestDatabase({
   databaseUrl: baseUrl,
   namePrefix: "tbbt_native_push_alerts",
+  setProcessEnv: true,
 });
 const prisma = session.prisma;
 const fake = createFakeNativePushProvider();
@@ -201,7 +248,22 @@ try {
     websiteSetupChoice: "SKIPPED",
   };
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Handyman", slug: "alpha-native-push", tradeCode: "HANDYMAN", ...completedOnboarding },
+    data: {
+      name: "Alpha Handyman",
+      slug: "alpha-native-push",
+      tradeCode: "HANDYMAN",
+      timezone: "America/New_York",
+      ...completedOnboarding,
+    },
+  });
+  await prisma.businessSettings.create({
+    data: {
+      businessId: businessA.id,
+      workingWeekdays: "1,2,3,4,5",
+      workStartMinutes: 8 * 60,
+      workEndMinutes: 17 * 60,
+      schedulingBufferMinutes: 0,
+    },
   });
   const businessB = await prisma.business.create({
     data: { name: "Beta Handyman", slug: "beta-native-push", tradeCode: "HANDYMAN", ...completedOnboarding },
@@ -215,6 +277,9 @@ try {
   const memberBUser = await prisma.user.create({
     data: { name: "Ben Worker", email: "ben@native-push.example", passwordHash: "x" },
   });
+  const adminUser = await prisma.user.create({
+    data: { name: "Ada Admin", email: "admin@native-push.example", passwordHash: "x" },
+  });
   const betaUser = await prisma.user.create({
     data: { name: "Bea Beta", email: "bea@beta-native-push.example", passwordHash: "x" },
   });
@@ -226,6 +291,9 @@ try {
   });
   const memberB = await prisma.membership.create({
     data: { userId: memberBUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const adminMembership = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
   });
   const betaMembership = await prisma.membership.create({
     data: { userId: betaUser.id, businessId: businessB.id, role: "MEMBER" },
@@ -275,7 +343,10 @@ try {
     platform: "test",
     optedIn: true,
   });
-  check("Workers can opt in and register a token on their active membership", registeredA.ok && registeredA.preference.optedIn);
+  check(
+    "Workers can opt in and register a token on their active membership",
+    registeredA.ok && registeredA.preference.optedIn && registeredA.preference.thisDeviceOptedIn,
+  );
   check("Second worker registers independently", registeredB.ok && registeredB.preference.devices.length === 1);
   check("Beta tenant registers its own token", registeredBeta.ok);
 
@@ -526,6 +597,430 @@ try {
   });
   check("Cleaning job assignment does not send a Handyman alert", fake.sent.length === 0);
 
+  const tokenA2 = `device-token-ava-second-${randomUUID()}`;
+  const secondDeviceList = await listNativePushPreference(prisma, accessA, { token: tokenA2 });
+  check(
+    "Second device GET reports thisDeviceOptedIn false while another device is opted in",
+    secondDeviceList.ok &&
+      secondDeviceList.preference.optedIn === true &&
+      secondDeviceList.preference.thisDeviceOptedIn === false,
+  );
+  const registeredA2 = await registerNativePushDevice(prisma, accessA, {
+    token: tokenA2,
+    platform: "test",
+    optedIn: true,
+  });
+  check(
+    "Second device can opt in using thisDeviceOptedIn, not membership optedIn",
+    registeredA2.ok &&
+      registeredA2.preference.thisDeviceOptedIn === true &&
+      registeredA2.preference.devices.length === 2,
+  );
+  const revokedA2 = await revokeNativePushDevice(prisma, accessA, { token: tokenA2 });
+  check(
+    "Second device revoke is scoped to that token",
+    revokedA2.ok &&
+      revokedA2.preference.thisDeviceOptedIn === false &&
+      revokedA2.preference.optedIn === true,
+  );
+
+  const sharedToken = `device-token-shared-${randomUUID()}`;
+  await registerNativePushDevice(prisma, accessA, {
+    token: sharedToken,
+    platform: "test",
+    optedIn: true,
+  });
+  const sharedOnB = await registerNativePushDevice(prisma, accessB, {
+    token: sharedToken,
+    platform: "test",
+    optedIn: true,
+  });
+  const sharedHash = hashNativePushDeviceToken(sharedToken);
+  const sharedARow = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: sharedHash },
+  });
+  const sharedBRow = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberB.id, tokenHash: sharedHash },
+  });
+  check(
+    "Registering a token on another membership revokes the previous active row",
+    sharedOnB.ok &&
+      sharedARow?.revokedAt != null &&
+      sharedBRow?.revokedAt == null &&
+      sharedBRow?.optedIn === true,
+  );
+  await revokeNativePushDevice(prisma, accessB, { token: sharedToken });
+
+  const crossRevoke = await revokeNativePushDevice(prisma, accessB, { token: tokenA });
+  const stillA = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+  });
+  check(
+    "Cross-worker revoke is refused and leaves the other worker's token",
+    crossRevoke.ok === false &&
+      crossRevoke.status === 403 &&
+      crossRevoke.error === NATIVE_PUSH_DEVICE_NOT_OWNED &&
+      stillA?.revokedAt == null &&
+      stillA?.optedIn === true,
+  );
+
+  const sessionRaw = `native-session-${randomUUID()}`;
+  const sessionRow = await prisma.session.create({
+    data: {
+      tokenHash: hashToken(sessionRaw),
+      userId: memberAUser.id,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  const sessionToken = `device-token-session-${randomUUID()}`;
+  const sessionAccess = { ...accessA, sessionId: sessionRow.id };
+  await registerNativePushDevice(prisma, sessionAccess, {
+    token: sessionToken,
+    platform: "test",
+    optedIn: true,
+  });
+  const revokedSession = await revokeNativeSession(prisma, sessionRaw);
+  const sessionDevice = await prisma.nativePushDevice.findFirst({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(sessionToken),
+    },
+  });
+  check(
+    "Session revoke clears the device stored on that session",
+    revokedSession === true && sessionDevice?.revokedAt != null && sessionDevice?.optedIn === false,
+  );
+
+  const selfAssignJob = await createHandymanJob("self-assign");
+  fake.sent.length = 0;
+  const selfAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: selfAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: memberA.id,
+  });
+  check("MEMBER self-assign write still commits", !selfAssigned?.error);
+  check("MEMBER self-assign sends 0 alerts", fake.sent.length === 0);
+  const memberNotify = await notifyHandymanJobAssigned(prisma, {
+    businessId: businessA.id,
+    jobId: selfAssignJob.id,
+    previousMembershipId: null,
+    nextMembershipId: memberA.id,
+    actorMembershipId: memberA.id,
+  });
+  check(
+    "OWNER/ADMIN actor check suppresses MEMBER notify",
+    memberNotify.status === "SUPPRESSED" &&
+      memberNotify.reason === "not-owner-side" &&
+      fake.sent.length === 0,
+  );
+
+  const adminJob = await createHandymanJob("admin-assign");
+  fake.sent.length = 0;
+  const adminAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: adminJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: adminMembership.id,
+  });
+  check("ADMIN assignment write succeeds", !adminAssigned?.error);
+  check("ADMIN actor check allows an assignment alert", fake.sent.length === 1);
+
+  fake.sent.length = 0;
+  const unchanged = await notifyHandymanJobAssigned(prisma, {
+    businessId: businessA.id,
+    jobId: adminJob.id,
+    previousMembershipId: memberA.id,
+    nextMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  check(
+    "previous-vs-next assignment check suppresses an unchanged assignee",
+    unchanged.status === "SUPPRESSED" &&
+      unchanged.reason === "unchanged-assignment" &&
+      fake.sent.length === 0,
+  );
+
+  fake.sent.length = 0;
+  const mismatch = await notifyHandymanJobAssigned(prisma, {
+    businessId: businessA.id,
+    jobId: adminJob.id,
+    previousMembershipId: null,
+    nextMembershipId: memberB.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  check(
+    "assignedMembershipId check suppresses a notify for the wrong worker",
+    mismatch.status === "SUPPRESSED" &&
+      mismatch.reason === "job-unavailable" &&
+      fake.sent.length === 0,
+  );
+
+  const optedOutOnlyJob = await createHandymanJob("opted-out-only");
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: false, revokedAt: null },
+  });
+  fake.sent.length = 0;
+  await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: optedOutOnlyJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  check("optedIn filter alone suppresses a send when revokedAt is null", fake.sent.length === 0);
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: true, revokedAt: null },
+  });
+
+  const revokedOnlyJob = await createHandymanJob("revoked-only");
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: true, revokedAt: new Date() },
+  });
+  fake.sent.length = 0;
+  await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: revokedOnlyJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  check("revokedAt filter alone suppresses a send when optedIn is still true", fake.sent.length === 0);
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: true, revokedAt: null },
+  });
+
+  const partialJob = await createHandymanJob("partial-success");
+  const extraDeviceToken = `device-token-ava-partial-${randomUUID()}`;
+  await registerNativePushDevice(prisma, accessA, {
+    token: extraDeviceToken,
+    platform: "test",
+    optedIn: true,
+  });
+  fake.sent.length = 0;
+  fake.setFailNext(true);
+  const partialAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: partialJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const partialDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: partialJob.id, kind: "JOB_ASSIGNED" },
+  });
+  check("Partial multi-device success still commits the assignment", !partialAssigned?.error);
+  check(
+    "Partial multi-device success is SENT when sentCount > 0",
+    partialDelivery?.status === "SENT" && fake.sent.length === 1,
+  );
+  await revokeNativePushDevice(prisma, accessA, { token: extraDeviceToken });
+
+  const maxJob = await createHandymanJob("max-attempts");
+  fake.sent.length = 0;
+  fake.sendCalls = 0;
+  fake.setFailAlways(true);
+  await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: maxJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  let maxDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: maxJob.id, kind: "JOB_ASSIGNED" },
+  });
+  for (let i = 0; i < 25; i += 1) {
+    await retryNativePushDelivery(prisma, maxDelivery.id);
+  }
+  maxDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { id: maxDelivery.id },
+  });
+  check(
+    "NATIVE_PUSH_MAX_ATTEMPTS settles failing retries at 3 without more adapter calls",
+    maxDelivery?.attemptCount === 3 &&
+      maxDelivery?.status === "FAILED" &&
+      maxDelivery?.failureReason === "max-attempts" &&
+      fake.sendCalls === 3 &&
+      fake.sent.length === 0,
+  );
+  fake.setFailAlways(false);
+
+  const staleJob = await createHandymanJob("stale-pending");
+  await prisma.job.update({
+    where: { id: staleJob.id },
+    data: { assignedMembershipId: memberA.id },
+  });
+  const staleFresh = await prisma.job.findFirst({ where: { id: staleJob.id } });
+  const staleKey = assignmentAlertIdempotencyKey({
+    jobId: staleFresh.id,
+    nextMembershipId: memberA.id,
+    previousMembershipId: null,
+    committedAt: staleFresh.updatedAt,
+  });
+  const staleRow = await prisma.nativePushDelivery.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberA.id,
+      jobId: staleJob.id,
+      kind: "JOB_ASSIGNED",
+      idempotencyKey: staleKey,
+      status: "PENDING",
+      attemptCount: 1,
+      payloadSnapshot: buildNativePushAlertPayload({ kind: "JOB_ASSIGNED", jobId: staleJob.id }),
+      provider: FAKE_NATIVE_PUSH_PROVIDER,
+    },
+  });
+  await prisma.$executeRaw`
+    UPDATE "NativePushDelivery"
+    SET "updatedAt" = NOW() - INTERVAL '2 minutes'
+    WHERE id = ${staleRow.id}
+  `;
+  setNativePushPendingStaleMs(1_000);
+  fake.sent.length = 0;
+  const staleClients = [prisma, session.createClient()];
+  const staleArgs = {
+    businessId: businessA.id,
+    jobId: staleJob.id,
+    previousMembershipId: null,
+    nextMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  };
+  await Promise.all(staleClients.map((client) => notifyHandymanJobAssigned(client, staleArgs)));
+  const staleDeliveries = await prisma.nativePushDelivery.findMany({
+    where: { jobId: staleJob.id, kind: "JOB_ASSIGNED" },
+  });
+  check(
+    "Stale PENDING reclaim sends once and keeps one delivery row",
+    fake.sent.length === 1 && staleDeliveries.length === 1 && staleDeliveries[0].status === "SENT",
+  );
+  setNativePushPendingStaleMs(null);
+
+  const raceClients = [prisma, session.createClient(), session.createClient()];
+  const raceJobs = [];
+  for (let i = 0; i < 50; i += 1) {
+    const job = await createHandymanJob(`race-${i}`);
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { assignedMembershipId: memberA.id },
+    });
+    raceJobs.push(job);
+  }
+  fake.sent.length = 0;
+  fake.sendCalls = 0;
+  fake.setSendDelayMs(15);
+  await Promise.all(
+    raceJobs.map(async (job) => {
+      const args = {
+        businessId: businessA.id,
+        jobId: job.id,
+        previousMembershipId: null,
+        nextMembershipId: memberA.id,
+        actorMembershipId: ownerMembership.id,
+      };
+      await Promise.all(raceClients.map((client) => notifyHandymanJobAssigned(client, args)));
+    }),
+  );
+  const raceDeliveries = await prisma.nativePushDelivery.findMany({
+    where: { jobId: { in: raceJobs.map((job) => job.id) }, kind: "JOB_ASSIGNED" },
+  });
+  check(
+    "3-connection x50 race with latency sends exactly once per event",
+    fake.sent.length === 50 &&
+      fake.sendCalls === 50 &&
+      raceDeliveries.length === 50 &&
+      raceDeliveries.every((row) => row.status === "SENT"),
+  );
+  fake.setSendDelayMs(0);
+
+  const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
+  const { scheduleJob } = await import("@/app/actions/job");
+  const { setTestAccess } = await import("./estimate-options-test-access.mjs");
+  function form(fields) {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) {
+      if (value != null) data.set(key, String(value));
+    }
+    return data;
+  }
+  const ownerAccess = {
+    businessId: businessA.id,
+    workspace: {
+      role: "OWNER",
+      membership: { id: ownerMembership.id },
+      user: { id: ownerUser.id },
+      business: {
+        id: businessA.id,
+        name: businessA.name,
+        slug: businessA.slug,
+        tradeCode: businessA.tradeCode,
+        timezone: "America/New_York",
+      },
+    },
+    scope: businessScope(businessA.id),
+    assertOwned(record) {
+      return assertBusinessRecord(record, businessA.id);
+    },
+    assertAttachable(record) {
+      return assertBusinessRecord(record, businessA.id);
+    },
+  };
+  setTestAccess(ownerAccess);
+  const firstScheduleJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      propertyId: property.id,
+      projectToken: randomUUID(),
+      status: "UNSCHEDULED",
+      assignedMembershipId: memberA.id,
+    },
+  });
+  fake.sent.length = 0;
+  const firstScheduled = await scheduleJob(
+    {},
+    form({
+      jobId: firstScheduleJob.id,
+      date: "2027-06-16",
+      time: "10:00",
+      durationPreset: "60",
+    }),
+  );
+  await flushNativePushNotifies();
+  check("First scheduleJob write succeeds", !firstScheduled?.error);
+  check("First scheduleJob does not send a reschedule alert", fake.sent.length === 0);
+
+  fake.sent.length = 0;
+  const nonMaterial = await scheduleJob(
+    {},
+    form({
+      jobId: firstScheduleJob.id,
+      date: "2027-06-16",
+      time: "10:00",
+      durationPreset: "60",
+    }),
+  );
+  await flushNativePushNotifies();
+  check("Non-material scheduleJob write succeeds", !nonMaterial?.error && !nonMaterial?.warning);
+  check("Non-material scheduleJob sends 0 alerts", fake.sent.length === 0);
+
+  fake.sent.length = 0;
+  const materialReschedule = await scheduleJob(
+    {},
+    form({
+      jobId: firstScheduleJob.id,
+      date: "2027-06-16",
+      time: "11:00",
+      durationPreset: "60",
+    }),
+  );
+  await flushNativePushNotifies();
+  check("Material scheduleJob reschedule write succeeds", !materialReschedule?.error);
+  check(
+    "Material scheduleJob reschedule sends one informational alert",
+    fake.sent.length === 1 && fake.sent[0].kind === "JOB_RESCHEDULED",
+  );
+
   const optedOut = await revokeNativePushDevice(prisma, accessB, { token: tokenB });
   check("Worker can revoke their own device token", optedOut.ok && optedOut.preference.optedIn === false);
   const quietJob = await createHandymanJob("quiet");
@@ -554,16 +1049,28 @@ try {
     revokedAfterDeactivate.length > 0 &&
       revokedAfterDeactivate.every((row) => row.revokedAt && row.optedIn === false),
   );
+  const inactiveToken = `device-token-ava-after-${randomUUID()}`;
+  const inactiveHash = hashNativePushDeviceToken(inactiveToken);
+  const devicesBeforeInactive = await prisma.nativePushDevice.count({
+    where: { membershipId: memberA.id, tokenHash: inactiveHash },
+  });
   const registerAfterDeactivate = await registerNativePushDevice(prisma, accessA, {
-    token: `device-token-ava-after-${randomUUID()}`,
+    token: inactiveToken,
     platform: "test",
     optedIn: true,
+  });
+  const devicesAfterInactive = await prisma.nativePushDevice.count({
+    where: { membershipId: memberA.id, tokenHash: inactiveHash },
   });
   check(
     "Inactive membership cannot register a new device token",
     registerAfterDeactivate.ok === false &&
       registerAfterDeactivate.status === 403 &&
       registerAfterDeactivate.error === NATIVE_PUSH_MEMBERSHIP_INACTIVE,
+  );
+  check(
+    "No NativePushDevice row is written for an inactive membership",
+    devicesBeforeInactive === 0 && devicesAfterInactive === 0,
   );
   fake.sent.length = 0;
   const postDeactivateJob = await createHandymanJob("post-deactivate");
@@ -576,6 +1083,35 @@ try {
   check(
     "Alerts to a deactivated membership are suppressed",
     fake.sent.length === 0,
+  );
+
+  const missingJob = await createHandymanJob("missing-table");
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "NativePushDelivery" CASCADE`);
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "NativePushDevice" CASCADE`);
+  resetNativePushSchemaEnsure();
+  fake.sent.length = 0;
+  const missingAssign = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: missingJob,
+    nextAssignedMembershipId: memberB.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const missingJobRow = await prisma.job.findFirst({ where: { id: missingJob.id } });
+  const missingList = await listNativePushPreference(prisma, accessB, { token: tokenB });
+  const missingRegister = await registerNativePushDevice(prisma, accessB, {
+    token: `device-token-missing-${randomUUID()}`,
+    platform: "test",
+    optedIn: true,
+  });
+  check("Missing-table assignment still commits", !missingAssign?.error);
+  check(
+    "Missing-table assignment persists assignedMembershipId",
+    missingJobRow?.assignedMembershipId === memberB.id,
+  );
+  check("Missing-table list returns 503", missingList.ok === false && missingList.status === 503);
+  check(
+    "Missing-table register returns 503",
+    missingRegister.ok === false && missingRegister.status === 503,
   );
 } finally {
   setNativePushProvider(null);

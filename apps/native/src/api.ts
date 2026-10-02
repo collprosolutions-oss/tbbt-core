@@ -133,9 +133,11 @@ export async function signOutNative(token: string) {
 
 export async function loadNativePushPreference(
   token: string,
+  deviceToken?: string,
 ): Promise<NativePushPreferencePayload | NativeApiError> {
+  const query = deviceToken ? `?token=${encodeURIComponent(deviceToken)}` : "";
   return requestNativeJson<NativePushPreferencePayload>(
-    "/api/native/v1/push-devices",
+    `/api/native/v1/push-devices${query}`,
     {
       headers: authHeaders(token),
     },

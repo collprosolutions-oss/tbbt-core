@@ -13,10 +13,15 @@ export type FakeNativePushSend = NativePushSendInput & {
 
 export type FakeNativePushProvider = NativePushProvider & {
   sent: FakeNativePushSend[];
+  sendCalls: number;
   failNext: boolean;
   throwNext: boolean;
+  failAlways: boolean;
+  sendDelayMs: number;
   setFailNext(value: boolean): void;
   setThrowNext(value: boolean): void;
+  setFailAlways(value: boolean): void;
+  setSendDelayMs(ms: number): void;
 };
 
 export function createFakeNativePushProvider(): FakeNativePushProvider {
@@ -26,15 +31,28 @@ export function createFakeNativePushProvider(): FakeNativePushProvider {
     id: FAKE_NATIVE_PUSH_PROVIDER,
     connected: true,
     sent,
+    sendCalls: 0,
     failNext: false,
     throwNext: false,
+    failAlways: false,
+    sendDelayMs: 0,
     setFailNext(value) {
       provider.failNext = value;
     },
     setThrowNext(value) {
       provider.throwNext = value;
     },
+    setFailAlways(value) {
+      provider.failAlways = value;
+    },
+    setSendDelayMs(ms) {
+      provider.sendDelayMs = ms;
+    },
     async send(input: NativePushSendInput): Promise<NativePushSendResult> {
+      provider.sendCalls += 1;
+      if (provider.sendDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, provider.sendDelayMs));
+      }
       if (nativePushPayloadHasForbiddenFields(input.payload)) {
         return {
           ok: false,
@@ -46,7 +64,7 @@ export function createFakeNativePushProvider(): FakeNativePushProvider {
         provider.throwNext = false;
         throw new Error("Fake push provider threw.");
       }
-      if (provider.failNext) {
+      if (provider.failAlways || provider.failNext) {
         provider.failNext = false;
         return { ok: false, status: "FAILED", error: "Fake push provider rejected the alert." };
       }

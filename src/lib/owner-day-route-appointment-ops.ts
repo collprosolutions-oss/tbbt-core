@@ -8,7 +8,10 @@
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { notifyHandymanJobRescheduled } from "@/lib/native-push/notify";
+import {
+  enqueueNativePushNotify,
+  notifyHandymanJobRescheduled,
+} from "@/lib/native-push/notify";
 import {
   isMaterialAppointmentChange,
   nextAppointmentProposalId,
@@ -424,14 +427,16 @@ export async function changeOwnerDayRouteAppointment(
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
-    if (changed.materialChange && changed.assignedMembershipId) {
-      await notifyHandymanJobRescheduled(db, {
-        businessId: changed.businessId,
-        jobId: changed.jobId,
-        membershipId: changed.assignedMembershipId,
-        actorMembershipId: access.workspace.membership.id,
-        proposalId: changed.appointmentProposalId,
-      }).catch(() => undefined);
+    if (changed.materialChange && changed.previousScheduledAt && changed.assignedMembershipId) {
+      enqueueNativePushNotify(() =>
+        notifyHandymanJobRescheduled(db, {
+          businessId: changed.businessId,
+          jobId: changed.jobId,
+          membershipId: changed.assignedMembershipId,
+          actorMembershipId: access.workspace.membership.id,
+          proposalId: changed.appointmentProposalId,
+        }),
+      );
     }
     return changed;
   } catch (error) {

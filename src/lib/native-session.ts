@@ -134,11 +134,23 @@ export async function resolveNativeSession(
 
 export async function revokeNativeSession(db: PrismaClient, token: string | null) {
   if (!token) return false;
-  const result = await db.session.updateMany({
+  const session = await db.session.findFirst({
     where: { tokenHash: hashToken(token), revokedAt: null },
+    select: { id: true },
+  });
+  if (!session) return false;
+  await db.session.update({
+    where: { id: session.id },
     data: { revokedAt: new Date() },
   });
-  return result.count > 0;
+  const { nativePushDeviceTablePresent } = await import("@/lib/native-push/schema");
+  if (await nativePushDeviceTablePresent(db)) {
+    await db.nativePushDevice.updateMany({
+      where: { sessionId: session.id, revokedAt: null },
+      data: { optedIn: false, revokedAt: new Date() },
+    });
+  }
+  return true;
 }
 
 export async function resolveNativeFieldAccess(

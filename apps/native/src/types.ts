@@ -304,6 +304,7 @@ export type NativePushDeviceSummary = {
 
 export type NativePushPreferencePayload = {
   optedIn: boolean;
+  thisDeviceOptedIn: boolean;
   informational: true;
   startsTime: false;
   acceptsAppointment: false;

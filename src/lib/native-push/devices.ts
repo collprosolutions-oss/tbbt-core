@@ -22,6 +22,7 @@ export const NATIVE_PUSH_TOKEN_MIN_CHARS = 8;
 export const NATIVE_PUSH_TOKEN_MAX_CHARS = 4096;
 export const NATIVE_PUSH_DEVICE_UNAVAILABLE = "Job alerts are not available.";
 export const NATIVE_PUSH_MEMBERSHIP_INACTIVE = "That workspace is not available.";
+export const NATIVE_PUSH_DEVICE_NOT_OWNED = "That device is not on this workspace.";
 export const NATIVE_PUSH_TOKEN_REQUIRED = "A device token is required.";
 export const NATIVE_PUSH_PLATFORM_REQUIRED = "Choose a device platform.";
 
@@ -35,6 +36,7 @@ export type NativePushDeviceSummary = {
 
 export type NativePushPreferencePayload = {
   optedIn: boolean;
+  thisDeviceOptedIn: boolean;
   informational: true;
   startsTime: false;
   acceptsAppointment: false;
@@ -97,6 +99,7 @@ function validateToken(token: string) {
 export function emptyNativePushPreference(): NativePushPreferencePayload {
   return {
     optedIn: false,
+    thisDeviceOptedIn: false,
     informational: true,
     startsTime: false,
     acceptsAppointment: false,
@@ -141,9 +144,37 @@ async function requireActiveMembership(db: PrismaClient, access: NativeFieldAcce
   return { ok: true as const };
 }
 
+function preferenceFromDevices(
+  devices: Array<{
+    id: string;
+    platform: string;
+    tokenLast4: string;
+    tokenHash: string;
+    optedIn: boolean;
+    revokedAt: Date | null;
+  }>,
+  token?: string | null,
+): NativePushPreferencePayload {
+  const tokenHash = token ? hashNativePushDeviceToken(token) : null;
+  const thisDevice = tokenHash
+    ? devices.find((row) => row.tokenHash === tokenHash && !row.revokedAt)
+    : undefined;
+  const active = devices.filter((row) => !row.revokedAt);
+  return {
+    optedIn: active.some((row) => row.optedIn),
+    thisDeviceOptedIn: Boolean(thisDevice?.optedIn),
+    informational: true,
+    startsTime: false,
+    acceptsAppointment: false,
+    disclaimer: NATIVE_PUSH_ALERT_DISCLAIMER,
+    devices: devices.map(toSummary),
+  };
+}
+
 export async function listNativePushPreference(
   db: PrismaClient,
   access: NativeFieldAccess,
+  options?: { token?: string | null },
 ): Promise<NativePushDeviceWriteResult> {
   try {
     await ensureNativePushSchema(db);
@@ -165,21 +196,14 @@ export async function listNativePushPreference(
       id: true,
       platform: true,
       tokenLast4: true,
+      tokenHash: true,
       optedIn: true,
       revokedAt: true,
     },
   });
-  const active = devices.filter((row) => !row.revokedAt);
   return {
     ok: true,
-    preference: {
-      optedIn: active.some((row) => row.optedIn),
-      informational: true,
-      startsTime: false,
-      acceptsAppointment: false,
-      disclaimer: NATIVE_PUSH_ALERT_DISCLAIMER,
-      devices: devices.map(toSummary),
-    },
+    preference: preferenceFromDevices(devices, options?.token),
   };
 }
 
@@ -209,6 +233,23 @@ export async function registerNativePushDevice(
   const optedIn = input.optedIn === undefined ? true : input.optedIn === true;
   const tokenHash = hashNativePushDeviceToken(token);
   const now = new Date();
+  const session = access.sessionId
+    ? await db.session.findFirst({
+        where: { id: access.sessionId },
+        select: { id: true },
+      })
+    : null;
+  await db.nativePushDevice.updateMany({
+    where: {
+      tokenHash,
+      revokedAt: null,
+      membershipId: { not: access.membershipId },
+    },
+    data: {
+      optedIn: false,
+      revokedAt: now,
+    },
+  });
   await db.nativePushDevice.upsert({
     where: {
       membershipId_tokenHash: {
@@ -220,6 +261,7 @@ export async function registerNativePushDevice(
       businessId: access.businessId,
       membershipId: access.membershipId,
       userId: access.userId,
+      sessionId: session?.id ?? null,
       platform: input.platform,
       tokenHash,
       tokenLast4: tokenLast4(token),
@@ -232,12 +274,13 @@ export async function registerNativePushDevice(
       platform: input.platform,
       tokenLast4: tokenLast4(token),
       deviceToken: token,
+      ...(session ? { sessionId: session.id } : {}),
       optedIn,
       revokedAt: null,
       lastSeenAt: now,
     },
   });
-  return listNativePushPreference(db, access);
+  return listNativePushPreference(db, access, { token });
 }
 
 export async function updateNativePushDeviceOptIn(
@@ -278,7 +321,7 @@ export async function updateNativePushDeviceOptIn(
   if (updated.count === 0) {
     return { ok: false, status: 404, error: NATIVE_PUSH_DEVICE_UNAVAILABLE };
   }
-  return listNativePushPreference(db, access);
+  return listNativePushPreference(db, access, { token });
 }
 
 export async function revokeNativePushDevice(
@@ -301,11 +344,12 @@ export async function revokeNativePushDevice(
   if (tokenError) {
     return { ok: false, status: 400, error: tokenError };
   }
-  await db.nativePushDevice.updateMany({
+  const tokenHash = hashNativePushDeviceToken(token);
+  const updated = await db.nativePushDevice.updateMany({
     where: {
       businessId: access.businessId,
       membershipId: access.membershipId,
-      tokenHash: hashNativePushDeviceToken(token),
+      tokenHash,
       revokedAt: null,
     },
     data: {
@@ -313,7 +357,20 @@ export async function revokeNativePushDevice(
       revokedAt: new Date(),
     },
   });
-  return listNativePushPreference(db, access);
+  if (updated.count === 0) {
+    const foreign = await db.nativePushDevice.findFirst({
+      where: {
+        tokenHash,
+        revokedAt: null,
+        membershipId: { not: access.membershipId },
+      },
+      select: { id: true },
+    });
+    if (foreign) {
+      return { ok: false, status: 403, error: NATIVE_PUSH_DEVICE_NOT_OWNED };
+    }
+  }
+  return listNativePushPreference(db, access, { token });
 }
 
 export async function revokeActiveNativePushDevicesForMembership(

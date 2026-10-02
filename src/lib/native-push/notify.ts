@@ -9,6 +9,10 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { isRequestPathSchemaUnavailableError } from "@/lib/request-path-schema";
 import {
+  NATIVE_PUSH_MAX_ATTEMPTS,
+  getNativePushPendingStaleMs,
+} from "@/lib/native-push/config";
+import {
   assignmentAlertIdempotencyKey,
   buildNativePushAlertPayload,
   isHandymanJobForNativePush,
@@ -48,6 +52,22 @@ export type NativePushNotifyResult = {
   reason?: string;
   sentCount: number;
 };
+
+const pendingNotifies: Promise<unknown>[] = [];
+
+export function enqueueNativePushNotify(work: () => Promise<unknown>) {
+  const promise = Promise.resolve()
+    .then(work)
+    .catch(() => undefined);
+  pendingNotifies.push(promise);
+  return promise;
+}
+
+export async function flushNativePushNotifies() {
+  const pending = pendingNotifies.splice(0);
+  if (pending.length === 0) return;
+  await Promise.all(pending);
+}
 
 function uniqueViolation(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
@@ -125,6 +145,153 @@ async function suppressDelivery(
   }
 }
 
+async function settleMaxAttempts(db: Db, deliveryId: string) {
+  await db.nativePushDelivery.update({
+    where: { id: deliveryId },
+    data: {
+      status: "FAILED",
+      failureReason: "max-attempts",
+    },
+  });
+  return {
+    status: "FAILED" as const,
+    deliveryId,
+    reason: "max-attempts",
+    sentCount: 0,
+  };
+}
+
+type ClaimedDelivery = {
+  id: string;
+  providerMessageId: string | null;
+};
+
+async function claimDelivery(
+  db: Db,
+  input: {
+    businessId: string;
+    membershipId: string;
+    jobId: string;
+    kind: NativePushKind;
+    idempotencyKey: string;
+    payload: NativePushAlertPayload;
+  },
+): Promise<{ ok: true; delivery: ClaimedDelivery } | { ok: false; result: NativePushNotifyResult }> {
+  const provider = getNativePushProvider();
+  try {
+    const created = await db.nativePushDelivery.create({
+      data: {
+        businessId: input.businessId,
+        membershipId: input.membershipId,
+        jobId: input.jobId,
+        kind: input.kind,
+        idempotencyKey: input.idempotencyKey,
+        status: "PENDING",
+        attemptCount: 1,
+        payloadSnapshot: input.payload,
+        provider: provider.id,
+      },
+    });
+    return { ok: true, delivery: created };
+  } catch (error) {
+    if (!uniqueViolation(error)) throw error;
+  }
+
+  const existing = await db.nativePushDelivery.findFirst({
+    where: { businessId: input.businessId, idempotencyKey: input.idempotencyKey },
+  });
+  if (!existing) {
+    return { ok: false, result: { status: "SUPPRESSED", reason: "duplicate", sentCount: 0 } };
+  }
+  if (existing.status === "SENT" || existing.status === "SUPPRESSED") {
+    return {
+      ok: false,
+      result: {
+        status: "SUPPRESSED",
+        deliveryId: existing.id,
+        reason: "duplicate",
+        sentCount: 0,
+      },
+    };
+  }
+
+  if (existing.attemptCount >= NATIVE_PUSH_MAX_ATTEMPTS) {
+    return { ok: false, result: await settleMaxAttempts(db, existing.id) };
+  }
+
+  if (existing.status === "FAILED") {
+    const claimed = await db.nativePushDelivery.updateMany({
+      where: {
+        id: existing.id,
+        status: "FAILED",
+        attemptCount: { lt: NATIVE_PUSH_MAX_ATTEMPTS },
+      },
+      data: {
+        status: "PENDING",
+        attemptCount: { increment: 1 },
+        failureReason: null,
+      },
+    });
+    if (claimed.count !== 1) {
+      return {
+        ok: false,
+        result: {
+          status: "SUPPRESSED",
+          deliveryId: existing.id,
+          reason: "duplicate",
+          sentCount: 0,
+        },
+      };
+    }
+    const delivery = await db.nativePushDelivery.findFirst({ where: { id: existing.id } });
+    if (!delivery) {
+      return { ok: false, result: { status: "SUPPRESSED", reason: "duplicate", sentCount: 0 } };
+    }
+    return { ok: true, delivery };
+  }
+
+  const staleCutoff = new Date(Date.now() - getNativePushPendingStaleMs());
+  if (existing.status === "PENDING" && existing.updatedAt <= staleCutoff) {
+    const claimed = await db.nativePushDelivery.updateMany({
+      where: {
+        id: existing.id,
+        status: "PENDING",
+        updatedAt: { lte: staleCutoff },
+        attemptCount: { lt: NATIVE_PUSH_MAX_ATTEMPTS },
+      },
+      data: {
+        attemptCount: { increment: 1 },
+      },
+    });
+    if (claimed.count !== 1) {
+      return {
+        ok: false,
+        result: {
+          status: "SUPPRESSED",
+          deliveryId: existing.id,
+          reason: "in-flight",
+          sentCount: 0,
+        },
+      };
+    }
+    const delivery = await db.nativePushDelivery.findFirst({ where: { id: existing.id } });
+    if (!delivery) {
+      return { ok: false, result: { status: "SUPPRESSED", reason: "in-flight", sentCount: 0 } };
+    }
+    return { ok: true, delivery };
+  }
+
+  return {
+    ok: false,
+    result: {
+      status: "SUPPRESSED",
+      deliveryId: existing.id,
+      reason: "in-flight",
+      sentCount: 0,
+    },
+  };
+}
+
 async function deliverToOptedInDevices(
   db: Db,
   input: {
@@ -164,48 +331,13 @@ async function deliverToOptedInDevices(
     return suppressDelivery(db, { ...input, reason: "not-opted-in" });
   }
 
+  const claimed = await claimDelivery(db, input);
+  if (!claimed.ok) return claimed.result;
+
   const provider = getNativePushProvider();
-  let delivery = await db.nativePushDelivery.findFirst({
-    where: { businessId: input.businessId, idempotencyKey: input.idempotencyKey },
-  });
-  if (delivery?.status === "SENT") {
-    return { status: "SUPPRESSED", deliveryId: delivery.id, reason: "duplicate", sentCount: 0 };
-  }
-  if (!delivery) {
-    try {
-      delivery = await db.nativePushDelivery.create({
-        data: {
-          businessId: input.businessId,
-          membershipId: input.membershipId,
-          jobId: input.jobId,
-          kind: input.kind,
-          idempotencyKey: input.idempotencyKey,
-          status: "PENDING",
-          attemptCount: 0,
-          payloadSnapshot: input.payload,
-          provider: provider.id,
-        },
-      });
-    } catch (error) {
-      if (!uniqueViolation(error)) throw error;
-      delivery = await db.nativePushDelivery.findFirst({
-        where: { businessId: input.businessId, idempotencyKey: input.idempotencyKey },
-      });
-      if (!delivery) throw error;
-      if (delivery.status === "SENT") {
-        return { status: "SUPPRESSED", deliveryId: delivery.id, reason: "duplicate", sentCount: 0 };
-      }
-    }
-  }
-
-  await db.nativePushDelivery.update({
-    where: { id: delivery.id },
-    data: { attemptCount: { increment: 1 } },
-  });
-
   let sentCount = 0;
   let lastError: string | null = null;
-  let lastProviderMessageId: string | null = delivery.providerMessageId;
+  let lastProviderMessageId: string | null = claimed.delivery.providerMessageId;
   for (const device of devices) {
     try {
       const result = await provider.send({
@@ -229,9 +361,9 @@ async function deliverToOptedInDevices(
     }
   }
 
-  if (sentCount > 0 && !lastError) {
+  if (sentCount > 0) {
     await db.nativePushDelivery.update({
-      where: { id: delivery.id },
+      where: { id: claimed.delivery.id },
       data: {
         status: "SENT",
         provider: provider.id,
@@ -240,11 +372,11 @@ async function deliverToOptedInDevices(
         payloadSnapshot: input.payload,
       },
     });
-    return { status: "SENT", deliveryId: delivery.id, sentCount };
+    return { status: "SENT", deliveryId: claimed.delivery.id, sentCount };
   }
 
   await db.nativePushDelivery.update({
-    where: { id: delivery.id },
+    where: { id: claimed.delivery.id },
     data: {
       status: "FAILED",
       provider: provider.id,
@@ -254,7 +386,7 @@ async function deliverToOptedInDevices(
   });
   return {
     status: "FAILED",
-    deliveryId: delivery.id,
+    deliveryId: claimed.delivery.id,
     reason: lastError ?? "Push provider failed.",
     sentCount,
   };
@@ -374,8 +506,11 @@ export async function retryNativePushDelivery(db: Db, deliveryId: string) {
   if (!delivery) {
     return { status: "SUPPRESSED" as const, reason: "missing", sentCount: 0 };
   }
-  if (delivery.status === "SENT") {
+  if (delivery.status === "SENT" || delivery.status === "SUPPRESSED") {
     return { status: "SUPPRESSED" as const, deliveryId: delivery.id, reason: "duplicate", sentCount: 0 };
+  }
+  if (delivery.attemptCount >= NATIVE_PUSH_MAX_ATTEMPTS) {
+    return settleMaxAttempts(db, delivery.id);
   }
   const payload = delivery.payloadSnapshot as NativePushAlertPayload;
   return deliverToOptedInDevices(db, {

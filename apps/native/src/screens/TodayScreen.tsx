@@ -93,7 +93,8 @@ function JobAlertsCard({
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const result = await loadNativePushPreference(token);
+    const deviceToken = await readOrCreateNativePushDeviceToken();
+    const result = await loadNativePushPreference(token, deviceToken);
     if (isApiError(result)) {
       if (isSessionExpired(result)) {
         onSessionExpired();
@@ -115,7 +116,7 @@ function JobAlertsCard({
     setBusy(true);
     try {
       const deviceToken = await readOrCreateNativePushDeviceToken();
-      const result = preference?.optedIn
+      const result = preference?.thisDeviceOptedIn
         ? await revokeNativePushDevice(token, deviceToken)
         : await registerNativePushDevice(token, {
             token: deviceToken,
@@ -153,7 +154,11 @@ function JobAlertsCard({
         style={styles.timeCards}
       >
         <Text style={styles.timeCardsLabel}>
-          {busy ? "Saving…" : preference?.optedIn ? "Turn off job alerts" : "Turn on job alerts"}
+          {busy
+            ? "Saving…"
+            : preference?.thisDeviceOptedIn
+              ? "Turn off job alerts"
+              : "Turn on job alerts"}
         </Text>
       </Pressable>
     </View>

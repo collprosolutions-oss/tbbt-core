@@ -1,8 +1,11 @@
 export {
   DISCONNECTED_NATIVE_PUSH_PROVIDER,
   FAKE_NATIVE_PUSH_PROVIDER,
+  NATIVE_PUSH_MAX_ATTEMPTS,
+  NATIVE_PUSH_PENDING_STALE_MS,
   isFakeNativePushAdapterEnabled,
   isNativePushConfigured,
+  setNativePushPendingStaleMs,
 } from "@/lib/native-push/config";
 export {
   emptyNativePushPreference,
@@ -13,6 +16,7 @@ export {
   revokeActiveNativePushDevicesForMembership,
   revokeNativePushDevice,
   updateNativePushDeviceOptIn,
+  NATIVE_PUSH_DEVICE_NOT_OWNED,
   NATIVE_PUSH_DEVICE_UNAVAILABLE,
   NATIVE_PUSH_MEMBERSHIP_INACTIVE,
   NATIVE_PUSH_JSON_MAX_BYTES,
@@ -31,6 +35,8 @@ export {
   NATIVE_PUSH_FORBIDDEN_PAYLOAD_KEYS,
 } from "@/lib/native-push/payload";
 export {
+  enqueueNativePushNotify,
+  flushNativePushNotifies,
   notifyHandymanJobAssigned,
   notifyHandymanJobRescheduled,
   retryNativePushDelivery,

@@ -5,6 +5,18 @@
  */
 export const DISCONNECTED_NATIVE_PUSH_PROVIDER = "disconnected";
 export const FAKE_NATIVE_PUSH_PROVIDER = "fake";
+export const NATIVE_PUSH_MAX_ATTEMPTS = 3;
+export const NATIVE_PUSH_PENDING_STALE_MS = 30_000;
+
+let pendingStaleMs = NATIVE_PUSH_PENDING_STALE_MS;
+
+export function getNativePushPendingStaleMs() {
+  return pendingStaleMs;
+}
+
+export function setNativePushPendingStaleMs(ms: number | null) {
+  pendingStaleMs = ms == null ? NATIVE_PUSH_PENDING_STALE_MS : ms;
+}
 
 export function isFakeNativePushAdapterEnabled() {
   if (process.env.VERCEL_ENV === "production") {

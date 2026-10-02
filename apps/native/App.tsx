@@ -93,9 +93,9 @@ export default function App() {
     if (session) {
       const deviceToken = await readNativePushDeviceToken();
       if (deviceToken) {
-        await revokeNativePushDevice(session.token, deviceToken);
+        await revokeNativePushDevice(session.token, deviceToken).catch(() => undefined);
       }
-      await signOutNative(session.token);
+      await signOutNative(session.token).catch(() => undefined);
     }
     await clearNativePushDeviceToken();
     await clearAllChecklistDrafts(secureChecklistDraftStorage);
