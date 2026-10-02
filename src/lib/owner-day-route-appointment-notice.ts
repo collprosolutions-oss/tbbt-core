@@ -173,13 +173,18 @@ export function scheduleFieldsFromNoticeReview(
   };
 }
 
-export function recordedDayRouteAppointmentNoticeEligible(job: {
-  status: string;
-  scheduledAt: Date | null;
-  appointmentProposalId?: number | null;
-  appointmentNotificationStatus?: string | null;
-  appointmentNotifiedForProposalId?: number | null;
-}) {
+/** First schedule (APPOINTMENT_PROPOSED only) is not a recorded change. */
+export function recordedDayRouteAppointmentNoticeEligible(
+  job: {
+    status: string;
+    scheduledAt: Date | null;
+    appointmentProposalId?: number | null;
+    appointmentNotificationStatus?: string | null;
+    appointmentNotifiedForProposalId?: number | null;
+  },
+  extras?: { recordedReschedule?: boolean },
+) {
+  if (extras?.recordedReschedule !== true) return false;
   if (job.status === "COMPLETED" || job.status === "CANCELLED") return false;
   if (!job.scheduledAt) return false;
   const proposalId = job.appointmentProposalId ?? 0;
@@ -332,10 +337,17 @@ export function buildOwnerDayRouteAppointmentNoticePreview(input: {
   smsEntitled: boolean;
   smsConfigured: boolean;
   emailConfigured: boolean;
+  recordedReschedule?: boolean;
   claim?: { status: string; attemptedAt: Date | null } | null;
 }): OwnerDayRouteAppointmentNoticePreview | null {
   if (input.job.businessId !== input.businessId) return null;
-  if (!recordedDayRouteAppointmentNoticeEligible(input.job)) return null;
+  if (
+    !recordedDayRouteAppointmentNoticeEligible(input.job, {
+      recordedReschedule: input.recordedReschedule === true,
+    })
+  ) {
+    return null;
+  }
 
   const resolved = resolveDayRouteAppointmentNoticeChannel({
     businessId: input.businessId,
