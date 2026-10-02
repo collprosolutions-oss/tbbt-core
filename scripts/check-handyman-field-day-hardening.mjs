@@ -181,10 +181,12 @@ check(
   startFieldFnSrc.includes("startJobWithRunningTimeSafetyInTransaction") &&
     !startFieldFnSrc.includes("data: { status: lifecycle.nextStatus }"),
 );
+const assignOpsSrc = readRepo("src/lib/job-assignment-ops.ts");
 check(
   "assignJobMember closes the previous worker's RUNNING JOB time",
-  jobActionSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
-    jobActionSrc.includes("JOB_REASSIGNMENT_TIME_CLOSED_REASON"),
+  jobActionSrc.includes("writeAssignedMembershipAndLaneWindows") &&
+    assignOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
+    assignOpsSrc.includes("JOB_REASSIGNMENT_TIME_CLOSED_REASON"),
 );
 check(
   "startJob / scheduleJob / owner confirm writes are status- or proposal-guarded",
@@ -202,8 +204,8 @@ const scheduleTxSrc = scheduleFnSrc.slice(
   scheduleFnSrc.indexOf("await prisma.$transaction"),
   scheduleFnSrc.indexOf("if (completedDuringWrite)"),
 );
-const writeAssignSrc = jobActionSrc.slice(
-  jobActionSrc.indexOf("async function writeAssignedMembershipAndLaneWindows"),
+const writeAssignSrc = assignOpsSrc.slice(
+  assignOpsSrc.indexOf("export async function writeAssignedMembershipAndLaneWindows"),
 );
 check(
   "scheduleJob locks the Job row after the schedule-reservation advisory lock",
@@ -219,9 +221,9 @@ check(
   writeAssignSrc.indexOf("lockBusinessScheduleReservation") >= 0 &&
     writeAssignSrc.indexOf("lockTenantOwnedJob") >
       writeAssignSrc.indexOf("lockBusinessScheduleReservation") &&
-    writeAssignSrc.includes("previousAssignee = lockedJob.assignedMembershipId") &&
-    writeAssignSrc.includes("membershipId: previousAssignee") &&
-    !writeAssignSrc.includes("membershipId: job.assignedMembershipId"),
+    assignOpsSrc.includes("previousAssignee = input.lockedJob.assignedMembershipId") &&
+    assignOpsSrc.includes("membershipId: previousAssignee") &&
+    !assignOpsSrc.includes("membershipId: job.assignedMembershipId"),
 );
 const deactivateFnSrc = teamSrc.slice(
   teamSrc.indexOf("export async function setTeamMemberActive"),

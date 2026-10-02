@@ -400,6 +400,7 @@ model Business {
   membershipWeeklyAvailability MembershipWeeklyAvailability[]
   membershipAvailabilityExceptions MembershipAvailabilityException[]
   membershipAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[]
+  jobReassignmentRequests  JobReassignmentRequest[]
   fillInBenchWorkers       FillInBenchWorker[]
   workforceOutreachTasks   WorkforceOutreachTask[]
   suppliers                  Supplier[]
@@ -683,6 +684,8 @@ model Membership {
   availabilityExceptions          MembershipAvailabilityException[]
   availabilityExceptionRequests   MembershipAvailabilityExceptionRequest[]
   decidedAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[] @relation("AvailabilityRequestDecider")
+  jobReassignmentRequests         JobReassignmentRequest[]
+  decidedJobReassignmentRequests  JobReassignmentRequest[] @relation("JobReassignmentRequestDecider")
   fillInBenchWorkers              FillInBenchWorker[]
   workforceOutreachCreated        WorkforceOutreachTask[]   @relation("WorkforceOutreachCreator")
   workforceOutreachApproved       WorkforceOutreachTask[]   @relation("WorkforceOutreachApprover")
@@ -1699,6 +1702,9 @@ model Job {
   /// milestone columns, so concurrent Job-column migrations do not collide.
   milestones              JobMilestone[]
   milestoneEvents         JobMilestoneEvent[]
+  /// Worker-requested reassignment. Request rows never rewrite Job columns
+  /// until OWNER accept runs the canonical assignment write.
+  reassignmentRequests    JobReassignmentRequest[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -4290,6 +4296,36 @@ model MembershipAvailabilityExceptionRequest {
 
   @@index([businessId, status])
   @@index([membershipId, date])
+  @@index([decidedByMembershipId])
+}
+
+/// Worker-requested reassignment of one currently assigned upcoming job.
+/// PENDING until an OWNER accepts or declines. Request create never
+/// changes Job.assignedMembershipId, scheduledAt, or status. Only ACCEPT
+/// unassigns through the canonical assignment write and schedule-
+/// reservation lock order. Decline leaves assignment and schedule
+/// unchanged. These rows never send customer messages.
+model JobReassignmentRequest {
+  id          String   @id @default(cuid())
+  businessId  String
+  jobId       String
+  membershipId String
+  reason      String
+  /// PENDING | ACCEPTED | DECLINED
+  status      String   @default("PENDING")
+  requestedAt DateTime @default(now())
+  decidedAt   DateTime?
+  decidedByMembershipId String?
+  updatedAt   DateTime @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  decidedBy  Membership? @relation("JobReassignmentRequestDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status])
+  @@index([jobId])
+  @@index([membershipId])
   @@index([decidedByMembershipId])
 }
 

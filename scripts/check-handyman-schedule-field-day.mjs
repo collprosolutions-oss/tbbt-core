@@ -60,10 +60,13 @@ check(
     jobActionSrc.includes("arrivalWindowMinutesForMode") &&
     jobActionSrc.includes("persistLaneArrivalWindows"),
 );
+const assignOpsSrc = readRepo("src/lib/job-assignment-ops.ts");
 check(
   "assignJobMember syncs persisted arrival windows after the assignment write",
-  jobActionSrc.includes("syncAssignedJobArrivalWindows") &&
-    jobActionSrc.includes("writeAssignedMembershipAndLaneWindows") &&
+  jobActionSrc.includes("writeAssignedMembershipAndLaneWindows") &&
+    assignOpsSrc.includes("syncAssignedJobArrivalWindows") &&
+    assignOpsSrc.includes("writeAssignedMembershipAndLaneWindows") &&
+    assignOpsSrc.includes("lockBusinessScheduleReservation") &&
     jobActionSrc.includes("lockBusinessScheduleReservation") &&
     workforceSrc.includes("export function laneArrivalWindowUpdates"),
 );

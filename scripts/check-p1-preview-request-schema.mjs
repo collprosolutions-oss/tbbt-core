@@ -33,6 +33,14 @@ const {
   loadJobAftercareReview,
   loadPublishedAftercareForProjectToken,
 } = await import("@/lib/job-aftercare-data");
+const {
+  loadOwnedJobReassignmentRequests,
+  loadSelfJobReassignmentRequests,
+} = await import("@/lib/job-reassignment-request-ops");
+const {
+  JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
+  missingJobReassignmentRequestSchema,
+} = await import("@/lib/job-reassignment-request");
 const { requireWorkspace } = await import("@/lib/workspace-request");
 const {
   ensureBusinessPublicContactSchema,
@@ -221,6 +229,9 @@ check(
 const aftercareDataSrc = readRepo("src/lib/job-aftercare-data.ts");
 const aftercareOpsSrc = readRepo("src/lib/job-aftercare-ops.ts");
 const aftercareActionSrc = readRepo("src/app/actions/job-aftercare.ts");
+const reassignmentRequestSrc = readRepo("src/lib/job-reassignment-request.ts");
+const reassignmentOpsSrc = readRepo("src/lib/job-reassignment-request-ops.ts");
+const reassignmentActionSrc = readRepo("src/app/actions/job-reassignment-request.ts");
 check(
   "Job aftercare request paths do not ensure or CREATE JobAftercare tables",
   aftercareDataSrc.includes("missingJobAftercareSchema") &&
@@ -232,6 +243,20 @@ check(
     !aftercareActionSrc.includes("$executeRaw") &&
     !aftercareActionSrc.includes("CREATE TABLE") &&
     aftercareOpsSrc.includes("JOB_AFTERCARE_UNAVAILABLE_MESSAGE"),
+);
+check(
+  "Job reassignment-request loaders degrade on a missing table and never CREATE it",
+  reassignmentRequestSrc.includes("missingJobReassignmentRequestSchema") &&
+    reassignmentOpsSrc.includes("if (missingJobReassignmentRequestSchema(error)) return []") &&
+    reassignmentOpsSrc.includes("JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE") &&
+    !reassignmentOpsSrc.includes("$executeRaw") &&
+    !reassignmentOpsSrc.includes("CREATE TABLE") &&
+    !reassignmentActionSrc.includes("$executeRaw") &&
+    !reassignmentActionSrc.includes("CREATE TABLE") &&
+    missingJobReassignmentRequestSchema({ code: "P2021" }) &&
+    missingJobReassignmentRequestSchema({ code: "P2022" }) &&
+    !missingJobReassignmentRequestSchema({ code: "P2002" }) &&
+    JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE.includes("not available yet"),
 );
 check(
   "Historical founder access-repair SQL is classified as forbidden backfill",
@@ -671,6 +696,68 @@ try {
       AND column_name = 'publicPhone'
   `;
   check("Dropped publicPhone is still absent after the fail-closed probe", phoneColumns.length === 0);
+
+  console.log("\nDYNAMIC — missing JobReassignmentRequest degrades without DDL");
+  await prisma.businessSaasSubscription.upsert({
+    where: { businessId: business.id },
+    update: { status: "active", planCode: "FOUNDER", legacyExempt: true },
+    create: { businessId: business.id, status: "active", planCode: "FOUNDER", legacyExempt: true },
+  });
+  const reassignmentAccess = {
+    businessId: business.id,
+    workspace: {
+      role: "OWNER",
+      membership: { id: membership.id },
+      user: { id: owner.id, email: owner.email, name: owner.name },
+      business: { id: business.id, name: business.name },
+    },
+    scope: businessScope(business.id),
+    assertOwned(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+    assertAttachable(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+  };
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobReassignmentRequest" CASCADE`);
+  const reassignmentProbe = instrumentPrisma(prisma);
+  let selfReassignment = "threw";
+  let ownedReassignment = "threw";
+  let reassignmentLoadError = null;
+  try {
+    selfReassignment = await loadSelfJobReassignmentRequests(reassignmentProbe.client, {
+      businessId: business.id,
+      membershipId: membership.id,
+    });
+    ownedReassignment = await loadOwnedJobReassignmentRequests(
+      reassignmentProbe.client,
+      reassignmentAccess,
+    );
+  } catch (error) {
+    reassignmentLoadError = error;
+  }
+  const reassignmentWrites = recordedWrites(reassignmentProbe.statements);
+  const reassignmentTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename = 'JobReassignmentRequest'
+  `;
+  check(
+    "Preview loaders return empty lists for missing JobReassignmentRequest",
+    Array.isArray(selfReassignment) &&
+      selfReassignment.length === 0 &&
+      ownedReassignment !== "threw" &&
+      ownedReassignment.pending.length === 0 &&
+      ownedReassignment.recent.length === 0 &&
+      reassignmentLoadError === null,
+  );
+  check(
+    "Missing JobReassignmentRequest does not run schema DDL or backfill DML",
+    reassignmentWrites.length === 0,
+  );
+  check(
+    "Dropped JobReassignmentRequest stays absent after the request-path load",
+    reassignmentTables.length === 0,
+  );
 
   await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "BusinessSaasSubscription"`);
   resetSaasBillingSchemaEnsure();

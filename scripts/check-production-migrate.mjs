@@ -1931,6 +1931,43 @@ check(
       localNames.indexOf("20261001180000_job_aftercare_instruction"),
 );
 
+const jobReassignmentRequestMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261001194700_job_reassignment_request/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const jobReassignmentRequestOps = readFileSync(
+  new URL("../src/lib/job-reassignment-request-ops.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Job reassignment-request migration is additive, uniquely named, and after aftercare",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(jobReassignmentRequestMigration) &&
+    jobReassignmentRequestMigration.includes('CREATE TABLE IF NOT EXISTS "JobReassignmentRequest"') &&
+    jobReassignmentRequestMigration.includes("WHERE \"status\" = 'PENDING'") &&
+    jobReassignmentRequestMigration.includes("IF NOT EXISTS") &&
+    !jobReassignmentRequestMigration.includes('ALTER TABLE "Job"') &&
+    jobReassignmentRequestMigration.includes("20261001194700") &&
+    localNames.includes("20261001194700_job_reassignment_request") &&
+    !localNames.includes("20261001180000_job_reassignment_request") &&
+    !localNames.includes("20261001190000_job_reassignment_request") &&
+    localNames.includes("20261001180000_job_aftercare_instruction") &&
+    localNames.indexOf("20261001180000_job_aftercare_instruction") <
+      localNames.indexOf("20261001194700_job_reassignment_request"),
+);
+check(
+  "Job reassignment-request ops do not run request-time DDL",
+  !jobReassignmentRequestOps.includes("$executeRawUnsafe") &&
+    !jobReassignmentRequestOps.includes("CREATE TABLE") &&
+    !jobReassignmentRequestOps.includes("ALTER TABLE") &&
+    jobReassignmentRequestOps.includes("missingJobReassignmentRequestSchema") &&
+    jobReassignmentRequestOps.includes(
+      "if (missingJobReassignmentRequestSchema(error)) return []",
+    ),
+);
+
 const jobMilestonesMigration = readFileSync(
   new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
   "utf8",

@@ -4,6 +4,7 @@ import { AddTeamMemberForm } from "@/components/team/add-team-member-form";
 import { SetTeamMemberActiveForm } from "@/components/team/set-team-member-active-form";
 import { FillInBenchWorkspace } from "@/components/team/fill-in-bench-workspace";
 import { AvailabilityExceptionRequestsPanel } from "@/components/team/availability-exception-requests";
+import { JobReassignmentRequestsPanel } from "@/components/team/job-reassignment-requests";
 import { StaffingRecommendationsPanel } from "@/components/team/staffing-recommendations";
 import { WeeklyAvailabilityForm } from "@/components/team/weekly-availability-form";
 import { WorkforceProfileForm } from "@/components/team/workforce-profile-form";
@@ -26,6 +27,7 @@ import { hasProductCapability } from "@/lib/product-entitlements";
 import { formatProgression, skillLabel } from "@/lib/workforce";
 import { loadWorkforceMembers } from "@/lib/workforce-data";
 import { loadOwnedAvailabilityExceptionRequests } from "@/lib/workforce-availability-request-ops";
+import { loadOwnedJobReassignmentRequests } from "@/lib/job-reassignment-request-ops";
 import { loadOwnedStaffingReview } from "@/lib/workforce-staffing-ops";
 
 export const metadata: Metadata = {
@@ -60,19 +62,31 @@ export default async function TeamPage() {
     access.businessId,
     PRODUCT_CAPABILITIES.TEAM_MANAGEMENT,
   );
-  const [workforceMembers, bench, staffing, availabilityRequests] = canManageWorkforce
-    ? await Promise.all([
-        loadWorkforceMembers(prisma, access.businessId),
-        loadOwnedFillInBench(prisma, access),
-        loadOwnedStaffingReview(prisma, access),
-        loadOwnedAvailabilityExceptionRequests(prisma, access),
-      ])
-    : [
-        [],
-        [],
-        { pending: [], accepted: [], history: [], canReview: false },
-        { pending: [], recent: [], canDecide: false, timeZone: "" },
-      ];
+  const canManageJobs = await hasProductCapability(
+    prisma,
+    access.businessId,
+    PRODUCT_CAPABILITIES.JOBS_TASKS,
+  );
+  const emptyReassignmentQueue = {
+    pending: [],
+    recent: [],
+    canDecide: false,
+    timeZone: "",
+  };
+  const [workforceMembers, bench, staffing, availabilityRequests, reassignmentRequests] =
+    await Promise.all([
+      canManageWorkforce ? loadWorkforceMembers(prisma, access.businessId) : Promise.resolve([]),
+      canManageWorkforce ? loadOwnedFillInBench(prisma, access) : Promise.resolve([]),
+      canManageWorkforce
+        ? loadOwnedStaffingReview(prisma, access)
+        : Promise.resolve({ pending: [], accepted: [], history: [], canReview: false }),
+      canManageWorkforce
+        ? loadOwnedAvailabilityExceptionRequests(prisma, access)
+        : Promise.resolve({ pending: [], recent: [], canDecide: false, timeZone: "" }),
+      canManageJobs
+        ? loadOwnedJobReassignmentRequests(prisma, access)
+        : Promise.resolve(emptyReassignmentQueue),
+    ]);
 
   return (
     <PageContainer>
@@ -144,6 +158,15 @@ export default async function TeamPage() {
           pending={availabilityRequests.pending}
           recent={availabilityRequests.recent}
           canDecide={availabilityRequests.canDecide}
+        />
+      ) : null}
+
+      {canManageJobs ? (
+        <JobReassignmentRequestsPanel
+          pending={reassignmentRequests.pending}
+          recent={reassignmentRequests.recent}
+          canDecide={reassignmentRequests.canDecide}
+          timeZone={reassignmentRequests.timeZone}
         />
       ) : null}
 

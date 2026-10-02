@@ -100,3 +100,25 @@ export function groupFieldJobs<T extends FieldJob>(
 
   return groups;
 }
+
+/**
+ * True when a job would appear in Field Home's Upcoming group.
+ * Cancelled jobs are never upcoming for reassignment requests even if
+ * grouping would otherwise leave them visible.
+ */
+export function isUpcomingFieldJob(
+  job: Pick<FieldJob, "id" | "status" | "scheduledAt">,
+  today: Date,
+  timeZone?: string,
+): boolean {
+  if (job.status === "CANCELLED") return false;
+  const row = {
+    id: job.id,
+    status: job.status,
+    scheduledAt: job.scheduledAt,
+    scheduledDurationMinutes: null,
+    customer: null,
+    property: null,
+  } satisfies FieldJob;
+  return groupFieldJobs([row], today, timeZone).upcoming.some((item) => item.id === job.id);
+}
