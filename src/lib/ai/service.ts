@@ -306,7 +306,7 @@ export async function runAiTask(
         status: result.status,
         provider: provider.id,
         outputSummary: JSON.stringify(input.fallback),
-        failureReason: AI_NOT_CONNECTED_MESSAGE,
+        failureReason: sanitizeAiText(AI_NOT_CONNECTED_MESSAGE, 400),
       },
     });
     await recordUsage(db, actor.businessId, result.status);
@@ -340,7 +340,7 @@ export async function runAiTask(
             model: completed.model,
             output: input.fallback,
             message: AI_VALIDATION_MESSAGE,
-            failureReason: AI_VALIDATION_MESSAGE,
+            failureReason: sanitizeAiText(AI_VALIDATION_MESSAGE, 400),
             retryable: false,
             usage: completed.usage,
             interactionId: pending.id,
@@ -356,7 +356,7 @@ export async function runAiTask(
               completionTokens: completed.usage?.completionTokens,
               retryCount: attempts - 1,
               outputSummary: JSON.stringify(input.fallback),
-              failureReason: AI_VALIDATION_MESSAGE,
+              failureReason: sanitizeAiText(AI_VALIDATION_MESSAGE, 400),
             },
           });
           await recordUsage(db, actor.businessId, result.status, completed.usage);
@@ -400,7 +400,7 @@ export async function runAiTask(
         model: completed.model ?? readAiModel(),
         output: input.fallback,
         message: AI_FAILURE_MESSAGE,
-        failureReason: completed.error,
+        failureReason: sanitizeAiText(completed.error, 400),
         retryable: false,
         interactionId: pending.id,
       };
@@ -413,7 +413,7 @@ export async function runAiTask(
           latencyMs: completed.latencyMs,
           retryCount: attempts - 1,
           outputSummary: JSON.stringify(input.fallback),
-          failureReason: completed.error,
+          failureReason: sanitizeAiText(completed.error, 400),
         },
       });
       await recordUsage(db, actor.businessId, result.status);
@@ -428,7 +428,7 @@ export async function runAiTask(
     model: readAiModel(),
     output: input.fallback,
     message: AI_FAILURE_MESSAGE,
-    failureReason: lastFailure,
+    failureReason: sanitizeAiText(lastFailure, 400),
     retryable: false,
     usage: lastUsage,
     interactionId: pending.id,
@@ -437,7 +437,7 @@ export async function runAiTask(
     where: { id: pending.id },
     data: {
       status: result.status,
-      failureReason: lastFailure,
+      failureReason: sanitizeAiText(lastFailure, 400),
       outputSummary: JSON.stringify(input.fallback),
     },
   });

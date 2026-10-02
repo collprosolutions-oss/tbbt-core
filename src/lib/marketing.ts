@@ -163,6 +163,10 @@ export const MARKETING_OWNER_DRAFT_MAX_INPUT_CHARS = 2_000;
 export const MARKETING_OWNER_DRAFT_MAX_OUTPUT_TOKENS = 400;
 export const MARKETING_OWNER_DRAFT_MONTHLY_REQUEST_LIMIT = 25;
 export const MARKETING_OWNER_DRAFT_MONTHLY_TOKEN_BUDGET = 8_000;
+export const MARKETING_OWNER_DRAFT_BURST_LIMIT = 5;
+export const MARKETING_OWNER_DRAFT_BURST_WINDOW_MS = 60_000;
+export const MARKETING_OWNER_DRAFT_BURST_BOUNDED_MESSAGE =
+  "Too many draft requests in a short window. No draft was created.";
 
 export function canRequestOwnerMarketingContentDraft(role: string) {
   return role === "OWNER";

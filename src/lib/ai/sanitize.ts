@@ -7,7 +7,7 @@ const SECRET_KEY_PATTERN =
   /(password|token|secret|authorization|cookie|ssn|cardNumber|cvv|totp|backupCode|api[_-]?key|private[_-]?key)/i;
 
 const SECRET_VALUE_PATTERN =
-  /(sk_live_|sk_test_|whsec_|Bearer\s+[A-Za-z0-9._-]+|BLOB_READ_WRITE_TOKEN)/i;
+  /(sk_live_|sk_test_|sk-proj-[A-Za-z0-9_-]+|whsec_|Bearer\s+[A-Za-z0-9._-]+|BLOB_READ_WRITE_TOKEN)/i;
 
 export function sanitizeAiText(value: string, max = 8_000) {
   const stripped = value
