@@ -18,7 +18,13 @@ export function WritingAssistBar({
 }) {
   const [state, action, pending] = useActionState(applyWritingAction, initial);
   const [suggestion, setSuggestion] = useState<string | null>(null);
-  const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
+  // Empty on the first server and client paint so the hidden attempt id
+  // cannot hydrate-mismatch on Website Publish.
+  const [attemptId, setAttemptId] = useState("");
+
+  useEffect(() => {
+    setAttemptId((current) => current || crypto.randomUUID());
+  }, []);
 
   useEffect(() => {
     if (state.keptOriginal) {
@@ -47,7 +53,7 @@ export function WritingAssistBar({
             value={item}
             size="xs"
             variant="outline"
-            disabled={pending}
+            disabled={pending || !attemptId}
           >
             {WRITING_ACTION_LABELS[item]}
           </Button>

@@ -375,7 +375,10 @@ check(
     formSrc.includes("Publish attempt is missing an idempotency key") &&
     panel.includes('name="idempotencyKey"') &&
     panel.includes("useFormAttemptKey") &&
-    !read("src/app/actions/website-engine.ts").includes("randomUUID()"),
+    !read("src/app/actions/website-engine.ts").includes("randomUUID()") &&
+    !panel.includes("useState(newAttemptKey)") &&
+    panel.includes('useState("")') &&
+    panel.includes("disabled={publishing || !publishKey}"),
 );
 check(
   "Owner editor lists gallery drafts and switches local-pair copy",

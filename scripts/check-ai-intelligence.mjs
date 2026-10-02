@@ -170,6 +170,12 @@ try {
       reviewFormSrc.includes('name="attemptId"'),
   );
   check(
+    "Writing assist does not seed a random attempt id during SSR",
+    !writingBarSrc.includes("useState(() => crypto.randomUUID())") &&
+      writingBarSrc.includes('useState("")') &&
+      writingBarSrc.includes("disabled={pending || !attemptId}"),
+  );
+  check(
     "PENDING/in-progress keeps the same attempt ID",
     shouldRotateAiAttemptId({ inProgress: true, message: AI_IN_PROGRESS_MESSAGE }) === false &&
       shouldRotateAiAttemptId({ message: AI_IN_PROGRESS_MESSAGE }) === false &&
