@@ -15,6 +15,7 @@ export {
   customerRecordsExportFilename,
   customerRecordsExportPageTruncationMessage,
   customerRecordsExportPropertyTruncationMessage,
+  customerRecordsExportCreditTruncationMessage,
   customerRecordsExportRelatedTruncationMessage,
   customerRecordsExportTimeCardTruncationMessage,
   defaultCustomerRecordsExportLimits,

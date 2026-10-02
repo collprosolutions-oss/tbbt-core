@@ -7,6 +7,7 @@ import {
   customerRecordsExportFileTruncationMessage,
   customerRecordsExportPageTruncationMessage,
   customerRecordsExportPropertyTruncationMessage,
+  customerRecordsExportCreditTruncationMessage,
   customerRecordsExportRelatedTruncationMessage,
   customerRecordsExportTimeCardTruncationMessage,
   type CustomerRecordsExportDocument,
@@ -38,7 +39,8 @@ export function CustomerRecordsExportPanel({
       packet.estimates.truncated ||
       packet.jobs.truncated ||
       packet.invoices.truncated ||
-      packet.payments.truncated,
+      packet.payments.truncated ||
+      packet.credits.truncated,
   );
   const timeCardsTruncated = document.customers.some((packet) => packet.timeCards.truncated);
   const filesTruncated = document.customers.some((packet) => packet.files.truncated);
@@ -51,8 +53,8 @@ export function CustomerRecordsExportPanel({
           <CardDescription>
             Versioned {CUSTOMER_RECORDS_EXPORT_CONTRACT} snapshot of recorded customers and their
             same-business properties, structured addresses, requests, estimates, jobs, invoices,
-            payments, and time cards. This is not the Settings business ZIP, not live
-            synchronization, and not a shared database.
+            payments, invoice credits, and time cards. This is not the Settings business ZIP, not
+            live synchronization, and not a shared database.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
@@ -82,7 +84,7 @@ export function CustomerRecordsExportPanel({
           {relatedTruncated ? (
             <p className="text-muted-foreground">
               {customerRecordsExportRelatedTruncationMessage(
-                "Related requests, estimates, jobs, invoices, payments, or time cards",
+                "Related requests, estimates, jobs, invoices, payments, credits, or time cards",
                 document.limits.relatedRecordLimit,
               )}
             </p>
@@ -90,6 +92,11 @@ export function CustomerRecordsExportPanel({
           {timeCardsTruncated ? (
             <p className="text-muted-foreground">
               {customerRecordsExportTimeCardTruncationMessage(document.limits.relatedRecordLimit)}
+            </p>
+          ) : null}
+          {document.customers.some((packet) => packet.credits.truncated) ? (
+            <p className="text-muted-foreground">
+              {customerRecordsExportCreditTruncationMessage(document.limits.relatedRecordLimit)}
             </p>
           ) : null}
           {filesTruncated ? (
@@ -131,7 +138,8 @@ export function CustomerRecordsExportPanel({
                       {packet.properties.count} properties · {packet.requests.count} requests ·{" "}
                       {packet.estimates.count} estimates · {packet.jobs.count} jobs ·{" "}
                       {packet.invoices.count} invoices · {packet.payments.count} payments ·{" "}
-                      {packet.timeCards.count} time cards · {packet.files.count} file refs
+                      {packet.credits.count} credits · {packet.timeCards.count} time cards ·{" "}
+                      {packet.files.count} file refs
                     </p>
                   </div>
                   <Link

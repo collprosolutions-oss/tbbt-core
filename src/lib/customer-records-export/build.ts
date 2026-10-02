@@ -44,6 +44,7 @@ export type ExportableCustomerRecord = {
   jobCount: number;
   invoiceCount: number;
   paymentCount: number;
+  creditCount: number;
   timeCardCount: number;
   updatedAt: Date;
 };
@@ -102,6 +103,7 @@ export async function listExportableCustomerRecords(
       jobCount: packet.jobs.count,
       invoiceCount: packet.invoices.count,
       paymentCount: packet.payments.count,
+      creditCount: packet.credits.count,
       timeCardCount: packet.timeCards.count,
       updatedAt: new Date(packet.customer.updatedAt),
     })),
@@ -248,7 +250,7 @@ async function buildCustomerPacket(
   },
 ): Promise<CustomerRecordsExportCustomerPacket> {
   const businessId = access.businessId;
-  const [properties, requests, estimates, jobs, invoices, payments, timeCards] = await Promise.all([
+  const [properties, requests, estimates, jobs, invoices, payments, credits, timeCards] = await Promise.all([
     prisma.property.findMany({
       where: { businessId, customerId: customer.id },
       select: {
@@ -356,6 +358,24 @@ async function buildCustomerPacket(
       orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
       take: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1,
     }),
+    prisma.invoiceCredit.findMany({
+      where: {
+        businessId,
+        invoice: { is: { businessId, customerId: customer.id } },
+      },
+      select: {
+        id: true,
+        businessId: true,
+        customerId: true,
+        invoiceId: true,
+        amount: true,
+        reason: true,
+        createdAt: true,
+        invoice: { select: { businessId: true, customerId: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1,
+    }),
     prisma.timeEntry.findMany({
       where: {
         businessId,
@@ -398,6 +418,12 @@ async function buildCustomerPacket(
   const ownedPayments = payments.filter(
     (row) => row.businessId === businessId && row.customerId === customer.id,
   );
+  const ownedCredits = credits.filter(
+    (row) =>
+      row.businessId === businessId &&
+      row.invoice.businessId === businessId &&
+      row.invoice.customerId === customer.id,
+  );
   const ownedTimeCards = timeCards.filter(
     (row) =>
       row.businessId === businessId &&
@@ -412,6 +438,7 @@ async function buildCustomerPacket(
     ...ownedJobs,
     ...ownedInvoices,
     ...ownedPayments,
+    ...ownedCredits,
     ...ownedTimeCards,
   ]) {
     access.assertOwned(row);
@@ -508,6 +535,17 @@ async function buildCustomerPacket(
     })),
     CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
   );
+  const creditCollection = collection(
+    ownedCredits.map((row) => ({
+      id: row.id,
+      customerId: row.customerId,
+      invoiceId: row.invoiceId,
+      amount: money(row.amount),
+      reason: row.reason,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+  );
   const timeCardCollection = collection(
     ownedTimeCards.map((row) => ({
       id: row.id,
@@ -548,6 +586,7 @@ async function buildCustomerPacket(
     jobs: jobCollection,
     invoices: invoiceCollection,
     payments: paymentCollection,
+    credits: creditCollection,
     timeCards: timeCardCollection,
     files: collection(fileRefs, CUSTOMER_RECORDS_EXPORT_FILE_LIMIT),
   };

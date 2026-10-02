@@ -654,7 +654,7 @@ export async function buildBusinessExportZip(
         ? "complete"
         : "partial";
 
-  const [saasSubscription, productAddons, productGrants] = await Promise.all([
+  const [saasSubscription, productAddons, productGrants, invoiceCredits] = await Promise.all([
     prisma.businessSaasSubscription.findUnique({
       where: { businessId },
       select: {
@@ -694,6 +694,19 @@ export async function buildBusinessExportZip(
         revokedAt: true,
       },
     }),
+    prisma.invoiceCredit.findMany({
+      where: { businessId },
+      select: {
+        id: true,
+        invoiceId: true,
+        customerId: true,
+        amount: true,
+        reason: true,
+        recordedByMembershipId: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
   ]);
   const accountingSource: AccountingExportSource = {
     businessId: business.id,
@@ -701,6 +714,11 @@ export async function buildBusinessExportZip(
     slug: business.slug,
     invoices,
     payments,
+    credits: invoiceCredits.map((row) => ({
+      id: row.id,
+      invoiceId: row.invoiceId,
+      amount: row.amount,
+    })),
     expenses,
     customers: customers.map((customer) => ({ id: customer.id, name: customer.name })),
     jobs: jobs.map((job) => ({ id: job.id })),
@@ -720,7 +738,7 @@ export async function buildBusinessExportZip(
           businessName: business.name,
           slug: business.slug,
           note:
-            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. invoices.csv, payments.csv, and expenses.csv are recorded TBBT truth for an accountant: Payment rows are never inferred from PAID invoice status, and voided expenses are omitted.",
+            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. invoices.csv, payments.csv, expenses.csv, and invoice-credits.csv are recorded TBBT truth for an accountant: Payment rows are never inferred from PAID invoice status, InvoiceCredit rows reduce Amount Remaining, and voided expenses are omitted. This ZIP is not size-capped; it loads every matching tenant row into memory.",
           documentExport,
           documentExportError: documentExportError ?? null,
           exportedDocumentCount,
@@ -759,6 +777,29 @@ export async function buildBusinessExportZip(
     { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },
     { name: "payments.csv", data: accountingPaymentsCsv(accountingSource) },
     { name: "expenses.csv", data: accountingExpensesCsv(accountingSource) },
+    {
+      name: "invoice-credits.csv",
+      data: toCsv(
+        [
+          "id",
+          "invoiceId",
+          "customerId",
+          "amount",
+          "reason",
+          "recordedByMembershipId",
+          "createdAt",
+        ],
+        invoiceCredits.map((row) => ({
+          id: row.id,
+          invoiceId: row.invoiceId,
+          customerId: row.customerId ?? "",
+          amount: exportEstimateTotal(row.amount),
+          reason: row.reason,
+          recordedByMembershipId: row.recordedByMembershipId,
+          createdAt: row.createdAt,
+        })),
+      ),
+    },
     { name: "time-entries.csv", data: toCsv(headersOf(timeEntries), timeEntries) },
     { name: "reviews.csv", data: toCsv(headersOf(reviews), reviews) },
     { name: "review-requests.csv", data: toCsv(headersOf(reviewRequests), reviewRequests) },

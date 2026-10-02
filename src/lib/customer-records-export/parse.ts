@@ -243,6 +243,12 @@ function parseCustomerPacket(input: unknown, index: number): CustomerRecordsExpo
       CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
       (item, itemIndex) => parsePayment(item, index, itemIndex, customer.id),
     ),
+    credits: parseCollection(
+      value.credits,
+      `customers[${index}].credits`,
+      CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+      (item, itemIndex) => parseCredit(item, index, itemIndex, customer.id),
+    ),
     timeCards: parseCollection(
       value.timeCards,
       `customers[${index}].timeCards`,
@@ -475,6 +481,29 @@ function parsePayment(
     throw invalid(`${label}.customerId must match the parent customer`);
   }
   return payment;
+}
+
+function parseCredit(
+  input: unknown,
+  customerIndex: number,
+  index: number,
+  customerId: string,
+): CustomerRecordsExportDocument["customers"][number]["credits"]["items"][number] {
+  const label = `customers[${customerIndex}].credits.items[${index}]`;
+  const value = asObject(input, label);
+  assertAbsent(value, `${label}`, ["idempotencyKey", "stripeCheckoutSessionId"]);
+  const credit = {
+    id: asNonEmptyString(value.id, `${label}.id`),
+    customerId: asNullableString(value.customerId, `${label}.customerId`),
+    invoiceId: asNonEmptyString(value.invoiceId, `${label}.invoiceId`),
+    amount: asMoney(value.amount, `${label}.amount`),
+    reason: asString(value.reason, `${label}.reason`),
+    createdAt: asIsoDate(value.createdAt, `${label}.createdAt`),
+  };
+  if (credit.customerId && credit.customerId !== customerId) {
+    throw invalid(`${label}.customerId must match the parent customer`);
+  }
+  return credit;
 }
 
 function parseTimeCard(

@@ -7,7 +7,7 @@ const CRC_TABLE = (() => {
   for (let i = 0; i < 256; i += 1) {
     let crc = i;
     for (let j = 0; j < 8; j += 1) {
-      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 8;
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
     }
     table[i] = crc >>> 0;
   }
@@ -103,9 +103,18 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
   return Buffer.concat([localBytes, centralBytes, eocd]);
 }
 
+const CSV_FORMULA_PREFIX = /^[=+\-@]/;
+const CSV_NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
+
+export function neutralizeCsvFormulaPrefix(value: string): string {
+  return CSV_FORMULA_PREFIX.test(value) && !CSV_NUMERIC_CELL.test(value) ? `'${value}` : value;
+}
+
 export function toCsvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const text = value instanceof Date ? value.toISOString() : String(value);
+  const text = neutralizeCsvFormulaPrefix(
+    value instanceof Date ? value.toISOString() : String(value),
+  );
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

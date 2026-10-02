@@ -171,7 +171,10 @@ check(
   businessExportSrc.includes("propertyId: true") &&
     businessExportSrc.includes("total: true") &&
     businessExportSrc.includes("activityType: true") &&
-    businessExportSrc.includes("exportEstimateTotal"),
+    businessExportSrc.includes("exportEstimateTotal") &&
+    businessExportSrc.includes("prisma.invoiceCredit.findMany") &&
+    businessExportSrc.includes("invoice-credits.csv") &&
+    businessExportSrc.includes("credits:"),
 );
 check(
   "Accounting ZIP reuses the same export gate and builders",

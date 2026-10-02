@@ -3,9 +3,10 @@
  *
  * This is a tenant-scoped portable JSON snapshot of recorded customers
  * and their same-business properties (with structured addresses),
- * requests, estimates, jobs, invoices, payments, and time cards. Large
- * exports are paginated. Private files stay permitted references or a
- * labeled omission — bytes and storage credentials are never included.
+ * requests, estimates, jobs, invoices, payments, invoice credits, and
+ * time cards. Large exports are paginated. Private files stay permitted
+ * references or a labeled omission — bytes and storage credentials are
+ * never included.
  *
  * It is not the Settings business ZIP, not the customers-page CSV, not
  * live synchronization, and not a shared database.
@@ -164,6 +165,15 @@ export type CustomerRecordsExportInvoice = {
   updatedAt: string;
 };
 
+export type CustomerRecordsExportCredit = {
+  id: string;
+  customerId: string | null;
+  invoiceId: string;
+  amount: string;
+  reason: string;
+  createdAt: string;
+};
+
 export type CustomerRecordsExportPayment = {
   id: string;
   customerId: string;
@@ -213,6 +223,7 @@ export type CustomerRecordsExportCustomerPacket = {
   jobs: CustomerRecordsExportCollection<CustomerRecordsExportJob>;
   invoices: CustomerRecordsExportCollection<CustomerRecordsExportInvoice>;
   payments: CustomerRecordsExportCollection<CustomerRecordsExportPayment>;
+  credits: CustomerRecordsExportCollection<CustomerRecordsExportCredit>;
   timeCards: CustomerRecordsExportCollection<CustomerRecordsExportTimeCard>;
   files: CustomerRecordsExportCollection<CustomerRecordsExportFileRef>;
 };
@@ -270,4 +281,8 @@ export function customerRecordsExportFileTruncationMessage(limit: number): strin
 
 export function customerRecordsExportTimeCardTruncationMessage(limit: number): string {
   return customerRecordsExportRelatedTruncationMessage("Time cards", limit);
+}
+
+export function customerRecordsExportCreditTruncationMessage(limit: number): string {
+  return customerRecordsExportRelatedTruncationMessage("Invoice credits", limit);
 }
