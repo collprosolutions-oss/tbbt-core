@@ -15,6 +15,7 @@ import {
 } from "@/lib/accounting-export";
 import { ForbiddenError } from "@/lib/authorization";
 import { VAULT_DOCUMENT_PURPOSE } from "@/lib/business-protection";
+import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
@@ -654,7 +655,8 @@ export async function buildBusinessExportZip(
         ? "complete"
         : "partial";
 
-  const [saasSubscription, productAddons, productGrants, invoiceCredits] = await Promise.all([
+  const [saasSubscription, productAddons, productGrants, invoiceCredits, projectDocuments] =
+    await Promise.all([
     prisma.businessSaasSubscription.findUnique({
       where: { businessId },
       select: {
@@ -703,6 +705,29 @@ export async function buildBusinessExportZip(
         amount: true,
         reason: true,
         recordedByMembershipId: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.storedAsset.findMany({
+      where: {
+        businessId,
+        category: "DOCUMENT",
+        purpose: PROJECT_DOCUMENT_PURPOSE,
+        visibility: "PRIVATE",
+        status: "READY",
+        deletedAt: null,
+        publicPath: null,
+      },
+      select: {
+        id: true,
+        jobId: true,
+        customerId: true,
+        originalFilename: true,
+        mimeType: true,
+        visibility: true,
+        status: true,
+        fileSizeBytes: true,
         createdAt: true,
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -774,6 +799,23 @@ export async function buildBusinessExportZip(
       ),
     },
     { name: "jobs.csv", data: toCsv(headersOf(jobs), jobs) },
+    {
+      name: "project-documents.csv",
+      data: toCsv(
+        [
+          "id",
+          "jobId",
+          "customerId",
+          "originalFilename",
+          "mimeType",
+          "visibility",
+          "status",
+          "fileSizeBytes",
+          "createdAt",
+        ],
+        projectDocuments,
+      ),
+    },
     { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },
     { name: "payments.csv", data: accountingPaymentsCsv(accountingSource) },
     { name: "expenses.csv", data: accountingExpensesCsv(accountingSource) },

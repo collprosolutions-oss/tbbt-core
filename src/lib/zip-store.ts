@@ -111,6 +111,27 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
   return Buffer.concat([localBytes, centralBytes, eocd]);
 }
 
+export function readZipStoreFiles(bytes: Buffer): Array<{ name: string; data: Buffer }> {
+  const files: Array<{ name: string; data: Buffer }> = [];
+  let offset = 0;
+  while (offset + 30 <= bytes.length) {
+    const signature = bytes.toString("binary", offset, offset + 4);
+    if (signature === "PK\u0001\u0002" || signature === "PK\u0005\u0006") break;
+    if (signature !== "PK\u0003\u0004") {
+      throw new Error("Invalid ZIP local header.");
+    }
+    const size = bytes.readUInt32LE(offset + 18);
+    const nameLength = bytes.readUInt16LE(offset + 26);
+    const extraLength = bytes.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const name = bytes.toString("utf8", nameStart, nameStart + nameLength);
+    const dataStart = nameStart + nameLength + extraLength;
+    files.push({ name, data: Buffer.from(bytes.subarray(dataStart, dataStart + size)) });
+    offset = dataStart + size;
+  }
+  return files;
+}
+
 const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
 const CSV_NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
 
