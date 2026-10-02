@@ -342,6 +342,67 @@ check(
     resolveSaasEntitlement({ slug: "new-co", row: trialRow, now: windowStart }).canOperate === true,
 );
 check(
+  "A declined first payment during the live trial does not end operating access",
+  resolveSaasEntitlement({
+    slug: "new-co",
+    row: { ...trialRow, status: "incomplete" },
+    now: windowStart,
+  }).state === "trial_active" &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: { ...trialRow, status: "incomplete" },
+      now: windowStart,
+    }).canOperate === true,
+);
+check(
+  "incomplete_expired during the live trial stays trial_active even after eligibility-ended is recorded",
+  resolveSaasEntitlement({
+    slug: "new-co",
+    row: {
+      ...trialRow,
+      status: "incomplete_expired",
+      founderEligible: false,
+      founderEligibilityEndedAt: windowStart,
+    },
+    now: windowStart,
+  }).state === "trial_active" &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: {
+        ...trialRow,
+        status: "incomplete_expired",
+        founderEligible: false,
+        founderEligibilityEndedAt: windowStart,
+      },
+      now: windowStart,
+    }).canOperate === true,
+);
+check(
+  "Cancel after Founder conversion does not resurrect leftover trial days",
+  resolveSaasEntitlement({
+    slug: "new-co",
+    row: {
+      ...trialRow,
+      status: "canceled",
+      founderConvertedAt: windowStart,
+      founderEligibilityEndedAt: windowStart,
+      founderEligible: false,
+    },
+    now: windowStart,
+  }).state === "subscription_required" &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: {
+        ...trialRow,
+        status: "canceled",
+        founderConvertedAt: windowStart,
+        founderEligibilityEndedAt: windowStart,
+        founderEligible: false,
+      },
+      now: windowStart,
+    }).canOperate === false,
+);
+check(
   "Expired unpaid trial receives subscription-required entitlement",
   resolveSaasEntitlement({
     slug: "new-co",
@@ -532,6 +593,89 @@ try {
     skipped.alreadyComplete === false &&
       skipStarted.started === true &&
       skipStarted.trialEndsAt.getTime() - skipStarted.trialStartedAt.getTime() === TBBT_FOUNDER_TRIAL_MS,
+  );
+
+  console.log("\nTEST — Failed Checkout during a live trial does not consume the Founder trial");
+  const failedCard = await seedBusiness("Failed Card Trial Co", {
+    firstRunSetupCompletedAt: now,
+    starterServicesSetupCompletedAt: now,
+    websiteSetupCompletedAt: now,
+  });
+  await startFounderTrialIfEligible(prisma, {
+    businessId: failedCard.business.id,
+    slug: failedCard.business.slug,
+    changedByMembershipId: failedCard.membership.id,
+    now,
+  });
+  await applySaasBillingStripeEvent(
+    prisma,
+    saasSubscriptionEvent({
+      id: "evt_failed_card_incomplete",
+      type: "customer.subscription.updated",
+      businessId: failedCard.business.id,
+      customerId: "cus_failed_card",
+      subscriptionId: "sub_failed_card",
+      status: "incomplete",
+    }),
+  );
+  await applySaasBillingStripeEvent(
+    prisma,
+    saasSubscriptionEvent({
+      id: "evt_failed_card_incomplete_expired",
+      type: "customer.subscription.updated",
+      businessId: failedCard.business.id,
+      customerId: "cus_failed_card",
+      subscriptionId: "sub_failed_card",
+      status: "incomplete_expired",
+    }),
+  );
+  const failedCardRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: failedCard.business.id },
+  });
+  const failedCardEntitlement = await loadSaasEntitlement(prisma, failedCard.business, now);
+  check(
+    "incomplete then incomplete_expired during a live trial stays trial_active",
+    failedCardRow?.status === "incomplete_expired" &&
+      Boolean(failedCardRow?.founderEligibilityEndedAt) &&
+      failedCardRow?.founderConvertedAt == null &&
+      failedCardEntitlement.state === "trial_active" &&
+      failedCardEntitlement.canOperate === true,
+  );
+
+  const createdExpired = await seedBusiness("Created Expired Trial Co", {
+    firstRunSetupCompletedAt: now,
+    starterServicesSetupCompletedAt: now,
+    websiteSetupCompletedAt: now,
+  });
+  await startFounderTrialIfEligible(prisma, {
+    businessId: createdExpired.business.id,
+    slug: createdExpired.business.slug,
+    changedByMembershipId: createdExpired.membership.id,
+    now,
+  });
+  await applySaasBillingStripeEvent(
+    prisma,
+    saasSubscriptionEvent({
+      id: "evt_created_incomplete_expired",
+      type: "customer.subscription.created",
+      businessId: createdExpired.business.id,
+      customerId: "cus_created_expired",
+      subscriptionId: "sub_created_expired",
+      status: "incomplete_expired",
+    }),
+  );
+  const createdExpiredEntitlement = await loadSaasEntitlement(
+    prisma,
+    createdExpired.business,
+    now,
+  );
+  check(
+    "customer.subscription.created with incomplete_expired during a live trial stays trial_active",
+    (await prisma.businessSaasSubscription.findUnique({
+      where: { businessId: createdExpired.business.id },
+    }))?.status === "incomplete_expired" &&
+      createdExpiredEntitlement.state === "trial_active" &&
+      createdExpiredEntitlement.canOperate === true,
   );
 
   console.log("\nTEST — Existing businesses and CollPro stay usable");

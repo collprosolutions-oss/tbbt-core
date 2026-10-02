@@ -125,7 +125,15 @@ export function resolveSaasEntitlement(input: {
       detail: "The TBBT subscription has a payment problem. Operating access continues while this is resolved in Billing.",
     };
   }
-  if (trialEndsAt && now < trialEndsAt) {
+  // Leftover trialEndsAt must not resurrect access after a paid/converted
+  // subscription. A failed first payment (incomplete / incomplete_expired)
+  // during the original card-free trial still keeps the contractor on trial,
+  // even though applyFounderSubscriptionTransition records eligibility-ended
+  // on incomplete_expired.
+  const trialStillHonored =
+    Boolean(trialEndsAt && now < trialEndsAt) &&
+    !row?.founderConvertedAt;
+  if (trialStillHonored) {
     const days = trialDaysRemaining(trialEndsAt, now) ?? 0;
     return {
       ...base,
