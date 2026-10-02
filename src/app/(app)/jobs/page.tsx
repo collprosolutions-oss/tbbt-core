@@ -56,6 +56,7 @@ import {
   formatDurationMinutes,
 } from "@/lib/job-schedule";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { resolveMaterialDeposit } from "@/lib/material-deposit";
 import {
   depositPaidByEstimateIds,
@@ -477,6 +478,10 @@ export default async function JobsPage({
   );
 
   const jobsRawForList = jobsRaw;
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    jobsRawForList.map((job) => job.id),
+  );
   const depositPaid = await depositPaidByEstimateIds(
     prisma,
     access.businessId,
@@ -559,7 +564,7 @@ export default async function JobsPage({
       assignedMembershipId: job.assignedMembership?.id ?? null,
       amountLabel: currentTotal ? formatMoney(currentTotal) : null,
       invoice: invoice ? { id: invoice.id, status: invoice.status, totalLabel: formatMoney(invoice.total) } : null,
-      projectToken: job.projectToken,
+      projectToken: projectLinkActive.get(job.id) === false ? null : job.projectToken,
       photoCount: job.photos.length,
       additionalWorkRequestCount: job.additionalWorkRequests.length,
       scheduleDate: job.scheduledAt ? formatISODate(job.scheduledAt, timeZone) : "",

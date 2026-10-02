@@ -24,6 +24,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
@@ -234,6 +235,10 @@ export default async function InvoicesPage({
     creditsByInvoiceId,
   );
 
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    invoicesRaw.flatMap((invoice) => (invoice.job?.id ? [invoice.job.id] : [])),
+  );
   const invoices: InvoiceListItem[] = invoicesRaw.map((invoice) => {
     const breakdown = invoicePaymentBreakdown({
       status: invoice.status,
@@ -261,7 +266,10 @@ export default async function InvoicesPage({
         quantityLabel: line.quantity.toString(),
       })),
       jobId: invoice.job?.id ?? null,
-      jobProjectToken: invoice.job?.projectToken ?? null,
+      jobProjectToken:
+        invoice.job && projectLinkActive.get(invoice.job.id) === false
+          ? null
+          : invoice.job?.projectToken ?? null,
       paidAtLabel: invoice.paidAt ? formatDateTime(invoice.paidAt) : null,
       paymentMethodLabel: paymentMethodLabel(invoice.paymentMethod),
       paymentReference: invoice.paymentReference,

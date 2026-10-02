@@ -25,6 +25,7 @@ import {
   countBusinessJobs,
   countBusinessPayments,
 } from "@/lib/job-callback-ops";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export type PortalJobCallbackSubmitInput = {
@@ -93,10 +94,7 @@ export async function submitPortalJobCallback(
 
   try {
     return await db.$transaction(async (tx) => {
-      const job = await tx.job.findUnique({
-        where: { projectToken: token },
-        select: PORTAL_JOB_SELECT,
-      });
+      const job = await findLiveJobByProjectToken(tx, token, PORTAL_JOB_SELECT);
       if (!job) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
@@ -162,9 +160,9 @@ export async function submitPortalJobCallback(
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
     ) {
-      const job = await db.job.findUnique({
-        where: { projectToken: token },
-        select: { id: true, businessId: true },
+      const job = await findLiveJobByProjectToken(db, token, {
+        id: true,
+        businessId: true,
       });
       if (!job) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };

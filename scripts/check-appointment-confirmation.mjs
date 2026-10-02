@@ -76,7 +76,7 @@ const accessSrc = readRepo("src/lib/property-access.ts");
 console.log("\nSTATIC — Security and lifecycle contracts");
 check(
   "Customer mutations look up Job by projectToken only",
-  publicSrc.includes("where: { projectToken: token }") &&
+  publicSrc.includes("findLiveJobByProjectToken") &&
     !publicSrc.includes("formData.get(\"businessId\")") &&
     !publicSrc.includes("formData.get(\"jobId\")") &&
     !publicSrc.includes("formData.get(\"customerId\")"),

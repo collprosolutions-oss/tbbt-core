@@ -55,7 +55,7 @@ export type JobListItem = {
   assignedMembershipId: string | null;
   amountLabel: string | null;
   invoice: { id: string; status: string; totalLabel: string } | null;
-  projectToken: string;
+  projectToken: string | null;
   photoCount: number;
   additionalWorkRequestCount: number;
   // Schedule form defaults (see toDateInput/toTimeInput on the Work Order page).
@@ -577,7 +577,9 @@ function JobDetailsPanel({
             <Link href={`/customers/${job.customer.id}`}>Open Customer</Link>
           </Button>
         ) : null}
-        <CopyProjectLinkButton projectToken={job.projectToken} />
+        {job.projectToken ? (
+          <CopyProjectLinkButton projectToken={job.projectToken} />
+        ) : null}
         <Button asChild variant="ghost" className="ml-auto">
           <Link href={`/jobs/${job.id}`}>
             <ExternalLink className="size-4" />

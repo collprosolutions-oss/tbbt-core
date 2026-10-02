@@ -59,6 +59,8 @@ const VARIANTS: Record<string, BadgeVariant> = {
   NO_RETURN_VISIT: "outline",
   CUSTOMER_WITHDREW: "outline",
   RECORDED_ONLY: "outline",
+  ACTIVE: "success",
+  REVOKED: "destructive",
 };
 
 const LABELS: Record<string, string> = {
@@ -100,6 +102,8 @@ const LABELS: Record<string, string> = {
   NO_RETURN_VISIT: "No return visit",
   CUSTOMER_WITHDREW: "Customer withdrew",
   RECORDED_ONLY: "Recorded only",
+  ACTIVE: "Active",
+  REVOKED: "Revoked",
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -7,6 +7,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { createPublicServiceRequest, type PublicIntakeInput } from "@/lib/public-intake";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   CLEANING_REPEAT_VISIT_UNAVAILABLE_MESSAGE,
   cleaningRepeatVisitEligible,
@@ -97,10 +98,7 @@ export async function createCleaningCustomerRepeatVisitRequest(
     return { ok: false, error: CLEANING_REPEAT_VISIT_UNAVAILABLE_MESSAGE };
   }
 
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: SOURCE_JOB_SELECT,
-  });
+  const job = await findLiveJobByProjectToken(db, token, SOURCE_JOB_SELECT);
   if (!job || job.business.id !== job.businessId) {
     return { ok: false, error: CLEANING_REPEAT_VISIT_UNAVAILABLE_MESSAGE };
   }

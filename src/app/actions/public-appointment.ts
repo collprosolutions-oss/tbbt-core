@@ -19,6 +19,7 @@ import {
 } from "@/lib/appointment-data";
 import { accessArrangementWriteData } from "@/lib/property-access";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 
 export type CustomerAppointmentActionState = {
   status?: string;
@@ -49,26 +50,23 @@ function parseProposalId(value: string) {
 async function findJobByToken(token: string) {
   if (!token) return null;
   await ensureAppointmentConfirmationSchema(prisma);
-  return prisma.job.findUnique({
-    where: { projectToken: token },
-    select: {
-      id: true,
-      businessId: true,
-      projectToken: true,
-      scheduledAt: true,
-      scheduledDurationMinutes: true,
-      appointmentConfirmationStatus: true,
-      appointmentProposalId: true,
-      appointmentConfirmedForProposalId: true,
-      appointmentConfirmationSource: true,
-      propertyAccessMethod: true,
-      propertyAccessInstructions: true,
-      propertyAccessContactName: true,
-      propertyAccessContactInfo: true,
-      propertyAccessPickupLocation: true,
-      propertyAccessNote: true,
-      appointmentChangeRequestNote: true,
-    },
+  return findLiveJobByProjectToken(prisma, token, {
+    id: true,
+    businessId: true,
+    projectToken: true,
+    scheduledAt: true,
+    scheduledDurationMinutes: true,
+    appointmentConfirmationStatus: true,
+    appointmentProposalId: true,
+    appointmentConfirmedForProposalId: true,
+    appointmentConfirmationSource: true,
+    propertyAccessMethod: true,
+    propertyAccessInstructions: true,
+    propertyAccessContactName: true,
+    propertyAccessContactInfo: true,
+    propertyAccessPickupLocation: true,
+    propertyAccessNote: true,
+    appointmentChangeRequestNote: true,
   });
 }
 

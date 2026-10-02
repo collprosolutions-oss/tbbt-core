@@ -56,6 +56,7 @@ import {
   ownerTodayViewerHasAssignedFieldJob,
 } from "@/lib/owner-today";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 
 export const metadata: Metadata = {
@@ -165,12 +166,18 @@ export default async function OwnerTodayPage() {
     }),
   ]);
 
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    todayJobs.map((job) => job.id),
+  );
   const jobs = buildOwnerTodayJobs(todayJobs, {
     businessId: access.businessId,
     range: todayRange,
     timeZone,
     viewerMembershipId,
-  });
+  }).map((job) =>
+    projectLinkActive.get(job.jobId) === false ? { ...job, projectToken: null } : job,
+  );
   const appointmentAttention = buildOwnerTodayAppointmentAttention(appointmentJobs, {
     businessId: access.businessId,
     start: todayRange.start,

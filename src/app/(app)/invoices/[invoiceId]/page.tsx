@@ -41,6 +41,7 @@ import {
 } from "@/lib/payments/go-live";
 import { loadRecordJourney } from "@/lib/record-nav";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
@@ -75,6 +76,13 @@ export default async function InvoicePage({
     notFound();
   }
   access.assertOwned(invoice);
+  const projectLinkActive = invoice.job
+    ? await loadProjectLinkActiveByJobIds(prisma, [invoice.job.id])
+    : new Map<string, boolean>();
+  const liveProjectToken =
+    invoice.job && projectLinkActive.get(invoice.job.id) !== false
+      ? invoice.job.projectToken
+      : null;
 
   const recordNavItems = await loadRecordJourney(prisma, access, {
     kind: "invoice",
@@ -161,10 +169,10 @@ export default async function InvoicePage({
               remainingDue={breakdown.amountDue.toFixed(2)}
             />
           ) : null}
-          {invoice.job?.projectToken && (isSent || isPaid) ? (
+          {liveProjectToken && (isSent || isPaid) ? (
             <CopyProjectLinkButton
-              projectToken={invoice.job.projectToken}
-              hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+              projectToken={liveProjectToken}
+              hrefPath={`/p/${liveProjectToken}/invoice`}
               label="Copy invoice link"
             />
           ) : null}
@@ -229,10 +237,10 @@ export default async function InvoicePage({
           </CardHeader>
           <CardContent className="space-y-3">
             <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
-            {invoice.job?.projectToken ? (
+            {liveProjectToken ? (
               <CopyProjectLinkButton
-                projectToken={invoice.job.projectToken}
-                hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+                projectToken={liveProjectToken}
+                hrefPath={`/p/${liveProjectToken}/invoice`}
                 label="Copy invoice link"
               />
             ) : (

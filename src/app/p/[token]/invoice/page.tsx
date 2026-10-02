@@ -13,6 +13,7 @@ import {
 import { listInvoiceCreditsForInvoice } from "@/lib/invoice-credits";
 import { invoicePaymentBreakdown, listProjectPayments, paymentsBelongingToInvoice } from "@/lib/project-payments";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 
 export const metadata: Metadata = {
   title: "Invoice",
@@ -37,16 +38,13 @@ export default async function CustomerInvoicePage({
     );
   }
 
-  const payable = await prisma.job.findUnique({
-    where: { projectToken: token },
-    select: {
-      id: true,
-      business: { select: { id: true } },
-      invoices: {
-        where: { id: document.invoiceId },
-        take: 1,
-        select: { id: true, status: true, total: true, kind: true },
-      },
+  const payable = await findLiveJobByProjectToken(prisma, token, {
+    id: true,
+    business: { select: { id: true } },
+    invoices: {
+      where: { id: document.invoiceId },
+      take: 1,
+      select: { id: true, status: true, total: true, kind: true },
     },
   });
   const invoice = payable?.invoices[0] ?? null;

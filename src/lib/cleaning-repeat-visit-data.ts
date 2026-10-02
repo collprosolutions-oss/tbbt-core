@@ -9,6 +9,7 @@ import {
   cleaningRepeatVisitEligible,
   resolveCleaningRepeatVisitTradeCode,
 } from "@/lib/cleaning-repeat-visit";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { emptySelectedWork, type SelectedWorkState } from "@/lib/selected-work";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -151,10 +152,7 @@ export async function loadCleaningRepeatVisitPublicView(
   const projectToken = token.trim();
   if (!projectToken) return { status: "unavailable" };
 
-  const job = await db.job.findUnique({
-    where: { projectToken },
-    select: SOURCE_JOB_SELECT,
-  });
+  const job = await findLiveJobByProjectToken(db, projectToken, SOURCE_JOB_SELECT);
   if (!job || job.business.id !== job.businessId) return { status: "unavailable" };
 
   const tradeCode = resolveCleaningRepeatVisitJob(job);

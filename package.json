@@ -200,6 +200,7 @@
     "test:retention-follow-up-due": "node --experimental-strip-types scripts/check-retention-follow-up-due.mjs",
     "test:day-route-appointment": "node --experimental-strip-types scripts/check-day-route-appointment.mjs",
     "test:day-route-appointment-notice": "node --experimental-strip-types scripts/check-day-route-appointment-notice.mjs",
+    "test:project-link": "node --experimental-strip-types scripts/check-project-link.mjs",
     "test:job-callback": "node --experimental-strip-types scripts/check-job-callback.mjs",
     "test:portal-job-callback": "node --experimental-strip-types scripts/check-portal-job-callback.mjs",
     "test:job-aftercare": "node --experimental-strip-types scripts/check-job-aftercare.mjs",

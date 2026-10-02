@@ -112,7 +112,9 @@ export function OwnerTodayJobCard({
             <Link href={job.fieldHref}>Open field view</Link>
           </Button>
         ) : null}
-        <CopyProjectLinkButton projectToken={job.projectToken} label="Copy portal link" />
+        {job.projectToken ? (
+          <CopyProjectLinkButton projectToken={job.projectToken} label="Copy portal link" />
+        ) : null}
         {job.directionsHref ? <CopyDirectionsLinkButton href={job.directionsHref} /> : null}
         {showStart && job.canStart && !job.appointmentConfirmed ? (
           <Button asChild size="sm" variant="outline">

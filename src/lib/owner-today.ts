@@ -349,7 +349,7 @@ export type OwnerTodayJobView = {
   jobHref: string;
   customerHref: string | null;
   fieldHref: string | null;
-  projectToken: string;
+  projectToken: string | null;
   directionsHref: string | null;
   callHref: string | null;
   canStart: boolean;

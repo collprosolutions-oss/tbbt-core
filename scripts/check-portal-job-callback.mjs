@@ -169,8 +169,8 @@ const DANGEROUS = /\beval\s*\(|new\s+Function\b|Function\s*\(|\$executeRawUnsafe
 console.log("\nSTATIC — token-only portal request, existing review path, no job/message/warranty");
 check(
   "Token-only ownership; browser businessId/customerId/jobId are never authorization",
-  dataSrc.includes("where: { projectToken }") &&
-    opsSrc.includes("where: { projectToken: token }") &&
+  dataSrc.includes("findLiveJobByProjectToken") &&
+    opsSrc.includes("findLiveJobByProjectToken") &&
     actionSrc.includes('readString(formData, "projectToken")') &&
     !actionSrc.includes('readString(formData, "businessId")') &&
     !actionSrc.includes('readString(formData, "customerId")') &&

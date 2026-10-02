@@ -3,11 +3,12 @@
  * authorize → PUT → finalize path. Authorization is the Job's own
  * unguessable projectToken — never a client-supplied businessId or jobId.
  *
- * Project tokens have no expiry or revocation. Upload stores a PRIVATE
- * DOCUMENT. It does not approve, publish, message, invoice, or change
- * Job status.
+ * Live project tokens only — a rotated or revoked token is refused.
+ * Upload stores a PRIVATE DOCUMENT. It does not approve, publish,
+ * message, invoice, or change Job status.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   abortManagedUpload,
   authorizeManagedUpload,
@@ -106,16 +107,13 @@ function isPrivateUnpublishedProjectDocument(asset: {
 async function findJobByProjectToken(db: Db, token: string) {
   const trimmed = token.trim();
   if (!trimmed) return null;
-  return db.job.findUnique({
-    where: { projectToken: trimmed },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      propertyId: true,
-      status: true,
-      projectToken: true,
-    },
+  return findLiveJobByProjectToken(db, trimmed, {
+    id: true,
+    businessId: true,
+    customerId: true,
+    propertyId: true,
+    status: true,
+    projectToken: true,
   });
 }
 

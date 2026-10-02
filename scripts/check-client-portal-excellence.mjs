@@ -67,12 +67,12 @@ console.log("\nSTATIC — Canonical portal only, no second portal or schema");
 check(
   "Still the existing /p/[token] Project Portal",
   page.includes("Customer Project Portal") &&
-    page.includes("where: { projectToken: token }") &&
+    page.includes("findLiveJobByProjectToken") &&
     !existsSync(new URL("../src/app/portal/", import.meta.url).pathname),
 );
 check(
   "Portal never accepts a client-supplied businessId/customerId/jobId",
-  page.includes("where: { projectToken: token }") &&
+  page.includes("findLiveJobByProjectToken") &&
     !page.includes("formData.get(\"businessId\")") &&
     !page.includes("formData.get(\"jobId\")") &&
     !page.includes("formData.get(\"customerId\")"),
@@ -99,7 +99,7 @@ check(
   page.includes("loadPortalCustomerCommunications") &&
     page.includes("loadPortalAdditionalWorkRequests") &&
     page.includes("prisma,\n    token") &&
-    homeHelper.includes("where: { projectToken: trimmed }") &&
+    homeHelper.includes("findLiveJobByProjectToken") &&
     homeHelper.includes("businessId: job.businessId") &&
     homeHelper.includes("customerId: job.customerId"),
 );

@@ -24,6 +24,7 @@ import {
   findInvoiceCheckoutSession,
   recordInvoiceCheckoutSession,
 } from "@/lib/payments/checkout-session-record";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import { resolveChosenCommercialScope } from "@/lib/estimate-options";
 import {
@@ -460,23 +461,20 @@ export async function createCustomerInvoiceCheckout(
   options: { appUrl?: string | null } = {},
 ): Promise<CheckoutSessionResult> {
   const job = token
-    ? await db.job.findUnique({
-        where: { projectToken: token },
-        select: {
-          id: true,
-          businessId: true,
-          business: { select: { slug: true } },
-          invoices: {
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-            select: {
-              id: true,
-              businessId: true,
-              status: true,
-              total: true,
-              jobId: true,
-              kind: true,
-              createdAt: true,
-            },
+    ? await findLiveJobByProjectToken(db, token, {
+        id: true,
+        businessId: true,
+        business: { select: { slug: true } },
+        invoices: {
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: {
+            id: true,
+            businessId: true,
+            status: true,
+            total: true,
+            jobId: true,
+            kind: true,
+            createdAt: true,
           },
         },
       })
@@ -894,9 +892,8 @@ async function loadDepositEstimateByCustomerToken(
   if (estimate) {
     return { estimate, returnPath: `/e/${token}` as const };
   }
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: { estimate: { select: DEPOSIT_ESTIMATE_SELECT } },
+  const job = await findLiveJobByProjectToken(db, token, {
+    estimate: { select: DEPOSIT_ESTIMATE_SELECT },
   });
   if (job?.estimate) {
     return { estimate: job.estimate, returnPath: `/p/${token}` as const };
@@ -1096,14 +1093,11 @@ export async function reconcileProjectTokenCheckoutPayment(
   provider: PaymentProvider = getPaymentProvider(),
 ): Promise<ReconcileCheckoutResult> {
   const job = token
-    ? await db.job.findUnique({
-        where: { projectToken: token },
-        select: {
-          businessId: true,
-          invoices: {
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-            select: { id: true, status: true, createdAt: true },
-          },
+    ? await findLiveJobByProjectToken(db, token, {
+        businessId: true,
+        invoices: {
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { id: true, status: true, createdAt: true },
         },
       })
     : null;

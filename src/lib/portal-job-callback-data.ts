@@ -6,6 +6,7 @@
  */
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { JOB_CALLBACK_OPEN_STATUSES, parsePortalProjectToken } from "@/lib/job-callback";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -27,10 +28,7 @@ export async function loadPortalJobCallbackView(
   const projectToken = parsePortalProjectToken(token);
   if (!projectToken) return { status: "hidden" };
 
-  const job = await db.job.findUnique({
-    where: { projectToken },
-    select: PORTAL_JOB_SELECT,
-  });
+  const job = await findLiveJobByProjectToken(db, projectToken, PORTAL_JOB_SELECT);
   if (!job || job.status !== "COMPLETED") {
     return { status: "hidden" };
   }
