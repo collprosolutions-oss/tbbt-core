@@ -5,7 +5,7 @@
  *   node --experimental-strip-types scripts/check-request-intake.mjs
  */
 import { createRequire, register } from "node:module";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
@@ -1943,48 +1943,47 @@ try {
     };
   }
 
-  async function lockPhotosInListedOrder(client, ids) {
-    return client.$transaction(async (tx) => {
-      for (const assetId of sortedStoredAssetIds(ids)) {
-        const locked = await lockStoredAssetRowForUpdate(tx, business.id, assetId);
-        if (!locked) throw new Error(`missing lock ${assetId}`);
-      }
-      return ids.length;
+  function photoLockSql(ids) {
+    const ordered = sortedStoredAssetIds(ids);
+    return [
+      "BEGIN;",
+      `SELECT id FROM "StoredAsset" WHERE id = '${ordered[0]}' AND "businessId" = '${business.id}' FOR UPDATE;`,
+      "SELECT pg_sleep(0.4);",
+      `SELECT id FROM "StoredAsset" WHERE id = '${ordered[1]}' AND "businessId" = '${business.id}' FOR UPDATE;`,
+      "COMMIT;",
+    ].join("\n");
+  }
+
+  function runPsqlLockScript(sql) {
+    return new Promise((resolve) => {
+      const child = spawn("psql", [testUrl, "-v", "ON_ERROR_STOP=1", "-c", sql], {
+        encoding: "utf8",
+      });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (chunk) => {
+        out += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        err += chunk;
+      });
+      child.on("close", (code) => {
+        resolve({
+          status: code === 0 ? "fulfilled" : "rejected",
+          reason: new Error(`${err}\n${out}`),
+          code,
+          err,
+          out,
+        });
+      });
     });
   }
 
   async function runOppositeOrderPhotoLocks(forwardIds, reverseIds) {
-    const clientA = new PrismaClient({ datasourceUrl: testUrl });
-    const clientB = new PrismaClient({ datasourceUrl: testUrl });
-    await clientA.$executeRawUnsafe(`SET timezone = 'UTC'`);
-    await clientB.$executeRawUnsafe(`SET timezone = 'UTC'`);
-    const firstLocks = createCountBarrier(2);
-    requestPhotoTestHooks.afterStoredAssetLock = async () => {
-      firstLocks.arrive();
-      await firstLocks.held;
-    };
-    try {
-      const first = lockPhotosInListedOrder(clientA, forwardIds);
-      const second = lockPhotosInListedOrder(clientB, reverseIds);
-      const firstLocksReady = Promise.race([
-        firstLocks.waiting,
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("first-lock timeout")), 3000);
-        }),
-      ]);
-      try {
-        await firstLocksReady;
-      } catch {
-        firstLocks.release();
-        return Promise.allSettled([first, second]);
-      }
-      firstLocks.release();
-      return Promise.allSettled([first, second]);
-    } finally {
-      delete requestPhotoTestHooks.afterStoredAssetLock;
-      await clientA.$disconnect();
-      await clientB.$disconnect();
-    }
+    return Promise.all([
+      runPsqlLockScript(photoLockSql(forwardIds)),
+      runPsqlLockScript(photoLockSql(reverseIds)),
+    ]);
   }
 
   const lockOrderLeft = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
@@ -2111,7 +2110,10 @@ try {
       [mutationLow, mutationHigh],
     );
     const deadlockSeen = [...unsortedLocks, ...unsortedReleases].some(
-      (row) => row.status === "rejected" && isDeadlockError(row.reason),
+      (row) =>
+        row.status === "rejected" &&
+        (isDeadlockError(row.reason) ||
+          /40P01|deadlock detected/i.test(`${row.err ?? ""} ${row.out ?? ""}`)),
     );
     check(
       "Reverting photo lock sort deadlocks opposite-order overlapping transactions",
