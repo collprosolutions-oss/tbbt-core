@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ReceptionistDispositionForm } from "@/components/communications/receptionist-disposition-form";
 import { StatusBadge } from "@/components/status-badge";
 import { formatDateTime } from "@/lib/format";
 import type { ReceptionistRecoveryCenter } from "@/lib/communications/receptionist-recovery";
@@ -16,8 +17,10 @@ function directionLabel(direction: string) {
 
 export function ReceptionistRecoveryCenter({
   source,
+  businessId,
 }: {
   source: ReceptionistRecoveryCenter;
+  businessId: string;
 }) {
   return (
     <div className="space-y-4">
@@ -26,8 +29,10 @@ export function ReceptionistRecoveryCenter({
           <CardTitle>Recorded recovery facts</CardTitle>
           <CardDescription>
             This workspace reads PhoneInteraction and ReceptionistEvent rows
-            already stored for this business. It does not place calls, send
-            texts, send email, or invent a close disposition.
+            already stored for this business. An authorized owner or admin
+            can record that a callback-needed item was handled. That write
+            does not place a call, send a text, send email, or invent a
+            successful contact.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -151,7 +156,7 @@ export function ReceptionistRecoveryCenter({
                     Caller identity is unknown, so no customer communication history is attached.
                   </p>
                 )}
-                <div className="flex flex-wrap gap-2 pt-1">
+                <div className="flex flex-wrap items-start gap-2 pt-1">
                   {item.customer ? (
                     <Button asChild size="sm" variant="outline">
                       <Link href={item.customer.href}>Open customer</Link>
@@ -161,6 +166,12 @@ export function ReceptionistRecoveryCenter({
                       <Link href={source.logLeadHref}>Log lead</Link>
                     </Button>
                   )}
+                  {item.canRecordDisposition ? (
+                    <ReceptionistDispositionForm
+                      phoneInteractionId={item.id}
+                      businessId={businessId}
+                    />
+                  ) : null}
                 </div>
               </article>
             ))

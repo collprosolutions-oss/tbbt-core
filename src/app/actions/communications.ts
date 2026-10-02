@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { communicationsActionError } from "@/lib/communications/action-errors";
 import { prisma } from "@/lib/prisma";
 import { isAiAttemptId } from "@/lib/ai/types";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
@@ -11,6 +12,7 @@ import {
   isCommunicationAiAction,
   recordInboundCallEvent,
   recordMissedOrManualCall,
+  executeReceptionistDispositionAction,
   runCommunicationAssist,
 } from "@/lib/communications";
 import {
@@ -35,6 +37,7 @@ function readString(formData: FormData, key: string) {
 
 function revalidateCommunications(customerId?: string) {
   revalidatePath("/communications");
+  revalidatePath("/communications/receptionist");
   revalidatePath("/customers");
   if (customerId) revalidatePath(`/customers/${customerId}`);
 }
@@ -137,6 +140,25 @@ export async function logMissedCallAction(
     };
   } catch {
     return { error: "You do not have permission to do that." };
+  }
+}
+
+export async function recordReceptionistDispositionAction(
+  _prev: CommunicationsActionState,
+  formData: FormData,
+): Promise<CommunicationsActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await executeReceptionistDispositionAction(prisma, access, {
+      phoneInteractionId: readString(formData, "phoneInteractionId"),
+      browserBusinessId: readString(formData, "businessId") || null,
+    });
+    if (!result.error) {
+      revalidateCommunications(readString(formData, "customerId") || undefined);
+    }
+    return result;
+  } catch (error) {
+    return communicationsActionError(error);
   }
 }
 

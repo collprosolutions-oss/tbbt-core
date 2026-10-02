@@ -28,7 +28,7 @@ export default async function ReceptionistRecoveryPage() {
           <Link href="/communications?area=receptionist">Back to Communications</Link>
         </Button>
       </PageHeader>
-      <ReceptionistRecoveryCenter source={source} />
+      <ReceptionistRecoveryCenter source={source} businessId={access.businessId} />
     </PageContainer>
   );
 }

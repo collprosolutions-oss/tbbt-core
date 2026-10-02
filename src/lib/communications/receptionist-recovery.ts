@@ -1,7 +1,12 @@
 /**
  * Owner/office recovery workspace over recorded phone and receptionist
- * facts. Read-only. Does not provision numbers, place calls, send SMS or
- * email, create leads, or invent resolved state.
+ * facts. Queue load is a bounded read. Authorized callback-needed
+ * disposition lives in receptionist-disposition.ts and uses canonical
+ * PhoneInteraction CLOSED plus a ReceptionistEvent audit row.
+ * Does not provision numbers, place calls, send SMS or email, create
+ * leads, or invent a successful contact. Missed calls logged without
+ * callbackNeeded stay recorded attention in the bounded scan; they are
+ * facts, not open callback work, so this writer does not clear them.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
@@ -9,6 +14,7 @@ import {
   requireCommunicationsCapability,
   type CommunicationAccess,
 } from "@/lib/communications/engine";
+import { phoneInteractionIsCallbackNeeded } from "@/lib/communications/receptionist-disposition";
 import { getReceptionistReadiness } from "@/lib/communications/receptionist";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -67,6 +73,7 @@ export type ReceptionistRecoveryQueueItem = {
   lastCustomerCommunication: ReceptionistRecoveryLastCommunication | null;
   laterCommunicationRecorded: boolean | null;
   logLeadHref: string | null;
+  canRecordDisposition: boolean;
 };
 
 export type ReceptionistRecoveryCenter = {
@@ -135,7 +142,12 @@ const COMMUNICATION_SELECT = {
   relatedId: true,
 } as const;
 
+function phoneIsClosed(row: Pick<PhoneRow, "status">) {
+  return row.status === "CLOSED";
+}
+
 function phoneNeedsAttention(row: Pick<PhoneRow, "kind" | "status" | "callbackNeeded">) {
+  if (phoneIsClosed(row)) return false;
   return (
     PHONE_ATTENTION_KINDS.has(row.kind) ||
     PHONE_ATTENTION_STATUSES.has(row.status) ||
@@ -312,6 +324,7 @@ export async function loadReceptionistRecoveryCenter(
     if (event.phoneInteractionId) {
       const scanned = scannedPhoneById.get(event.phoneInteractionId);
       if (scanned) {
+        if (phoneIsClosed(scanned)) continue;
         const list = eventsByPhoneId.get(scanned.id) ?? [];
         list.push(event);
         eventsByPhoneId.set(scanned.id, list);
@@ -440,6 +453,9 @@ export async function loadReceptionistRecoveryCenter(
         lastCustomerCommunication: null,
         laterCommunicationRecorded: customer ? false : null,
         logLeadHref: customer ? null : OWNER_LOG_LEAD_HREF,
+        // Missed calls without callbackNeeded stay recorded attention.
+        // This writer only closes open callback work, not every MISSED_CALL fact.
+        canRecordDisposition: phoneInteractionIsCallbackNeeded(row),
       },
     });
   }
@@ -469,6 +485,7 @@ export async function loadReceptionistRecoveryCenter(
         lastCustomerCommunication: null,
         laterCommunicationRecorded: customer ? false : null,
         logLeadHref: customer ? null : OWNER_LOG_LEAD_HREF,
+        canRecordDisposition: false,
       },
     });
   }

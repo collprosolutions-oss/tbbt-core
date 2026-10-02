@@ -1,8 +1,10 @@
 /**
  * Receptionist & missed-call recovery center proofs.
  *
- * Recorded PhoneInteraction / ReceptionistEvent workspace only.
- * No schema, no carrier, no auto follow-up, no fake resolved state.
+ * Recorded PhoneInteraction / ReceptionistEvent workspace, plus an
+ * authorized manual disposition that uses canonical CLOSED + a
+ * ReceptionistEvent audit row. No schema, no carrier, no auto follow-up,
+ * and no invented successful contact.
  *
  * Run with:
  *   npm run test:receptionist-recovery-center
@@ -10,9 +12,12 @@
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const mutationKind = process.env.RECEPTIONIST_RECOVERY_MUTATION ?? "";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -26,14 +31,16 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 process.env.DATABASE_URL = testUrl;
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for receptionist recovery test database.");
-  process.exit(push.status ?? 1);
+if (!mutationKind) {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for receptionist recovery test database.");
+    process.exit(push.status ?? 1);
+  }
 }
 
 const require = createRequire(import.meta.url);
@@ -49,16 +56,32 @@ const {
   RECEPTIONIST_RECOVERY_SCAN_LIMIT,
   appendReceptionistRecoveryFacts,
   loadReceptionistRecoveryCenter,
+  PHONE_INTERACTION_CLOSED_STATUS,
+  RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
+  RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+  RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
+  COMMUNICATIONS_PERMISSION_ERROR,
+  COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR,
+  communicationsActionError,
+  executeReceptionistDispositionAction,
+  receptionistDispositionLockKey,
   recordMissedOrManualCall,
   recordInboundCallEvent,
+  recordReceptionistCallbackDisposition,
+  receptionistDispositionIdempotencyKey,
   VOICE_NOT_CONNECTED_REASON,
 } = await import("@/lib/communications");
 const { planSpecialists } = await import("@/lib/chief-of-staff");
 
 let failures = 0;
+let passes = 0;
 function check(label, condition) {
-  if (condition) console.log(`  ok  - ${label}`);
-  else {
+  if (condition) {
+    console.log(`  ok  - ${label}`);
+    passes += 1;
+  } else {
     console.error(`FAIL - ${label}`);
     failures += 1;
   }
@@ -114,17 +137,738 @@ async function seedBusiness(name) {
   const memberMembership = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: business.id, role: "MEMBER" },
   });
+  const adminUser = await prisma.user.create({
+    data: {
+      name: `${name} Admin`,
+      email: `${name.toLowerCase().replace(/\s+/g, ".")}.admin.${randomUUID().slice(0, 8)}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const adminMembership = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: business.id, role: "ADMIN" },
+  });
   return {
     business,
     membership,
     memberMembership,
+    adminMembership,
     access: makeAccess(business.id, "OWNER", membership.id, ownerUser.id),
     memberAccess: makeAccess(business.id, "MEMBER", memberMembership.id, memberUser.id),
+    adminAccess: makeAccess(business.id, "ADMIN", adminMembership.id, adminUser.id),
   };
 }
 
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function assertClosedDispositionHeld(label, tenant, phoneInteractionId, extra = {}) {
+  const after = await prisma.phoneInteraction.findFirst({
+    where: { id: phoneInteractionId, businessId: tenant.business.id },
+  });
+  const afterCenter = await loadReceptionistRecoveryCenter(prisma, tenant.access);
+  const action = after?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: after.followUpActionItemId, businessId: tenant.business.id },
+      })
+    : null;
+  const events = await prisma.receptionistEvent.findMany({
+    where: {
+      businessId: tenant.business.id,
+      phoneInteractionId,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+  });
+  check(
+    label,
+    after?.status === "CLOSED" &&
+      after.callbackNeeded === false &&
+      action?.status === "DONE" &&
+      events.length === 1 &&
+      afterCenter.recordedCallbackNeededCount === (extra.recordedCallbackNeededCount ?? 0) &&
+      !afterCenter.queue.some((row) => row.id === phoneInteractionId) &&
+      (extra.replayOk ?? true) &&
+      (extra.replayReused ?? true),
+  );
+  return { after, afterCenter, action, events };
+}
+
+async function proveClosedLogReplay() {
+  console.log("\nDB — CLOSED stays CLOSED on an idempotent missed-call replay");
+  const tenant = await seedBusiness("Closed Replay");
+  const key = `closed-replay-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551212000",
+    summary: "Callback needed, then handled, then a stale form retries.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  check("Replay seed logged a callback-needed phone", logged.ok && Boolean(logged.phoneInteractionId));
+  await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  const beforeReplay = await loadReceptionistRecoveryCenter(prisma, tenant.access);
+  const replay = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551212000",
+    summary: "Callback needed, then handled, then a stale form retries.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  await assertClosedDispositionHeld("Replayed missed-call log keeps a CLOSED row closed", tenant, logged.phoneInteractionId, {
+    recordedCallbackNeededCount: beforeReplay.recordedCallbackNeededCount,
+    replayOk: replay.ok,
+    replayReused: replay.reused === true,
+  });
+}
+
+async function proveEventIdempotencyLookup() {
+  console.log("\nDB — Disposition event replay uses the pre-insert lookup");
+  const tenant = await seedBusiness("Disposition Lookup");
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551313000",
+    summary: "Lookup replay for the disposition event.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-lookup-${randomUUID()}`,
+  });
+  const first = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  let replayedViaLookup = false;
+  let replayErrorCode = null;
+  try {
+    const second = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+      phoneInteractionId: logged.phoneInteractionId,
+    });
+    replayedViaLookup = second.ok && second.replayedViaLookup === true;
+  } catch (error) {
+    replayErrorCode = error?.code ?? error?.meta?.code ?? String(error?.message ?? error);
+    replayedViaLookup = false;
+  }
+  check("First disposition wrote the audit event", first.ok && first.replayedViaLookup === false);
+  check(
+    "Idempotent disposition replay uses the pre-insert lookup",
+    replayedViaLookup === true && replayErrorCode !== "25P02" && replayErrorCode !== "P2002",
+  );
+}
+
+async function proveDispositionActionRoleCheck() {
+  console.log("\nDB — Server action role check is distinct from unexpected errors");
+  const tenant = await seedBusiness("Disposition Action");
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551414000",
+    summary: "Action-layer role check.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-action-${randomUUID()}`,
+  });
+  const memberAction = await executeReceptionistDispositionAction(prisma, tenant.memberAccess, {
+    phoneInteractionId: logged.phoneInteractionId,
+    browserBusinessId: tenant.business.id,
+  });
+  const missing = await executeReceptionistDispositionAction(prisma, tenant.access, {
+    phoneInteractionId: "",
+    browserBusinessId: tenant.business.id,
+  });
+  const previousError = console.error;
+  console.error = () => {};
+  let exploded;
+  let mapped;
+  try {
+    exploded = await executeReceptionistDispositionAction(
+      {
+        phoneInteraction: {
+          findFirst: async () => {
+            throw new Error("injected writer failure");
+          },
+        },
+      },
+      tenant.access,
+      { phoneInteractionId: logged.phoneInteractionId, browserBusinessId: tenant.business.id },
+    );
+    mapped = communicationsActionError(new Error("injected disposition failure"));
+  } finally {
+    console.error = previousError;
+  }
+  const stillOpen = await prisma.phoneInteraction.findFirst({
+    where: { id: logged.phoneInteractionId, businessId: tenant.business.id },
+  });
+  check(
+    "Server action role check denies MEMBER with the permission error",
+    memberAction.error === COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Unexpected action errors are distinguishable from permission denials",
+    exploded.error === COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR &&
+      mapped.error === COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR &&
+      exploded.error !== COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Server action returns the writer failure, not a permission error, for a missing item",
+    missing.error === RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON &&
+      missing.error !== COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Denied or failed action writes do not close the callback-needed row",
+    stillOpen?.status === "CALLBACK_NEEDED" && stillOpen.callbackNeeded === true,
+  );
+}
+
+async function proveCommunicationsActionErrorHardening() {
+  console.log("\nUNIT — communicationsActionError preserves redirect and SaaS copy");
+  const redirectError = Object.assign(new Error("NEXT_REDIRECT"), {
+    digest: "NEXT_REDIRECT;replace;/communications/receptionist",
+  });
+  let rethrewRedirect = false;
+  try {
+    communicationsActionError(redirectError);
+  } catch (error) {
+    rethrewRedirect = error === redirectError;
+  }
+  const saas = new Error(
+    "The Founder Plan trial has ended. Subscribe from TBBT Billing to keep creating and changing business records.",
+  );
+  saas.name = "SaasSubscriptionRequiredError";
+  const saasMapped = communicationsActionError(saas);
+  const unexpected = new Error("injected unexpected disposition boom");
+  const previousError = console.error;
+  const logged = [];
+  console.error = (...args) => {
+    logged.push(args);
+  };
+  let unexpectedMapped;
+  try {
+    unexpectedMapped = communicationsActionError(unexpected);
+  } finally {
+    console.error = previousError;
+  }
+  check("NEXT_REDIRECT is rethrown from communicationsActionError", rethrewRedirect);
+  check(
+    "SaasSubscriptionRequiredError keeps its message",
+    saasMapped.error === saas.message && saasMapped.error !== COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR,
+  );
+  check(
+    "Unexpected disposition errors are logged server-side",
+    unexpectedMapped.error === COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR &&
+      logged.some((args) => args.includes(unexpected) || args.some((arg) => arg === unexpected)),
+  );
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function countUngrantedDispositionLocks(client, lockKey) {
+  const rows = await client.$queryRaw`
+    SELECT COUNT(*)::int AS n
+    FROM pg_locks
+    WHERE locktype = 'advisory'
+      AND granted = false
+      AND objsubid = 1
+      AND classid = CASE WHEN hashtext(${lockKey}) < 0 THEN -1 ELSE 0 END
+      AND objid = hashtext(${lockKey})
+  `;
+  return Number(rows[0]?.n ?? 0);
+}
+
+function pauseBeforeActionCreate(client) {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let notifyReached;
+  const reached = new Promise((resolve) => {
+    notifyReached = resolve;
+  });
+  let pausedCreates = 0;
+  const paused = client.$extends({
+    query: {
+      businessActionItem: {
+        async create({ args, query }) {
+          pausedCreates += 1;
+          if (pausedCreates === 1) {
+            notifyReached();
+            await gate;
+          }
+          return query(args);
+        },
+      },
+    },
+  });
+  return { paused, reached, release: () => release() };
+}
+
+function pauseAfterMatchingFindFirst(client, match) {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let notifyReached;
+  const reached = new Promise((resolve) => {
+    notifyReached = resolve;
+  });
+  let pausedReads = 0;
+  const paused = client.$extends({
+    query: {
+      phoneInteraction: {
+        async findFirst({ args, query }) {
+          const result = await query(args);
+          if (match(args, result)) {
+            pausedReads += 1;
+            if (pausedReads === 1) {
+              notifyReached();
+              await gate;
+            }
+          }
+          return result;
+        },
+      },
+    },
+  });
+  return { paused, reached, release: () => release() };
+}
+
+async function provePausedReplayThenDisposition() {
+  console.log("\nDB — Paused same-key replay cannot reopen a committed CLOSED row");
+  const tenant = await seedBusiness("Paused Replay First");
+  const key = `paused-replay-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551616000",
+    summary: "Replay pauses after findFirst; disposition commits; replay resumes.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  const pauseClient = new PrismaClient({ datasourceUrl: testUrl });
+  const { paused, reached, release } = pauseAfterMatchingFindFirst(
+    pauseClient,
+    (args) => args.where?.idempotencyKey === key,
+  );
+  try {
+    const replayPromise = recordMissedOrManualCall(paused, tenant.access, {
+      kind: "MISSED_CALL",
+      callerPhone: "5551616000",
+      summary: "Replay pauses after findFirst; disposition commits; replay resumes.",
+      callbackNeeded: true,
+      idempotencyKey: key,
+    });
+    await withTimeout(reached, 8000, "replay never reached the idempotency findFirst");
+    const disposed = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+      phoneInteractionId: logged.phoneInteractionId,
+    });
+    check(
+      "Disposition commits while the same-key replay is paused after findFirst",
+      disposed.ok && disposed.status === "CLOSED" && disposed.callbackNeeded === false,
+    );
+    release();
+    const replay = await withTimeout(replayPromise, 8000, "paused replay never finished");
+    await assertClosedDispositionHeld(
+      "Resumed replay leaves the CLOSED row closed and out of the recovery queue",
+      tenant,
+      logged.phoneInteractionId,
+      { replayOk: replay.ok, replayReused: replay.reused === true },
+    );
+  } finally {
+    await pauseClient.$disconnect();
+  }
+}
+
+async function provePausedDispositionThenReplay() {
+  console.log("\nDB — Replay that finishes while disposition is paused still ends CLOSED");
+  const tenant = await seedBusiness("Paused Disposition First");
+  const key = `paused-disposition-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551717000",
+    summary: "Disposition pauses after its owned-row read; replay finishes; disposition resumes.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  const pauseClient = new PrismaClient({ datasourceUrl: testUrl });
+  const { paused, reached, release } = pauseAfterMatchingFindFirst(
+    pauseClient,
+    (args) => args.where?.id === logged.phoneInteractionId && !args.where?.idempotencyKey,
+  );
+  try {
+    const dispositionPromise = recordReceptionistCallbackDisposition(paused, tenant.access, {
+      phoneInteractionId: logged.phoneInteractionId,
+    });
+    await withTimeout(reached, 8000, "disposition never reached the owned-row findFirst");
+    const replayPromise = recordMissedOrManualCall(prisma, tenant.access, {
+      kind: "MISSED_CALL",
+      callerPhone: "5551717000",
+      summary: "Disposition pauses after its owned-row read; replay overlaps; disposition resumes.",
+      callbackNeeded: true,
+      idempotencyKey: key,
+    });
+    release();
+    const [replay, disposed] = await Promise.all([
+      withTimeout(replayPromise, 8000, "overlapping replay never finished"),
+      withTimeout(dispositionPromise, 8000, "paused disposition never finished"),
+    ]);
+    check("Same-key replay that overlapped a paused disposition still succeeds", replay.ok && replay.reused === true);
+    check(
+      "Resumed disposition still records CLOSED",
+      disposed.ok && disposed.status === "CLOSED" && disposed.callbackNeeded === false,
+    );
+    await assertClosedDispositionHeld(
+      "Replay-then-disposition interleave leaves the row CLOSED and out of the queue",
+      tenant,
+      logged.phoneInteractionId,
+      { replayOk: replay.ok, replayReused: replay.reused === true },
+    );
+  } finally {
+    await pauseClient.$disconnect();
+  }
+}
+
+async function assertSingleClosedCallbackAction(tenant, phoneInteractionId, idempotencyKey) {
+  const after = await prisma.phoneInteraction.findFirst({
+    where: { id: phoneInteractionId, businessId: tenant.business.id },
+  });
+  const afterCenter = await loadReceptionistRecoveryCenter(prisma, tenant.access);
+  const actions = await prisma.businessActionItem.findMany({
+    where: { businessId: tenant.business.id, recommendationKey: `phone-callback:${idempotencyKey}` },
+  });
+  const linked = after?.followUpActionItemId
+    ? actions.find((row) => row.id === after.followUpActionItemId)
+    : null;
+  const events = await prisma.receptionistEvent.count({
+    where: {
+      businessId: tenant.business.id,
+      phoneInteractionId,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+  });
+  return {
+    after,
+    afterCenter,
+    actions,
+    linked,
+    events,
+    ok:
+      after?.status === "CLOSED" &&
+      after.callbackNeeded === false &&
+      actions.length === 1 &&
+      linked?.status === "DONE" &&
+      actions.every((row) => row.status === "DONE") &&
+      events === 1 &&
+      afterCenter.recordedCallbackNeededCount === 0 &&
+      !afterCenter.queue.some((row) => row.id === phoneInteractionId),
+  };
+}
+
+async function provePausedUpgradeBeforeActionCreate() {
+  console.log("\nDB — Upgrade replay paused before action create cannot leave an OPEN item on CLOSED");
+  const tenant = await seedBusiness("Paused Upgrade Action");
+  const key = `paused-upgrade-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5552121000",
+    summary: "Log without callback, then upgrade replay pauses before the action create.",
+    callbackNeeded: false,
+    idempotencyKey: key,
+  });
+  const pauseClient = new PrismaClient({ datasourceUrl: testUrl });
+  const { paused, reached, release } = pauseBeforeActionCreate(pauseClient);
+  const lockKey = receptionistDispositionLockKey(tenant.business.id, logged.phoneInteractionId);
+  try {
+    const replayPromise = recordMissedOrManualCall(paused, tenant.access, {
+      kind: "MISSED_CALL",
+      callerPhone: "5552121000",
+      summary: "Log without callback, then upgrade replay pauses before the action create.",
+      callbackNeeded: true,
+      idempotencyKey: key,
+    });
+    await withTimeout(reached, 8000, "upgrade replay never reached businessActionItem.create");
+    const dispositionPromise = recordReceptionistCallbackDisposition(prisma, tenant.access, {
+      phoneInteractionId: logged.phoneInteractionId,
+    });
+    await Promise.race([
+      dispositionPromise,
+      (async () => {
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline) {
+          if ((await countUngrantedDispositionLocks(prisma, lockKey)) >= 1) return;
+          await delay(15);
+        }
+      })(),
+    ]);
+    release();
+    const [replay, disposed] = await Promise.all([
+      withTimeout(replayPromise, 8000, "paused upgrade replay never finished"),
+      withTimeout(dispositionPromise, 8000, "disposition during paused upgrade never finished"),
+    ]);
+    const settled = await assertSingleClosedCallbackAction(tenant, logged.phoneInteractionId, key);
+    check(
+      "Upgrade replay paused before action create still ends CLOSED with one DONE action item",
+      replay.ok &&
+        disposed.ok &&
+        settled.ok &&
+        settled.actions.length === 1 &&
+        settled.linked?.status === "DONE",
+    );
+  } finally {
+    await pauseClient.$disconnect();
+  }
+}
+
+async function provePausedFirstCallBeforeActionCreate() {
+  console.log("\nDB — First callback-needed log paused before action create cannot leave an OPEN item on CLOSED");
+  const tenant = await seedBusiness("Paused First Action");
+  const key = `paused-first-${randomUUID()}`;
+  const pauseClient = new PrismaClient({ datasourceUrl: testUrl });
+  const { paused, reached, release } = pauseBeforeActionCreate(pauseClient);
+  try {
+    const firstPromise = recordMissedOrManualCall(paused, tenant.access, {
+      kind: "MISSED_CALL",
+      callerPhone: "5552222000",
+      summary: "First callback-needed log pauses before the action create.",
+      callbackNeeded: true,
+      idempotencyKey: key,
+    });
+    await withTimeout(reached, 8000, "first call never reached businessActionItem.create");
+    const phone = await prisma.phoneInteraction.findFirst({
+      where: { businessId: tenant.business.id, idempotencyKey: key },
+    });
+    check("First call claimed the phone before the paused action create", Boolean(phone?.id));
+    const lockKey = receptionistDispositionLockKey(tenant.business.id, phone.id);
+    const dispositionPromise = recordReceptionistCallbackDisposition(prisma, tenant.access, {
+      phoneInteractionId: phone.id,
+    });
+    await Promise.race([
+      dispositionPromise,
+      (async () => {
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline) {
+          if ((await countUngrantedDispositionLocks(prisma, lockKey)) >= 1) return;
+          await delay(15);
+        }
+      })(),
+    ]);
+    release();
+    const [first, disposed] = await Promise.all([
+      withTimeout(firstPromise, 8000, "paused first call never finished"),
+      withTimeout(dispositionPromise, 8000, "disposition during paused first call never finished"),
+    ]);
+    const settled = await assertSingleClosedCallbackAction(tenant, phone.id, key);
+    check(
+      "First call paused before action create still ends CLOSED with one DONE action item",
+      first.ok &&
+        disposed.ok &&
+        settled.ok &&
+        settled.actions.length === 1 &&
+        settled.linked?.status === "DONE",
+    );
+  } finally {
+    await pauseClient.$disconnect();
+  }
+}
+
+async function proveClosedStaysClosedUnderHammer(order) {
+  const rounds = 24;
+  const clients = Array.from({ length: 8 }, () => new PrismaClient({ datasourceUrl: testUrl }));
+  let closedRounds = 0;
+  try {
+    for (let round = 0; round < rounds; round += 1) {
+      const tenant = await seedBusiness(`Hammer ${order} ${round}`);
+      const key = `hammer-${order}-${round}-${randomUUID()}`;
+      const upgrade = round % 3 === 0;
+      const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+        kind: "MISSED_CALL",
+        callerPhone: "5551818000",
+        summary: `Eight-connection mix ${order} round ${round}.`,
+        callbackNeeded: !upgrade,
+        idempotencyKey: key,
+      });
+      const replayClients = clients.slice(0, 4);
+      const dispositionClients = clients.slice(4, 8);
+      const replayJobs = replayClients.map(async (client) => {
+        await delay(Math.floor(Math.random() * 9));
+        return recordMissedOrManualCall(client, tenant.access, {
+          kind: "MISSED_CALL",
+          callerPhone: "5551818000",
+          summary: `Eight-connection mix ${order} round ${round}.`,
+          callbackNeeded: true,
+          idempotencyKey: key,
+        });
+      });
+      const dispositionJobs = dispositionClients.map(async (client) => {
+        await delay(Math.floor(Math.random() * 9));
+        return recordReceptionistCallbackDisposition(client, tenant.access, {
+          phoneInteractionId: logged.phoneInteractionId,
+        });
+      });
+      const jobs = order === "replay-first" ? [...replayJobs, ...dispositionJobs] : [...dispositionJobs, ...replayJobs];
+      await Promise.all(jobs);
+      const mid = await prisma.phoneInteraction.findFirst({
+        where: { id: logged.phoneInteractionId, businessId: tenant.business.id },
+      });
+      if (mid && mid.status !== "CLOSED" && (mid.status === "CALLBACK_NEEDED" || mid.callbackNeeded)) {
+        await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+          phoneInteractionId: logged.phoneInteractionId,
+        });
+      }
+      const settled = await assertSingleClosedCallbackAction(tenant, logged.phoneInteractionId, key);
+      if (settled.ok) closedRounds += 1;
+    }
+  } finally {
+    await Promise.all(clients.map((client) => client.$disconnect()));
+  }
+  check(
+    `Eight-connection ${order} mix keeps CLOSED, one action item, and no OPEN leftover`,
+    closedRounds === rounds,
+  );
+}
+
+async function proveDispositionEventTenantIsolation() {
+  console.log("\nDB — Disposition event lookup does not reuse another tenant's idempotency key");
+  const tenant = await seedBusiness("Event Scope A");
+  const foreign = await seedBusiness("Event Scope B");
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551919000",
+    summary: "Same disposition key exists on another tenant.",
+    callbackNeeded: true,
+    idempotencyKey: `event-scope-${randomUUID()}`,
+  });
+  const sharedKey = receptionistDispositionIdempotencyKey(logged.phoneInteractionId);
+  const foreignEvent = await prisma.receptionistEvent.create({
+    data: {
+      businessId: foreign.business.id,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+      status: RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
+      provider: "none",
+      providerConnected: false,
+      payload: { foreign: true },
+      idempotencyKey: sharedKey,
+    },
+  });
+  const decided = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  const ownEvent = await prisma.receptionistEvent.findFirst({
+    where: { businessId: tenant.business.id, idempotencyKey: sharedKey },
+  });
+  const foreignStill = await prisma.receptionistEvent.findFirst({
+    where: { id: foreignEvent.id, businessId: foreign.business.id },
+  });
+  check(
+    "Event lookup stays on the acting business when another tenant already holds the same key",
+    decided.ok &&
+      decided.receptionistEventId === ownEvent?.id &&
+      ownEvent.id !== foreignEvent.id &&
+      foreignStill?.id === foreignEvent.id &&
+      ownEvent.businessId === tenant.business.id,
+  );
+}
+
+async function proveTenantScopedDispositionWrites() {
+  console.log("\nDB — Disposition lookups and state writes keep businessId in the where");
+  const tenant = await seedBusiness("Scoped Writes");
+  const key = `scoped-writes-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5552020000",
+    summary: "Watch tenant-scoped where clauses.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  const seen = {
+    eventLookup: [],
+    actionUpdate: [],
+    phoneUpdate: [],
+  };
+  const watching = prisma.$extends({
+    query: {
+      receptionistEvent: {
+        async findFirst({ args, query }) {
+          if (String(args.where?.idempotencyKey ?? "").startsWith("receptionist-disposition:")) {
+            seen.eventLookup.push(Boolean(args.where?.businessId));
+          }
+          return query(args);
+        },
+      },
+      businessActionItem: {
+        async updateMany({ args, query }) {
+          if (args.data?.status === "DONE") {
+            seen.actionUpdate.push(Boolean(args.where?.businessId));
+          }
+          return query(args);
+        },
+      },
+      phoneInteraction: {
+        async updateMany({ args, query }) {
+          seen.phoneUpdate.push(Boolean(args.where?.businessId));
+          return query(args);
+        },
+      },
+    },
+  });
+  await recordReceptionistCallbackDisposition(watching, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  await recordMissedOrManualCall(watching, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5552020000",
+    summary: "Watch tenant-scoped where clauses.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  check(
+    "Disposition event lookup includes businessId",
+    seen.eventLookup.length > 0 && seen.eventLookup.every(Boolean),
+  );
+  check(
+    "Action-item DONE updateMany includes businessId",
+    seen.actionUpdate.length > 0 && seen.actionUpdate.every(Boolean),
+  );
+  check(
+    "PhoneInteraction updateMany includes businessId",
+    seen.phoneUpdate.length > 0 && seen.phoneUpdate.every(Boolean),
+  );
+}
+
 try {
+  if (mutationKind === "closed-preserve") {
+    await proveClosedLogReplay();
+    await provePausedReplayThenDisposition();
+    await provePausedDispositionThenReplay();
+  } else if (mutationKind === "closed-action-lock") {
+    await provePausedUpgradeBeforeActionCreate();
+    await provePausedFirstCallBeforeActionCreate();
+  } else if (mutationKind === "event-idempotency-lookup") {
+    await proveEventIdempotencyLookup();
+  } else if (mutationKind === "event-lookup-businessId") {
+    await proveDispositionEventTenantIsolation();
+    await proveTenantScopedDispositionWrites();
+  } else if (mutationKind === "action-item-businessId") {
+    await proveTenantScopedDispositionWrites();
+  } else if (mutationKind === "phone-update-businessId") {
+    await proveTenantScopedDispositionWrites();
+  } else if (mutationKind) {
+    check(`unknown mutation ${mutationKind}`, false);
+  } else {
   const recoverySrc = readRepo("src/lib/communications/receptionist-recovery.ts");
+  const missedCallSrc = readRepo("src/lib/communications/missed-call.ts");
+  const dispositionSrc = readRepo("src/lib/communications/receptionist-disposition.ts");
+  const actionErrorSrc = readRepo("src/lib/communications/action-errors.ts");
+  const actionSrc = readRepo("src/app/actions/communications.ts");
+  const formSrc = readRepo("src/components/communications/receptionist-disposition-form.tsx");
   const pageSrc = readRepo("src/app/(app)/communications/receptionist/page.tsx");
   const uiSrc = readRepo("src/components/communications/receptionist-recovery-center.tsx");
   const workspaceSrc = readRepo("src/components/communications/communications-workspace.tsx");
@@ -172,12 +916,72 @@ try {
       !pageSrc.includes("attemptCustomerSms"),
   );
   check(
-    "No fake resolved persistence is invented",
-    !recoverySrc.includes('status: "CLOSED"') &&
-      !recoverySrc.includes("updateMany") &&
-      !recoverySrc.includes("phoneInteraction.update") &&
+    "Manual disposition reuses canonical CLOSED and ReceptionistEvent audit rows",
+    dispositionSrc.includes('status: PHONE_INTERACTION_CLOSED_STATUS') &&
+      dispositionSrc.includes('kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND') &&
+      dispositionSrc.includes('status: RECEPTIONIST_MANUAL_DISPOSITION_STATUS') &&
+      dispositionSrc.includes("initiatedByMembershipId") &&
+      dispositionSrc.includes("pg_advisory_xact_lock") &&
+      dispositionSrc.includes("phoneInteraction.updateMany") &&
+      dispositionSrc.includes("businessId: access.businessId") &&
+      !dispositionSrc.includes("phoneInteraction.update(") &&
+      !dispositionSrc.includes("phoneInteraction.delete") &&
       !uiSrc.includes("Mark resolved") &&
-      !pageSrc.includes("Mark resolved"),
+      !pageSrc.includes("Mark resolved") &&
+      !formSrc.includes("Mark resolved"),
+  );
+  check(
+    "Disposition writer does not send SMS, email, place a call, or invent a successful contact",
+    !dispositionSrc.includes("composeCustomerCommunication") &&
+      !dispositionSrc.includes("attemptCustomerSms") &&
+      !dispositionSrc.includes("sendTransactionalEmail") &&
+      !dispositionSrc.includes("recordMissedOrManualCall") &&
+      !dispositionSrc.includes("customerCommunication.create") &&
+      dispositionSrc.includes("contactClaimed: false") &&
+      formSrc.includes("Record handled") &&
+      formSrc.includes("disabled={pending}") &&
+      actionSrc.includes("executeReceptionistDispositionAction") &&
+      actionSrc.includes("communicationsActionError") &&
+      actionSrc.includes('revalidatePath("/communications/receptionist")'),
+  );
+  check(
+    "Idempotent phone-log replay preserves CLOSED with a live status write guard",
+    missedCallSrc.includes("PHONE_LOG_PRESERVE_CLOSED") &&
+      missedCallSrc.includes('status: { not: "CLOSED" }') &&
+      missedCallSrc.includes("stateWrite.count") &&
+      missedCallSrc.includes("callbackNeeded && stateWrite.count > 0") &&
+      missedCallSrc.includes("PHONE_LOG_DISPOSITION_LOCK") &&
+      missedCallSrc.includes("receptionistDispositionLockKey") &&
+      missedCallSrc.includes("withDispositionLock") &&
+      missedCallSrc.includes("closedNow ? {} : { followUpActionItemId: actionItemId }") &&
+      dispositionSrc.includes("RECEPTIONIST_DISPOSITION_IDEMPOTENCY_LOOKUP") &&
+      dispositionSrc.includes("replayedViaLookup: true"),
+  );
+  check(
+    "Disposition event lookup and state writes stay tenant-scoped",
+    dispositionSrc.includes("where: { businessId: access.businessId, idempotencyKey }") &&
+      /businessActionItem\.updateMany\(\{[\s\S]*?businessId: access\.businessId/.test(dispositionSrc) &&
+      /phoneInteraction\.updateMany\(\{[\s\S]*?businessId: access\.businessId/.test(dispositionSrc) &&
+      /phoneInteraction\.updateMany\(\{[\s\S]*?businessId: access\.businessId/.test(missedCallSrc),
+  );
+  check(
+    "P2002 disposition event race does not query again inside the aborted transaction",
+    dispositionSrc.includes('error.code === "P2002"') &&
+      dispositionSrc.includes("Receptionist disposition event already recorded.") &&
+      !/error\.code === "P2002"[\s\S]{0,400}receptionistEvent\.findFirst/.test(dispositionSrc),
+  );
+  check(
+    "Disposition server action distinguishes ForbiddenError from unexpected errors",
+    actionSrc.includes("communicationsActionError(error)") &&
+      actionSrc.includes("executeReceptionistDispositionAction") &&
+      dispositionSrc.includes("roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)") &&
+      dispositionSrc.includes("throw new ForbiddenError()") &&
+      /export async function recordReceptionistDispositionAction\([\s\S]*?catch \(error\) \{\s*return communicationsActionError\(error\);\s*\}/.test(
+        actionSrc,
+      ) &&
+      actionErrorSrc.includes('digest.startsWith("NEXT_REDIRECT")') &&
+      actionErrorSrc.includes('error.name === "SaasSubscriptionRequiredError"') &&
+      actionErrorSrc.includes("console.error(error)"),
   );
   check(
     "Voice remains disconnected and no Twilio voice/number provisioning is added",
@@ -289,6 +1093,21 @@ try {
     roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       roleHasCapability("ADMIN", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_COMMUNICATIONS),
+  );
+  check(
+    "Queue UI offers authorized disposition only for callback-needed phone items",
+    uiSrc.includes("item.canRecordDisposition") &&
+      uiSrc.includes("ReceptionistDispositionForm") &&
+      recoverySrc.includes("canRecordDisposition: phoneInteractionIsCallbackNeeded(row)") &&
+      recoverySrc.includes("canRecordDisposition: false") &&
+      pageSrc.includes("businessId={access.businessId}") &&
+      formSrc.includes('name="phoneInteractionId"') &&
+      formSrc.includes('name="businessId"'),
+  );
+  check(
+    "Closed phones leave attention even when kind is MISSED_CALL or a linked event exists",
+    recoverySrc.includes("if (phoneIsClosed(row)) return false") &&
+      recoverySrc.includes("if (phoneIsClosed(scanned)) continue"),
   );
 
   const missedPlan = planSpecialists({
@@ -1025,6 +1844,306 @@ try {
       !recoverySrc.includes("payload.direction") &&
       !recoverySrc.includes('payload["direction"]'),
   );
+  check(
+    "Known callback-needed queue item can record disposition; unknown missed without callback cannot",
+    knownItem?.canRecordDisposition === true &&
+      unknownItem?.canRecordDisposition === false &&
+      inboundItem?.canRecordDisposition === false,
+  );
+
+  console.log("\nDB — Authorized manual disposition leaves the owner queue");
+  const dispositionTenant = await seedBusiness("Disposition Recovery");
+  const dispositionForeign = await seedBusiness("Disposition Foreign");
+  const dispositionCustomer = await prisma.customer.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      name: "Disposition Known Caller",
+      phone: "5553219876",
+      email: "disposition-known@example.com",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const knownCallback = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    customerId: dispositionCustomer.id,
+    callerPhone: "5553219876",
+    summary: "Known caller still needs a callback.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-known-${randomUUID()}`,
+  });
+  const unknownCallback = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5550001111",
+    summary: "Unknown caller still needs a callback.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-unknown-${randomUUID()}`,
+  });
+  const ordinaryMissed = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5550002222",
+    summary: "Missed call without callback needed stays in the scan unless disposed.",
+    callbackNeeded: false,
+    idempotencyKey: `disp-ordinary-${randomUUID()}`,
+  });
+  const escalatedCallback = await prisma.phoneInteraction.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      customerId: dispositionCustomer.id,
+      kind: "MISSED_CALL",
+      status: "CALLBACK_NEEDED",
+      direction: "INBOUND",
+      callerLast4: "9876",
+      summary: "Callback-needed phone with a linked escalation.",
+      callbackNeeded: true,
+      idempotencyKey: `disp-escalated-${randomUUID()}`,
+    },
+  });
+  await prisma.receptionistEvent.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      customerId: dispositionCustomer.id,
+      phoneInteractionId: escalatedCallback.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Linked escalation must not keep a handled phone in queue." },
+      idempotencyKey: `disp-escalated-event-${randomUUID()}`,
+    },
+  });
+  const beforeUnknown = await prisma.phoneInteraction.findFirst({
+    where: { id: unknownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const commsBeforeDisposition = await prisma.customerCommunication.count({
+    where: { businessId: dispositionTenant.business.id },
+  });
+  const beforeCenter = await loadReceptionistRecoveryCenter(prisma, dispositionTenant.access);
+  const beforeCallbackCount = beforeCenter.recordedCallbackNeededCount;
+
+  let memberDispositionDenied = false;
+  try {
+    await recordReceptionistCallbackDisposition(prisma, dispositionTenant.memberAccess, {
+      phoneInteractionId: knownCallback.phoneInteractionId,
+    });
+  } catch (error) {
+    memberDispositionDenied = error instanceof ForbiddenError;
+  }
+  const memberCenter = await (async () => {
+    try {
+      await loadReceptionistRecoveryCenter(prisma, dispositionTenant.memberAccess);
+      return "loaded";
+    } catch (error) {
+      return error instanceof ForbiddenError ? "forbidden" : "other";
+    }
+  })();
+  const foreignDecision = await recordReceptionistCallbackDisposition(prisma, dispositionForeign.access, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const spoofedBrowser = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+    browserBusinessId: dispositionForeign.business.id,
+  });
+  const ordinaryDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: ordinaryMissed.phoneInteractionId,
+  });
+  const knownFirst = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.adminAccess, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const knownSecond = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.adminAccess, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const unknownDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: unknownCallback.phoneInteractionId,
+  });
+  const escalatedDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: escalatedCallback.id,
+  });
+
+  const afterUnknown = await prisma.phoneInteraction.findFirst({
+    where: { id: unknownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterKnown = await prisma.phoneInteraction.findFirst({
+    where: { id: knownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterEscalated = await prisma.phoneInteraction.findFirst({
+    where: { id: escalatedCallback.id, businessId: dispositionTenant.business.id },
+  });
+  const afterOrdinary = await prisma.phoneInteraction.findFirst({
+    where: { id: ordinaryMissed.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterCenter = await loadReceptionistRecoveryCenter(prisma, dispositionTenant.access);
+  const foreignCenter = await loadReceptionistRecoveryCenter(prisma, dispositionForeign.access);
+  const commsAfterDisposition = await prisma.customerCommunication.count({
+    where: { businessId: dispositionTenant.business.id },
+  });
+  const dispositionEvents = await prisma.receptionistEvent.findMany({
+    where: {
+      businessId: dispositionTenant.business.id,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const knownAction = afterKnown?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: afterKnown.followUpActionItemId, businessId: dispositionTenant.business.id },
+      })
+    : null;
+
+  check("MEMBER cannot record a receptionist disposition", memberDispositionDenied);
+  check("MEMBER still cannot load the office recovery queue", memberCenter === "forbidden");
+  check(
+    "Foreign tenant cannot dispose another tenant's callback-needed item",
+    foreignDecision.ok === false &&
+      foreignDecision.failureReason === RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON &&
+      foreignDecision.phoneInteractionId === null &&
+      !JSON.stringify(foreignDecision).includes(dispositionCustomer.name),
+  );
+  check(
+    "Browser businessId never authorizes a receptionist disposition",
+    spoofedBrowser.ok === false &&
+      spoofedBrowser.failureReason === RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+  );
+  check(
+    "Plain missed calls without callbackNeeded stay recorded attention; this writer does not clear them",
+    ordinaryDecision.ok === false &&
+      ordinaryDecision.failureReason === RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON &&
+      afterOrdinary?.status === "LOGGED" &&
+      afterOrdinary.callbackNeeded === false,
+  );
+  check(
+    "ADMIN can record the canonical CLOSED disposition",
+    knownFirst.ok &&
+      knownFirst.reused === false &&
+      knownFirst.status === PHONE_INTERACTION_CLOSED_STATUS &&
+      knownFirst.callbackNeeded === false &&
+      afterKnown?.status === "CLOSED" &&
+      afterKnown.callbackNeeded === false &&
+      afterKnown.customerId === dispositionCustomer.id &&
+      afterKnown.kind === "MISSED_CALL",
+  );
+  check(
+    "Double-click reuses the same ReceptionistEvent and does not reopen or duplicate the write",
+    knownSecond.ok &&
+      knownSecond.reused === true &&
+      knownSecond.replayedViaLookup === true &&
+      knownSecond.receptionistEventId === knownFirst.receptionistEventId &&
+      knownSecond.status === "CLOSED" &&
+      dispositionEvents.filter((row) => row.phoneInteractionId === knownCallback.phoneInteractionId).length ===
+        1 &&
+      dispositionEvents.find((row) => row.phoneInteractionId === knownCallback.phoneInteractionId)
+        ?.idempotencyKey === receptionistDispositionIdempotencyKey(knownCallback.phoneInteractionId),
+  );
+  check(
+    "Unknown-caller record is preserved and stays unknown",
+    unknownDecision.ok &&
+      afterUnknown?.id === beforeUnknown.id &&
+      afterUnknown.customerId === null &&
+      afterUnknown.status === "CLOSED" &&
+      afterUnknown.callbackNeeded === false &&
+      afterUnknown.kind === "MISSED_CALL" &&
+      afterUnknown.summary === beforeUnknown.summary &&
+      afterUnknown.callerLast4 === beforeUnknown.callerLast4,
+  );
+  check(
+    "Disposition does not invent a successful contact communication",
+    commsAfterDisposition === commsBeforeDisposition &&
+      dispositionEvents.every((row) => {
+        const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+        return (
+          row.status === RECEPTIONIST_MANUAL_DISPOSITION_STATUS &&
+          payload.contactClaimed === false &&
+          payload.channel === null
+        );
+      }),
+  );
+  check(
+    "Handled callback-needed items leave the owner queue, including phones with a linked escalation",
+    !afterCenter.queue.some((row) => row.id === knownCallback.phoneInteractionId) &&
+      !afterCenter.queue.some((row) => row.id === unknownCallback.phoneInteractionId) &&
+      !afterCenter.queue.some((row) => row.id === escalatedCallback.id) &&
+      escalatedDecision.ok &&
+      afterEscalated?.status === "CLOSED" &&
+      afterCenter.queue.some((row) => row.id === ordinaryMissed.phoneInteractionId) &&
+      afterCenter.recordedCallbackNeededCount === beforeCallbackCount - 3 &&
+      afterCenter.recordedMissedCallCount === beforeCenter.recordedMissedCallCount,
+  );
+  check(
+    "Linked callback task is marked DONE without claiming a send",
+    knownAction?.status === "DONE" &&
+      knownFirst.actionItemId === knownAction.id,
+  );
+  check(
+    "Foreign tenant queue and counts stay empty after another tenant's dispositions",
+    foreignCenter.queue.length === 0 &&
+      foreignCenter.recordedCallbackNeededCount === 0 &&
+      foreignCenter.recordedMissedCallCount === 0 &&
+      !JSON.stringify(foreignCenter).includes("Disposition Known Caller"),
+  );
+
+  console.log("\nDB — Simultaneous authorized decisions settle once");
+  const raceTenant = await seedBusiness("Disposition Race");
+  const racePhone = await recordMissedOrManualCall(prisma, raceTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5558887777",
+    summary: "Two owners decide at the same time.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-race-${randomUUID()}`,
+  });
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const [raceLeft, raceRight] = await Promise.all([
+    recordReceptionistCallbackDisposition(raceClientA, raceTenant.access, {
+      phoneInteractionId: racePhone.phoneInteractionId,
+    }),
+    recordReceptionistCallbackDisposition(raceClientB, raceTenant.adminAccess, {
+      phoneInteractionId: racePhone.phoneInteractionId,
+    }),
+  ]);
+  await Promise.all([raceClientA.$disconnect(), raceClientB.$disconnect()]);
+  const racedPhone = await prisma.phoneInteraction.findFirst({
+    where: { id: racePhone.phoneInteractionId, businessId: raceTenant.business.id },
+  });
+  const racedEvents = await prisma.receptionistEvent.findMany({
+    where: {
+      businessId: raceTenant.business.id,
+      phoneInteractionId: racePhone.phoneInteractionId,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+  });
+  const racedCenter = await loadReceptionistRecoveryCenter(prisma, raceTenant.access);
+  const racedAction = racedPhone?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: racedPhone.followUpActionItemId, businessId: raceTenant.business.id },
+      })
+    : null;
+  check(
+    "Simultaneous dispositions both succeed and write CLOSED exactly once",
+    raceLeft.ok &&
+      raceRight.ok &&
+      raceLeft.receptionistEventId === raceRight.receptionistEventId &&
+      racedEvents.length === 1 &&
+      racedPhone?.status === "CLOSED" &&
+      racedPhone.callbackNeeded === false &&
+      racedPhone.customerId === null &&
+      racedAction?.status === "DONE" &&
+      !racedCenter.queue.some((row) => row.id === racePhone.phoneInteractionId) &&
+      [raceLeft.reused, raceRight.reused].filter(Boolean).length === 1,
+  );
+
+  await proveClosedLogReplay();
+  await provePausedReplayThenDisposition();
+  await provePausedDispositionThenReplay();
+  await provePausedUpgradeBeforeActionCreate();
+  await provePausedFirstCallBeforeActionCreate();
+  console.log("\nDB — Eight-connection mix of replays and dispositions, both orders");
+  await proveClosedStaysClosedUnderHammer("replay-first");
+  await proveClosedStaysClosedUnderHammer("disposition-first");
+  await proveEventIdempotencyLookup();
+  await proveDispositionEventTenantIsolation();
+  await proveTenantScopedDispositionWrites();
+  await proveDispositionActionRoleCheck();
+  await proveCommunicationsActionErrorHardening();
+  }
 } catch (error) {
   console.error(error);
   failures += 1;
@@ -1032,8 +2151,85 @@ try {
   await prisma.$disconnect();
 }
 
+if (!mutationKind && failures === 0) {
+  console.log("\nMUTATION — revert each guard and show the matching test fail cleanly");
+  const mutations = [
+    {
+      kind: "closed-preserve",
+      file: "src/lib/communications/missed-call.ts",
+      find: "    // PHONE_LOG_PRESERVE_CLOSED — only write status/callbackNeeded onto a live row.\n    // claimed.status is from the pre-lock findFirst and can be stale.\n    const stateWrite = await tx.phoneInteraction.updateMany({\n      where: {\n        id: claimed.id,\n        businessId: access.businessId,\n        status: { not: \"CLOSED\" },\n      },",
+      replace:
+        "    const stateWrite = await tx.phoneInteraction.updateMany({\n      where: {\n        id: claimed.id,\n        businessId: access.businessId,\n      },",
+    },
+    {
+      kind: "closed-action-lock",
+      file: "src/lib/communications/missed-call.ts",
+      find: "  // PHONE_LOG_DISPOSITION_LOCK\n  return withDispositionLock(db, receptionistDispositionLockKey(businessId, phoneInteractionId), work);",
+      replace: "  return work(db);",
+    },
+    {
+      kind: "event-idempotency-lookup",
+      file: "src/lib/communications/receptionist-disposition.ts",
+      find: "  // RECEPTIONIST_DISPOSITION_IDEMPOTENCY_LOOKUP\n  const existing = await db.receptionistEvent.findFirst({",
+      replace: "  const existing = null; await db.receptionistEvent.findFirst({",
+    },
+    {
+      kind: "event-lookup-businessId",
+      file: "src/lib/communications/receptionist-disposition.ts",
+      find: "    where: { businessId: access.businessId, idempotencyKey },",
+      replace: "    where: { idempotencyKey },",
+    },
+    {
+      kind: "action-item-businessId",
+      file: "src/lib/communications/receptionist-disposition.ts",
+      find: "            id: current.followUpActionItemId,\n            businessId: access.businessId,\n            status: \"OPEN\",",
+      replace: "            id: current.followUpActionItemId,\n            status: \"OPEN\",",
+    },
+    {
+      kind: "phone-update-businessId",
+      file: "src/lib/communications/receptionist-disposition.ts",
+      find: "            id: current.id,\n            businessId: access.businessId,\n            OR: [{ callbackNeeded: true }, { status: \"CALLBACK_NEEDED\" }],",
+      replace: "            id: current.id,\n            OR: [{ callbackNeeded: true }, { status: \"CALLBACK_NEEDED\" }],",
+    },
+  ];
+  const scriptPath = fileURLToPath(import.meta.url);
+  for (const mutation of mutations) {
+    const abs = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(abs, "utf8");
+    if (!original.includes(mutation.find)) {
+      check(`mutation ${mutation.kind} found its target`, false);
+      continue;
+    }
+    writeFileSync(abs, original.replace(mutation.find, mutation.replace));
+    try {
+      const child = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", scriptPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DATABASE_URL: testUrl,
+            RECEPTIONIST_RECOVERY_MUTATION: mutation.kind,
+          },
+        },
+      );
+      const failedCleanly =
+        child.status !== 0 &&
+        !/PrismaClientKnownRequestError|25P02|Unique constraint/.test(`${child.stdout}\n${child.stderr}`);
+      check(`mutation ${mutation.kind} fails cleanly without a Postgres crash`, failedCleanly);
+      if (!failedCleanly) {
+        console.error(child.stdout.slice(-2500));
+        console.error(child.stderr.slice(-1500));
+      }
+    } finally {
+      writeFileSync(abs, original);
+    }
+  }
+}
+
 if (failures > 0) {
-  console.error(`\n${failures} receptionist recovery check(s) failed.`);
+  console.error(`\n${failures} receptionist recovery check(s) failed (${passes} passed).`);
   process.exit(1);
 }
-console.log("\nReceptionist recovery center checks passed.");
+console.log(`\nReceptionist recovery center checks passed (${passes} passed).`);
