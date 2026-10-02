@@ -1,13 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireBusinessAccess } from "@/lib/access";
-import { ForbiddenError } from "@/lib/authorization";
-import {
-  CustomerRecordsExportError,
-  buildCustomerRecordsExport,
-  customerRecordsExportFilename,
-  recordCustomerRecordsExportAudit,
-  serializeCustomerRecordsExport,
-} from "@/lib/customer-records-export";
+import { runCustomerRecordsExportDownload } from "@/lib/customer-records-export";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -15,28 +8,20 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const access = await requireBusinessAccess();
   const url = new URL(request.url);
-
-  try {
-    const document = await buildCustomerRecordsExport(prisma, access, {
-      cursor: url.searchParams.get("cursor"),
-      customerId: url.searchParams.get("customerId"),
-    });
-    await recordCustomerRecordsExportAudit(prisma, access, document);
-    return new NextResponse(serializeCustomerRecordsExport(document), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${customerRecordsExportFilename(document)}"`,
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (error) {
-    if (error instanceof ForbiddenError) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    if (error instanceof CustomerRecordsExportError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    throw error;
+  const exported = await runCustomerRecordsExportDownload(prisma, access, {
+    cursor: url.searchParams.get("cursor"),
+    customerId: url.searchParams.get("customerId"),
+  });
+  if (!exported.ok) {
+    return NextResponse.json({ error: exported.error }, { status: exported.status });
   }
+
+  return new NextResponse(exported.body, {
+    status: 200,
+    headers: {
+      "Content-Type": exported.contentType,
+      "Content-Disposition": `attachment; filename="${exported.filename}"`,
+      "Cache-Control": "no-store",
+    },
+  });
 }

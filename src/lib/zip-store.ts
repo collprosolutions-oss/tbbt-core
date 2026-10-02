@@ -7,7 +7,7 @@ const CRC_TABLE = (() => {
   for (let i = 0; i < 256; i += 1) {
     let crc = i;
     for (let j = 0; j < 8; j += 1) {
-      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 8;
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
     }
     table[i] = crc >>> 0;
   }
@@ -39,6 +39,13 @@ export type ZipStoreFile = {
   data: string | Buffer;
 };
 
+export const ZIP_UTF8_NAME_FLAG = 0x0800;
+
+export function zipNameGeneralPurposeFlag(name: string | Buffer): number {
+  const bytes = typeof name === "string" ? Buffer.from(name, "utf8") : name;
+  return bytes.some((byte) => byte > 0x7f) ? ZIP_UTF8_NAME_FLAG : 0;
+}
+
 export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
@@ -48,10 +55,11 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
     const name = Buffer.from(file.name, "utf8");
     const data = typeof file.data === "string" ? Buffer.from(file.data, "utf8") : file.data;
     const crc = crc32(data);
+    const flags = zipNameGeneralPurposeFlag(name);
     const local = Buffer.concat([
       Buffer.from("PK\u0003\u0004", "binary"),
       u16(20),
-      u16(0),
+      u16(flags),
       u16(0),
       u16(0),
       u16(0),
@@ -68,7 +76,7 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
       Buffer.from("PK\u0001\u0002", "binary"),
       u16(20),
       u16(20),
-      u16(0),
+      u16(flags),
       u16(0),
       u16(0),
       u16(0),
@@ -103,10 +111,19 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
   return Buffer.concat([localBytes, centralBytes, eocd]);
 }
 
+const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const CSV_NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
+
+export function neutralizeCsvFormulaPrefix(value: string): string {
+  return CSV_FORMULA_PREFIX.test(value) && !CSV_NUMERIC_CELL.test(value) ? `'${value}` : value;
+}
+
 export function toCsvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const text = value instanceof Date ? value.toISOString() : String(value);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  const text = neutralizeCsvFormulaPrefix(
+    value instanceof Date ? value.toISOString() : String(value),
+  );
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 export function toCsv(headers: readonly string[], rows: Array<Record<string, unknown>>): string {

@@ -43,7 +43,7 @@ import {
 } from "@/lib/project-payments";
 import { buildZipStore, toCsv } from "@/lib/zip-store";
 
-const FORMULA_PREFIX = /^[=+\-@]/;
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
 
 export const PAYMENT_BASIS = {
   RECORDED_PAYMENTS: "RECORDED_PAYMENTS",

@@ -3,9 +3,10 @@
  *
  * This is a tenant-scoped portable JSON snapshot of recorded customers
  * and their same-business properties (with structured addresses),
- * requests, estimates, jobs, invoices, and payments. Large exports are
- * paginated. Private files stay references or a labeled omission —
- * bytes and storage credentials are never included.
+ * requests, estimates, jobs, invoices, payments, invoice credits, and
+ * time cards. Large exports are paginated. Private files stay permitted
+ * references or a labeled omission — bytes and storage credentials are
+ * never included.
  *
  * It is not the Settings business ZIP, not the customers-page CSV, not
  * live synchronization, and not a shared database.
@@ -35,6 +36,9 @@ export const CUSTOMER_RECORDS_EXPORT_OMISSIONS = [
 
 export const PRIVATE_FILE_OMISSION =
   "Private file bytes, storage URLs, storage keys, and storage credentials are omitted. This row is a same-business reference only.";
+
+export const CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE =
+  "project-portal-document" as const;
 
 export type CustomerRecordsExportSource = {
   system: typeof CUSTOMER_RECORDS_EXPORT_SYSTEM;
@@ -161,6 +165,15 @@ export type CustomerRecordsExportInvoice = {
   updatedAt: string;
 };
 
+export type CustomerRecordsExportCredit = {
+  id: string;
+  customerId: string | null;
+  invoiceId: string;
+  amount: string;
+  reason: string;
+  createdAt: string;
+};
+
 export type CustomerRecordsExportPayment = {
   id: string;
   customerId: string;
@@ -175,7 +188,20 @@ export type CustomerRecordsExportPayment = {
   createdAt: string;
 };
 
-export type CustomerRecordsExportFileKind = "REQUEST_PHOTO" | "JOB_PHOTO";
+export type CustomerRecordsExportTimeCard = {
+  id: string;
+  jobId: string | null;
+  membershipId: string;
+  activityType: string;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  note: string | null;
+  source: string;
+  createdAt: string;
+};
+
+export type CustomerRecordsExportFileKind = "REQUEST_PHOTO" | "JOB_PHOTO" | "PROJECT_DOCUMENT";
 
 export type CustomerRecordsExportFileRef = {
   id: string;
@@ -197,6 +223,8 @@ export type CustomerRecordsExportCustomerPacket = {
   jobs: CustomerRecordsExportCollection<CustomerRecordsExportJob>;
   invoices: CustomerRecordsExportCollection<CustomerRecordsExportInvoice>;
   payments: CustomerRecordsExportCollection<CustomerRecordsExportPayment>;
+  credits: CustomerRecordsExportCollection<CustomerRecordsExportCredit>;
+  timeCards: CustomerRecordsExportCollection<CustomerRecordsExportTimeCard>;
   files: CustomerRecordsExportCollection<CustomerRecordsExportFileRef>;
 };
 
@@ -249,4 +277,12 @@ export function customerRecordsExportPropertyTruncationMessage(limit: number): s
 
 export function customerRecordsExportFileTruncationMessage(limit: number): string {
   return `Private file references are truncated at ${limit}. Additional files were not listed. File bytes were never exported.`;
+}
+
+export function customerRecordsExportTimeCardTruncationMessage(limit: number): string {
+  return customerRecordsExportRelatedTruncationMessage("Time cards", limit);
+}
+
+export function customerRecordsExportCreditTruncationMessage(limit: number): string {
+  return customerRecordsExportRelatedTruncationMessage("Invoice credits", limit);
 }

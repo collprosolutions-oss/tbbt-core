@@ -10,8 +10,12 @@
  *   node --experimental-strip-types scripts/check-customer-records-export.mjs
  */
 import { register } from "node:module";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { crc32 as zlibCrc32 } from "node:zlib";
 import { openDisposableTestDatabase } from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
@@ -25,6 +29,7 @@ const {
   CUSTOMER_RECORDS_EXPORT_FILE_LIMIT,
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
   CUSTOMER_RECORDS_EXPORT_PAGE_SIZE,
+  CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE,
   CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
   CUSTOMER_RECORDS_EXPORT_VERSION,
   PRIVATE_FILE_OMISSION,
@@ -35,14 +40,167 @@ const {
   customerRecordsExportFileTruncationMessage,
   customerRecordsExportFilename,
   customerRecordsExportPageTruncationMessage,
+  customerRecordsExportCreditTruncationMessage,
   customerRecordsExportPropertyTruncationMessage,
+  customerRecordsExportTimeCardTruncationMessage,
   listExportableCustomerRecords,
   parseCustomerRecordsExport,
   recordCustomerRecordsExportAudit,
+  runCustomerRecordsExportDownload,
   serializeCustomerRecordsExport,
 } = await import("@/lib/customer-records-export");
+const {
+  BUSINESS_EXPORT_AUDIT_AREA,
+  BUSINESS_EXPORT_AUDIT_KEY,
+  buildBusinessExportZip,
+  runBusinessExportDownload,
+} = await import("@/lib/business-export");
+const { PROJECT_DOCUMENT_PURPOSE } = await import("@/lib/business-storage/project-documents");
+const {
+  ZIP_UTF8_NAME_FLAG,
+  buildZipStore,
+  neutralizeCsvFormulaPrefix,
+  toCsvCell,
+  zipNameGeneralPurposeFlag,
+} = await import("@/lib/zip-store");
 const { isSecretSettingKey } = await import("@/lib/settings");
 const { CustomerRecordsExportError } = await import("@/lib/customer-records-export/access");
+
+function crc32Table(elseShift) {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let crc = i;
+    for (let j = 0; j < 8; j += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> elseShift;
+    }
+    table[i] = crc >>> 0;
+  }
+  return table;
+}
+
+function crc32WithTable(data, table) {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function readZipStoreEntries(bytes) {
+  const buf = Buffer.from(bytes);
+  const entries = [];
+  let offset = 0;
+  while (offset + 30 <= buf.length) {
+    if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+    const localFlags = buf.readUInt16LE(offset + 6);
+    const crc = buf.readUInt32LE(offset + 14);
+    const size = buf.readUInt32LE(offset + 18);
+    const nameLen = buf.readUInt16LE(offset + 26);
+    const extraLen = buf.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const name = buf.subarray(nameStart, nameStart + nameLen).toString("utf8");
+    const dataStart = nameStart + nameLen + extraLen;
+    const data = buf.subarray(dataStart, dataStart + size);
+    entries.push({ name, crc, data, localFlags, centralFlags: null });
+    offset = dataStart + size;
+  }
+  while (offset + 46 <= buf.length) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+    const centralFlags = buf.readUInt16LE(offset + 8);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const name = buf.subarray(offset + 46, offset + 46 + nameLen).toString("utf8");
+    const entry = entries.find((row) => row.name === name && row.centralFlags == null);
+    if (entry) entry.centralFlags = centralFlags;
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function probeZipTools(bytes) {
+  const dir = mkdtempSync(join(tmpdir(), "tbbt-zip-probe-"));
+  const zipPath = join(dir, "probe.zip");
+  writeFileSync(zipPath, bytes);
+  try {
+    const unzipTest = spawnSync("unzip", ["-t", "-qq", zipPath]);
+    const pythonTest = spawnSync(
+      "python3",
+      [
+        "-c",
+        "import sys, zipfile; z=zipfile.ZipFile(sys.argv[1]); print('OK' if z.testzip() is None else 'BAD'); print('\\n'.join(z.namelist()))",
+        zipPath,
+      ],
+      { encoding: "utf8" },
+    );
+    return {
+      unzipMissing: unzipTest.error?.code === "ENOENT",
+      unzipOk: unzipTest.status === 0,
+      pythonMissing: pythonTest.error?.code === "ENOENT",
+      pythonOk: pythonTest.status === 0 && (pythonTest.stdout ?? "").startsWith("OK"),
+      pythonNames: (pythonTest.stdout ?? "")
+        .split("\n")
+        .slice(1)
+        .map((row) => row.trim())
+        .filter(Boolean),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function parseCsv(text) {
+  const src = text.replace(/\r\n/g, "\n");
+  const lines = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+          continue;
+        }
+        inQuotes = false;
+        continue;
+      }
+      cell += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (ch === ",") {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if (ch === "\n") {
+      row.push(cell);
+      lines.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += ch;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    lines.push(row);
+  }
+  if (lines.length && lines[lines.length - 1].every((value) => value === "")) {
+    lines.pop();
+  }
+  const headers = lines[0] ?? [];
+  const records = lines.slice(1).map((values) =>
+    Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])),
+  );
+  return { headers, records };
+}
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -103,8 +261,10 @@ const buildSrc = readRepo("src/lib/customer-records-export/build.ts");
 const parseSrc = readRepo("src/lib/customer-records-export/parse.ts");
 const accessSrc = readRepo("src/lib/customer-records-export/access.ts");
 const auditSrc = readRepo("src/lib/customer-records-export/audit.ts");
+const httpSrc = readRepo("src/lib/customer-records-export/http.ts");
 const pageSrc = readRepo("src/app/(app)/customers/records-export/page.tsx");
 const downloadSrc = readRepo("src/app/(app)/customers/records-export/download/route.ts");
+const businessExportRouteSrc = readRepo("src/app/(app)/settings/export/route.ts");
 const panelSrc = readRepo("src/components/customers/customer-records-export-panel.tsx");
 const customersPageSrc = readRepo("src/app/(app)/customers/page.tsx");
 const customerProfileSrc = readRepo("src/app/(app)/customers/[customerId]/page.tsx");
@@ -117,6 +277,7 @@ const schemaSrc = readRepo("prisma/schema.prisma");
 const navSrc = readRepo("src/lib/nav.ts");
 const packageSrc = readRepo("package.json");
 const checkSrc = readRepo("scripts/check-customer-records-export.mjs");
+const zipStoreSrc = readRepo("src/lib/zip-store.ts");
 
 const SECRET_MARKERS = [
   "publicToken",
@@ -183,7 +344,8 @@ check(
 );
 check(
   "Download records who exported and when on existing SettingsAuditLog",
-  downloadSrc.includes("recordCustomerRecordsExportAudit") &&
+  downloadSrc.includes("runCustomerRecordsExportDownload") &&
+    httpSrc.includes("recordCustomerRecordsExportAudit") &&
     auditSrc.includes("writeSettingsAuditLog") &&
     auditSrc.includes("CUSTOMER_RECORDS_EXPORT_AUDIT_AREA") &&
     CUSTOMER_RECORDS_EXPORT_AUDIT_AREA === "data-export" &&
@@ -196,9 +358,59 @@ check(
   "Dedicated page and download route stay OWNER-gated",
   pageSrc.includes("canExportCustomerRecords") &&
     pageSrc.includes("buildCustomerRecordsExport") &&
-    downloadSrc.includes("buildCustomerRecordsExport") &&
+    downloadSrc.includes("runCustomerRecordsExportDownload") &&
+    httpSrc.includes("canExportCustomerRecords") &&
     downloadSrc.includes("Cache-Control") &&
     downloadSrc.includes("no-store"),
+);
+check(
+  "Business ZIP download is route-level gated and audited without a new capability",
+  businessExportRouteSrc.includes("runBusinessExportDownload") &&
+    businessExportSrc.includes("canExportBusinessData") &&
+    businessExportSrc.includes("recordBusinessExportAudit") &&
+    BUSINESS_EXPORT_AUDIT_AREA === "data-export" &&
+    BUSINESS_EXPORT_AUDIT_KEY === "businessExport" &&
+    !isSecretSettingKey(BUSINESS_EXPORT_AUDIT_KEY) &&
+    businessExportSrc.includes("propertyId: true") &&
+    businessExportSrc.includes("activityType: true") &&
+    businessExportSrc.includes("exportEstimateTotal") &&
+    businessExportSrc.includes("prisma.invoiceCredit.findMany") &&
+    businessExportSrc.includes("credits:") &&
+    businessExportSrc.includes("invoice-credits.csv"),
+);
+check(
+  "ZIP CRC-32 table uses the correct else-shift and formula text is neutralized",
+  zipStoreSrc.includes("crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1") &&
+    !zipStoreSrc.includes("crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 8") &&
+    zipStoreSrc.includes("neutralizeCsvFormulaPrefix") &&
+    zipStoreSrc.includes("CSV_NUMERIC_CELL") &&
+    zipStoreSrc.includes("/^[=+\\-@\\t\\r]/") &&
+    zipStoreSrc.includes("/[\",\\n\\r]/") &&
+    zipStoreSrc.includes("0x0800"),
+);
+const downloadHelperSrc = httpSrc.slice(
+  httpSrc.indexOf("export async function runCustomerRecordsExportDownload"),
+);
+check(
+  "Customer-records download helper owns the OWNER gate and the audit write",
+  downloadHelperSrc.includes("if (!canExportCustomerRecords(access.workspace.role))") &&
+    downloadHelperSrc.includes('return { ok: false, status: 403, error: "Forbidden" }') &&
+    downloadHelperSrc.includes("await recordCustomerRecordsExportAudit(prisma, access, document)") &&
+    downloadHelperSrc.indexOf("canExportCustomerRecords") <
+      downloadHelperSrc.indexOf("buildCustomerRecordsExport") &&
+    downloadHelperSrc.indexOf("await recordCustomerRecordsExportAudit") >
+      downloadHelperSrc.indexOf("const document = await buildCustomerRecordsExport"),
+);
+check(
+  "Customer-records contract includes time cards and permitted project-document references",
+  contractSrc.includes("timeCards") &&
+    contractSrc.includes("PROJECT_DOCUMENT") &&
+    CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE === PROJECT_DOCUMENT_PURPOSE &&
+    buildSrc.includes("prisma.timeEntry.findMany") &&
+    buildSrc.includes("kind: \"PROJECT_DOCUMENT\"") &&
+    !buildSrc.includes("storageKey: true") &&
+    parseSrc.includes("FORBIDDEN_TIME_CARD_KEYS") &&
+    parseSrc.includes("approvedHourlyWage"),
 );
 check(
   "Settings and customer surfaces expose the OWNER export without a new global nav item",
@@ -242,15 +454,53 @@ check(
     buildSrc.includes("boundExportRead"),
 );
 check(
-  "UI shows pagination, property, and file-reference honesty",
+  "UI shows pagination, property, time-card, and file-reference honesty",
   panelSrc.includes("customerRecordsExportPageTruncationMessage") &&
     panelSrc.includes("customerRecordsExportFileTruncationMessage") &&
     panelSrc.includes("customerRecordsExportPropertyTruncationMessage") &&
+    panelSrc.includes("customerRecordsExportTimeCardTruncationMessage") &&
     panelSrc.includes("document.provenance.page.truncated") &&
     panelSrc.includes("packet.properties.count") &&
+    panelSrc.includes("packet.timeCards.count") &&
+    panelSrc.includes("packet.credits.count") &&
+    panelSrc.includes("customerRecordsExportCreditTruncationMessage") &&
     customerRecordsExportPropertyTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
       String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
+    ) &&
+    customerRecordsExportTimeCardTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
+      String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
+    ) &&
+    customerRecordsExportCreditTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
+      String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
     ),
+);
+const crcSample = Buffer.from("invoices.csv,payments.csv,time-entries.csv");
+const zlibSampleCrc = zlibCrc32(crcSample) >>> 0;
+check(
+  "Old ZIP CRC table (>>> 8 in the else branch) disagrees with zlib",
+  crc32WithTable(crcSample, crc32Table(8)) !== zlibSampleCrc,
+);
+check(
+  "Fixed ZIP CRC table (>>> 1 in the else branch) matches zlib",
+  crc32WithTable(crcSample, crc32Table(1)) === zlibSampleCrc,
+);
+check(
+  "CSV formula prefix is neutralized on text and left alone on money",
+  neutralizeCsvFormulaPrefix("=cmd|' /C calc'!A0") === "'=cmd|' /C calc'!A0" &&
+    neutralizeCsvFormulaPrefix("+SUM(A1)") === "'+SUM(A1)" &&
+    neutralizeCsvFormulaPrefix("@foo") === "'@foo" &&
+    neutralizeCsvFormulaPrefix("\t=1+1") === "'\t=1+1" &&
+    neutralizeCsvFormulaPrefix("\r=1+1") === "'\r=1+1" &&
+    neutralizeCsvFormulaPrefix("-70.00") === "-70.00" &&
+    neutralizeCsvFormulaPrefix("-1") === "-1" &&
+    neutralizeCsvFormulaPrefix("-0.5") === "-0.5" &&
+    neutralizeCsvFormulaPrefix("100.00") === "100.00" &&
+    toCsvCell("\t=1+1") === "'\t=1+1" &&
+    toCsvCell("\r=1+1") === `"'\r=1+1"` &&
+    toCsvCell("Line1\rLine2") === `"Line1\rLine2"` &&
+    toCsvCell("-70.00") === "-70.00" &&
+    toCsvCell("-1") === "-1" &&
+    toCsvCell("-0.5") === "-0.5",
 );
 check(
   "boundExportRead keeps the cap and marks overflow",
@@ -376,6 +626,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       status: "OPEN",
       summary: "Fix door",
       description: "Front door sticks",
@@ -420,6 +671,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       serviceRequestId: requestA1.id,
       status: "SENT",
       total: "125.50",
@@ -441,6 +693,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       estimateId: estimateA.id,
       status: "COMPLETED",
       serviceIntent: "ONE_TIME",
@@ -505,6 +758,40 @@ try {
     },
   });
 
+  const creditedInvoice = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customerA.id,
+      jobId: jobA.id,
+      kind: "ORIGINAL",
+      status: "SENT",
+      total: "100.00",
+    },
+  });
+  const creditA = await prisma.invoiceCredit.create({
+    data: {
+      businessId: businessA.id,
+      invoiceId: creditedInvoice.id,
+      customerId: customerA.id,
+      amount: "30.00",
+      reason: "Owner correction",
+      recordedByMembershipId: ownerMemA.id,
+      idempotencyKey: `credit-a-${randomUUID()}`,
+    },
+  });
+  const creditB = await prisma.invoiceCredit.create({
+    data: {
+      businessId: businessB.id,
+      invoiceId: invoiceB.id,
+      customerId: customerB.id,
+      amount: "10.00",
+      reason: "Beta only credit",
+      recordedByMembershipId: ownerMemB.id,
+      idempotencyKey: `credit-b-${randomUUID()}`,
+    },
+  });
+  const formulaNote = "=cmd|' /C calc'!A0";
+
   const photoUrl = `https://secret-storage.example/private-${randomUUID()}.jpg`;
   const photoA = await prisma.serviceRequestPhoto.create({
     data: {
@@ -530,6 +817,171 @@ try {
       url: "https://secret-storage.example/beta-only.jpg",
     },
   });
+
+  const timeCardA = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMemA.id,
+      jobId: jobA.id,
+      activityType: "JOB",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Installed lockset",
+      startedAt: new Date("2026-03-01T14:00:00.000Z"),
+      endedAt: new Date("2026-03-01T16:00:00.000Z"),
+    },
+  });
+  await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: memberMemA.id,
+      jobId: jobA.id,
+      activityType: "JOB",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: formulaNote,
+      startedAt: new Date("2026-03-01T16:00:00.000Z"),
+      endedAt: new Date("2026-03-01T16:30:00.000Z"),
+    },
+  });
+  const timeCardB = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: ownerMemB.id,
+      jobId: jobB.id,
+      activityType: "JOB",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Beta only time",
+      startedAt: new Date("2026-03-02T14:00:00.000Z"),
+      endedAt: new Date("2026-03-02T15:00:00.000Z"),
+    },
+  });
+  const timeCardCross = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: ownerMemB.id,
+      jobId: jobA.id,
+      activityType: "TRAVEL",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Cross-tenant planted time",
+      startedAt: new Date("2026-03-03T14:00:00.000Z"),
+      endedAt: new Date("2026-03-03T14:30:00.000Z"),
+    },
+  });
+
+  const storageA = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: businessA.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-test",
+      namespacePrefix: `businesses/${businessA.id}`,
+      storageLimitBytes: BigInt(1024 * 1024),
+    },
+  });
+  const storageB = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: businessB.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-test",
+      namespacePrefix: `businesses/${businessB.id}`,
+      storageLimitBytes: BigInt(1024 * 1024),
+    },
+  });
+  const projectDocKey = `secret-project-doc-${randomUUID()}`;
+  const projectDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "permit.pdf",
+      storageKey: projectDocKey,
+      mimeType: "application/pdf",
+      fileSizeBytes: 24,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  const vaultDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: "BUSINESS_VAULT",
+      originalFilename: "insurance.pdf",
+      storageKey: `vault-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 12,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  const pendingDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "pending.pdf",
+      storageKey: `pending-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 8,
+      visibility: "PRIVATE",
+      status: "PENDING",
+    },
+  });
+  const projectDocB = await prisma.storedAsset.create({
+    data: {
+      businessId: businessB.id,
+      storageAccountId: storageB.id,
+      customerId: customerB.id,
+      jobId: jobB.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "beta-only.pdf",
+      storageKey: `beta-doc-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 10,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+
+  const overflowJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: overflowCustomer.id,
+      status: "SCHEDULED",
+      serviceIntent: "ONE_TIME",
+      projectToken: `overflow-job-${randomUUID()}`,
+    },
+  });
+  const overflowTimeCards = await Promise.all(
+    Array.from({ length: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1 }, (_, index) =>
+      prisma.timeEntry.create({
+        data: {
+          businessId: businessA.id,
+          membershipId: ownerMemA.id,
+          jobId: overflowJob.id,
+          activityType: "JOB",
+          status: "STOPPED",
+          source: "CLOCK",
+          note: `Overflow time ${index + 1}`,
+          startedAt: new Date(Date.UTC(2024, 2, 1 + index, 13, 0, 0)),
+          endedAt: new Date(Date.UTC(2024, 2, 1 + index, 14, 0, 0)),
+        },
+      }),
+    ),
+  );
 
   const overflowRequests = await Promise.all(
     Array.from({ length: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1 }, (_, index) =>
@@ -570,6 +1022,27 @@ try {
       }),
     );
   }
+  const tabFormulaCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "\t=1+1",
+      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    },
+  });
+  const crFormulaCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "\r=1+1",
+      createdAt: new Date(Date.UTC(2026, 0, 3)),
+    },
+  });
+  const embeddedCrCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Line1\rLine2",
+      createdAt: new Date(Date.UTC(2026, 0, 4)),
+    },
+  });
 
   const ownerAccessA = makeAccess(businessA.id, "OWNER", ownerMemA.id);
   const adminAccessA = makeAccess(businessA.id, "ADMIN", adminMemA.id);
@@ -650,13 +1123,31 @@ try {
       packetA.estimates.count === 1 &&
       packetA.estimates.items[0].id === estimateA.id &&
       packetA.estimates.items[0].total === "125.50" &&
+      packetA.estimates.items[0].propertyId === propertyA.id &&
       packetA.jobs.count === 1 &&
       packetA.jobs.items[0].id === jobA.id &&
-      packetA.invoices.count === 1 &&
-      packetA.invoices.items[0].id === invoiceA.id &&
+      packetA.jobs.items[0].propertyId === propertyA.id &&
+      packetA.jobs.items[0].estimateId === estimateA.id &&
+      packetA.invoices.count === 2 &&
+      packetA.invoices.items.some((row) => row.id === invoiceA.id) &&
+      packetA.invoices.items.some((row) => row.id === creditedInvoice.id && row.total === "100.00") &&
       packetA.payments.count === 1 &&
       packetA.payments.items[0].id === paymentA.id &&
-      packetA.payments.items[0].amount === "40.00",
+      packetA.payments.items[0].amount === "40.00" &&
+      packetA.credits.count === 1 &&
+      packetA.credits.truncated === false &&
+      packetA.credits.items[0].id === creditA.id &&
+      packetA.credits.items[0].invoiceId === creditedInvoice.id &&
+      packetA.credits.items[0].amount === "30.00" &&
+      packetA.timeCards.count === 2 &&
+      packetA.timeCards.truncated === false &&
+      packetA.timeCards.items.some(
+        (row) =>
+          row.id === timeCardA.id &&
+          row.jobId === jobA.id &&
+          row.activityType === "JOB" &&
+          row.note === "Installed lockset",
+      ),
   );
   check(
     "Related overflow is truncated at the related-record cap",
@@ -674,6 +1165,12 @@ try {
       overflowPacket.properties.items[0].id === overflowProperties[0].id &&
       !overflowPacket.properties.items.some(
         (row) => row.id === overflowProperties[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
+      ) &&
+      overflowPacket.timeCards.truncated === true &&
+      overflowPacket.timeCards.count === CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT &&
+      overflowPacket.timeCards.items[0].id === overflowTimeCards[0].id &&
+      !overflowPacket.timeCards.items.some(
+        (row) => row.id === overflowTimeCards[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
       ),
   );
   check(
@@ -687,6 +1184,16 @@ try {
       !pageOneJson.includes(jobB.id) &&
       !pageOneJson.includes(invoiceB.id) &&
       !pageOneJson.includes(paymentB.id) &&
+      !pageOneJson.includes(creditB.id) &&
+      !pageOneJson.includes("Beta only credit") &&
+      !pageOneJson.includes(timeCardB.id) &&
+      !pageOneJson.includes(timeCardCross.id) &&
+      !pageOneJson.includes("Beta only time") &&
+      !pageOneJson.includes("Cross-tenant planted time") &&
+      !pageOneJson.includes(projectDocB.id) &&
+      !pageOneJson.includes("beta-only.pdf") &&
+      !pageOneJson.includes(vaultDocA.id) &&
+      !pageOneJson.includes(pendingDocA.id) &&
       !pageOneJson.includes("Beta only request") &&
       !pageOneJson.includes("Cross-tenant planted request") &&
       !pageOneJson.includes("Wrong-customer planted request") &&
@@ -706,6 +1213,7 @@ try {
       !pageOneJson.includes("Key under mat") &&
       !pageOneJson.includes("4321") &&
       !pageOneJson.includes(photoUrl) &&
+      !pageOneJson.includes(projectDocKey) &&
       !pageOneJson.includes("hashed-owner-secret") &&
       !pageOneJson.includes("publicToken") &&
       !pageOneJson.includes("projectToken") &&
@@ -722,8 +1230,8 @@ try {
       ),
   );
   check(
-    "Private files are same-business references with a labeled omission",
-    packetA.files.count >= 2 &&
+    "Private files are same-business permitted references with a labeled omission",
+    packetA.files.count >= 3 &&
       packetA.files.items.some(
         (file) =>
           file.id === photoA.id &&
@@ -732,7 +1240,23 @@ try {
           file.status === "REFERENCE" &&
           file.omission === PRIVATE_FILE_OMISSION,
       ) &&
-      packetA.files.items.every((file) => !("url" in file) && !("storageKey" in file)) &&
+      packetA.files.items.some(
+        (file) =>
+          file.id === projectDocA.id &&
+          file.kind === "PROJECT_DOCUMENT" &&
+          file.relatedJobId === jobA.id &&
+          file.originalFilename === "permit.pdf" &&
+          file.status === "REFERENCE" &&
+          file.omission === PRIVATE_FILE_OMISSION,
+      ) &&
+      packetA.files.items.every(
+        (file) =>
+          !("url" in file) &&
+          !("storageKey" in file) &&
+          file.id !== vaultDocA.id &&
+          file.id !== pendingDocA.id &&
+          file.id !== projectDocB.id,
+      ) &&
       CUSTOMER_RECORDS_EXPORT_OMISSIONS.some((item) => item.includes("Private file bytes")),
   );
 
@@ -785,7 +1309,10 @@ try {
       !otherJson.includes(estimateA.id) &&
       !otherJson.includes(jobA.id) &&
       !otherJson.includes(invoiceA.id) &&
-      !otherJson.includes(paymentA.id),
+      !otherJson.includes(paymentA.id) &&
+      !otherJson.includes(creditA.id) &&
+      !otherJson.includes(timeCardA.id) &&
+      !otherJson.includes(projectDocA.id),
   );
 
   const roundTrip = parseCustomerRecordsExport(JSON.parse(serializeCustomerRecordsExport(single)));
@@ -808,6 +1335,8 @@ try {
       listed.customers[0].propertyCount === 2 &&
       listed.customers[0].requestCount === 2 &&
       listed.customers[0].paymentCount === 1 &&
+      listed.customers[0].creditCount === 1 &&
+      listed.customers[0].timeCardCount === 2 &&
       listed.truncated === false,
   );
 
@@ -907,6 +1436,209 @@ try {
       !ownerBAudit.some((row) => row.id === recorded.id),
   );
 
+  const adminCustomerDownload = await runCustomerRecordsExportDownload(prisma, adminAccessA);
+  const memberCustomerDownload = await runCustomerRecordsExportDownload(prisma, memberAccessA);
+  check(
+    "Route-level ADMIN customer-records download is 403 Forbidden",
+    adminCustomerDownload.ok === false &&
+      adminCustomerDownload.status === 403 &&
+      adminCustomerDownload.error === "Forbidden",
+  );
+  check(
+    "Route-level MEMBER customer-records download is 403 Forbidden",
+    memberCustomerDownload.ok === false &&
+      memberCustomerDownload.status === 403 &&
+      memberCustomerDownload.error === "Forbidden",
+  );
+  const ownerAuditsBeforeDownload = await prisma.settingsAuditLog.count({
+    where: { businessId: businessA.id, settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY },
+  });
+  const ownerCustomerDownload = await runCustomerRecordsExportDownload(prisma, ownerAccessA, {
+    customerId: customerA.id,
+  });
+  const ownerCustomerBody = ownerCustomerDownload.ok ? JSON.parse(ownerCustomerDownload.body) : null;
+  const ownerAuditsAfterDownload = await prisma.settingsAuditLog.count({
+    where: { businessId: businessA.id, settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Route-level OWNER customer-records download succeeds",
+    ownerCustomerDownload.ok === true &&
+      ownerCustomerDownload.status === 200 &&
+      ownerCustomerBody?.customers[0]?.customer.id === customerA.id &&
+      ownerCustomerBody?.customers[0]?.jobs.items[0]?.propertyId === propertyA.id &&
+      ownerCustomerBody?.customers[0]?.estimates.items[0]?.total === "125.50" &&
+      ownerCustomerBody?.customers[0]?.credits.items[0]?.id === creditA.id &&
+      ownerCustomerBody?.customers[0]?.timeCards.items.some((row) => row.id === timeCardA.id) &&
+      ownerCustomerBody?.customers[0]?.files.truncated === true &&
+      !ownerCustomerDownload.body.includes(customerB.name) &&
+      !ownerCustomerDownload.body.includes(projectDocKey),
+  );
+  check(
+    "OWNER route-level download writes one new customer-records audit row",
+    ownerCustomerDownload.ok === true &&
+      ownerAuditsAfterDownload === ownerAuditsBeforeDownload + 1,
+  );
+  const afterAdminMemberCustomerAudit = await prisma.settingsAuditLog.count({
+    where: {
+      businessId: businessA.id,
+      settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY,
+      changedByMembershipId: { in: [adminMemA.id, memberMemA.id] },
+    },
+  });
+  check(
+    "ADMIN and MEMBER customer-records route denials do not write an export audit",
+    afterAdminMemberCustomerAudit === 0,
+  );
+
+  const memberBusinessDownload = await runBusinessExportDownload(prisma, memberAccessA);
+  const adminBusinessDownload = await runBusinessExportDownload(prisma, adminAccessA);
+  const ownerBusinessDownload = await runBusinessExportDownload(prisma, ownerAccessA);
+  const ownerZipText = ownerBusinessDownload.ok ? ownerBusinessDownload.body.toString("utf8") : "";
+  const adminZipText = adminBusinessDownload.ok ? adminBusinessDownload.body.toString("utf8") : "";
+  check(
+    "Route-level business ZIP lets OWNER and ADMIN retrieve tenant records; MEMBER is forbidden",
+    memberBusinessDownload.ok === false &&
+      memberBusinessDownload.status === 403 &&
+      adminBusinessDownload.ok === true &&
+      ownerBusinessDownload.ok === true &&
+      ownerZipText.includes(customerA.name) &&
+      ownerZipText.includes(propertyA.id) &&
+      ownerZipText.includes(jobA.id) &&
+      ownerZipText.includes("125.50") &&
+      ownerZipText.includes("JOB") &&
+      ownerZipText.includes("Installed lockset") &&
+      ownerZipText.includes(timeCardA.id) &&
+      !ownerZipText.includes(customerB.name) &&
+      !ownerZipText.includes(timeCardB.id) &&
+      !ownerZipText.includes(projectDocKey) &&
+      adminZipText.includes(customerA.name) &&
+      !adminZipText.includes(customerB.name),
+  );
+  const builtZip = await buildBusinessExportZip(prisma, businessA.id);
+  const builtZipText = builtZip.bytes.toString("utf8");
+  const zipEntries = readZipStoreEntries(builtZip.bytes);
+  const invoicesCsv = zipEntries.find((entry) => entry.name === "invoices.csv");
+  const creditsCsv = zipEntries.find((entry) => entry.name === "invoice-credits.csv");
+  const timeEntriesCsv = zipEntries.find((entry) => entry.name === "time-entries.csv");
+  const customersCsv = zipEntries.find((entry) => entry.name === "customers.csv");
+  const invoiceRows = invoicesCsv ? parseCsv(invoicesCsv.data.toString("utf8")).records : [];
+  const creditRows = creditsCsv ? parseCsv(creditsCsv.data.toString("utf8")).records : [];
+  const creditedInvoiceRow = invoiceRows.find((row) => row["Invoice ID"] === creditedInvoice.id);
+  const recordedPaymentInvoiceRow = invoiceRows.find((row) => row["Invoice ID"] === invoiceA.id);
+  check(
+    "Business ZIP completeness keeps property links, estimate totals, and time-card activity",
+    builtZipText.includes("propertyId") &&
+      builtZipText.includes("activityType") &&
+      builtZipText.includes(propertyA.id) &&
+      builtZipText.includes(estimateA.id) &&
+      builtZipText.includes("125.50") &&
+      builtZipText.includes(timeCardA.id) &&
+      builtZipText.includes("CLOCK") &&
+      !builtZipText.includes(estimateToken) &&
+      !builtZipText.includes(projectToken) &&
+      !builtZipText.includes(stripeSession) &&
+      !builtZipText.includes("Key under mat"),
+  );
+  check(
+    "Recorded payment ZIP remaining follows #274 invoicePaymentBreakdown",
+    recordedPaymentInvoiceRow?.Total === "125.50" &&
+      recordedPaymentInvoiceRow?.["Amount Paid"] === "40.00" &&
+      recordedPaymentInvoiceRow?.["Amount Remaining"] === "85.50" &&
+      recordedPaymentInvoiceRow?.["Payment Basis"] === "RECORDED_PAYMENTS",
+  );
+  check(
+    "Credited SENT invoice remaining is 70.00 and the credit row is exported",
+    creditedInvoiceRow?.Total === "100.00" &&
+      creditedInvoiceRow?.["Amount Remaining"] === "70.00" &&
+      creditedInvoiceRow?.["Payment Basis"] === "NO_RECORDED_PAYMENT" &&
+      creditRows.some(
+        (row) =>
+          row.id === creditA.id &&
+          row.invoiceId === creditedInvoice.id &&
+          row.amount === "30.00" &&
+          row.reason === "Owner correction",
+      ) &&
+      !creditRows.some((row) => row.id === creditB.id) &&
+      !builtZipText.includes(creditB.id) &&
+      ownerCustomerBody?.customers[0]?.credits.items.some(
+        (row) => row.id === creditA.id && row.amount === "30.00",
+      ) &&
+      !ownerCustomerDownload.body.includes(creditB.id),
+  );
+  check(
+    "Each Settings ZIP entry CRC matches node:zlib crc32",
+    zipEntries.length > 0 &&
+      zipEntries.every((entry) => entry.crc === (zlibCrc32(entry.data) >>> 0)),
+  );
+  const settingsZipProbe = probeZipTools(builtZip.bytes);
+  check(
+    "unzip -t accepts the Settings ZIP when unzip is available",
+    settingsZipProbe.unzipMissing || settingsZipProbe.unzipOk,
+  );
+  check(
+    "Python zipfile accepts the Settings ZIP when python3 is available",
+    settingsZipProbe.pythonMissing || settingsZipProbe.pythonOk,
+  );
+  check(
+    "Time-card note formula prefix is neutralized in the ZIP CSV",
+    Boolean(timeEntriesCsv?.data.toString("utf8").includes(`'=cmd|' /C calc'!A0`)) &&
+      neutralizeCsvFormulaPrefix(formulaNote) === "'=cmd|' /C calc'!A0",
+  );
+  const customersCsvText = customersCsv?.data.toString("utf8") ?? "";
+  const customerRows = customersCsv ? parseCsv(customersCsvText).records : [];
+  check(
+    "ZIP customers.csv prefixes tab/CR formulas and quotes embedded CR",
+    customersCsvText.includes("'\t=1+1") &&
+      customersCsvText.includes(`"'${"\r"}=1+1"`) &&
+      customersCsvText.includes(`"Line1\rLine2"`) &&
+      customerRows.some((row) => row.name === "'\t=1+1" && row.id === tabFormulaCustomer.id) &&
+      customerRows.some((row) => row.name === "'\r=1+1" && row.id === crFormulaCustomer.id) &&
+      customerRows.some((row) => row.name === "Line1\rLine2" && row.id === embeddedCrCustomer.id) &&
+      !customerRows.some((row) => row.name === "\t=1+1" || row.name === "\r=1+1"),
+  );
+
+  const unicodeEntryName = "vault-documents/id-résumé-日本.pdf";
+  const unicodeZip = buildZipStore([{ name: unicodeEntryName, data: "vault-bytes" }]);
+  const unicodeEntries = readZipStoreEntries(unicodeZip);
+  const unicodeEntry = unicodeEntries.find((entry) => entry.name === unicodeEntryName);
+  const unicodeProbe = probeZipTools(unicodeZip);
+  check(
+    "Non-ASCII ZIP entry names set UTF-8 flag bit 11 in local and central headers",
+    ZIP_UTF8_NAME_FLAG === 0x0800 &&
+      zipNameGeneralPurposeFlag(unicodeEntryName) === ZIP_UTF8_NAME_FLAG &&
+      zipNameGeneralPurposeFlag("customers.csv") === 0 &&
+      unicodeEntry?.localFlags === ZIP_UTF8_NAME_FLAG &&
+      unicodeEntry?.centralFlags === ZIP_UTF8_NAME_FLAG &&
+      zipEntries.every((entry) => entry.localFlags === 0 && entry.centralFlags === 0) &&
+      (unicodeProbe.unzipMissing || unicodeProbe.unzipOk) &&
+      (unicodeProbe.pythonMissing ||
+        (unicodeProbe.pythonOk && unicodeProbe.pythonNames.includes(unicodeEntryName))),
+  );
+
+  const businessAuditsA = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: BUSINESS_EXPORT_AUDIT_KEY },
+  });
+  const businessAuditsB = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessB.id, settingKey: BUSINESS_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Business ZIP route writes tenant-scoped audit for permitted downloaders only",
+    businessAuditsA.length === 2 &&
+      businessAuditsA.some((row) => row.changedByMembershipId === ownerMemA.id) &&
+      businessAuditsA.some((row) => row.changedByMembershipId === adminMemA.id) &&
+      !businessAuditsA.some((row) => row.changedByMembershipId === memberMemA.id) &&
+      businessAuditsB.length === 0 &&
+      businessAuditsA.every((row) => {
+        const payload = JSON.parse(row.newValue);
+        return (
+          row.settingArea === BUSINESS_EXPORT_AUDIT_AREA &&
+          payload.filename?.startsWith("tbbt-export-") &&
+          !row.newValue.includes(projectDocKey) &&
+          !row.newValue.includes(estimateToken)
+        );
+      }),
+  );
+
   try {
     const forgedProperty = structuredClone(single);
     forgedProperty.customers[0].properties.items[0].accessCode = "4321";
@@ -964,6 +1696,17 @@ try {
     check(
       "Parser rejects private file URLs on references",
       error instanceof CustomerRecordsExportError && /must not include url/.test(error.message),
+    );
+  }
+  try {
+    const forgedTime = structuredClone(single);
+    forgedTime.customers[0].timeCards.items[0].approvedHourlyWage = "25.00";
+    parseCustomerRecordsExport(forgedTime);
+    check("Parser rejects time-card wage fields", false);
+  } catch (error) {
+    check(
+      "Parser rejects time-card wage fields",
+      error instanceof CustomerRecordsExportError && /must not include approvedHourlyWage/.test(error.message),
     );
   }
 } catch (error) {

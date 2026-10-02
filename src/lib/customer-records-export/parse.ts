@@ -19,7 +19,18 @@ import {
   invalidCustomerRecordsExportError,
 } from "@/lib/customer-records-export/access";
 
-const FILE_KINDS = new Set<CustomerRecordsExportFileKind>(["REQUEST_PHOTO", "JOB_PHOTO"]);
+const FILE_KINDS = new Set<CustomerRecordsExportFileKind>([
+  "REQUEST_PHOTO",
+  "JOB_PHOTO",
+  "PROJECT_DOCUMENT",
+]);
+const FORBIDDEN_TIME_CARD_KEYS = [
+  "approvedHours",
+  "approvedHourlyWage",
+  "approvedLaborCost",
+  "passwordHash",
+  "totpSecret",
+];
 const FORBIDDEN_FILE_KEYS = ["url", "storageKey", "storageAccount", "body", "bytes", "content"];
 const FORBIDDEN_PROPERTY_KEYS = [
   "accessCode",
@@ -231,6 +242,18 @@ function parseCustomerPacket(input: unknown, index: number): CustomerRecordsExpo
       `customers[${index}].payments`,
       CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
       (item, itemIndex) => parsePayment(item, index, itemIndex, customer.id),
+    ),
+    credits: parseCollection(
+      value.credits,
+      `customers[${index}].credits`,
+      CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+      (item, itemIndex) => parseCredit(item, index, itemIndex, customer.id),
+    ),
+    timeCards: parseCollection(
+      value.timeCards,
+      `customers[${index}].timeCards`,
+      CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+      (item, itemIndex) => parseTimeCard(item, index, itemIndex),
     ),
     files: parseCollection(
       value.files,
@@ -458,6 +481,51 @@ function parsePayment(
     throw invalid(`${label}.customerId must match the parent customer`);
   }
   return payment;
+}
+
+function parseCredit(
+  input: unknown,
+  customerIndex: number,
+  index: number,
+  customerId: string,
+): CustomerRecordsExportDocument["customers"][number]["credits"]["items"][number] {
+  const label = `customers[${customerIndex}].credits.items[${index}]`;
+  const value = asObject(input, label);
+  assertAbsent(value, `${label}`, ["idempotencyKey", "stripeCheckoutSessionId"]);
+  const credit = {
+    id: asNonEmptyString(value.id, `${label}.id`),
+    customerId: asNullableString(value.customerId, `${label}.customerId`),
+    invoiceId: asNonEmptyString(value.invoiceId, `${label}.invoiceId`),
+    amount: asMoney(value.amount, `${label}.amount`),
+    reason: asString(value.reason, `${label}.reason`),
+    createdAt: asIsoDate(value.createdAt, `${label}.createdAt`),
+  };
+  if (credit.customerId && credit.customerId !== customerId) {
+    throw invalid(`${label}.customerId must match the parent customer`);
+  }
+  return credit;
+}
+
+function parseTimeCard(
+  input: unknown,
+  customerIndex: number,
+  index: number,
+): CustomerRecordsExportDocument["customers"][number]["timeCards"]["items"][number] {
+  const label = `customers[${customerIndex}].timeCards.items[${index}]`;
+  const value = asObject(input, label);
+  assertAbsent(value, `${label}`, FORBIDDEN_TIME_CARD_KEYS);
+  return {
+    id: asNonEmptyString(value.id, `${label}.id`),
+    jobId: asNullableString(value.jobId, `${label}.jobId`),
+    membershipId: asNonEmptyString(value.membershipId, `${label}.membershipId`),
+    activityType: asNonEmptyString(value.activityType, `${label}.activityType`),
+    status: asNonEmptyString(value.status, `${label}.status`),
+    startedAt: asIsoDate(value.startedAt, `${label}.startedAt`),
+    endedAt: asNullableIsoDate(value.endedAt, `${label}.endedAt`),
+    note: asNullableString(value.note, `${label}.note`),
+    source: asNonEmptyString(value.source, `${label}.source`),
+    createdAt: asIsoDate(value.createdAt, `${label}.createdAt`),
+  };
 }
 
 function parseFileRef(
