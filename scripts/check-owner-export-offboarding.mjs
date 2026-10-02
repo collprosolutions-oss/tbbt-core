@@ -267,6 +267,16 @@ try {
       total: "125.50",
     },
   });
+  const invoiceB = await prisma.invoice.create({
+    data: {
+      businessId: businessB.id,
+      customerId: customerB.id,
+      jobId: jobB.id,
+      kind: "ORIGINAL",
+      status: "SENT",
+      total: "999.00",
+    },
+  });
   await prisma.payment.create({
     data: {
       businessId: businessA.id,
@@ -440,13 +450,18 @@ try {
   }
   const accountingFiles = readZipStoreFiles(ownerAccounting.bytes);
   const accountingInvoices = parseCsv(zipFile(accountingFiles, "invoices.csv")?.data.toString("utf8") ?? "");
-  const otherAccountingText = otherAccounting.bytes.toString("utf8");
+  const otherAccountingFiles = readZipStoreFiles(otherAccounting.bytes);
+  const otherAccountingInvoices = parseCsv(
+    zipFile(otherAccountingFiles, "invoices.csv")?.data.toString("utf8") ?? "",
+  );
   check(
     "Accounting ZIP stays on this tenant and never includes the other business",
-    accountingInvoices.records.some((row) => Object.values(row).includes(invoiceA.id)) &&
+    accountingInvoices.records.some((row) => row["Invoice ID"] === invoiceA.id) &&
+      !accountingInvoices.records.some((row) => row["Invoice ID"] === invoiceB.id) &&
       !ownerAccounting.bytes.toString("utf8").includes(customerB.name) &&
-      otherAccountingText.includes(customerB.name) &&
-      !otherAccountingText.includes(customerA.name),
+      otherAccountingInvoices.records.some((row) => row["Invoice ID"] === invoiceB.id) &&
+      !otherAccountingInvoices.records.some((row) => row["Invoice ID"] === invoiceA.id) &&
+      !otherAccounting.bytes.toString("utf8").includes(customerA.name),
   );
 
   const ownerBusiness = await runBusinessExportDownload(prisma, ownerAccessA);
@@ -541,7 +556,7 @@ try {
 
   console.log("\nMUTATION — dropping the unique project-document CSV fails the proof");
   const mutatedSrc = businessExportSrc.replace(
-    /name: "project-documents.csv",[\s\S]*?projectDocuments,\s*\},/,
+    /\{\s*name: "project-documents.csv",[\s\S]*?projectDocuments,\s*\),\s*\},/,
     "",
   );
   const mutatedPath = join(tmpdir(), `owner-export-offboarding-mutated-${randomUUID()}.mjs`);
