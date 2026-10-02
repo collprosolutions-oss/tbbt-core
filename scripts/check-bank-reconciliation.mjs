@@ -70,7 +70,7 @@ const selfSrc = readRepo("scripts/check-bank-reconciliation.mjs");
 const authSrc = readRepo("src/lib/authorization.ts");
 const migrationSrc = readRepo("prisma/migrations/20261002190000_bank_reconciliation/migration.sql");
 const acceptedUniqueMigrationSrc = readRepo(
-  "prisma/migrations/20261002196000_bank_reconciliation_accepted_unique/migration.sql",
+  "prisma/migrations/20261002190100_bank_reconciliation_accepted_unique/migration.sql",
 );
 
 const {
@@ -135,7 +135,7 @@ check(
     !migrationSrc.includes("DROP TABLE"),
 );
 check(
-  "accepted-match unique indexes are additive 20261002196000",
+  "accepted-match unique indexes are additive 20261002190100",
   acceptedUniqueMigrationSrc.includes("BankReconciliationMatch_accepted_candidate_key") &&
     acceptedUniqueMigrationSrc.includes("BankReconciliationMatch_accepted_row_key") &&
     acceptedUniqueMigrationSrc.includes("WHERE status = 'ACCEPTED'") &&
@@ -249,7 +249,7 @@ check(
 );
 check(
   "verifier applies the accepted-unique migration SQL",
-  selfSrc.includes("20261002196000_bank_reconciliation_accepted_unique") &&
+  selfSrc.includes("20261002190100_bank_reconciliation_accepted_unique") &&
     selfSrc.includes("applyMigrationStatements(acceptedUniqueMigrationSrc)"),
 );
 check(

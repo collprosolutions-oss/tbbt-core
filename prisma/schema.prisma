@@ -5748,7 +5748,7 @@ model BankReconciliationMatch {
 
   // One ACCEPTED match per (businessId, candidateKind, candidateId) and one
   // ACCEPTED match per rowId are enforced by partial unique indexes in
-  // 20261002196000_bank_reconciliation_accepted_unique. Prisma cannot model
+  // 20261002190100_bank_reconciliation_accepted_unique. Prisma cannot model
   // those WHERE status = 'ACCEPTED' constraints here.
   @@unique([rowId, candidateKind, candidateId])
   @@index([businessId])
