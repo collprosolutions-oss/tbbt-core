@@ -80,6 +80,7 @@ export {
   receptionistDispositionIdempotencyKey,
   receptionistDispositionLockKey,
   recordReceptionistCallbackDisposition,
+  withDispositionLock,
 } from "@/lib/communications/receptionist-disposition";
 export {
   isCommunicationAiAction,

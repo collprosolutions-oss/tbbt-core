@@ -112,16 +112,19 @@ export function phoneInteractionIsClosedDisposition(row: {
   return row.status === PHONE_INTERACTION_CLOSED_STATUS && !row.callbackNeeded;
 }
 
-async function withDispositionLock<T>(
+export async function withDispositionLock<T>(
   db: Db,
   lockKey: string,
   work: (tx: Db) => Promise<T>,
 ): Promise<T> {
   if ("$transaction" in db && typeof db.$transaction === "function") {
-    return db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
-      return work(tx);
-    });
+    return db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        return work(tx);
+      },
+      { timeout: 15000 },
+    );
   }
   return work(db);
 }

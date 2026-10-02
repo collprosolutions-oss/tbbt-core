@@ -13,6 +13,10 @@ import {
   RELATED_RECORD_NOT_OWNED_REASON,
   conflictingCustomerIds,
 } from "@/lib/communications/related";
+import {
+  receptionistDispositionLockKey,
+  withDispositionLock,
+} from "@/lib/communications/receptionist-disposition";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -253,6 +257,16 @@ async function ensurePhoneCommunication(
   }
 }
 
+async function withPhoneLogDispositionLock<T>(
+  db: Db,
+  businessId: string,
+  phoneInteractionId: string,
+  work: (tx: Db) => Promise<T>,
+): Promise<T> {
+  // PHONE_LOG_DISPOSITION_LOCK
+  return withDispositionLock(db, receptionistDispositionLockKey(businessId, phoneInteractionId), work);
+}
+
 async function completePhoneLog(
   db: Db,
   access: CommunicationAccess,
@@ -311,42 +325,61 @@ async function completePhoneLog(
     maybeFail("communication");
   }
 
-  // PHONE_LOG_PRESERVE_CLOSED — only write status/callbackNeeded onto a live row.
-  // claimed.status is from the pre-lock findFirst and can be stale.
-  const stateWrite = await db.phoneInteraction.updateMany({
-    where: {
-      id: claimed.id,
-      businessId: access.businessId,
-      status: { not: "CLOSED" },
-    },
-    data: {
-      callbackNeeded,
-      status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
-    },
-  });
-
-  let actionItemId = claimed.followUpActionItemId;
-  if (callbackNeeded && stateWrite.count > 0) {
-    actionItemId = await ensureCallbackAction(db, access, {
-      claimedId: claimed.id,
-      idempotencyKey: input.idempotencyKey,
-      summary,
-      customerName: customer?.name ?? null,
+  const locked = await withPhoneLogDispositionLock(db, access.businessId, claimed.id, async (tx) => {
+    const live = await tx.phoneInteraction.findFirst({
+      where: { id: claimed.id, businessId: access.businessId },
+      select: { id: true, status: true, followUpActionItemId: true },
     });
-    maybeFail("action");
-  }
+    if (!live) {
+      return { actionItemId: claimed.followUpActionItemId };
+    }
 
-  await db.phoneInteraction.updateMany({
-    where: { id: claimed.id, businessId: access.businessId },
-    data: {
-      customerId: customer?.id ?? claimed.customerId,
-      threadId: thread?.id ?? claimed.threadId,
-      communicationId,
-      followUpActionItemId: actionItemId,
-      requestId: input.requestId || null,
-      jobId: input.jobId || null,
-    },
+    let actionItemId = live.followUpActionItemId;
+    // PHONE_LOG_PRESERVE_CLOSED — only write status/callbackNeeded onto a live row.
+    // claimed.status is from the pre-lock findFirst and can be stale.
+    const stateWrite = await tx.phoneInteraction.updateMany({
+      where: {
+        id: claimed.id,
+        businessId: access.businessId,
+        status: { not: "CLOSED" },
+      },
+      data: {
+        callbackNeeded,
+        status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
+      },
+    });
+
+    if (callbackNeeded && stateWrite.count > 0) {
+      actionItemId = await ensureCallbackAction(tx, access, {
+        claimedId: claimed.id,
+        idempotencyKey: input.idempotencyKey,
+        summary,
+        customerName: customer?.name ?? null,
+      });
+      maybeFail("action");
+    }
+
+    const after = await tx.phoneInteraction.findFirst({
+      where: { id: claimed.id, businessId: access.businessId },
+      select: { status: true, followUpActionItemId: true },
+    });
+    const closedNow = after?.status === "CLOSED";
+
+    await tx.phoneInteraction.updateMany({
+      where: { id: claimed.id, businessId: access.businessId },
+      data: {
+        customerId: customer?.id ?? claimed.customerId,
+        threadId: thread?.id ?? claimed.threadId,
+        communicationId,
+        requestId: input.requestId || null,
+        jobId: input.jobId || null,
+        ...(closedNow ? {} : { followUpActionItemId: actionItemId }),
+      },
+    });
+
+    return { actionItemId: after?.followUpActionItemId ?? actionItemId };
   });
+  const actionItemId = locked.actionItemId;
   if (thread) {
     await touchCommunicationThread(db, {
       businessId: access.businessId,
