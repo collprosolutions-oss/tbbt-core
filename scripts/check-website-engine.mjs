@@ -329,6 +329,31 @@ check(
     readReferencedWebsitePublishId("not a valid id!").publishId == null &&
     readReferencedWebsitePublishId("not a valid id!").provided === true,
 );
+const ownedWebsiteLookup = intakeSrc.slice(
+  intakeSrc.indexOf("async function loadOwnedWebsiteSnapshot"),
+  intakeSrc.indexOf("async function resolveIntakePublishedSnapshot"),
+);
+function websitePublishLookupIsTenantScoped(src) {
+  return /where:\s*\{\s*id:\s*publishId,\s*businessId:\s*business\.id\s*\}/.test(src);
+}
+check(
+  "Historical WebsitePublish lookup is tenant-scoped by id and businessId",
+  websitePublishLookupIsTenantScoped(ownedWebsiteLookup) &&
+    ownedWebsiteLookup.includes("parsed.business.id === business.id") &&
+    ownedWebsiteLookup.includes("parsed.business.slug === safeSlug"),
+);
+check(
+  "A mutation that drops the tenant guard from the website publish lookup fails the pin",
+  websitePublishLookupIsTenantScoped(ownedWebsiteLookup) === true &&
+    websitePublishLookupIsTenantScoped(
+      ownedWebsiteLookup.replace("businessId: business.id", ""),
+    ) === false,
+);
+check(
+  "Historical opened tabs reject services deactivated after a later publish",
+  intakeSrc.includes("historicalPublish") &&
+    /publishedSnapshot && !historicalPublish \? \{\} : \{ active: true \}/.test(intakeSrc),
+);
 check(
   "Sitemap catch falls back to CollPro only for CollPro or local-preview hosts",
   sitemapBuilder.includes("catch") &&
@@ -1727,7 +1752,7 @@ try {
       intakeMeasurementUnit: "IN",
     },
   });
-  await publishWebsite(prisma, accessA, { idempotencyKey: "pub-ghost" });
+  const ghostPublish = await publishWebsite(prisma, accessA, { idempotencyKey: "pub-ghost" });
   await prisma.serviceCatalogItem.update({
     where: { id: ghost.id },
     data: { active: false, name: "Hidden Draft", intakeMeasurementMode: "NONE" },
@@ -1761,6 +1786,28 @@ try {
   check(
     "Next Publish removes a service that is no longer offered",
     goneView?.site.items.some((row) => row.id === ghost.id) !== true,
+  );
+  const oldTabGhostSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Old Tab Hidden",
+    email: `old-ghost-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0101",
+    address: "",
+    streetAddress: "19 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Opened before the service was deactivated and republished.",
+    catalogItemIds: [ghost.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: ghost.id, width: "12", height: "8", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    websitePublishId: ghostPublish.id,
+  });
+  check(
+    "Old hire form cannot submit a service deactivated after a later publish",
+    oldTabGhostSubmit.ok === false,
   );
   const tenantASlug = publicServiceFromView(goneView, "tv-mounting");
   const viewB = await loadPublicWebsiteView(businessB.slug, prisma);

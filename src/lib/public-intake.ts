@@ -197,7 +197,8 @@ export type PublicIntakeInput = {
    * or corrupt reference fails closed. Omitting the id uses the current
    * published pointer when one exists (new tabs). Already-opened forms
    * send the id they displayed so a later owner publish cannot change
-   * service-city qualification.
+   * service-city qualification. A service deactivated after that publish
+   * is rejected even if the opened snapshot still lists it.
    */
   websitePublishId?: string | null;
   /**
@@ -635,6 +636,11 @@ async function createPublicServiceRequestInner(
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
   }
   const { business, publishedSnapshot } = published;
+  const referencedPublish = readReferencedWebsitePublishId(input.websitePublishId);
+  const historicalPublish =
+    referencedPublish.provided &&
+    Boolean(referencedPublish.publishId) &&
+    referencedPublish.publishId !== business.publishedWebsiteId;
   const configuredAreas = publishedSnapshot
     ? snapshotServiceAreaRecords(publishedSnapshot)
     : (input.configuredAreas ?? []);
@@ -716,7 +722,7 @@ async function createPublicServiceRequestInner(
       where: {
         id: { in: catalogIds },
         businessId: business.id,
-        ...(publishedSnapshot ? {} : { active: true }),
+        ...(publishedSnapshot && !historicalPublish ? {} : { active: true }),
       },
       select: {
         id: true,
