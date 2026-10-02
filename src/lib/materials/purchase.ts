@@ -437,14 +437,18 @@ function postedMoneyEqualsStoredCents(
   return Boolean(postedMoney && postedMoney.eq(stored.toDecimalPlaces(2)));
 }
 
-export async function updatePurchaseListItem(
-  db: Db,
+async function updatePurchaseListItemInTx(
+  db: Prisma.TransactionClient,
   access: BusinessAccess,
   input: UpdatePurchaseListItemInput,
 ) {
+  const locked = await lockTenantOwnedPurchaseListItem(db, access.businessId, input.itemId);
+  if (!locked) {
+    throw new MaterialsError("That purchase-list item was not found in this workspace.");
+  }
   const existing = access.assertOwned(
     await db.materialPurchaseListItem.findFirst({
-      where: { id: input.itemId, businessId: access.businessId },
+      where: { id: locked.id, businessId: access.businessId },
       include: {
         purchaseList: true,
         selectedQuote: true,
@@ -570,6 +574,17 @@ export async function updatePurchaseListItem(
     where: { id: existing.id },
     data,
   });
+}
+
+export async function updatePurchaseListItem(
+  db: Db,
+  access: BusinessAccess,
+  input: UpdatePurchaseListItemInput,
+) {
+  if ("$transaction" in db) {
+    return (db as PrismaClient).$transaction((tx) => updatePurchaseListItemInTx(tx, access, input));
+  }
+  return updatePurchaseListItemInTx(db, access, input);
 }
 
 export async function applyPurchaseActuals(

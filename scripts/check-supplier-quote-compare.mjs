@@ -324,6 +324,14 @@ try {
       purchaseSrc.includes("$transaction") &&
       purchaseSrc.includes('item.supplierId !== input.supplierId'),
   );
+  check(
+    "updatePurchaseListItem locks the item FOR UPDATE then re-reads the quote",
+    purchaseSrc.includes("async function updatePurchaseListItemInTx") &&
+      purchaseSrc.includes("lockTenantOwnedPurchaseListItem(db, access.businessId, input.itemId)") &&
+      /lockTenantOwnedPurchaseListItem[\s\S]*findFirst\([\s\S]*selectedQuote: true[\s\S]*packSize/.test(
+        purchaseSrc,
+      ),
+  );
 
   const liveAdapter = getSupplierCommerceAdapter();
   const lookup = await liveAdapter.lookupProduct("lumber");
@@ -1200,6 +1208,63 @@ try {
     linkedExpense.actualCost.toString() === "1005",
   );
 
+  const qtyItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: longStock.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+  });
+  const qtySelected = await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: qtyItem.id,
+    quoteId: landedYard.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  const afterQty = await updatePurchaseListItem(prisma, ownerA, {
+    itemId: qtyItem.id,
+    name: longStock.name,
+    quantityNeeded: "450",
+    unit: "ft",
+    plannedUnitCost: qtySelected.plannedUnitCost.toString(),
+    supplierId: depot.id,
+    status: "PLANNED",
+  });
+  check(
+    "Quantity 450 on the quoted $10/yd + $5 row keeps delivery and plannedCost 1505",
+    afterQty.selectedQuoteId === landedYard.id &&
+      afterQty.plannedCost.toString() === "1505" &&
+      afterQty.quantityNeeded.toString() === "450",
+  );
+  const costChangeItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: longStock.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+  });
+  await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: costChangeItem.id,
+    quoteId: landedYard.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  const afterCostChange = await updatePurchaseListItem(prisma, ownerA, {
+    itemId: costChangeItem.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+    plannedUnitCost: "5.00",
+    supplierId: depot.id,
+    status: "PLANNED",
+  });
+  check(
+    "A user unit-cost change clears selectedQuoteId",
+    afterCostChange.selectedQuoteId === null &&
+      afterCostChange.plannedUnitCost.toString() === "5" &&
+      afterCostChange.plannedCost.toString() === "1500",
+  );
+
   console.log("\nTEST — Selection refuses items already on a purchase order");
   check(
     "ORDERED items are not quote-selectable",
@@ -1541,6 +1606,173 @@ try {
       poFirstAfter.supplierId === depot.id &&
       poFirstLine?.purchaseOrder.supplierId === depot.id &&
       /already on a purchase order/i.test(String(poFirstFailed[0].reason?.message ?? "")),
+  );
+
+  const deadlockEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const deadlockList = await ensurePurchaseList(prisma, ownerA, { estimateId: deadlockEstimate.id });
+  const deadlockOne = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: deadlockList.id,
+    materialId: lumber.id,
+    name: lumber.name,
+    quantityNeeded: "30",
+    unit: "ft",
+    plannedUnitCost: "4.00",
+    supplierId: depot.id,
+  });
+  const deadlockTwo = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: deadlockList.id,
+    materialId: lumber.id,
+    name: `${lumber.name} B`,
+    quantityNeeded: "10",
+    unit: "ft",
+    plannedUnitCost: "4.00",
+    supplierId: depot.id,
+  });
+  const reversedIds = [deadlockOne.id, deadlockTwo.id].sort((left, right) => right.localeCompare(left));
+  const deadlockPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: deadlockList.id,
+    supplierId: depot.id,
+    itemIds: reversedIds,
+  });
+  check(
+    "createPurchaseOrder with reverse-order itemIds does not deadlock",
+    deadlockPo.items.length === 2 &&
+      reversedIds[0] !== [...reversedIds].sort((left, right) => left.localeCompare(right))[0],
+  );
+
+  console.log("\nTEST — Select vs edit-save lost update");
+  function quoteRowIsConsistent(item, quotes, packSize) {
+    if (!item.selectedQuoteId) return true;
+    const quote = quotes.find((row) => row.id === item.selectedQuoteId);
+    if (!quote) return false;
+    const priced = quoteCostForNeededQuantity({
+      unitPrice: quote.unitPrice,
+      fromUnit: quote.unit,
+      toUnit: item.unit,
+      neededQuantity: item.quantityNeeded,
+      deliveryCost: quote.deliveryCost,
+      packSize,
+    });
+    return (
+      item.supplierId === quote.supplierId &&
+      item.plannedCost.toString() === priced.plannedCost.toString()
+    );
+  }
+  const raceQuotes = [currentQuote, cheaperQuote];
+
+  async function seedStaleFormItem() {
+    return addPurchaseListItem(prisma, ownerA, {
+      purchaseListId: deadlockList.id,
+      materialId: lumber.id,
+      name: lumber.name,
+      quantityNeeded: "30",
+      unit: "ft",
+      plannedUnitCost: "4.00",
+      supplierId: depot.id,
+    });
+  }
+  function staleEdit(itemId) {
+    return {
+      itemId,
+      name: lumber.name,
+      quantityNeeded: "30",
+      unit: "ft",
+      plannedUnitCost: "4",
+      supplierId: depot.id,
+      status: "NEEDED",
+      notes: "stale form",
+    };
+  }
+
+  const selectVsEditItem = await seedStaleFormItem();
+  let selectVsEditResults = [];
+  const selectVsEditPending = [];
+  await installPauseTrigger(
+    "tbbt_quote_select_vs_edit_pause",
+    `"MaterialPurchaseListItem"`,
+    `BEFORE UPDATE OF "selectedQuoteId" ON "MaterialPurchaseListItem"
+     FOR EACH ROW
+     WHEN (NEW."selectedQuoteId" IS DISTINCT FROM OLD."selectedQuoteId")`,
+  );
+  try {
+    const selectFirst = selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+      purchaseListItemId: selectVsEditItem.id,
+      quoteId: cheaperQuote.id,
+      expectedSelectedQuoteId: null,
+      now,
+    });
+    selectVsEditPending.push(selectFirst);
+    const selectPid = await waitForGrantedPurchaseListItemLock(prismaHold);
+    const editWhileSelect = updatePurchaseListItem(prismaRace, ownerA, staleEdit(selectVsEditItem.id));
+    selectVsEditPending.push(editWhileSelect);
+    const editBlockedPid = await waitForBlockedByPid(prismaHold, selectPid);
+    selectVsEditResults = await Promise.allSettled(selectVsEditPending);
+    check(
+      "Select-first race blocks edit-save on the item lock",
+      Number(selectPid) > 0 && Number(editBlockedPid) > 0 && Number(editBlockedPid) !== Number(selectPid),
+    );
+  } catch (error) {
+    selectVsEditResults = await Promise.allSettled(selectVsEditPending);
+    throw error;
+  } finally {
+    await dropPauseTrigger("tbbt_quote_select_vs_edit_pause", `"MaterialPurchaseListItem"`);
+  }
+  const selectVsEditAfter = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: selectVsEditItem.id },
+  });
+  check(
+    "Select-first vs stale edit-save leaves quote+supplier+cost consistent or quote cleared",
+    selectVsEditResults.every((row) => row.status === "fulfilled") &&
+      quoteRowIsConsistent(selectVsEditAfter, raceQuotes, lumber.packSize),
+  );
+
+  const editVsSelectItem = await seedStaleFormItem();
+  let editVsSelectResults = [];
+  const editVsSelectPending = [];
+  await installPauseTrigger(
+    "tbbt_quote_edit_vs_select_pause",
+    `"MaterialPurchaseListItem"`,
+    `BEFORE UPDATE OF "notes" ON "MaterialPurchaseListItem"
+     FOR EACH ROW
+     WHEN (NEW.notes IS DISTINCT FROM OLD.notes)`,
+  );
+  try {
+    const editFirst = updatePurchaseListItem(prisma, ownerA, staleEdit(editVsSelectItem.id));
+    editVsSelectPending.push(editFirst);
+    const editPid = await waitForGrantedPurchaseListItemLock(prismaHold);
+    const selectWhileEdit = selectSupplierQuoteForPurchaseList(prismaRace, ownerA, {
+      purchaseListItemId: editVsSelectItem.id,
+      quoteId: cheaperQuote.id,
+      expectedSelectedQuoteId: null,
+      now,
+    });
+    editVsSelectPending.push(selectWhileEdit);
+    const selectBlockedPid = await waitForBlockedByPid(prismaHold, editPid);
+    editVsSelectResults = await Promise.allSettled(editVsSelectPending);
+    check(
+      "Edit-first race blocks select on the item lock",
+      Number(editPid) > 0 && Number(selectBlockedPid) > 0 && Number(selectBlockedPid) !== Number(editPid),
+    );
+  } catch (error) {
+    editVsSelectResults = await Promise.allSettled(editVsSelectPending);
+    throw error;
+  } finally {
+    await dropPauseTrigger("tbbt_quote_edit_vs_select_pause", `"MaterialPurchaseListItem"`);
+  }
+  const editVsSelectAfter = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: editVsSelectItem.id },
+  });
+  check(
+    "Edit-first vs select leaves quote+supplier+cost consistent or quote cleared",
+    editVsSelectResults.every((row) => row.status === "fulfilled") &&
+      quoteRowIsConsistent(editVsSelectAfter, raceQuotes, lumber.packSize),
   );
 
   if (failures) {
