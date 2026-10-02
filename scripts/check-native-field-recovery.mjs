@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { openDisposableTestDatabase } from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+register(new URL("./native-relative-ts-loader.mjs", import.meta.url), import.meta.url);
 
 const mutationChild = Boolean(process.env.NATIVE_FIELD_RECOVERY_MUTATION_CHILD);
 
@@ -142,6 +143,8 @@ check(
     timeCardsSrc.includes("shouldApplyNativeResponse") &&
     appSrc.includes("restoreError") &&
     appSrc.includes("restoreSession") &&
+    appSrc.includes("restored.status === 401") &&
+    appSrc.includes("restored.status === 403") &&
     appSrc.includes("onSessionExpired") &&
     appSrc.includes("expireSession") &&
     appSrc.includes(">Retry<") &&

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { isApiError, isSessionExpired, loadNativeSession, signOutNative } from "./src/api";
+import { isApiError, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { TimeCardsScreen } from "./src/screens/TimeCardsScreen";
@@ -40,7 +40,7 @@ export default function App() {
     }
     const restored = await loadNativeSession(token);
     if (isApiError(restored)) {
-      if (isSessionExpired(restored)) {
+      if (restored.status === 401 || restored.status === 403) {
         await clearSessionToken();
         setSession(null);
       } else {
