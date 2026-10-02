@@ -610,6 +610,32 @@ try {
     [],
   );
   check("SENT $1000 with $400 collected has $600 remaining, not $1000", sentPartial === 600);
+  const jobOnlyDepositDue = invoiceBalanceDue(
+    { id: "inv-job-only", total: 1000, jobId: "job-deposit", kind: "ORIGINAL" },
+    [{ id: "pay-deposit-only", amount: 300, invoiceId: null, jobId: "job-deposit", customerId: "c1", receivedAt: new Date() }],
+    [],
+  );
+  check(
+    "SENT $1000 with a job-only $300 deposit has $700 remaining, not $1000",
+    jobOnlyDepositDue === 700,
+  );
+  check(
+    "SENT $1000 missing kind does not apply a job-only $300 deposit",
+    invoiceBalanceDue(
+      { id: "inv-bare-kind", total: 1000, jobId: "job-bare", kind: null },
+      [
+        {
+          id: "pay-bare-kind",
+          amount: 300,
+          invoiceId: null,
+          jobId: "job-bare",
+          customerId: "c1",
+          receivedAt: new Date(),
+        },
+      ],
+      [],
+    ) === 1000,
+  );
   check(
     "SENT $100 with a $40 credit has $60 remaining",
     invoiceBalanceDue({ id: "inv-credit-100", total: 100 }, [], [{ invoiceId: "inv-credit-100", amount: 40 }]) === 60,

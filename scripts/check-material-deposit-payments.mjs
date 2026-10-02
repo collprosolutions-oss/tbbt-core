@@ -298,9 +298,13 @@ try {
     projectPaymentsSrc.indexOf("export async function listProjectPayments"),
     projectPaymentsSrc.indexOf("export async function listPaymentsGroupedByInvoiceId"),
   );
-  const paymentBelongsToInvoiceSrc = projectPaymentsSrc.slice(
-    projectPaymentsSrc.indexOf("export function paymentBelongsToInvoice"),
-    projectPaymentsSrc.indexOf("export function paymentsBelongingToInvoice"),
+  const paymentAttributionSrc = readFileSync(
+    new URL("../src/lib/payment-attribution.ts", import.meta.url),
+    "utf8",
+  );
+  const paymentBelongsToInvoiceSrc = paymentAttributionSrc.slice(
+    paymentAttributionSrc.indexOf("export function paymentBelongsToInvoice"),
+    paymentAttributionSrc.indexOf("export function paymentsBelongingToInvoice"),
   );
 
   console.log("\nSTATIC — Deposit workflow contracts");
@@ -358,8 +362,9 @@ try {
     "invoice payment attribution still treats ORIGINAL and SUPPLEMENTAL invoices differently",
     paymentBelongsToInvoiceSrc.includes("if (payment.invoiceId)") &&
       paymentBelongsToInvoiceSrc.includes("return payment.invoiceId === invoice.id") &&
-      paymentBelongsToInvoiceSrc.includes("if (!isOriginalInvoiceKind(invoice.kind))") &&
-      paymentBelongsToInvoiceSrc.includes("return Boolean(invoice.jobId) && payment.jobId === invoice.jobId"),
+      paymentBelongsToInvoiceSrc.includes("invoice.kind !== INVOICE_KIND_ORIGINAL") &&
+      paymentBelongsToInvoiceSrc.includes("return Boolean(invoice.jobId) && payment.jobId === invoice.jobId") &&
+      !paymentBelongsToInvoiceSrc.includes("isOriginalInvoiceKind"),
   );
   check(
     "owner invoices list remaining due uses Payment rows, not PAID vs full total",
@@ -595,6 +600,14 @@ try {
   check(
     "supplemental invoice never claims an unallocated job-only payment",
     supplementalRows.map((row) => row.id).join(",") === "p-other-invoice",
+  );
+  const missingKindRows = paymentsBelongingToInvoice(
+    { id: "inv-missing-kind", jobId: "job-1", kind: null },
+    [{ id: "p-unattached", invoiceId: null, jobId: "job-1" }],
+  );
+  check(
+    "missing invoice kind does not claim a job-only payment",
+    missingKindRows.length === 0,
   );
 
   const businessA = await seedBusiness("Deposit A");

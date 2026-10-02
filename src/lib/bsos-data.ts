@@ -99,7 +99,7 @@ export async function loadBsosFactsBundle(
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { ...scope, status: "SENT" },
-      select: { id: true, total: true },
+      select: { id: true, total: true, jobId: true, kind: true },
     }),
     prisma.estimate.count({ where: { ...scope, status: "SENT" } }),
     prisma.estimate.count({ where: { ...scope, status: "DRAFT" } }),
@@ -240,7 +240,16 @@ export async function loadBsosFactsBundle(
   }));
   const unpaidRemaining = unpaid
     .map((invoice) =>
-      invoiceBalanceDue({ id: invoice.id, total: asNumber(invoice.total) }, paymentRows, creditRows),
+      invoiceBalanceDue(
+        {
+          id: invoice.id,
+          total: asNumber(invoice.total),
+          jobId: invoice.jobId,
+          kind: invoice.kind,
+        },
+        paymentRows,
+        creditRows,
+      ),
     )
     .filter((amount) => amount > 0);
   const [hasInsights, hasMarketing, growthLoaded] = await Promise.all([

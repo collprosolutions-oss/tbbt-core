@@ -120,6 +120,7 @@ export async function loadGrowthSource(
       select: {
         id: true,
         jobId: true,
+        kind: true,
         customerId: true,
         status: true,
         total: true,

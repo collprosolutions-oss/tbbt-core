@@ -281,6 +281,57 @@ try {
   });
   check("Action item belongs to A", action.businessId === businessA.id);
 
+  const moneyBiz = await prisma.business.create({
+    data: { name: "Money BSOS", slug: `money-bsos-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const moneyCustomer = await prisma.customer.create({
+    data: { businessId: moneyBiz.id, name: "Cash Customer" },
+  });
+  const moneyJob = await prisma.job.create({
+    data: {
+      businessId: moneyBiz.id,
+      customerId: moneyCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: moneyBiz.id,
+      customerId: moneyCustomer.id,
+      jobId: moneyJob.id,
+      kind: "ORIGINAL",
+      status: "SENT",
+      total: 1000,
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: moneyBiz.id,
+      customerId: moneyCustomer.id,
+      jobId: moneyJob.id,
+      kind: "SUPPLEMENTAL",
+      status: "DRAFT",
+      total: 500,
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: moneyBiz.id,
+      customerId: moneyCustomer.id,
+      jobId: moneyJob.id,
+      invoiceId: null,
+      purpose: "MATERIAL_DEPOSIT",
+      amount: 300,
+      method: "CASH",
+    },
+  });
+  const moneyWorkspace = await loadBsosWorkspace(prisma, moneyBiz.id);
+  check(
+    "BSOS unpaid total applies a job-only $300 deposit to the ORIGINAL invoice",
+    moneyWorkspace.facts.unpaidInvoices.count === 1 && moneyWorkspace.facts.unpaidInvoices.amount === 700,
+  );
+
   const workspaceB = await loadBsosWorkspace(prisma, businessB.id);
   check("Business B does not see A's unpaid invoice", workspaceB.facts.unpaidInvoices.count === 0);
   check("Business B does not see A's goal", workspaceB.goals.length === 0);

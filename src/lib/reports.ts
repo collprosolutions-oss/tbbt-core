@@ -19,6 +19,7 @@ import { expenseCategoryLabel } from "@/lib/expenses";
 import { addDays, addMonths, formatISODate, parseScheduleDate, startOfDay, startOfMonth, startOfWeek } from "@/lib/schedule";
 import { isPaidActivity, roundHours, roundMoney } from "@/lib/time-cards";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
+import { paymentBelongsToInvoice } from "@/lib/payment-attribution";
 import { listCompletedUnbilledJobs } from "@/lib/revenue-integrity";
 
 export const REPORT_AREAS = [
@@ -286,7 +287,7 @@ export type ReportInvoice = {
   jobId: string | null;
   paymentMethod: string | null;
   paymentReference: string | null;
-  kind?: string | null;
+  kind: string | null;
 };
 
 export type ReportChangeOrder = {
@@ -435,10 +436,20 @@ export function outstandingInvoices(invoices: readonly ReportInvoice[]) {
   return invoices.filter((invoice) => invoice.status === "SENT");
 }
 
-function paymentsOnInvoice(payments: readonly ReportPayment[] | undefined, invoiceId: string) {
+function paymentsOnInvoice(
+  payments: readonly ReportPayment[] | undefined,
+  invoice: Pick<ReportInvoice, "id" | "jobId" | "kind">,
+) {
   if (!payments?.length) return 0;
   return roundMoney(
-    payments.filter((payment) => payment.invoiceId === invoiceId).reduce((sum, payment) => sum + payment.amount, 0),
+    payments
+      .filter((payment) =>
+        paymentBelongsToInvoice(
+          { invoiceId: payment.invoiceId, jobId: payment.jobId },
+          { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
+        ),
+      )
+      .reduce((sum, payment) => sum + payment.amount, 0),
   );
 }
 
@@ -465,7 +476,7 @@ export function outstandingRemaining(
       balance: roundMoney(
         Math.max(
           0,
-          invoice.total - paymentsOnInvoice(payments, invoice.id) - creditsOnInvoice(credits, invoice.id),
+          invoice.total - paymentsOnInvoice(payments, invoice) - creditsOnInvoice(credits, invoice.id),
         ),
       ),
     }))
