@@ -43,6 +43,7 @@ import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { NAV_ICONS } from "@/lib/nav-icons";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import {
@@ -378,6 +379,13 @@ export default async function DashboardPage() {
     timeZone,
     viewerMembershipId: access.workspace.membership.id,
   });
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    ownerTodayJobs.map((job) => job.jobId),
+  );
+  for (const job of ownerTodayJobs) {
+    job.projectLinkActive = projectLinkActive.get(job.jobId) ?? true;
+  }
 
   const kpis: KpiCardProps[] = [
     {

@@ -243,6 +243,13 @@ check(
     !additionalWorkSrc.includes("jobCallback") &&
     !additionalWorkSrc.includes("JobCallback"),
 );
+check(
+  "OWNER urgent record is not cooled down after an outcome",
+  !opsSrc.includes("isPortalJobCallbackCoolingDown") &&
+    !opsSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN") &&
+    !opsSrc.includes("JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE") &&
+    !actionSrc.includes("isPortalJobCallbackCoolingDown"),
+);
 
 try {
   const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {

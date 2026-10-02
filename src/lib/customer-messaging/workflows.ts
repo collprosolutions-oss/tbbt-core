@@ -17,6 +17,7 @@ import {
 } from "@/lib/customer-messaging/bodies";
 import { safeAttemptCustomerSms } from "@/lib/customer-messaging/ops";
 import type { CustomerCommunicationAttemptResult } from "@/lib/customer-messaging/types";
+import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -29,12 +30,22 @@ async function businessSlug(db: Db, businessId: string) {
   return row?.slug ?? null;
 }
 
-function projectUrl(slug: string | null, token: string | null | undefined) {
-  return token && slug ? tenantProjectUrl(slug, token) : null;
+async function liveProjectUrl(
+  db: Db,
+  slug: string | null,
+  token: string | null | undefined,
+) {
+  const live = await liveOutboundProjectToken(db, token);
+  return live && slug ? tenantProjectUrl(slug, live) : null;
 }
 
-function invoicePortalUrl(slug: string | null, token: string | null | undefined) {
-  return token && slug ? tenantInvoiceUrl(slug, token) : null;
+async function liveInvoicePortalUrl(
+  db: Db,
+  slug: string | null,
+  token: string | null | undefined,
+) {
+  const live = await liveOutboundProjectToken(db, token);
+  return live && slug ? tenantInvoiceUrl(slug, live) : null;
 }
 
 export async function attemptEstimateReadySms(
@@ -88,7 +99,7 @@ export async function attemptAppointmentSms(
     idempotencyKey: customerSmsIdempotencyKey(purpose, input.jobId, String(input.proposalId)),
     body: appointmentConfirmationSmsBody({
       businessName: input.businessName,
-      url: projectUrl(slug, input.projectToken),
+      url: await liveProjectUrl(db, slug, input.projectToken),
       rescheduled: input.rescheduled,
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
@@ -121,7 +132,7 @@ export async function attemptAppointmentReminderSms(
     ),
     body: appointmentReminderSmsBody({
       businessName: input.businessName,
-      url: projectUrl(slug, input.projectToken),
+      url: await liveProjectUrl(db, slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
@@ -149,7 +160,7 @@ export async function attemptInvoiceReadySms(
     idempotencyKey: customerSmsIdempotencyKey("INVOICE_READY", input.invoiceId),
     body: invoiceReadySmsBody({
       businessName: input.businessName,
-      url: invoicePortalUrl(slug, input.projectToken),
+      url: await liveInvoicePortalUrl(db, slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });
@@ -181,7 +192,7 @@ export async function attemptPaymentReminderSms(
     ),
     body: paymentReminderSmsBody({
       businessName: input.businessName,
-      url: invoicePortalUrl(slug, input.projectToken),
+      url: await liveInvoicePortalUrl(db, slug, input.projectToken),
     }),
     initiatedByMembershipId: input.initiatedByMembershipId,
   });

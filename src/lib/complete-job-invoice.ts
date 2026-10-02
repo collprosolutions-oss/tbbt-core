@@ -32,6 +32,7 @@ import {
   senderFrom,
   sendTransactionalEmail,
 } from "@/lib/mail";
+import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantInvoiceUrl } from "@/lib/tenant-app-url";
 
 export type CompleteJobInvoiceResult =
@@ -186,7 +187,7 @@ export async function sendDraftInvoiceIfNeeded(
     customerId: invoice.customer?.id ?? null,
     customerName: invoice.customer?.name ?? null,
     customerEmail: invoice.customer?.email ?? null,
-    projectToken: invoice.job?.projectToken ?? null,
+    projectToken: await liveOutboundProjectToken(db, invoice.job?.projectToken),
     slug: invoice.business.slug,
     address: formatInvoiceServiceAddress(invoice.job?.property ?? null),
   });

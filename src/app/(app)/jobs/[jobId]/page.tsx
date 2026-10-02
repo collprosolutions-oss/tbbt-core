@@ -20,7 +20,7 @@ import { CleaningNextBookingForm } from "@/components/jobs/cleaning-next-booking
 import { CleaningRecurringBookingForm } from "@/components/jobs/cleaning-recurring-booking-form";
 import { CleaningVisitCadenceForm } from "@/components/jobs/cleaning-visit-cadence-form";
 import { ChangeOrderList } from "@/components/jobs/change-order-list";
-import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
+import { ProjectLinkPanel } from "@/components/jobs/project-link-panel";
 import { CreateChangeOrderForm } from "@/components/jobs/create-change-order-form";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
@@ -120,6 +120,7 @@ import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-boo
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { loadJobAftercareReview } from "@/lib/job-aftercare-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
+import { loadJobProjectLinkReview } from "@/lib/project-link-data";
 
 export const metadata: Metadata = {
   title: "Work Order",
@@ -416,6 +417,7 @@ export default async function JobPage({
     : null;
   const jobCallbackReview = await loadJobCallbackReview(prisma, access, job.id);
   const jobAftercareReview = await loadJobAftercareReview(prisma, access, job.id);
+  const jobProjectLinkReview = await loadJobProjectLinkReview(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
     BEFORE: [],
@@ -606,17 +608,18 @@ export default async function JobPage({
           <CardDescription>
             Share this link so the customer can see project status, approved
             work, and their invoice once it exists. It only ever shows this
-            one job — never other customers, jobs, or business data.
+            one job — never other customers, jobs, or business data. OWNER
+            can rotate or revoke the URL. That does not send a message.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3 text-sm">
-          <Link
-            href={`/p/${job.projectToken}`}
-            className="underline underline-offset-4"
-          >
-            /p/{job.projectToken}
-          </Link>
-          <CopyProjectLinkButton projectToken={job.projectToken} />
+        <CardContent>
+          {jobProjectLinkReview ? (
+            <ProjectLinkPanel review={jobProjectLinkReview} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This project link is not available.
+            </p>
+          )}
         </CardContent>
       </Card>
 

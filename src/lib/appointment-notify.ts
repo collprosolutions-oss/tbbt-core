@@ -13,6 +13,7 @@ import {
   sendTransactionalEmail,
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
+import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type NotifyClient = PrismaClient | Prisma.TransactionClient;
@@ -93,6 +94,7 @@ export async function notifyCustomerAppointmentProposed(
     return { sent: false, warning: "That appointment could not be notified." };
   }
 
+  const liveToken = await liveOutboundProjectToken(db, job.projectToken);
   const queueSms = () =>
     attemptAppointmentSms(db, {
       businessId: input.businessId,
@@ -101,7 +103,7 @@ export async function notifyCustomerAppointmentProposed(
       businessName: input.businessName,
       proposalId: input.proposalId,
       rescheduled: input.rescheduled,
-      projectToken: job.projectToken,
+      projectToken: liveToken,
       initiatedByMembershipId: input.actorMembershipId,
     });
 
@@ -186,9 +188,9 @@ export async function notifyCustomerAppointmentProposed(
         return chosen.slice(0, 1);
       })(),
     ),
-    projectUrl:
-      tenantProjectUrl(job.business.slug, job.projectToken) ??
-      `${appUrl}/p/${job.projectToken}`,
+    projectUrl: liveToken
+      ? tenantProjectUrl(job.business.slug, liveToken) ?? `${appUrl}/p/${liveToken}`
+      : appUrl,
     rescheduled: input.rescheduled,
     timeZone: resolveBusinessTimeZone(job.business),
   });

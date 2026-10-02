@@ -205,6 +205,7 @@
     "test:job-callback": "node --experimental-strip-types scripts/check-job-callback.mjs",
     "test:portal-job-callback": "node --experimental-strip-types scripts/check-portal-job-callback.mjs",
     "test:job-aftercare": "node --experimental-strip-types scripts/check-job-aftercare.mjs",
+    "test:project-link": "node --experimental-strip-types scripts/check-project-link.mjs",
     "test:request-source-report": "node --experimental-strip-types scripts/check-request-source-report.mjs",
     "test:collections-worklist": "node --experimental-strip-types scripts/check-collections-worklist.mjs",
     "test:p1-migration-and-db-safety": "node scripts/run-p1-gate.mjs migration-and-db-safety",

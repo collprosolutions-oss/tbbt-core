@@ -70,8 +70,10 @@ import { loadPortalJobCallbackView } from "@/lib/portal-job-callback-data";
 import {
   JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
+  portalJobCallbackCooldownMessage,
 } from "@/lib/job-callback";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   customerAppointmentStatusLabel,
   effectiveAppointmentConfirmationStatus,
@@ -135,9 +137,7 @@ export default async function CustomerProjectPortalPage({
   await ensureAppointmentConfirmationSchema(prisma);
 
   const job = token
-    ? await prisma.job.findUnique({
-        where: { projectToken: token },
-        select: {
+    ? await findLiveJobByProjectToken(prisma, token, {
           id: true,
           customerId: true,
           status: true,
@@ -247,7 +247,6 @@ export default async function CustomerProjectPortalPage({
               },
             },
           },
-        },
       })
     : null;
 
@@ -672,6 +671,12 @@ export default async function CustomerProjectPortalPage({
               <CardContent>
                 {callbackView.status === "already_requested" ? (
                   <p className="text-sm">{JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE}</p>
+                ) : callbackView.status === "cooldown" ? (
+                  <p className="text-sm">
+                    {portalJobCallbackCooldownMessage(
+                      formatDateTime(callbackView.availableAt, timeZone),
+                    )}
+                  </p>
                 ) : (
                   <RequestJobCallbackForm projectToken={token} />
                 )}

@@ -3,9 +3,9 @@
  * authorize → PUT → finalize path. Authorization is the Job's own
  * unguessable projectToken — never a client-supplied businessId or jobId.
  *
- * Project tokens have no expiry or revocation. Upload stores a PRIVATE
- * DOCUMENT. It does not approve, publish, message, invoice, or change
- * Job status.
+ * Retired or revoked project tokens are refused by the live-token
+ * resolver. Upload stores a PRIVATE DOCUMENT. It does not approve,
+ * publish, message, invoice, or change Job status.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -31,6 +31,10 @@ import {
   missingProjectDocumentReviewSchema,
   recordedProjectDocumentReviewLabel,
 } from "@/lib/project-document-review";
+import {
+  assertLiveLockedProjectToken,
+  findLiveJobByProjectToken,
+} from "@/lib/project-link-data";
 
 export const PROJECT_DOCUMENT_PURPOSE = "project-portal-document";
 export const PROJECT_DOCUMENT_RECEIVED_COPY = "Received. Private to the business.";
@@ -104,18 +108,13 @@ function isPrivateUnpublishedProjectDocument(asset: {
 }
 
 async function findJobByProjectToken(db: Db, token: string) {
-  const trimmed = token.trim();
-  if (!trimmed) return null;
-  return db.job.findUnique({
-    where: { projectToken: trimmed },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      propertyId: true,
-      status: true,
-      projectToken: true,
-    },
+  return findLiveJobByProjectToken(db, token, {
+    id: true,
+    businessId: true,
+    customerId: true,
+    propertyId: true,
+    status: true,
+    projectToken: true,
   });
 }
 
@@ -243,6 +242,15 @@ export async function authorizeProjectTokenDocument(
       async beforeCreate(tx) {
         await lockJobForProjectDocument(tx, job);
         await projectDocumentTestHooks.afterJobLock?.();
+        if (
+          !(await assertLiveLockedProjectToken(tx, {
+            jobId: job.id,
+            businessId: job.businessId,
+            token: job.projectToken,
+          }))
+        ) {
+          throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
+        }
         const active = await countActiveProjectDocuments(tx, {
           businessId: job.businessId,
           jobId: job.id,

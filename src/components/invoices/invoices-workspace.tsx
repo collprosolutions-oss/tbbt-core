@@ -43,6 +43,7 @@ export type InvoiceListItem = {
   }>;
   jobId: string | null;
   jobProjectToken: string | null;
+  jobProjectLinkActive?: boolean;
   paidAtLabel: string | null;
   paymentMethodLabel: string | null;
   paymentReference: string | null;
@@ -447,7 +448,7 @@ function InvoiceDetailsPanel({ invoice }: { invoice: InvoiceListItem | null }) {
             </Link>
           </Button>
         ) : null}
-        {invoice.jobProjectToken ? (
+        {invoice.jobProjectToken && invoice.jobProjectLinkActive !== false ? (
           <CopyProjectLinkButton projectToken={invoice.jobProjectToken} />
         ) : null}
       </CardFooter>

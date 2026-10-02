@@ -11,10 +11,12 @@ import {
   JOB_CALLBACK_OPEN_STATUSES,
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE,
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
   JOB_CALLBACK_PORTAL_DESCRIPTION_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE,
   completedSameBusinessJobEligible,
   formatPortalCallbackDescription,
+  isPortalJobCallbackCoolingDown,
   parsePortalJobCallbackDescription,
   parsePortalJobCallbackPreferredContact,
   parsePortalProjectToken,
@@ -25,6 +27,14 @@ import {
   countBusinessJobs,
   countBusinessPayments,
 } from "@/lib/job-callback-ops";
+import {
+  findLatestResolvedJobCallback,
+  resolvedJobCallbackAt,
+} from "@/lib/portal-job-callback-data";
+import {
+  assertLiveLockedProjectToken,
+  findLiveJobByProjectToken,
+} from "@/lib/project-link-data";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export type PortalJobCallbackSubmitInput = {
@@ -36,6 +46,16 @@ export type PortalJobCallbackSubmitInput = {
 export type PortalJobCallbackSubmitResult =
   | { ok: true; callbackId: string; jobId: string; alreadyExists: boolean }
   | { ok: false; error: string };
+
+/**
+ * Test-only barrier. Production never sets this.
+ * afterJobLock runs inside the write transaction after lockTenantOwnedJob
+ * and before the post-lock live-token re-check. Reverting that re-check
+ * lets an in-flight old-token callback land after rotate commits.
+ */
+export const portalJobCallbackTestHooks: {
+  afterJobLock?: (input: { jobId: string; token: string }) => Promise<void> | void;
+} = {};
 
 const PORTAL_JOB_SELECT = {
   id: true,
@@ -93,16 +113,23 @@ export async function submitPortalJobCallback(
 
   try {
     return await db.$transaction(async (tx) => {
-      const job = await tx.job.findUnique({
-        where: { projectToken: token },
-        select: PORTAL_JOB_SELECT,
-      });
+      const job = await findLiveJobByProjectToken(tx, token, PORTAL_JOB_SELECT);
       if (!job) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
 
       const locked = await lockTenantOwnedJob(tx, job.businessId, job.id);
       if (!locked || locked.businessId !== job.businessId) {
+        return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
+      }
+      await portalJobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, token });
+      if (
+        !(await assertLiveLockedProjectToken(tx, {
+          jobId: locked.id,
+          businessId: locked.businessId,
+          token,
+        }))
+      ) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
       if (!completedSameBusinessJobEligible(locked, job.businessId)) {
@@ -117,6 +144,11 @@ export async function submitPortalJobCallback(
           jobId: locked.id,
           alreadyExists: true,
         };
+      }
+
+      const resolved = await findLatestResolvedJobCallback(tx, locked.businessId, locked.id);
+      if (isPortalJobCallbackCoolingDown(resolvedJobCallbackAt(resolved))) {
+        return { ok: false, error: JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE };
       }
 
       const owner = await findActiveOwnerMembership(tx, locked.businessId);
@@ -162,9 +194,9 @@ export async function submitPortalJobCallback(
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
     ) {
-      const job = await db.job.findUnique({
-        where: { projectToken: token },
-        select: { id: true, businessId: true },
+      const job = await findLiveJobByProjectToken(db, token, {
+        id: true,
+        businessId: true,
       });
       if (!job) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };

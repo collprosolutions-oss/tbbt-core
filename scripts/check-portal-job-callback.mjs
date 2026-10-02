@@ -4,9 +4,11 @@
  * Dedicated database: tbbt_portal_job_callback_test
  *
  * Proves token-only ownership, invalid-token refusal, wrong-tenant
- * isolation, duplicate/retry idempotency, and concurrent submit on a
- * dedicated local DB. Reuses the existing OWNER JobCallback review path.
- * Does not create a job, promise warranty coverage, or send a message.
+ * isolation, duplicate/retry idempotency, concurrent submit, and the
+ * bounded post-outcome portal cooldown on a dedicated local DB. Reuses
+ * the existing OWNER JobCallback review path. OWNER can still record an
+ * urgent callback during the portal cooldown. Does not create a job,
+ * promise warranty coverage, or send a message.
  *
  * Run with:
  *   npm run test:portal-job-callback
@@ -33,19 +35,29 @@ const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope
 const {
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE,
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
   JOB_CALLBACK_PORTAL_DESCRIPTION_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
   JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
   MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH,
   MAX_PORTAL_PROJECT_TOKEN_LENGTH,
+  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS,
+  PORTAL_JOB_CALLBACK_COOLDOWN_MS,
   formatPortalCallbackDescription,
+  isPortalJobCallbackCoolingDown,
   parsePortalJobCallbackDescription,
   parsePortalJobCallbackPreferredContact,
   parsePortalProjectToken,
+  portalJobCallbackCooldownAvailableAt,
+  portalJobCallbackCooldownMessage,
 } = await import("@/lib/job-callback");
 const { loadJobCallbackReview } = await import("@/lib/job-callback-data");
-const { reviewCustomerReportedCallback } = await import("@/lib/job-callback-ops");
+const {
+  recordCustomerReportedCallback,
+  recordCustomerReportedCallbackOutcome,
+  reviewCustomerReportedCallback,
+} = await import("@/lib/job-callback-ops");
 const { loadPortalJobCallbackView } = await import("@/lib/portal-job-callback-data");
 const {
   countBusinessCommunications,
@@ -169,8 +181,8 @@ const DANGEROUS = /\beval\s*\(|new\s+Function\b|Function\s*\(|\$executeRawUnsafe
 console.log("\nSTATIC — token-only portal request, existing review path, no job/message/warranty");
 check(
   "Token-only ownership; browser businessId/customerId/jobId are never authorization",
-  dataSrc.includes("where: { projectToken }") &&
-    opsSrc.includes("where: { projectToken: token }") &&
+  dataSrc.includes("findLiveJobByProjectToken") &&
+    opsSrc.includes("findLiveJobByProjectToken") &&
     actionSrc.includes('readString(formData, "projectToken")') &&
     !actionSrc.includes('readString(formData, "businessId")') &&
     !actionSrc.includes('readString(formData, "customerId")') &&
@@ -203,6 +215,48 @@ check(
     portalSrc.includes("RequestJobCallbackForm") &&
     !portalSrc.includes("JobCallbackPanel") &&
     !portalSrc.includes("recordJobCallbackAction"),
+);
+check(
+  "Portal cooldown is a bounded 24 hours and OWNER record is not cooled down",
+  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS === 24 &&
+    PORTAL_JOB_CALLBACK_COOLDOWN_MS === 24 * 60 * 60 * 1000 &&
+    opsSrc.includes("isPortalJobCallbackCoolingDown") &&
+    opsSrc.includes("JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE") &&
+    dataSrc.includes('status: "cooldown"') &&
+    portalSrc.includes("portalJobCallbackCooldownMessage") &&
+    !ownerOpsSrc.includes("isPortalJobCallbackCoolingDown") &&
+    !ownerOpsSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN") &&
+    !ownerActionSrc.includes("isPortalJobCallbackCoolingDown"),
+);
+const cooldownNow = new Date("2026-10-02T12:00:00.000Z");
+check(
+  "Cooldown boundary is exclusive of the 24-hour mark",
+  isPortalJobCallbackCoolingDown(
+    new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 1),
+    cooldownNow,
+  ) === true &&
+    isPortalJobCallbackCoolingDown(
+      new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS),
+      cooldownNow,
+    ) === false &&
+    isPortalJobCallbackCoolingDown(
+      new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS - 1),
+      cooldownNow,
+    ) === false &&
+    portalJobCallbackCooldownAvailableAt(cooldownNow).getTime() ===
+      cooldownNow.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS,
+);
+check(
+  "Cooldown copy states the 24-hour wait and does not promise a visit or warranty",
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("after 24 hours") &&
+    JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("not a warranty decision") &&
+    JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not promise coverage") &&
+    JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not schedule a visit") &&
+    JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not send a message") &&
+    portalJobCallbackCooldownMessage("Oct 3, 2026, 12:00 PM").includes(
+      "Next available Oct 3, 2026, 12:00 PM",
+    ) &&
+    !JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("we will call"),
 );
 check(
   "Write path does not create a job, promise coverage, or send a message",
@@ -474,6 +528,169 @@ try {
       stillIdempotent.callbackId === first.callbackId,
   );
 
+  console.log("\nCOOLDOWN — portal cannot re-file immediately after OWNER resolves");
+  const isolationReady = await createJob(businessA.id);
+  const laterSeed = await createJob(businessA.id);
+  const outcome = await recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+    callbackId: first.callbackId,
+    outcome: "RECORDED_ONLY",
+    outcomeNotes: "Operational close only.",
+  });
+  check(
+    "Owner outcome closes the portal callback",
+    outcome.callback.status === "OUTCOME_RECORDED" && outcome.unchanged === false,
+  );
+  const cooldownView = await loadPortalJobCallbackView(prisma, completedA.job.projectToken);
+  const isolationView = await loadPortalJobCallbackView(
+    prisma,
+    isolationReady.job.projectToken,
+  );
+  const betaOpenView = await loadPortalJobCallbackView(prisma, completedB.job.projectToken);
+  check(
+    "Resolved token shows cooldown; other tokens stay isolated",
+    cooldownView.status === "cooldown" &&
+      cooldownView.jobId === completedA.job.id &&
+      cooldownView.availableAt instanceof Date &&
+      cooldownView.availableAt.getTime() ===
+        portalJobCallbackCooldownAvailableAt(outcome.callback.outcomeAt).getTime() &&
+      isolationView.status === "ready" &&
+      isolationView.jobId === isolationReady.job.id &&
+      betaOpenView.status === "already_requested" &&
+      betaOpenView.jobId === completedB.job.id,
+  );
+  const immediateRefile = await submitPortalJobCallback(prisma, {
+    token: completedA.job.projectToken,
+    description: "Trying again right away",
+    preferredContact: "PHONE",
+  });
+  const isolationSubmit = await submitPortalJobCallback(prisma, {
+    token: isolationReady.job.projectToken,
+    description: "Different job, same business",
+    preferredContact: "EMAIL",
+  });
+  const afterImmediate = await prisma.jobCallback.count({
+    where: { businessId: businessA.id, jobId: completedA.job.id },
+  });
+  check(
+    "Immediate portal re-file is refused; a different token is not blocked",
+    immediateRefile.ok === false &&
+      immediateRefile.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
+      afterImmediate === 1 &&
+      isolationSubmit.ok === true &&
+      isolationSubmit.alreadyExists === false &&
+      isolationSubmit.jobId === isolationReady.job.id,
+  );
+
+  const cooldownRaceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const cooldownRaceB = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
+  const cooldownBarrier = createWriteBarrier(2, 5000);
+  const cooldownConcurrent = await Promise.allSettled([
+    (async () => {
+      await cooldownBarrier.arriveAndWait();
+      return submitPortalJobCallback(cooldownRaceA, {
+        token: completedA.job.projectToken,
+        description: "Cooldown race A",
+        preferredContact: "PHONE",
+      });
+    })(),
+    (async () => {
+      await cooldownBarrier.arriveAndWait();
+      return submitPortalJobCallback(cooldownRaceB, {
+        token: completedA.job.projectToken,
+        description: "Cooldown race B",
+        preferredContact: "TEXT",
+      });
+    })(),
+  ]);
+  const cooldownRefused = cooldownConcurrent.filter(
+    (row) =>
+      row.status === "fulfilled" &&
+      row.value.ok === false &&
+      row.value.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
+  );
+  check(
+    "Concurrent portal re-files during cooldown are both refused",
+    cooldownConcurrent.length === 2 &&
+      cooldownRefused.length === 2 &&
+      (await prisma.jobCallback.count({
+        where: { businessId: businessA.id, jobId: completedA.job.id },
+      })) === 1,
+  );
+
+  const ownerUrgent = await recordCustomerReportedCallback(prisma, ownerA, {
+    jobId: completedA.job.id,
+    description: "Owner recorded an urgent phone callback during the portal wait.",
+    reportedVia: "PHONE",
+  });
+  const afterOwnerUrgent = await loadPortalJobCallbackView(
+    prisma,
+    completedA.job.projectToken,
+  );
+  check(
+    "OWNER can record an urgent callback during the portal cooldown",
+    ownerUrgent.status === "RECORDED" &&
+      ownerUrgent.jobId === completedA.job.id &&
+      ownerUrgent.reportedVia === "PHONE" &&
+      afterOwnerUrgent.status === "already_requested",
+  );
+
+  const laterFirst = await submitPortalJobCallback(prisma, {
+    token: laterSeed.job.projectToken,
+    description: "First later-job request",
+    preferredContact: "TEXT",
+  });
+  if (!laterFirst.ok) {
+    throw new Error(laterFirst.error);
+  }
+  await reviewCustomerReportedCallback(prisma, ownerA, {
+    callbackId: laterFirst.callbackId,
+  });
+  const laterOutcome = await recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+    callbackId: laterFirst.callbackId,
+    outcome: "RECORDED_ONLY",
+  });
+  const justInside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 60_000);
+  await prisma.jobCallback.update({
+    where: { id: laterFirst.callbackId },
+    data: { outcomeAt: justInside },
+  });
+  const insideBoundary = await submitPortalJobCallback(prisma, {
+    token: laterSeed.job.projectToken,
+    description: "Still inside the 24-hour wait",
+    preferredContact: "PHONE",
+  });
+  const insideView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
+  check(
+    "Sixty seconds inside the 24-hour mark still refuses a portal re-file",
+    laterOutcome.callback.status === "OUTCOME_RECORDED" &&
+      insideBoundary.ok === false &&
+      insideBoundary.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
+      insideView.status === "cooldown",
+  );
+
+  const atBoundary = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+  await prisma.jobCallback.update({
+    where: { id: laterFirst.callbackId },
+    data: { outcomeAt: atBoundary },
+  });
+  const laterView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
+  const laterSecond = await submitPortalJobCallback(prisma, {
+    token: laterSeed.job.projectToken,
+    description: "Legitimate later request after the wait",
+    preferredContact: "EMAIL",
+  });
+  const laterCount = await prisma.jobCallback.count({
+    where: { businessId: businessA.id, jobId: laterSeed.job.id },
+  });
+  check(
+    "A later portal request is accepted at the 24-hour boundary",
+    laterView.status === "ready" &&
+      laterSecond.ok === true &&
+      laterSecond.alreadyExists === false &&
+      laterSecond.callbackId !== laterFirst.callbackId &&
+      laterCount === 2,
+  );
+
   console.log("\nCONCURRENT — two token submits create one open callback");
   const concurrentSeed = await createJob(businessA.id);
   const raceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
@@ -516,7 +733,7 @@ try {
   check(
     "Invoice / job / payment / communication counts stay honest",
     (await countBusinessInvoices(prisma, businessA.id)) === invoicesBefore &&
-      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 1 &&
+      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 3 &&
       (await countBusinessPayments(prisma, businessA.id)) === paymentsBefore &&
       (await countBusinessCommunications(prisma, businessA.id)) === commsBefore,
   );

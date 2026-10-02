@@ -26,6 +26,7 @@ import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
 import { invoiceNumberFromId } from "@/lib/invoice-document";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -75,6 +76,11 @@ export default async function InvoicePage({
     notFound();
   }
   access.assertOwned(invoice);
+  const projectLinkActive = invoice.job?.id
+    ? ((await loadProjectLinkActiveByJobIds(prisma, [invoice.job.id])).get(invoice.job.id) ?? true)
+    : false;
+  const liveInvoiceToken =
+    projectLinkActive && invoice.job?.projectToken ? invoice.job.projectToken : null;
 
   const recordNavItems = await loadRecordJourney(prisma, access, {
     kind: "invoice",
@@ -161,10 +167,10 @@ export default async function InvoicePage({
               remainingDue={breakdown.amountDue.toFixed(2)}
             />
           ) : null}
-          {invoice.job?.projectToken && (isSent || isPaid) ? (
+          {liveInvoiceToken && (isSent || isPaid) ? (
             <CopyProjectLinkButton
-              projectToken={invoice.job.projectToken}
-              hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+              projectToken={liveInvoiceToken}
+              hrefPath={`/p/${liveInvoiceToken}/invoice`}
               label="Copy invoice link"
             />
           ) : null}
@@ -229,10 +235,10 @@ export default async function InvoicePage({
           </CardHeader>
           <CardContent className="space-y-3">
             <OwnerPaymentsGoLiveBanner explanation={paymentsGoLive} />
-            {invoice.job?.projectToken ? (
+            {liveInvoiceToken ? (
               <CopyProjectLinkButton
-                projectToken={invoice.job.projectToken}
-                hrefPath={`/p/${invoice.job.projectToken}/invoice`}
+                projectToken={liveInvoiceToken}
+                hrefPath={`/p/${liveInvoiceToken}/invoice`}
                 label="Copy invoice link"
               />
             ) : (

@@ -15,6 +15,7 @@ import { customerFacingChangeOrderStatusLabel } from "@/lib/change-order";
 import { isPublicEstimateDocumentVisible } from "@/lib/estimate-document";
 import { formatDateTime, formatTime } from "@/lib/format";
 import { customerFacingJobStatusLabel } from "@/lib/project-progress";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { requestedWorkLabels, requestedWorkSummary } from "@/lib/service-request-work";
 
 type PortalDb = PrismaClient | Prisma.TransactionClient;
@@ -313,16 +314,13 @@ export async function loadPortalCustomerCommunications(
   const trimmed = token.trim();
   if (!trimmed) return [];
 
-  const job = await db.job.findUnique({
-    where: { projectToken: trimmed },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      estimateId: true,
-      estimate: { select: { serviceRequestId: true } },
-      invoices: { select: { id: true } },
-    },
+  const job = await findLiveJobByProjectToken(db, trimmed, {
+    id: true,
+    businessId: true,
+    customerId: true,
+    estimateId: true,
+    estimate: { select: { serviceRequestId: true } },
+    invoices: { select: { id: true } },
   });
   if (!job?.customerId) return [];
 
@@ -393,9 +391,9 @@ export async function loadPortalAdditionalWorkRequests(
   const trimmed = token.trim();
   if (!trimmed) return [];
 
-  const job = await db.job.findUnique({
-    where: { projectToken: trimmed },
-    select: { id: true, businessId: true },
+  const job = await findLiveJobByProjectToken(db, trimmed, {
+    id: true,
+    businessId: true,
   });
   if (!job) return [];
 

@@ -16,6 +16,7 @@ import {
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
+import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -169,10 +170,13 @@ export async function attemptAutomationEmail(
       },
     });
     if (!invoice) return { status: "SKIPPED", failureReason: "Invoice is not in this business." };
+    const liveInvoiceToken = await liveOutboundProjectToken(
+      db,
+      invoice.job?.projectToken,
+    );
     const url =
-      (invoice.job?.projectToken && slug
-        ? tenantInvoiceUrl(slug, invoice.job.projectToken)
-        : null) ?? "the invoice link in TBBT";
+      (liveInvoiceToken && slug ? tenantInvoiceUrl(slug, liveInvoiceToken) : null) ??
+      "the invoice link in TBBT";
     const email = buildInvoiceReadyEmail({
       businessName: input.businessName,
       customerName: invoice.customer?.name ?? null,
@@ -225,8 +229,9 @@ export async function attemptAutomationEmail(
     ) {
       return { status: "SKIPPED", failureReason: "Appointment reminder is stale or superseded. SENT was not recorded." };
     }
+    const liveJobToken = await liveOutboundProjectToken(db, job.projectToken);
     const url =
-      (job.projectToken && slug ? tenantProjectUrl(slug, job.projectToken) : null) ??
+      (liveJobToken && slug ? tenantProjectUrl(slug, liveJobToken) : null) ??
       "the project link in TBBT";
     const email = buildAppointmentProposedEmail({
       businessName: input.businessName,

@@ -350,6 +350,7 @@ export type OwnerTodayJobView = {
   customerHref: string | null;
   fieldHref: string | null;
   projectToken: string;
+  projectLinkActive?: boolean;
   directionsHref: string | null;
   callHref: string | null;
   canStart: boolean;
@@ -417,6 +418,7 @@ export function buildOwnerTodayJobView(
     customerHref: actions.customerHref,
     fieldHref: actions.fieldHref,
     projectToken: actions.projectToken,
+    projectLinkActive: true,
     directionsHref: actions.directionsHref,
     callHref: actions.callHref,
     canStart: job.status !== "COMPLETED" && job.status !== "IN_PROGRESS",
