@@ -149,6 +149,7 @@ export function MultiServiceRequestFlow({
   serviceArea,
   intakeSchemasByTrade = {},
   publishedIntakeByTrade = {},
+  websitePublishId,
   activeTrades = [],
   projectToken,
   submitAction,
@@ -166,6 +167,8 @@ export function MultiServiceRequestFlow({
   serviceArea: BusinessServiceArea;
   intakeSchemasByTrade?: Record<string, PublicIntakeSchemaProjection>;
   publishedIntakeByTrade?: Record<string, PublishedIntakeOverlay>;
+  /** Exact WebsitePublish the hire form displayed. Never authorization. */
+  websitePublishId?: string | null;
   activeTrades?: Array<{ code: string; label: string }>;
   projectToken?: string;
   submitAction?: (
@@ -478,6 +481,9 @@ export function MultiServiceRequestFlow({
     }
     if (publishedIntake) {
       formData.set("tenantIntakeSnapshotId", publishedIntake.snapshotId);
+    }
+    if (websitePublishId) {
+      formData.set("websitePublishId", websitePublishId);
     }
     if (resolvedTrade) {
       formData.set("requestedTradeCode", resolvedTrade);
