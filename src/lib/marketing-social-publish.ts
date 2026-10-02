@@ -88,6 +88,13 @@ export type ResolveMarketingSocialPublishInput = {
   resolution: string;
 };
 
+export type ResolveMarketingSocialPublishDeps = {
+  /** Test hook. Runs after the unconfirmed pre-check and before the CAS update. */
+  beforeResolveUpdate?: () => Promise<void>;
+  /** Test hook. Omits status: CLAIMED so the compare-and-set guard can be proven. */
+  omitResolveClaimedGuard?: boolean;
+};
+
 export type ResolveMarketingSocialPublishResult = {
   attemptId: string;
   status: "PUBLISHED" | "FAILED";
@@ -432,6 +439,7 @@ export async function resolveMarketingSocialPublishAttempt(
   db: Db,
   access: BusinessAccess,
   input: ResolveMarketingSocialPublishInput,
+  deps?: ResolveMarketingSocialPublishDeps,
 ): Promise<ResolveMarketingSocialPublishResult> {
   requireOwnerSocialPublish(access);
 
@@ -479,13 +487,15 @@ export async function resolveMarketingSocialPublishAttempt(
     throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE);
   }
 
+  if (deps?.beforeResolveUpdate) await deps.beforeResolveUpdate();
+
+  const claimedWhere = deps?.omitResolveClaimedGuard
+    ? { id: attempt.id, businessId: access.businessId }
+    : { id: attempt.id, businessId: access.businessId, status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED };
+
   if (resolution === SOCIAL_PUBLISH_RESOLVE_POSTED) {
     const updated = await db.marketingSocialPublishAttempt.updateMany({
-      where: {
-        id: attempt.id,
-        businessId: access.businessId,
-        status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
-      },
+      where: claimedWhere,
       data: {
         status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
         publishedAt: new Date(),
@@ -505,11 +515,7 @@ export async function resolveMarketingSocialPublishAttempt(
   }
 
   const updated = await db.marketingSocialPublishAttempt.updateMany({
-    where: {
-      id: attempt.id,
-      businessId: access.businessId,
-      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
-    },
+    where: claimedWhere,
     data: {
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
       liveKey: null,

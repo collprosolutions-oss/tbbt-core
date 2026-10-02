@@ -42,11 +42,30 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function graphErrorObject(payload: unknown) {
+  return asRecord(asRecord(payload)?.error);
+}
+
 function providerErrorMessage(payload: unknown, fallback: string, accessToken?: string) {
-  const record = asRecord(payload);
-  const error = asRecord(record?.error);
+  const error = graphErrorObject(payload);
   const message = typeof error?.message === "string" ? error.message.trim() : "";
   return sanitizeSocialPublishProviderError(message || fallback, accessToken);
+}
+
+function isDefiniteGraphRejection(
+  response: { ok: boolean; status: number },
+  payload: unknown,
+) {
+  return !response.ok && response.status < 500 && graphErrorObject(payload) != null;
+}
+
+function unknownPublishResult(raw: string, accessToken?: string): SocialPublishResult {
+  return {
+    ok: false,
+    status: "UNKNOWN",
+    outcome: "unknown",
+    error: sanitizeSocialPublishProviderError(raw, accessToken) || raw,
+  };
 }
 
 export function facebookPageFeedUrl(pageId: string) {
@@ -78,19 +97,25 @@ export function createFacebookSocialPublishingProvider(
         try {
           payload = await response.json();
         } catch {
-          payload = null;
+          return unknownPublishResult("Facebook returned an unreadable response.", input.accessToken);
         }
         const record = asRecord(payload);
         const providerPostId = typeof record?.id === "string" ? record.id.trim() : "";
         if (response.ok && providerPostId) {
           return { ok: true, status: "PUBLISHED", providerPostId };
         }
-        return {
-          ok: false,
-          status: "FAILED",
-          outcome: "rejected",
-          error: providerErrorMessage(payload, "Facebook rejected the post.", input.accessToken),
-        };
+        if (isDefiniteGraphRejection(response, payload)) {
+          return {
+            ok: false,
+            status: "FAILED",
+            outcome: "rejected",
+            error: providerErrorMessage(payload, "Facebook rejected the post.", input.accessToken),
+          };
+        }
+        return unknownPublishResult(
+          providerErrorMessage(payload, "Facebook publish outcome is unconfirmed.", input.accessToken),
+          input.accessToken,
+        );
       } catch (error) {
         const timedOut = error instanceof Error && error.name === "AbortError";
         const raw = timedOut
@@ -98,12 +123,7 @@ export function createFacebookSocialPublishingProvider(
           : error instanceof Error
             ? error.message
             : "Facebook publish failed.";
-        return {
-          ok: false,
-          status: "UNKNOWN",
-          outcome: "unknown",
-          error: sanitizeSocialPublishProviderError(raw, input.accessToken) || raw,
-        };
+        return unknownPublishResult(raw, input.accessToken);
       } finally {
         clearTimeout(timer);
       }

@@ -281,7 +281,12 @@ export function sanitizeSocialPublishProviderError(
 ): string {
   let text = (raw ?? "").replace(/\s+/g, " ").trim();
   const token = accessToken?.trim();
-  if (token) text = text.split(token).join("[redacted]");
+  if (token) {
+    text = text.split(token).join("[redacted]");
+    const encoded = encodeURIComponent(token);
+    if (encoded && encoded !== token) text = text.split(encoded).join("[redacted]");
+  }
+  text = text.replace(/access_token=[^&\s]+/gi, "access_token=[redacted]");
   SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN.lastIndex = 0;
   text = text.replace(SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN, "[redacted]");
   if (text.length > SOCIAL_PUBLISH_ERROR_MAX_CHARS) {
