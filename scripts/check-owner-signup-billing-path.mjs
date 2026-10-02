@@ -159,8 +159,8 @@ check(
 check(
   "Converted/canceled leftover trial days do not resurrect operating access",
   entitlementSrc.includes("trialStillHonored") &&
-    entitlementSrc.includes("founderConvertedAt") &&
-    entitlementSrc.includes("isSaasTerminatedStatus(status)") &&
+    entitlementSrc.includes("!row?.founderConvertedAt") &&
+    !entitlementSrc.includes("!row?.founderEligibilityEndedAt &&") &&
     resolveSaasEntitlement({
       slug: "new-co",
       row: {
@@ -173,7 +173,20 @@ check(
         legacyExempt: false,
       },
       now: new Date("2026-09-23T12:00:00.000Z"),
-    }).state === "subscription_required",
+    }).state === "subscription_required" &&
+    resolveSaasEntitlement({
+      slug: "new-co",
+      row: {
+        status: "incomplete_expired",
+        trialStartedAt: new Date("2026-09-20T12:00:00.000Z"),
+        trialEndsAt: new Date("2026-10-20T12:00:00.000Z"),
+        founderEligible: false,
+        founderConvertedAt: null,
+        founderEligibilityEndedAt: new Date("2026-09-21T12:00:00.000Z"),
+        legacyExempt: false,
+      },
+      now: new Date("2026-09-23T12:00:00.000Z"),
+    }).state === "trial_active",
 );
 check(
   "Cancellation and export stay outside the operating-write gate",
@@ -298,6 +311,74 @@ try {
         expenseInput("Trial lumber"),
       );
       check("Trial OWNER can create operating records", Boolean(trialExpense.id));
+
+      console.log("\nTEST — Failed first payment during the live trial stays on the card-free trial");
+      const failedTrial = await provisionNewOwnerWithFounderTrial(prisma, {
+        name: "Failed Card Owner",
+        email: `failed-card-${randomUUID().slice(0, 8)}@example.com`,
+        passwordHash,
+        businessName: "Failed Card Handyman",
+        now,
+      });
+      const failedAccess = makeAccess(failedTrial.business, failedTrial.membership, failedTrial.user);
+      const failedCheckout = await startSaasSubscriptionCheckout(prisma, failedAccess, {
+        planCode: PLAN_CODES.FOUNDER,
+      });
+      await dispatchSignedSaasStripeFixture(
+        prisma,
+        saasSubscriptionFixture({
+          id: "evt_owner_live_incomplete",
+          created: 1_700_000_010,
+          type: "customer.subscription.created",
+          businessId: failedTrial.business.id,
+          customerId: failedCheckout.customerId,
+          subscriptionId: "sub_owner_live_fail",
+          status: "incomplete",
+        }),
+      );
+      rememberFakeSubscription(provider, {
+        subscriptionId: "sub_owner_live_fail",
+        customerId: failedCheckout.customerId,
+        status: "incomplete",
+      });
+      await dispatchSignedSaasStripeFixture(
+        prisma,
+        saasSubscriptionFixture({
+          id: "evt_owner_live_incomplete_expired",
+          created: 1_700_000_020,
+          type: "customer.subscription.updated",
+          businessId: failedTrial.business.id,
+          customerId: failedCheckout.customerId,
+          subscriptionId: "sub_owner_live_fail",
+          status: "incomplete_expired",
+        }),
+      );
+      rememberFakeSubscription(provider, {
+        subscriptionId: "sub_owner_live_fail",
+        customerId: failedCheckout.customerId,
+        status: "incomplete_expired",
+      });
+      const failedRow = await prisma.businessSaasSubscription.findUnique({
+        where: { businessId: failedTrial.business.id },
+      });
+      const failedEntitlement = await loadSaasEntitlement(prisma, failedTrial.business, now);
+      const failedRetry = await startSaasSubscriptionCheckout(prisma, failedAccess, {
+        planCode: PLAN_CODES.FOUNDER,
+      });
+      const failedExpense = await createExpense(
+        prisma,
+        failedAccess,
+        expenseInput("Still on trial lumber"),
+      );
+      check(
+        "Live-trial incomplete then incomplete_expired stays trial_active and operable",
+        failedRow?.status === "incomplete_expired" &&
+          failedRow?.founderConvertedAt == null &&
+          failedEntitlement.state === "trial_active" &&
+          failedEntitlement.canOperate === true &&
+          failedRetry.url.includes("checkout.stripe.test") &&
+          Boolean(failedExpense.id),
+      );
 
       console.log("\nTEST — Plan selection starts Founder Checkout; Stripe test webhooks subscribe the same tenant");
       const checkout = await startSaasSubscriptionCheckout(prisma, ownerAccess, {
@@ -524,7 +605,8 @@ try {
         "Canceled OWNER can start Founder Checkout again on the same Stripe customer",
         reentryCheckout.customerId === checkout.customerId &&
           reentryCheckout.url.includes("checkout.stripe.test") &&
-          (await prisma.business.count()) === 1,
+          (await prisma.business.count({ where: { id: signup.business.id } })) === 1 &&
+          (await prisma.membership.count({ where: { userId: signup.user.id } })) === 1,
       );
 
       await dispatchSignedSaasStripeFixture(
@@ -642,7 +724,7 @@ try {
           recoveredEntitlement.state === "subscribed_active" &&
           recoveredEntitlement.canOperate === true &&
           Boolean(recoveredExpense.id) &&
-          (await prisma.business.count()) === 1 &&
+          (await prisma.business.count({ where: { id: signup.business.id } })) === 1 &&
           (await prisma.businessSaasSubscription.count({
             where: { businessId: signup.business.id },
           })) === 1,
