@@ -5,6 +5,10 @@
  *
  * Static + pure-function checks always run. Prisma checks use a disposable
  * sibling Postgres database. HTTP checks run when APP_URL is reachable.
+ * Those HTTP hits use the APP_URL process database (DATABASE_URL), not the
+ * sibling test DB, so the suite upserts a local `collpro-reno` Business on
+ * that database before fetching /hire and /r. It never publishes, never
+ * changes production routing, and never overwrites an existing row.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-public-website.mjs
@@ -1062,10 +1066,38 @@ try {
     }
   }
 
+  async function ensureAppUrlCollProFixture() {
+    const appDb = new PrismaClient({ datasourceUrl: baseUrl });
+    try {
+      const existing = await appDb.business.findUnique({
+        where: { slug: "collpro-reno" },
+        select: { id: true, slug: true, name: true },
+      });
+      if (existing) {
+        console.log("  HTTP fixture — APP_URL database already has slug collpro-reno");
+        return existing;
+      }
+      const created = await appDb.business.create({
+        data: {
+          name: "CollPro Reno Handyman Services",
+          slug: "collpro-reno",
+          tradeCode: "HANDYMAN",
+        },
+      });
+      console.log(
+        "  HTTP fixture — created slug collpro-reno on the APP_URL database (compatibility public path; no publish)",
+      );
+      return created;
+    } finally {
+      await appDb.$disconnect();
+    }
+  }
+
   const reachable = await fetchMaybe("/sign-in");
   if (!reachable) {
     console.log("\nHTTP — skipped (APP_URL is not reachable)");
   } else {
+    await ensureAppUrlCollProFixture();
     console.log("\nHTTP — Public pages");
     const home = await fetchMaybe("/");
     check("Public homepage loads", Boolean(home && home.status === 200 && home.body.includes(COLLPRO_RENO_DISPLAY_NAME)));

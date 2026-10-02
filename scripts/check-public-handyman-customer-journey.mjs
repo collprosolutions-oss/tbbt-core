@@ -71,6 +71,10 @@ const {
 const { loadInvoiceDocumentForProjectToken } = await import(
   "@/lib/invoice-document"
 );
+const { findLiveJobByProjectToken } = await import("@/lib/project-link-data");
+const { rotateJobProjectLink, revokeJobProjectLink } = await import(
+  "@/lib/project-link-ops"
+);
 const { createFakePaymentProvider, FAKE_STRIPE_TEST_CHECKOUT_PATH } = await import(
   "@/lib/payments/fake"
 );
@@ -175,13 +179,25 @@ check(
   "HTTP isolation waits for a production BUILD_ID, not a Turbopack .next/dev folder",
   read("scripts/check-public-handyman-customer-journey.mjs").includes(".next/BUILD_ID"),
 );
+const liveTokenSrc = read("src/lib/project-link-data.ts");
 check(
   "Portal, estimate, and invoice stay token-only",
-  portalPage.includes("where: { projectToken: token }") &&
+  portalPage.includes("findLiveJobByProjectToken(prisma, token") &&
+    invoicePage.includes("findLiveJobByProjectToken(prisma, token") &&
     estimatePage.includes("loadEstimateDocumentByToken") &&
     invoicePage.includes("loadInvoiceDocumentForProjectToken") &&
+    liveTokenSrc.includes("export async function findLiveJobByProjectToken") &&
+    liveTokenSrc.includes("isLiveProjectToken") &&
+    liveTokenSrc.includes('link?.status !== "REVOKED"') &&
+    liveTokenSrc.includes("Old rotated tokens miss Job.projectToken") &&
     !portalPage.includes('formData.get("businessId")') &&
-    !estimatePage.includes('formData.get("businessId")'),
+    !estimatePage.includes('formData.get("businessId")') &&
+    !invoicePage.includes('formData.get("businessId")') &&
+    !portalPage.includes("getServerSession") &&
+    !portalPage.includes("requireBusinessAccess") &&
+    !portalPage.includes("requireBusinessCapability") &&
+    !/from ["']@\/lib\/auth["']/.test(portalPage) &&
+    !/prisma\.job\.findUnique\(\s*\{\s*where:\s*\{\s*id:/.test(portalPage),
 );
 check(
   "Completed jobs still list permitted private document receipts",
@@ -815,6 +831,47 @@ await withDisposableTestDatabase(
         otherInvoice === null,
     );
 
+    const liveJob = await findLiveJobByProjectToken(prisma, jobA.projectToken, { id: true });
+    const linkJob = await prisma.job.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        propertyId: propertyA.id,
+        projectToken: randomUUID(),
+        status: "IN_PROGRESS",
+      },
+    });
+    const rotated = await rotateJobProjectLink(prisma, ownerA, { jobId: linkJob.id });
+    const oldAfterRotate = await findLiveJobByProjectToken(prisma, rotated.previousToken, {
+      id: true,
+    });
+    const newAfterRotate = await findLiveJobByProjectToken(prisma, rotated.projectToken, {
+      id: true,
+    });
+    check(
+      "Live-token lookup keeps the current token and drops a rotated token",
+      liveJob?.id === jobA.id &&
+        oldAfterRotate === null &&
+        newAfterRotate?.id === linkJob.id,
+    );
+    const revoked = await revokeJobProjectLink(prisma, ownerA, { jobId: linkJob.id });
+    const afterRevoke = await findLiveJobByProjectToken(prisma, rotated.projectToken, {
+      id: true,
+    });
+    const burned = await prisma.job.findUnique({
+      where: { id: linkJob.id },
+      select: { projectToken: true },
+    });
+    const burnedLive = await findLiveJobByProjectToken(prisma, burned?.projectToken, {
+      id: true,
+    });
+    check(
+      "Revoked project token is not live",
+      revoked.previousToken === rotated.projectToken &&
+        afterRevoke === null &&
+        burnedLive === null,
+    );
+
     const accountId = `acct_test_journey_${suffix}`;
     await prisma.businessPaymentAccount.create({
       data: {
@@ -1006,6 +1063,50 @@ await withDisposableTestDatabase(
       check(
         "Unknown portal token is unavailable",
         missingBody.includes("Project unavailable") || missingBody.includes("not available"),
+      );
+
+      const rotateHttpJob = await prisma.job.create({
+        data: {
+          businessId: businessA.id,
+          customerId: customerA.id,
+          propertyId: propertyA.id,
+          projectToken: randomUUID(),
+          status: "IN_PROGRESS",
+        },
+      });
+      const rotateHttp = await rotateJobProjectLink(prisma, ownerA, {
+        jobId: rotateHttpJob.id,
+      });
+      const rotatedPortal = await fetch(`${APP_URL}/p/${rotateHttp.previousToken}`, {
+        redirect: "manual",
+      });
+      const rotatedPortalBody = await rotatedPortal.text();
+      const replacementPortal = await fetch(`${APP_URL}/p/${rotateHttp.projectToken}`, {
+        redirect: "manual",
+      });
+      const replacementPortalBody = await replacementPortal.text();
+      check(
+        "Rotated portal token does not open the page",
+        rotatedPortal.status === 200 &&
+          (rotatedPortalBody.includes("Project unavailable") ||
+            rotatedPortalBody.includes("not available")),
+      );
+      check(
+        "Replacement live token still opens the portal",
+        replacementPortal.status === 200 &&
+          !replacementPortalBody.includes("Project unavailable") &&
+          replacementPortalBody.includes("Alpha Journey Handyman"),
+      );
+      await revokeJobProjectLink(prisma, ownerA, { jobId: rotateHttpJob.id });
+      const revokedPortal = await fetch(`${APP_URL}/p/${rotateHttp.projectToken}`, {
+        redirect: "manual",
+      });
+      const revokedPortalBody = await revokedPortal.text();
+      check(
+        "Revoked portal token does not open the page",
+        revokedPortal.status === 200 &&
+          (revokedPortalBody.includes("Project unavailable") ||
+            revokedPortalBody.includes("not available")),
       );
 
       const invoiceHttp = await fetch(`${APP_URL}/p/${jobA.projectToken}/invoice`, {
