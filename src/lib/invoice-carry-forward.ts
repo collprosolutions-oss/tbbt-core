@@ -14,9 +14,15 @@
  * computed once at create. A later approved Change Order is billed on a
  * SUPPLEMENTAL invoice. Copied LineItem rows are a commercial snapshot:
  * later catalog / settings edits must not rewrite them.
+ *
+ * Recurring occurrences are refused unless the OWNER occurrence draft
+ * action passes `recurringOccurrence: "allow-job-payments-only"`. That
+ * path still uses these snapshots, but attaches only payments already
+ * bound to the occurrence job.
  */
 import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
+import { isRecurringOccurrenceJob } from "@/lib/cleaning-recurring-booking";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
 import { attachEstimatePaymentsToInvoice } from "@/lib/project-payments";
@@ -605,6 +611,31 @@ async function attachOriginalInvoicePayments(
   });
 }
 
+export type PersistDraftInvoiceInput = {
+  businessId: string;
+  jobId: string;
+  /**
+   * Recurring occurrences share the source estimate. The default Complete
+   * Job / Create invoice path refuses them so it cannot send, charge, or
+   * attach source-estimate payments by accident. The OWNER occurrence
+   * draft action sets `allow-job-payments-only`.
+   */
+  recurringOccurrence?: "refuse" | "allow-job-payments-only";
+};
+
+export const RECURRING_OCCURRENCE_USE_DRAFT_INVOICE_ACTION_MESSAGE =
+  "Create a draft invoice for this completed recurring booking from the occurrence invoice action. Completing the job or using Create invoice does not bill that booking.";
+
+export function persistDraftInvoicePaymentEstimateId(input: {
+  estimateId?: string | null;
+  recurringOccurrence?: PersistDraftInvoiceInput["recurringOccurrence"];
+}) {
+  if (input.recurringOccurrence === "allow-job-payments-only") {
+    return null;
+  }
+  return input.estimateId ?? null;
+}
+
 /**
  * Creates the ORIGINAL invoice when none exists, or a SUPPLEMENTAL invoice
  * for approved Change Orders that are not yet billed. Safe to call twice:
@@ -618,7 +649,7 @@ async function attachOriginalInvoicePayments(
  */
 export async function persistDraftInvoiceFromCompletedJob(
   db: PrismaClient,
-  input: { businessId: string; jobId: string },
+  input: PersistDraftInvoiceInput,
 ): Promise<PersistDraftInvoiceResult> {
   const job = await db.job.findFirst({
     where: { id: input.jobId, businessId: input.businessId },
@@ -632,6 +663,22 @@ export async function persistDraftInvoiceFromCompletedJob(
   if (job.status !== "COMPLETED") {
     return { ok: false, error: "Only a completed job can become an invoice." };
   }
+
+  const isOccurrence = isRecurringOccurrenceJob(job);
+  if (isOccurrence && input.recurringOccurrence !== "allow-job-payments-only") {
+    return { ok: false, error: RECURRING_OCCURRENCE_USE_DRAFT_INVOICE_ACTION_MESSAGE };
+  }
+  if (!isOccurrence && input.recurringOccurrence === "allow-job-payments-only") {
+    return {
+      ok: false,
+      error: "This action invoices one completed recurring booking, not the original job.",
+    };
+  }
+
+  const paymentEstimateId = persistDraftInvoicePaymentEstimateId({
+    estimateId: job.estimateId,
+    recurringOccurrence: input.recurringOccurrence,
+  });
 
   const approvedScope = resolveApprovedWorkOrderScope(job);
   if (approvedScope.source === "none") {
@@ -720,7 +767,7 @@ export async function persistDraftInvoiceFromCompletedJob(
 
       await attachOriginalInvoicePayments(tx, {
         businessId: input.businessId,
-        estimateId: job.estimateId,
+        estimateId: paymentEstimateId,
         jobId: job.id,
         invoiceId: created.id,
       });
@@ -738,7 +785,7 @@ export async function persistDraftInvoiceFromCompletedJob(
     if (original && isOriginalInvoiceKind(original.kind)) {
       await attachOriginalInvoicePayments(tx, {
         businessId: input.businessId,
-        estimateId: job.estimateId,
+        estimateId: paymentEstimateId,
         jobId: job.id,
         invoiceId: original.id,
       });

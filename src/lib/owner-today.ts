@@ -18,6 +18,7 @@ import {
 import { directionsUrl, telHref } from "@/lib/directions";
 import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
 import { expectedEnd } from "@/lib/job-schedule";
+import { isRecurringOccurrenceJob } from "@/lib/cleaning-recurring-booking";
 import {
   completedJobBillingAttention,
   type BillingChangeOrderLike,
@@ -100,6 +101,10 @@ export const OWNER_TODAY_HANDOFF_SELECT = {
   customerId: true,
   estimateId: true,
   status: true,
+  recurrenceSourceJobId: true,
+  recurrenceOccurrenceKey: true,
+  nextBookingSourceJobId: true,
+  correctiveCleanSourceJobId: true,
   customer: { select: { name: true } },
   invoices: {
     select: { id: true, status: true, kind: true, createdAt: true, total: true },
@@ -504,6 +509,10 @@ export type OwnerTodayHandoffRecord = {
   status: string;
   customerId?: string | null;
   estimateId?: string | null;
+  recurrenceSourceJobId?: string | null;
+  recurrenceOccurrenceKey?: string | null;
+  nextBookingSourceJobId?: string | null;
+  correctiveCleanSourceJobId?: string | null;
   customer?: { name: string | null } | null;
   invoices: readonly BillingInvoiceLike[];
   changeOrders: readonly BillingChangeOrderLike[];
@@ -532,6 +541,7 @@ export function buildOwnerTodayHandoffItems(
   const items: OwnerTodayHandoffItem[] = [];
   for (const job of jobs) {
     if (job.businessId !== businessId) continue;
+    if (isRecurringOccurrenceJob(job)) continue;
     const attention = completedJobBillingAttention({
       jobStatus: job.status,
       originalApprovedTotal:

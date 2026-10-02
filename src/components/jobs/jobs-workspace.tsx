@@ -70,6 +70,7 @@ export type JobListItem = {
   unpaidDepositWarning?: string | null;
   appointmentConfirmed: boolean;
   appointmentConfirmationLabel: string | null;
+  isRecurringOccurrence: boolean;
 };
 
 function initials(name: string) {
@@ -544,6 +545,10 @@ function JobDetailsPanel({
                 <Receipt className="size-4" />
                 Open Invoice
               </Link>
+            </Button>
+          ) : job.isRecurringOccurrence ? (
+            <Button asChild variant="outline">
+              <Link href={`/jobs/${job.id}`}>Review draft invoice</Link>
             </Button>
           ) : (
             <CreateInvoiceButton jobId={job.id} />

@@ -43,6 +43,7 @@ import {
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
+import { isRecurringOccurrenceJob } from "@/lib/cleaning-recurring-booking";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import {
   appointmentConfirmationLabel,
@@ -557,6 +558,7 @@ export default async function JobsPage({
       assignedMembershipId: job.assignedMembership?.id ?? null,
       amountLabel: currentTotal ? formatMoney(currentTotal) : null,
       invoice: invoice ? { id: invoice.id, status: invoice.status, totalLabel: formatMoney(invoice.total) } : null,
+      isRecurringOccurrence: isRecurringOccurrenceJob(job),
       projectToken: job.projectToken,
       photoCount: job.photos.length,
       additionalWorkRequestCount: job.additionalWorkRequests.length,
