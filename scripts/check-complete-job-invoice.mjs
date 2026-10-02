@@ -1,7 +1,8 @@
 /**
- * Complete Job → create/reuse invoice → send (DRAFT → SENT).
+ * Complete Job → create/reuse a draft invoice. Send is a separate
+ * sendDraftInvoiceIfNeeded / markInvoiceSent step (DRAFT → SENT).
  *
- * Imports the real completeJobAndSendInvoice / persist helpers.
+ * Imports the real completeJobAndDraftInvoice / persist helpers.
  * Server actions that depend on next/headers are not invoked.
  *
  * Run with:
@@ -10,14 +11,25 @@
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
-  completeJobAndSendInvoice,
+  completeJobAndDraftInvoice,
   invoiceSendShouldNotify,
+  ownerCompleteJobSuccessState,
   sendDraftInvoiceIfNeeded,
 } = await import("@/lib/complete-job-invoice");
+const {
+  COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  FIELD_COMPLETE_JOB_MESSAGE,
+  INVOICE_ALREADY_SENT_MESSAGE,
+  completedJobPageInvoiceMessage,
+  workOrderCardCompletedInvoiceMessage,
+  invoicePageStatusMessage,
+  completeJobDraftInvoiceHref,
+} = await import("@/lib/complete-job-copy");
 const {
   clockInTime,
   JOB_COMPLETION_TIME_CLOSED_REASON,
@@ -184,6 +196,141 @@ try {
   check("SENT invoices do not notify again", invoiceSendShouldNotify("SENT") === false);
   check("PAID invoices do not notify again", invoiceSendShouldNotify("PAID") === false);
 
+  const copySrc = readFileSync(new URL("../src/lib/complete-job-copy.ts", import.meta.url), "utf8");
+  const completeSrc = readFileSync(new URL("../src/lib/complete-job-invoice.ts", import.meta.url), "utf8");
+  const jobActionSrc = readFileSync(new URL("../src/app/actions/job.ts", import.meta.url), "utf8");
+  const completeButtonSrc = readFileSync(
+    new URL("../src/components/jobs/mark-job-complete-button.tsx", import.meta.url),
+    "utf8",
+  );
+  const workOrderCardSrc = readFileSync(
+    new URL("../src/components/jobs/jobs-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const jobPageSrc = readFileSync(new URL("../src/app/(app)/jobs/[jobId]/page.tsx", import.meta.url), "utf8");
+  const invoicePageSrc = readFileSync(
+    new URL("../src/app/(app)/invoices/[invoiceId]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const fieldButtonSrc = readFileSync(
+    new URL("../src/components/field/complete-assigned-job-button.tsx", import.meta.url),
+    "utf8",
+  );
+  const fieldPageSrc = readFileSync(new URL("../src/app/field/jobs/[jobId]/page.tsx", import.meta.url), "utf8");
+  const nativeJobSrc = readFileSync(new URL("../apps/native/src/screens/JobScreen.tsx", import.meta.url), "utf8");
+  const todaySrc = readFileSync(new URL("../src/lib/owner-today.ts", import.meta.url), "utf8");
+  const bsosSrc = readFileSync(new URL("../src/lib/bsos.ts", import.meta.url), "utf8");
+  check(
+    "draft completion message is pinned",
+    COMPLETE_JOB_DRAFT_INVOICE_MESSAGE ===
+      "Job completed. Invoice drafted - review it and press Send when ready.",
+  );
+  check(
+    "field completion message does not claim an invoice was sent or drafted",
+    FIELD_COMPLETE_JOB_MESSAGE ===
+      "This job is complete. The owner will review and send the invoice when ready." &&
+      !/invoice was sent|sent automatically|invoice drafted/i.test(FIELD_COMPLETE_JOB_MESSAGE),
+  );
+
+  const draftOnlyAttention = {
+    unbilled: true,
+    reason: "draft-only-invoice",
+    detail: "Completed job invoice has not been sent",
+    invoiceStatuses: ["DRAFT"],
+  };
+  check(
+    "job page draft-only derived output is the Send prompt, not the generic unbilled detail",
+    completedJobPageInvoiceMessage(draftOnlyAttention) === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      completedJobPageInvoiceMessage(draftOnlyAttention) !== draftOnlyAttention.detail,
+  );
+  check(
+    "job page other unbilled reasons keep their detail",
+    completedJobPageInvoiceMessage({
+      unbilled: true,
+      reason: "no-covering-invoice",
+      detail: "Completed job has unbilled approved work",
+      invoiceStatuses: [],
+    }) === "Completed job has unbilled approved work",
+  );
+  check(
+    "work-order card derived output is the Send prompt for a draft invoice",
+    workOrderCardCompletedInvoiceMessage("DRAFT") === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      workOrderCardCompletedInvoiceMessage("SENT") === null,
+  );
+  check(
+    "invoice page derived output is the Send prompt for a draft invoice",
+    invoicePageStatusMessage("DRAFT") === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      invoicePageStatusMessage("SENT", false) !== COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  );
+
+  const markJobCompleteFn = jobActionSrc.slice(
+    jobActionSrc.indexOf("export async function markJobComplete"),
+    jobActionSrc.indexOf(
+      "export async function",
+      jobActionSrc.indexOf("export async function markJobComplete") + 1,
+    ),
+  );
+  check(
+    "markJobComplete returns the draft success message and invoice href",
+    markJobCompleteFn.includes("...ownerCompleteJobSuccessState(result)") &&
+      markJobCompleteFn.includes("warning: result.warning"),
+  );
+  check(
+    "job page Invoice card renders the derived draft-only helper",
+    /<CardDescription>\s*\{completedJobPageInvoiceMessage\(/.test(jobPageSrc) &&
+      !/<CardDescription>\s*\{billingAttention/.test(jobPageSrc) &&
+      jobPageSrc.includes("MarkInvoiceSentButton") &&
+      jobPageSrc.includes("`/invoices/${invoice.id}`") &&
+      jobPageSrc.includes("`/invoices/${row.id}`"),
+  );
+  check(
+    "work-order card renders the derived draft message plus Send and Open invoice",
+    workOrderCardSrc.includes("workOrderCardCompletedInvoiceMessage(") &&
+      workOrderCardSrc.includes("{draftInvoicePrompt}") &&
+      workOrderCardSrc.includes("MarkInvoiceSentButton") &&
+      workOrderCardSrc.includes("`/invoices/${job.invoice.id}`") &&
+      !workOrderCardSrc.includes("invoice was sent"),
+  );
+  check(
+    "invoice page renders the derived draft message where Send lives",
+    invoicePageSrc.includes("invoicePageStatusMessage(") &&
+      invoicePageSrc.includes("MarkInvoiceSentButton") &&
+      !invoicePageSrc.includes("invoice was sent automatically"),
+  );
+  check(
+    "owner Complete Job button still exposes a transient Open invoice path",
+    completeButtonSrc.includes("state.message") &&
+      completeButtonSrc.includes("Open invoice") &&
+      completeButtonSrc.includes("completeJobDraftInvoiceHref") &&
+      !completeButtonSrc.includes("invoice was sent"),
+  );
+  check(
+    "field and native complete copy does not claim send or double the sentence",
+    fieldButtonSrc.includes("state.message") &&
+      fieldPageSrc.includes("{FIELD_COMPLETE_JOB_MESSAGE}") &&
+      !fieldPageSrc.includes("This job is complete. {FIELD_COMPLETE_JOB_MESSAGE}") &&
+      nativeJobSrc.includes(FIELD_COMPLETE_JOB_MESSAGE) &&
+      !nativeJobSrc.includes("invoice was sent") &&
+      todaySrc.includes("Owner Complete Job leaves a draft") &&
+      bsosSrc.includes("Owner Complete Job leaves a draft until Send") &&
+      !completeSrc.includes("sendDraftInvoiceIfNeeded(db"),
+  );
+  check(
+    "draft success state points at the invoice Send page",
+    ownerCompleteJobSuccessState({
+      ok: true,
+      jobCompleted: true,
+      invoiceId: "inv_draft",
+      invoiceCreated: true,
+      invoiceReused: false,
+      invoiceStatus: "DRAFT",
+      newlySent: false,
+      customerNotified: false,
+    }).message === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      completeJobDraftInvoiceHref("inv_draft") === "/invoices/inv_draft",
+  );
+  check("copy helpers live next to the pinned draft message", copySrc.includes("completedJobPageInvoiceMessage"));
+
   const businessA = await prisma.business.create({
     data: { name: "Alpha Handyman", slug: "alpha-handyman", tradeCode: "HANDYMAN" },
   });
@@ -344,8 +491,8 @@ try {
     },
   });
 
-  console.log("\nTEST A — Completing an approved job creates and sends one invoice");
-  const completed = await completeJobAndSendInvoice(prisma, {
+  console.log("\nTEST A — Completing an approved job creates one draft invoice");
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
@@ -354,8 +501,38 @@ try {
   check("complete succeeds", completed.ok === true);
   check("job is marked completed", (await prisma.job.findUniqueOrThrow({ where: { id: work.job.id } })).status === "COMPLETED");
   check("invoice was created", completed.ok && completed.invoiceCreated === true);
-  check("invoice is SENT", completed.ok && completed.invoiceStatus === "SENT" && completed.newlySent === true);
-  check("portal-visible status", isCustomerVisibleInvoiceStatus(completed.ok ? completed.invoiceStatus : "") === true);
+  check("invoice stays DRAFT until an explicit send", completed.ok && completed.invoiceStatus === "DRAFT" && completed.newlySent === false);
+  check("complete does not notify the customer", completed.ok && completed.customerNotified === false);
+  check(
+    "complete success copy is the draft Send prompt",
+    completed.ok &&
+      ownerCompleteJobSuccessState(completed).message === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      ownerCompleteJobSuccessState(completed).invoiceHref === `/invoices/${completed.invoiceId}`,
+  );
+  const completeEvents = await prisma.businessEvent.findMany({
+    where: { businessId: businessA.id, subjectId: work.job.id },
+    select: { type: true },
+  });
+  const invoiceEventsAfterComplete = await prisma.businessEvent.findMany({
+    where: { businessId: businessA.id, subjectId: completed.ok ? completed.invoiceId : "" },
+    select: { type: true },
+  });
+  check(
+    "complete does not emit INVOICE_SENT",
+    completeEvents.every((event) => event.type !== "INVOICE_SENT") &&
+      invoiceEventsAfterComplete.every((event) => event.type !== "INVOICE_SENT"),
+  );
+  check(
+    "complete writes no invoice-ready email or SMS",
+    (await prisma.customerCommunication.count({
+      where: {
+        businessId: businessA.id,
+        relatedType: "INVOICE",
+        relatedId: completed.ok ? completed.invoiceId : undefined,
+      },
+    })) === 0,
+  );
+  check("draft is not portal-visible", isCustomerVisibleInvoiceStatus(completed.ok ? completed.invoiceStatus : "") === false);
 
   const invoiceCount = await prisma.invoice.count({ where: { jobId: work.job.id } });
   check("exactly one invoice", invoiceCount === 1);
@@ -388,6 +565,43 @@ try {
     ),
   );
 
+  const draftPortalDoc = await loadInvoiceDocumentForProjectToken(
+    work.job.projectToken,
+    prisma,
+  );
+  check("customer portal cannot load the draft invoice", draftPortalDoc == null);
+
+  const sent = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: invoice.id,
+    businessName: businessA.name,
+  });
+  check("explicit send flips DRAFT to SENT", sent.ok === true && sent.newlySent === true && sent.status === "SENT");
+  check(
+    "explicit send emits INVOICE_SENT exactly once",
+    (await prisma.businessEvent.count({
+      where: { businessId: businessA.id, type: "INVOICE_SENT", subjectId: invoice.id },
+    })) === 1,
+  );
+  const sentAgain = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: invoice.id,
+    businessName: businessA.name,
+  });
+  check(
+    "duplicate send is idempotent already-sent success",
+    sentAgain.ok === true &&
+      sentAgain.newlySent === false &&
+      sentAgain.alreadySent === true &&
+      sentAgain.message === INVOICE_ALREADY_SENT_MESSAGE,
+  );
+  check(
+    "duplicate send does not emit a second INVOICE_SENT",
+    (await prisma.businessEvent.count({
+      where: { businessId: businessA.id, type: "INVOICE_SENT", subjectId: invoice.id },
+    })) === 1,
+  );
+
   const portalDoc = await loadInvoiceDocumentForProjectToken(
     work.job.projectToken,
     prisma,
@@ -401,8 +615,76 @@ try {
   check("PDF contains WORK PERFORMED", pdfText.includes("WORK PERFORMED"));
   check("PDF total is $375.00", pdfText.includes("$375.00"));
 
+  console.log("\nTEST — Concurrent double Send is already-sent success");
+  const concurrentWork = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 40,
+    estimateLines: [{ description: "Concurrent send", quantity: 1, unitPrice: 40, total: 40 }],
+  });
+  const concurrentCompleted = await completeJobAndDraftInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: concurrentWork.job.id,
+    businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
+  });
+  check(
+    "concurrent fixture stays DRAFT until send",
+    concurrentCompleted.ok === true && concurrentCompleted.invoiceStatus === "DRAFT",
+  );
+  const concurrentSends = await Promise.all([
+    sendDraftInvoiceIfNeeded(prisma, {
+      businessId: businessA.id,
+      invoiceId: concurrentCompleted.invoiceId,
+      businessName: businessA.name,
+    }),
+    sendDraftInvoiceIfNeeded(prisma, {
+      businessId: businessA.id,
+      invoiceId: concurrentCompleted.invoiceId,
+      businessName: businessA.name,
+    }),
+  ]);
+  check(
+    "both concurrent Send clicks succeed",
+    concurrentSends.every(
+      (result) =>
+        result.ok === true &&
+        result.status === "SENT" &&
+        result.error == null,
+    ),
+  );
+  check(
+    "exactly one concurrent click newly sends",
+    concurrentSends.filter((result) => result.ok && result.newlySent === true).length === 1,
+  );
+  check(
+    "the losing Send click is already-sent success, not a created-but-could-not-send error",
+    concurrentSends.some(
+      (result) =>
+        result.ok === true &&
+        result.newlySent === false &&
+        result.alreadySent === true &&
+        result.message === INVOICE_ALREADY_SENT_MESSAGE,
+    ) &&
+      concurrentSends.every(
+        (result) => result.error !== "The invoice was created but could not be sent.",
+      ),
+  );
+  check(
+    "concurrent Send emits INVOICE_SENT exactly once",
+    (await prisma.businessEvent.count({
+      where: {
+        businessId: businessA.id,
+        type: "INVOICE_SENT",
+        subjectId: concurrentCompleted.ok ? concurrentCompleted.invoiceId : "",
+      },
+    })) === 1,
+  );
+
   console.log("\nTEST B — Retrying Complete Job is idempotent");
-  const retry = await completeJobAndSendInvoice(prisma, {
+  const retry = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
@@ -423,6 +705,12 @@ try {
   const afterRetry = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
   check("retry did not change invoice total", afterRetry.total.toString() === "375");
   check("retry left status SENT", afterRetry.status === "SENT");
+  check(
+    "retry complete still leaves INVOICE_SENT at exactly one",
+    (await prisma.businessEvent.count({
+      where: { businessId: businessA.id, type: "INVOICE_SENT", subjectId: invoice.id },
+    })) === 1,
+  );
   check("retry created no payment write", afterRetry.paidAt == null && afterRetry.paymentMethod == null);
 
   console.log("\nTEST C — Approved scope stays frozen after catalog edits");
@@ -464,7 +752,7 @@ try {
       paymentReference: "pi_existing_375",
     },
   });
-  const paidRetry = await completeJobAndSendInvoice(prisma, {
+  const paidRetry = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
     businessName: businessA.name,
@@ -480,7 +768,7 @@ try {
   check("payment reference is unchanged", paid.paymentReference === "pi_existing_375");
 
   console.log("\nTEST F — Tenant isolation");
-  const foreign = await completeJobAndSendInvoice(prisma, {
+  const foreign = await completeJobAndDraftInvoice(prisma, {
     businessId: businessB.id,
     jobId: work.job.id,
     businessName: businessB.name,
@@ -512,7 +800,7 @@ try {
     ],
     status: "SCHEDULED",
   });
-  const blocked = await completeJobAndSendInvoice(prisma, {
+  const blocked = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: unstarted.job.id,
     businessName: businessA.name,
@@ -584,7 +872,7 @@ try {
       source: "CLOCK",
     },
   });
-  const completedTimed = await completeJobAndSendInvoice(prisma, {
+  const completedTimed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: timed.job.id,
     businessName: businessA.name,
@@ -603,8 +891,8 @@ try {
     "invoice behavior is preserved",
     completedTimed.ok &&
       completedTimed.invoiceCreated === true &&
-      completedTimed.invoiceStatus === "SENT" &&
-      completedTimed.newlySent === true,
+      completedTimed.invoiceStatus === "DRAFT" &&
+      completedTimed.newlySent === false,
   );
   check(
     "RUNNING JOB entry is READY with endedAt and preserved startedAt/note",
@@ -623,7 +911,7 @@ try {
     (await prisma.timeEntry.findUnique({ where: { id: runningTravel.id } })).status === "RUNNING",
   );
 
-  const retryTimed = await completeJobAndSendInvoice(prisma, {
+  const retryTimed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: timed.job.id,
     businessName: businessA.name,
@@ -663,14 +951,14 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: memberMem.id,
-      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      weekStartedAt: weekRange(approvedRunning.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
     },
   });
   const invoicesBeforeBlock = await prisma.invoice.count({ where: { jobId: approvedBlock.job.id } });
-  const blockedApproved = await completeJobAndSendInvoice(prisma, {
+  const blockedApproved = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId: approvedBlock.job.id,
     businessName: businessA.name,
@@ -717,7 +1005,7 @@ try {
       activityType: "JOB",
       jobId: race.job.id,
     }),
-    completeJobAndSendInvoice(prisma, {
+    completeJobAndDraftInvoice(prisma, {
       businessId: businessA.id,
       jobId: race.job.id,
       businessName: businessA.name,

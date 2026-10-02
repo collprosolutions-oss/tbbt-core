@@ -25,7 +25,9 @@ const {
   shouldShowPayDeposit,
   startStripeConnectOnboarding,
 } = await import("@/lib/payments/service");
-const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
+const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
+  "@/lib/complete-job-invoice"
+);
 const {
   invoiceDocumentPlainText,
   loadInvoiceDocumentForBusiness,
@@ -787,12 +789,18 @@ try {
       projectToken: randomUUID(),
     },
   });
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.business.id,
     jobId: job.id,
     businessName: businessA.business.name,
   });
-  check("complete job created and sent the invoice", completed.ok === true && completed.invoiceId);
+  check("complete job created a draft invoice", completed.ok === true && completed.invoiceId && completed.invoiceStatus === "DRAFT");
+  const sentAfterComplete = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.business.id,
+    invoiceId: completed.invoiceId,
+    businessName: businessA.business.name,
+  });
+  check("explicit send after complete is SENT", sentAfterComplete.ok === true && sentAfterComplete.status === "SENT");
   const invoiceDoc = await loadInvoiceDocumentForBusiness(
     completed.invoiceId,
     businessA.business.id,

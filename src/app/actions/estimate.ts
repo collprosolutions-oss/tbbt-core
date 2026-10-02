@@ -78,6 +78,7 @@ import { describeSavedBusinessDefaults } from "@/lib/estimating-defaults";
 import { resolveDraftEstimatingWorkspace } from "@/lib/estimate-calculators/estimating-registry";
 import { parseWorkAreaIntake } from "@/lib/work-area-intake";
 import { stampDraftEstimateTerms } from "@/lib/estimate-terms/stamp";
+import { estimateSendTestHooks } from "@/lib/estimate-send-test-hooks";
 import { normalizeCustomerPolicies } from "@/lib/estimate-policies";
 import { toStoredIntakeMeasurement } from "@/lib/intake-quote-handoff";
 import { draftEstimateSendError } from "@/lib/request-estimate-draft";
@@ -1388,10 +1389,6 @@ export async function clearDraftEstimate(
   revalidatePath(`/estimates/${estimate.id}`);
   return {};
 }
-
-export const estimateSendTestHooks: {
-  afterEstimateLock?: (input: { estimateId: string }) => Promise<void> | void;
-} = {};
 
 export async function sendEstimate(
   _prev: EstimateActionState,

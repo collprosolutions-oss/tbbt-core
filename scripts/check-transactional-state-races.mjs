@@ -217,9 +217,8 @@ await (async () => {
     const { updateDraftEstimateLineIncludedWork, EstimateLineError } = await import(
       "@/lib/estimate-line-ops"
     );
-    const { sendEstimate, estimateSendTestHooks, createEstimate } = await import(
-      "@/app/actions/estimate"
-    );
+    const { sendEstimate, createEstimate } = await import("@/app/actions/estimate");
+    const { estimateSendTestHooks } = await import("@/lib/estimate-send-test-hooks");
     const { createJobFromEstimate } = await import("@/app/actions/job");
     const { applyParsedSaasBillingEvent, saasBillingTestHooks } = await import(
       "@/lib/saas-billing/ops"

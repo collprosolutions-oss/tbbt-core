@@ -281,7 +281,9 @@ try {
     "@/app/actions/change-order"
   );
   const { approveChangeOrder } = await import("@/app/actions/public-change-order");
-  const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
+  const { completeJobAndDraftInvoice, sendDraftInvoiceIfNeeded } = await import(
+    "@/lib/complete-job-invoice"
+  );
   const { createInvoiceFromJob, markInvoicePaid } = await import("@/app/actions/invoice");
   const { persistDraftInvoiceFromCompletedJob } = await import("@/lib/invoice-carry-forward");
   const {
@@ -986,13 +988,25 @@ try {
   const foreignComplete = await completeNativeAssignedJob(prisma, ownerBNative.access, jobId);
   check("Tenant B cannot complete tenant A's job", foreignComplete.ok === false);
 
-  const completed = await completeJobAndSendInvoice(prisma, {
+  const completed = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId,
     businessName: businessA.name,
     actorMembershipId: ownerMem.id,
   });
-  demand("OWNER complete created and sent the original invoice", completed.ok === true && completed.invoiceCreated === true);
+  demand(
+    "OWNER complete created a draft original invoice",
+    completed.ok === true &&
+      completed.invoiceCreated === true &&
+      completed.invoiceStatus === "DRAFT" &&
+      completed.newlySent === false,
+  );
+  const sentOriginal = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: completed.invoiceId,
+    businessName: businessA.name,
+  });
+  demand("OWNER explicitly sent the original invoice", sentOriginal.ok === true && sentOriginal.newlySent === true);
   const originalInvoice = await prisma.invoice.findUnique({ where: { id: completed.invoiceId } });
   const fieldChangeOrder = await prisma.changeOrder.findUnique({ where: { id: fieldChangeOrderId } });
   const approvedEstimate = await prisma.estimate.findUnique({ where: { id: estimateCreate.id } });
@@ -1010,7 +1024,7 @@ try {
       closeMoney(fieldChangeOrder.total, PINNED_FIELD_CHANGE_ORDER_TOTAL) &&
       closeMoney(originalInvoice.total, PINNED_ORIGINAL_INVOICE_TOTAL),
   );
-  const replayComplete = await completeJobAndSendInvoice(prisma, {
+  const replayComplete = await completeJobAndDraftInvoice(prisma, {
     businessId: businessA.id,
     jobId,
     businessName: businessA.name,

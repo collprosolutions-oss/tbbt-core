@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AddFieldJobPhotoForm } from "@/components/field/add-field-job-photo-form";
 import { JobReassignmentRequestForm } from "@/components/field/job-reassignment-request-form";
 import { CompleteAssignedJobButton } from "@/components/field/complete-assigned-job-button";
+import { FIELD_COMPLETE_JOB_MESSAGE } from "@/lib/complete-job-copy";
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { ReportProblemForm } from "@/components/field/report-problem-form";
 import { RequestAdditionalWorkFieldForm } from "@/components/field/request-additional-work-field-form";
@@ -322,7 +323,7 @@ export default async function FieldJobPage({
         {isInProgress ? <CompleteAssignedJobButton jobId={job.id} /> : null}
         {isCompleted ? (
           <p className="rounded-lg border border-dashed p-3 text-center text-sm text-muted-foreground">
-            This job is complete.
+            {FIELD_COMPLETE_JOB_MESSAGE}
           </p>
         ) : null}
       </div>

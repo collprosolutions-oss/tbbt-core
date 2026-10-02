@@ -34,6 +34,7 @@ export {
   payInvoiceButtonLabel,
 } from "@/lib/payments/money";
 export { getPaymentProvider, stripeConnectAvailable } from "@/lib/payments/provider";
+export { getFakePaymentProvider } from "@/lib/payments/provider";
 export {
   applyVerifiedCheckoutPayment,
   STRIPE_CREDIT_MISMATCH_REASON,

@@ -41,8 +41,8 @@ function readString(formData: FormData, key: string) {
  * is idempotent and tenant-scoped.
  *
  * Approved estimate / change-order line items are copied as LineItem
- * snapshots. Recovery / manual create also sends the invoice (DRAFT → SENT)
- * so the owner is not left with a second send step after Complete Job.
+ * snapshots. Complete Job leaves a draft. Recovery / Today "Create & send"
+ * still sends (DRAFT → SENT) because that click is the explicit send.
  */
 export async function createInvoiceFromJob(
   jobId: string,

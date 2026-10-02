@@ -254,7 +254,7 @@ check(
     completeOpsSrc.includes("requireSaasOperatingEntitlement") &&
     completeOpsSrc.includes("exactActiveMembershipHeld") &&
     completeRouteSrc.includes("completeNativeAssignedJob") &&
-    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+    !completeOpsSrc.includes("completeJobAndDraftInvoice"),
 );
 check(
   "Exact active membership is rechecked after the Job lock on start, complete, and stop",
@@ -283,7 +283,7 @@ check(
     timeCardOpsSrc.includes("evaluateStartJob") &&
     timeCardOpsSrc.includes("JOB_START_TIME_STARTED_REASON") &&
     startRouteSrc.includes("startNativeAssignedJob") &&
-    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+    !completeOpsSrc.includes("completeJobAndDraftInvoice"),
 );
 check(
   "Stop job time reuses assigned-job scope and the canonical time-card write",
@@ -295,7 +295,7 @@ check(
     timeCardOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
     timeCardOpsSrc.includes("JOB_STOP_TIME_CLOSED_REASON") &&
     stopTimeRouteSrc.includes("stopNativeAssignedJobRunningTime") &&
-    !completeOpsSrc.includes("completeJobAndSendInvoice"),
+    !completeOpsSrc.includes("completeJobAndDraftInvoice"),
 );
 check(
   "nativeCompleteAction follows evaluateCompleteJob",

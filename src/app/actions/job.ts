@@ -20,7 +20,10 @@ import {
 } from "@/lib/appointment-data";
 import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
-import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
+import {
+  completeJobAndDraftInvoice,
+  ownerCompleteJobSuccessState,
+} from "@/lib/complete-job-invoice";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { evaluateStartJob } from "@/lib/job-lifecycle";
 import {
@@ -84,6 +87,8 @@ export type JobActionState = {
   conflicts?: ScheduleConflictFact[];
   notificationWarning?: string;
   message?: string;
+  invoiceId?: string;
+  invoiceHref?: string;
 };
 
 async function ownedScheduleConflictFacts(
@@ -761,7 +766,7 @@ export async function markJobComplete(
     }),
   );
 
-  const result = await completeJobAndSendInvoice(prisma, {
+  const result = await completeJobAndDraftInvoice(prisma, {
     businessId: access.businessId,
     jobId: job.id,
     businessName: access.workspace.business.name,
@@ -783,7 +788,10 @@ export async function markJobComplete(
   revalidatePath("/invoices");
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath(`/invoices/${result.invoiceId}`);
-  return result.warning ? { warning: result.warning } : {};
+  return {
+    ...ownerCompleteJobSuccessState(result),
+    warning: result.warning,
+  };
 }
 
 /**

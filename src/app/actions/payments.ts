@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { requireBusinessAccess } from "@/lib/access";
 import {
+  isFakePaymentsAdapterEnabled,
   PaymentError,
   startStripeConnectOnboarding,
 } from "@/lib/payments";
@@ -23,6 +24,9 @@ export async function startStripeConnect(
   try {
     const access = await requireBusinessAccess();
     const result = await startStripeConnectOnboarding(prisma, access);
+    if (isFakePaymentsAdapterEnabled()) {
+      redirect("/dev/fake-connect");
+    }
     redirect(result.url);
   } catch (error) {
     if (error instanceof PaymentError) {

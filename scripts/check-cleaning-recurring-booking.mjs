@@ -248,7 +248,7 @@ check(
     opsSrc.includes("lockTenantOwnedJob") &&
     !opsSrc.includes("invoice.create") &&
     !opsSrc.includes("persistDraftInvoice") &&
-    !opsSrc.includes("completeJobAndSendInvoice") &&
+    !opsSrc.includes("completeJobAndDraftInvoice") &&
     !opsSrc.includes("notifyCustomer") &&
     !opsSrc.includes("emitAndProcessBusinessEvent") &&
     !actionSrc.includes("invoice.create") &&

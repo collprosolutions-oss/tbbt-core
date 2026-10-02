@@ -195,7 +195,7 @@ check(
   "Write path does not invoice, schedule, or message",
   !opsSrc.includes("invoice.create") &&
     !opsSrc.includes("persistDraftInvoice") &&
-    !opsSrc.includes("completeJobAndSendInvoice") &&
+    !opsSrc.includes("completeJobAndDraftInvoice") &&
     !opsSrc.includes("tx.job.create") &&
     !opsSrc.includes("payment.create") &&
     !opsSrc.includes("notifyCustomer") &&

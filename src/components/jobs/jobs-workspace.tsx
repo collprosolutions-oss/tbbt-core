@@ -6,6 +6,8 @@ import { Camera, ExternalLink, FileText, Mail, MapPin, Phone, Receipt, UserCog }
 import { AssignJobMemberForm, type EligibleMember } from "@/components/jobs/assign-job-member-form";
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
+import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
+import { workOrderCardCompletedInvoiceMessage } from "@/lib/complete-job-copy";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
@@ -365,6 +367,7 @@ function JobDetailsPanel({
   const customerName = job.customer?.name ?? "Customer";
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
+  const draftInvoicePrompt = workOrderCardCompletedInvoiceMessage(job.invoice?.status);
   const isScheduled = Boolean(job.scheduledAtLabel);
 
   return (
@@ -539,12 +542,22 @@ function JobDetailsPanel({
         {isInProgress ? <MarkJobCompleteButton jobId={job.id} /> : null}
         {isCompleted ? (
           job.invoice ? (
-            <Button asChild>
-              <Link href={`/invoices/${job.invoice.id}`}>
-                <Receipt className="size-4" />
-                Open Invoice
-              </Link>
-            </Button>
+            <div className="flex flex-col gap-2">
+              {draftInvoicePrompt ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    {draftInvoicePrompt}
+                  </p>
+                  <MarkInvoiceSentButton invoiceId={job.invoice.id} />
+                </>
+              ) : null}
+              <Button asChild>
+                <Link href={`/invoices/${job.invoice.id}`}>
+                  <Receipt className="size-4" />
+                  Open Invoice
+                </Link>
+              </Button>
+            </div>
           ) : (
             <CreateInvoiceButton jobId={job.id} />
           )

@@ -1,15 +1,21 @@
 /**
- * Owner Complete Job → create/reuse invoice → send to customer.
+ * Owner Complete Job → create/reuse a draft invoice.
  *
- * Existing invoice "send" is the DRAFT → SENT status change
- * (src/app/actions/invoice.ts). SENT makes the invoice visible on the
- * Customer Project Portal. Email is attempted once on that first
- * transition when mail is configured; it is never required for SENT.
+ * Complete Job does not send. Existing invoice "send" is the explicit
+ * DRAFT → SENT change (src/app/actions/invoice.ts / markInvoiceSent).
+ * SENT makes the invoice visible on the Customer Project Portal. Email
+ * is attempted once on that first transition when mail is configured;
+ * it is never required for SENT.
  *
  * Field completeAssignedJob() does not call this — owner financial
  * control stays on the Work Order Complete Job action.
  */
 import type { PrismaClient } from "@prisma/client";
+import {
+  COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  INVOICE_ALREADY_SENT_MESSAGE,
+  completeJobDraftInvoiceHref,
+} from "@/lib/complete-job-copy";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
 import { completeJobWithRunningTimeSafety } from "@/lib/time-card-ops";
 import {
@@ -53,6 +59,8 @@ export type SendDraftInvoiceResult =
       status: string;
       newlySent: false;
       customerNotified: false;
+      alreadySent?: true;
+      message?: string;
     }
   | {
       ok: true;
@@ -62,6 +70,25 @@ export type SendDraftInvoiceResult =
       warning?: string;
     }
   | { ok: false; error: string; status?: string };
+
+export type OwnerCompleteJobSuccessState = {
+  message: string;
+  invoiceId: string;
+  invoiceHref: string;
+};
+
+export function ownerCompleteJobSuccessState(
+  result: Extract<CompleteJobInvoiceResult, { ok: true }>,
+): OwnerCompleteJobSuccessState {
+  return {
+    message:
+      result.invoiceStatus === "DRAFT"
+        ? COMPLETE_JOB_DRAFT_INVOICE_MESSAGE
+        : "Job completed.",
+    invoiceId: result.invoiceId,
+    invoiceHref: completeJobDraftInvoiceHref(result.invoiceId),
+  };
+}
 
 /** A customer notification is only attempted on a fresh DRAFT → SENT flip. */
 export function invoiceSendShouldNotify(status: string): boolean {
@@ -111,6 +138,8 @@ export async function sendDraftInvoiceIfNeeded(
       status: invoice.status,
       newlySent: false,
       customerNotified: false,
+      alreadySent: true,
+      message: INVOICE_ALREADY_SENT_MESSAGE,
     };
   }
 
@@ -128,10 +157,24 @@ export async function sendDraftInvoiceIfNeeded(
   });
 
   if (updated.count !== 1) {
+    const raced = await db.invoice.findFirst({
+      where: { id: invoice.id, businessId: input.businessId },
+      select: { status: true },
+    });
+    if (raced?.status === "SENT" || raced?.status === "PAID") {
+      return {
+        ok: true,
+        status: raced.status,
+        newlySent: false,
+        customerNotified: false,
+        alreadySent: true,
+        message: INVOICE_ALREADY_SENT_MESSAGE,
+      };
+    }
     return {
       ok: false,
       error: "The invoice was created but could not be sent.",
-      status: "DRAFT",
+      status: raced?.status ?? "DRAFT",
     };
   }
 
@@ -248,7 +291,7 @@ async function notifyCustomerInvoiceReady(
   return { sent: true };
 }
 
-export async function completeJobAndSendInvoice(
+export async function completeJobAndDraftInvoice(
   db: PrismaClient,
   input: {
     businessId: string;
@@ -280,20 +323,10 @@ export async function completeJobAndSendInvoice(
     };
   }
 
-  const sent = await sendDraftInvoiceIfNeeded(db, {
-    businessId: input.businessId,
-    invoiceId: persist.invoiceId,
-    businessName: input.businessName,
+  const invoice = await db.invoice.findFirst({
+    where: { id: persist.invoiceId, businessId: input.businessId },
+    select: { status: true },
   });
-
-  if (!sent.ok) {
-    return {
-      ok: false,
-      error: sent.error,
-      jobCompleted: true,
-      invoiceId: persist.invoiceId,
-    };
-  }
 
   await emitAndProcessBusinessEvent(db, {
     businessId: input.businessId,
@@ -319,16 +352,6 @@ export async function completeJobAndSendInvoice(
     payload: { customerId: safety.customerId, businessName: input.businessName },
     idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${input.jobId}`,
   });
-  if (sent.newlySent) {
-    await emitAndProcessBusinessEvent(db, {
-      businessId: input.businessId,
-      type: "INVOICE_SENT",
-      subjectType: "INVOICE",
-      subjectId: persist.invoiceId,
-      payload: { customerId: safety.customerId, businessName: input.businessName },
-      idempotencyKey: `INVOICE_SENT:${persist.invoiceId}`,
-    });
-  }
 
   return {
     ok: true,
@@ -336,9 +359,8 @@ export async function completeJobAndSendInvoice(
     invoiceId: persist.invoiceId,
     invoiceCreated: persist.reused === false,
     invoiceReused: persist.reused === true,
-    invoiceStatus: sent.status,
-    newlySent: sent.newlySent,
-    customerNotified: sent.customerNotified,
-    warning: sent.newlySent ? sent.warning : undefined,
+    invoiceStatus: invoice?.status ?? "DRAFT",
+    newlySent: false,
+    customerNotified: false,
   };
 }

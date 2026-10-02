@@ -34,6 +34,9 @@ export function CompleteAssignedJobButton({ jobId }: { jobId: string }) {
       {state.error ? (
         <p className="mt-2 text-sm text-destructive">{state.error}</p>
       ) : null}
+      {state.message ? (
+        <p className="mt-2 text-sm text-muted-foreground">{state.message}</p>
+      ) : null}
     </form>
   );
 }

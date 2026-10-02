@@ -16,6 +16,7 @@
  * the spec.
  */
 import { revalidatePath } from "next/cache";
+import { FIELD_COMPLETE_JOB_MESSAGE } from "@/lib/complete-job-copy";
 import { findAssignedJob } from "@/lib/field-access";
 import {
   FIELD_JOB_NOT_ASSIGNED,
@@ -137,7 +138,8 @@ export async function completeAssignedJob(
   // Deliberately ONLY flips Job.status (after closing RUNNING JOB time).
   // Does not create/send an Invoice, approve any Change Order, or touch
   // payment -- owner financial control stays on Work Order Complete Job
-  // (markJobComplete → completeJobAndSendInvoice).
+  // (markJobComplete → completeJobAndDraftInvoice leaves a draft; send is
+  // an explicit owner action). Field complete does not draft or send.
   const result = await completeJobWithRunningTimeSafety(prisma, {
     businessId: job.businessId,
     jobId: job.id,
@@ -159,7 +161,7 @@ export async function completeAssignedJob(
   }
 
   revalidateFieldJob(job.id);
-  return {};
+  return { message: FIELD_COMPLETE_JOB_MESSAGE };
 }
 
 const STORAGE_NOT_CONFIGURED_ERROR =

@@ -2,7 +2,10 @@ import {
   isFakePaymentsAdapterEnabled,
   isStripePlatformConfigured,
 } from "@/lib/payments/config";
-import { createFakePaymentProvider } from "@/lib/payments/fake";
+import {
+  createFakePaymentProvider,
+  type FakePaymentProvider,
+} from "@/lib/payments/fake";
 import { createStripePaymentProvider } from "@/lib/payments/stripe-adapter";
 import type { PaymentProvider } from "@/lib/payments/types";
 
@@ -15,6 +18,14 @@ export function getPaymentProvider(): PaymentProvider {
       : createStripePaymentProvider();
   }
   return cached;
+}
+
+/** Local/script fake adapter only. Null when Stripe is the live provider. */
+export function getFakePaymentProvider(): FakePaymentProvider | null {
+  if (!isFakePaymentsAdapterEnabled()) {
+    return null;
+  }
+  return getPaymentProvider() as FakePaymentProvider;
 }
 
 export function stripeConnectAvailable(): boolean {
