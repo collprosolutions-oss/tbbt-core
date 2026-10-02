@@ -1,15 +1,25 @@
+const testCookies = new Map();
+
+export function setTestCookies(entries) {
+  testCookies.clear();
+  for (const [name, value] of Object.entries(entries ?? {})) {
+    if (value != null) testCookies.set(name, String(value));
+  }
+}
+
 export async function cookies() {
   return {
-    get() {
-      return undefined;
+    get(name) {
+      const value = testCookies.get(name);
+      return value == null ? undefined : { value };
     },
     set() {},
     delete() {},
-    has() {
-      return false;
+    has(name) {
+      return testCookies.has(name);
     },
     getAll() {
-      return [];
+      return [...testCookies.entries()].map(([name, value]) => ({ name, value }));
     },
   };
 }

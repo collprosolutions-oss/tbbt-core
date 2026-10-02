@@ -7,6 +7,7 @@ import type {
   NativeJobPhotoStage,
   NativeJobProblemKind,
   NativePickupException,
+  NativePushPreferencePayload,
   NativeSessionPayload,
   NativeTimeCardsPayload,
   NativeTodayPayload,
@@ -128,6 +129,55 @@ export async function signOutNative(token: string) {
     method: "DELETE",
     headers: authHeaders(token),
   }).catch(() => undefined);
+}
+
+export const NATIVE_PUSH_DEVICE_TOKEN_HEADER = "x-tbbt-device-token";
+
+export async function loadNativePushPreference(
+  token: string,
+  deviceToken?: string,
+): Promise<NativePushPreferencePayload | NativeApiError> {
+  const headers = authHeaders(token);
+  if (deviceToken) {
+    headers[NATIVE_PUSH_DEVICE_TOKEN_HEADER] = deviceToken;
+  }
+  return requestNativeJson<NativePushPreferencePayload>(
+    "/api/native/v1/push-devices",
+    {
+      headers,
+    },
+    "Job alerts are not available.",
+  );
+}
+
+export async function registerNativePushDevice(
+  token: string,
+  input: { token: string; platform: "ios" | "android" | "expo" | "test"; optedIn: boolean },
+): Promise<NativePushPreferencePayload | NativeApiError> {
+  return requestNativeJson<NativePushPreferencePayload>(
+    "/api/native/v1/push-devices",
+    {
+      method: "POST",
+      headers: jsonHeaders(token),
+      body: JSON.stringify(input),
+    },
+    "Job alerts could not be updated.",
+  );
+}
+
+export async function revokeNativePushDevice(
+  token: string,
+  deviceToken: string,
+): Promise<NativePushPreferencePayload | NativeApiError> {
+  return requestNativeJson<NativePushPreferencePayload>(
+    "/api/native/v1/push-devices",
+    {
+      method: "DELETE",
+      headers: jsonHeaders(token),
+      body: JSON.stringify({ token: deviceToken }),
+    },
+    "Job alerts could not be updated.",
+  );
 }
 
 export async function loadNativeToday(token: string): Promise<NativeTodayPayload | NativeApiError> {

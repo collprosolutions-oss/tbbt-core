@@ -281,6 +281,15 @@ export async function completePasswordResetOp(
       // session (including a stolen cookie) must die in the same
       // transaction. The server action may create one fresh session after
       // this returns. A failed claim never reaches this delete.
+      const sessions = await tx.session.findMany({
+        where: { userId: resetToken.userId },
+        select: { id: true },
+      });
+      const { revokeNativePushDevicesForSessions } = await import("@/lib/native-push/devices");
+      await revokeNativePushDevicesForSessions(
+        tx,
+        sessions.map((row) => row.id),
+      );
       await tx.session.deleteMany({
         where: { userId: resetToken.userId },
       });

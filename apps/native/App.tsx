@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { isApiError, loadNativeSession, signOutNative } from "./src/api";
+import { isApiError, loadNativeSession, revokeNativePushDevice, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { TimeCardsScreen } from "./src/screens/TimeCardsScreen";
@@ -16,7 +16,12 @@ import {
   applyTimeCardDraftAccount,
   clearAllTimeCardDrafts,
 } from "./src/time-card-drafts";
-import { clearSessionToken, readSessionToken } from "./src/session";
+import {
+  clearNativePushDeviceToken,
+  clearSessionToken,
+  readNativePushDeviceToken,
+  readSessionToken,
+} from "./src/session";
 import type { NativeViewer, NativeWorkspace } from "./src/types";
 
 type SessionState = {
@@ -86,8 +91,13 @@ export default function App() {
 
   async function signOut() {
     if (session) {
-      await signOutNative(session.token);
+      const deviceToken = await readNativePushDeviceToken();
+      if (deviceToken) {
+        await revokeNativePushDevice(session.token, deviceToken).catch(() => undefined);
+      }
+      await signOutNative(session.token).catch(() => undefined);
     }
+    await clearNativePushDeviceToken();
     await clearAllChecklistDrafts(secureChecklistDraftStorage);
     await clearAllTimeCardDrafts(secureTimeCardDraftStorage);
     await expireSession();

@@ -12,6 +12,7 @@
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { lockTenantOwnedMemberships } from "@/lib/exact-active-membership";
+import { revokeActiveNativePushDevicesForMembership } from "@/lib/native-push/devices";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
   MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
@@ -79,6 +80,10 @@ export async function writeTeamMemberActive(
             membershipId: input.membershipId,
             actorMembershipId: input.actorMembershipId,
             reason: MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
+          });
+          await revokeActiveNativePushDevicesForMembership(tx, {
+            businessId: input.businessId,
+            membershipId: input.membershipId,
           });
         }
         await tx.membership.update({

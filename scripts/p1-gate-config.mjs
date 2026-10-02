@@ -151,6 +151,7 @@ export const P1_DOMAINS = [
       "scripts/check-native-field-checklist.mjs",
       "scripts/check-native-field-pickup.mjs",
       "scripts/check-team-onboarding.mjs",
+      "scripts/check-native-push-alerts.mjs",
     ],
     pending: [
       {

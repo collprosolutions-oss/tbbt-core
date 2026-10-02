@@ -9,6 +9,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
+  enqueueNativePushNotify,
+  notifyHandymanJobRescheduled,
+} from "@/lib/native-push/notify";
+import {
   isMaterialAppointmentChange,
   nextAppointmentProposalId,
 } from "@/lib/appointment-confirmation";
@@ -133,6 +137,9 @@ export type ChangedOwnerDayRouteAppointment = {
   previousScheduledAt: Date;
   pickupDurationMinutes: number | null;
   arrivalWindowMinutes: number | null;
+  materialChange: boolean;
+  appointmentProposalId: number;
+  assignedMembershipId: string | null;
 };
 
 const JOB_SELECT = {
@@ -287,7 +294,7 @@ export async function changeOwnerDayRouteAppointment(
 
     await dayRouteAppointmentTestHooks.afterDayRouteAppointmentRead?.(job.id);
 
-    return await db.$transaction(
+    const changed = await db.$transaction(
       async (tx) => {
         await lockBusinessScheduleReservation(tx, access.businessId);
         await tx.$executeRaw`
@@ -413,10 +420,25 @@ export async function changeOwnerDayRouteAppointment(
           previousScheduledAt: fresh.scheduledAt,
           pickupDurationMinutes: evaluation.pickupDurationMinutes,
           arrivalWindowMinutes: persistedArrivalWindowMinutes,
+          materialChange,
+          appointmentProposalId: proposalId,
+          assignedMembershipId: fresh.assignedMembershipId,
         };
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
+    if (changed.materialChange && changed.previousScheduledAt && changed.assignedMembershipId) {
+      enqueueNativePushNotify(() =>
+        notifyHandymanJobRescheduled(db, {
+          businessId: changed.businessId,
+          jobId: changed.jobId,
+          membershipId: changed.assignedMembershipId,
+          actorMembershipId: access.workspace.membership.id,
+          proposalId: changed.appointmentProposalId,
+        }),
+      );
+    }
+    return changed;
   } catch (error) {
     throwIfAppointmentSchemaMissing(error);
   }

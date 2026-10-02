@@ -9,11 +9,21 @@ import {
   Text,
   View,
 } from "react-native";
-import { isApiError, isLostAssignment, isSessionExpired, loadNativeToday } from "../api";
+import {
+  isApiError,
+  isLostAssignment,
+  isSessionExpired,
+  loadNativePushPreference,
+  loadNativeToday,
+  registerNativePushDevice,
+  revokeNativePushDevice,
+} from "../api";
+import { readOrCreateNativePushDeviceToken } from "../session";
 import { applyLostAssignment, nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
 import type {
   NativeAssignedStopsMaps,
   NativeJobSummary,
+  NativePushPreferencePayload,
   NativeTodayPayload,
   NativeViewer,
   NativeWorkspace,
@@ -67,6 +77,90 @@ function AssignedStopsMapsCard({ stops }: { stops: NativeAssignedStopsMaps }) {
           ))}
         </View>
       ) : null}
+    </View>
+  );
+}
+
+function JobAlertsCard({
+  token,
+  onSessionExpired,
+}: {
+  token: string;
+  onSessionExpired: () => void;
+}) {
+  const [preference, setPreference] = useState<NativePushPreferencePayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const deviceToken = await readOrCreateNativePushDeviceToken();
+    const result = await loadNativePushPreference(token, deviceToken);
+    if (isApiError(result)) {
+      if (isSessionExpired(result)) {
+        onSessionExpired();
+        return;
+      }
+      setError(result.error);
+      return;
+    }
+    setPreference(result);
+    setError(null);
+  }, [onSessionExpired, token]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function toggleAlerts() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const deviceToken = await readOrCreateNativePushDeviceToken();
+      const result = preference?.thisDeviceOptedIn
+        ? await revokeNativePushDevice(token, deviceToken)
+        : await registerNativePushDevice(token, {
+            token: deviceToken,
+            platform: "expo",
+            optedIn: true,
+          });
+      if (isApiError(result)) {
+        if (isSessionExpired(result)) {
+          onSessionExpired();
+          return;
+        }
+        setError(result.error);
+        return;
+      }
+      setPreference(result);
+      setError(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={styles.alerts}>
+      <Text style={styles.groupTitle}>Job alerts</Text>
+      <Text style={styles.copy}>
+        {preference?.disclaimer ??
+          "Job alerts are optional. A notice is informational only — it never starts your time or accepts an appointment."}
+      </Text>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <Pressable
+        disabled={busy}
+        onPress={() => {
+          void toggleAlerts();
+        }}
+        style={styles.timeCards}
+      >
+        <Text style={styles.timeCardsLabel}>
+          {busy
+            ? "Saving…"
+            : preference?.thisDeviceOptedIn
+              ? "Turn off job alerts"
+              : "Turn on job alerts"}
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -170,6 +264,7 @@ export function TodayScreen({
       <Pressable onPress={onOpenTimeCards} style={styles.timeCards}>
         <Text style={styles.timeCardsLabel}>Time cards</Text>
       </Pressable>
+      <JobAlertsCard onSessionExpired={onSessionExpired} token={token} />
       {error ? (
         <>
           <Text style={styles.error}>{error}</Text>
@@ -297,6 +392,12 @@ const styles = StyleSheet.create({
   excluded: {
     gap: 4,
     marginTop: 4,
+  },
+  alerts: {
+    backgroundColor: "#1f2937",
+    borderRadius: 16,
+    padding: 16,
+    gap: 8,
   },
   timeCards: {
     alignSelf: "flex-start",

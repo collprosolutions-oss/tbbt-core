@@ -7,7 +7,8 @@
  * and before assignedMembershipId changes. Reassignment closes the
  * previous worker's RUNNING JOB time, then persistLaneArrivalWindows
  * re-reads under the same reservation. This path never sends a customer
- * message and never changes scheduledAt.
+ * message and never changes scheduledAt. After commit, an opted-in
+ * native worker may receive an informational assignment alert.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { lockTenantOwnedMemberships } from "@/lib/exact-active-membership";
@@ -21,6 +22,7 @@ import {
   stopRunningAssignedJobTimeInTransaction,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
+import { notifyHandymanJobAssigned } from "@/lib/native-push/notify";
 import {
   loadSchedulingPolicy,
   loadWorkforceTimeZone,
@@ -127,6 +129,15 @@ export async function writeAssignedMembershipAndLaneWindows(
     ) => Promise<void> | void;
   },
 ): Promise<AssignmentWriteResult | void> {
+  const committed: {
+    previousMembershipId: string | null;
+    nextMembershipId: string | null;
+    wrote: boolean;
+  } = {
+    previousMembershipId: null,
+    nextMembershipId: null,
+    wrote: false,
+  };
   try {
     await db.$transaction(
       async (tx) => {
@@ -148,6 +159,9 @@ export async function writeAssignedMembershipAndLaneWindows(
           nextAssignedMembershipId: input.nextAssignedMembershipId,
           actorMembershipId: input.actorMembershipId,
         });
+        committed.previousMembershipId = lockedJob.assignedMembershipId;
+        committed.nextMembershipId = input.nextAssignedMembershipId;
+        committed.wrote = true;
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
@@ -158,6 +172,19 @@ export async function writeAssignedMembershipAndLaneWindows(
       };
     }
     throw error;
+  }
+  if (
+    committed.wrote &&
+    committed.nextMembershipId &&
+    committed.previousMembershipId !== committed.nextMembershipId
+  ) {
+    await notifyHandymanJobAssigned(db, {
+      businessId: input.businessId,
+      jobId: input.job.id,
+      previousMembershipId: committed.previousMembershipId,
+      nextMembershipId: committed.nextMembershipId,
+      actorMembershipId: input.actorMembershipId,
+    }).catch(() => undefined);
   }
 }
 

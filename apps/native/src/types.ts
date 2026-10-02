@@ -293,3 +293,21 @@ export type NativeSessionPayload = {
   viewer: NativeViewer;
   workspace: NativeWorkspace;
 };
+
+export type NativePushDeviceSummary = {
+  id: string;
+  platform: string;
+  tokenLast4: string;
+  optedIn: boolean;
+  revokedAt: string | null;
+};
+
+export type NativePushPreferencePayload = {
+  optedIn: boolean;
+  thisDeviceOptedIn: boolean;
+  informational: true;
+  startsTime: false;
+  acceptsAppointment: false;
+  disclaimer: string;
+  devices: NativePushDeviceSummary[];
+};

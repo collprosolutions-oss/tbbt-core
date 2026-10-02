@@ -959,7 +959,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <PreferenceSettingsForm
           values={snapshot.preferences}
           canEdit={canEditPreferences}
-          disclaimer="These are owner/admin preferences only. TBBT does not run a notification delivery engine in this build and does not poll for events."
+          disclaimer="These are owner/admin preferences only. They do not send email, SMS, or native push, and TBBT does not poll for events. Worker assignment alerts are opted in on the field app and never start time or accept an appointment."
           fields={[
             { key: "notifyEstimateEvents", label: "Estimate events", help: "Record that estimate activity should be reviewed." },
             { key: "notifyScheduleEvents", label: "Schedule events", help: "Record that schedule activity should be reviewed." },
