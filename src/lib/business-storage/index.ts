@@ -52,6 +52,7 @@ export {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   STORAGE_KEY_FOLDERS,
   STORAGE_PENDING_TTL_MS,
+  UNATTACHED_REQUEST_PHOTO_TTL_MS,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   STORED_ASSET_CATEGORIES,
@@ -108,10 +109,12 @@ export {
   releaseUnpersistedJobPhoto,
 } from "@/lib/business-storage/field-job-photos";
 export {
+  MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
   PUBLIC_REQUEST_PHOTO_PURPOSE,
   abortPublicRequestPhoto,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  lockStoredAssetRowForUpdate,
   putPublicRequestPhotoFromBytes,
   releaseExpiredUnattachedPublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,

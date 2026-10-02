@@ -9,17 +9,52 @@ import {
 } from "@/lib/business-storage/service";
 import { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-rules";
 import { privateAssetPath } from "@/lib/business-storage/keys";
-import { STORAGE_PENDING_TTL_MS, StorageError } from "@/lib/business-storage/types";
+import {
+  UNATTACHED_REQUEST_PHOTO_TTL_MS,
+  StorageError,
+} from "@/lib/business-storage/types";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
 
 export { inspectRequestPhotoUpload, requestPhotoMaxBytesLabel } from "@/lib/business-storage/request-photo-rules";
+export { UNATTACHED_REQUEST_PHOTO_TTL_MS };
 
 export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
+/** Bound the public form's photoAssetIds list before any StoredAsset lookup. */
+export const MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP = 50;
 const NOT_PRIVATE_REQUEST_PHOTO = "That photo is not a private request photo.";
 const REQUEST_PHOTO_CANNOT_BE_PUBLISHED = "Request photos cannot be published.";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+type AssetLockClient = Pick<Prisma.TransactionClient, "$queryRaw">;
+
+type LockedStoredAssetRow = {
+  id: string;
+  status: string;
+  purpose: string | null;
+  category: string;
+  visibility: string;
+  fileSizeBytes: number;
+  storageAccountId: string;
+  storageKey: string;
+};
+
+export async function lockStoredAssetRowForUpdate(
+  tx: AssetLockClient,
+  businessId: string,
+  assetId: string,
+): Promise<LockedStoredAssetRow | null> {
+  const rows = await tx.$queryRaw<LockedStoredAssetRow[]>`
+    SELECT id, status, purpose, category, visibility,
+           "fileSizeBytes", "storageAccountId", "storageKey"
+    FROM "StoredAsset"
+    WHERE id = ${assetId}
+      AND "businessId" = ${businessId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
 
 export type PublicRequestFallbackPhotoFile = {
   name: string;
@@ -39,22 +74,27 @@ async function claimUnattachedRequestPhotoInTx(
   assetId: string,
   now: Date,
 ) {
+  const asset = await lockStoredAssetRowForUpdate(tx, businessId, assetId);
+  if (
+    !asset ||
+    asset.status !== "READY" ||
+    asset.purpose !== PUBLIC_REQUEST_PHOTO_PURPOSE ||
+    asset.category !== "CUSTOMER_PHOTO" ||
+    asset.visibility !== "PRIVATE"
+  ) {
+    return null;
+  }
+  const account = await tx.businessStorageAccount.findUnique({
+    where: { id: asset.storageAccountId },
+    select: { bucketName: true },
+  });
+  if (!account) return null;
   const referenced = await tx.serviceRequestPhoto.findFirst({
     where: { storedAssetId: assetId, businessId },
     select: { id: true },
   });
   if (referenced) return null;
-  const asset = await tx.storedAsset.findFirst({
-    where: {
-      id: assetId,
-      businessId,
-      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
-      category: "CUSTOMER_PHOTO",
-      visibility: "PRIVATE",
-    },
-    include: { storageAccount: true },
-  });
-  if (!asset || asset.status !== "READY") return null;
+  const fileSizeBytes = Number(asset.fileSizeBytes);
   const updated = await tx.storedAsset.updateMany({
     where: {
       id: asset.id,
@@ -65,14 +105,14 @@ async function claimUnattachedRequestPhotoInTx(
     data: { status: "FAILED", deletedAt: now, publicPath: null },
   });
   if (updated.count !== 1) return null;
-  if (asset.fileSizeBytes > 0) {
+  if (fileSizeBytes > 0) {
     await tx.businessStorageAccount.update({
       where: { id: asset.storageAccountId },
-      data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
+      data: { storageUsedBytes: { decrement: fileSizeBytes } },
     });
   }
   return {
-    bucket: asset.storageAccount.bucketName,
+    bucket: account.bucketName,
     storageKey: asset.storageKey,
   };
 }
@@ -173,7 +213,7 @@ async function stampUnattachedRequestPhotoExpiry(
       purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
       expiresAt: null,
     },
-    data: { expiresAt: new Date(now.getTime() + STORAGE_PENDING_TTL_MS) },
+    data: { expiresAt: new Date(now.getTime() + UNATTACHED_REQUEST_PHOTO_TTL_MS) },
   });
 }
 

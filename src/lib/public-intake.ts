@@ -3,6 +3,9 @@ import { parseLeadSource, PUBLIC_DEFAULT_LEAD_SOURCE } from "@/lib/lead-attribut
 import { qualifyServiceAddress, serviceAreaCities } from "@/lib/service-areas";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
+  MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
+  lockStoredAssetRowForUpdate,
   rememberAttachedPublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,
 } from "@/lib/business-storage/request-photos";
@@ -74,6 +77,15 @@ import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 import { claimPublicIntakeSubmission } from "@/lib/public-intake-submission";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
+export const PUBLIC_REQUEST_PHOTO_UNAVAILABLE =
+  "A selected photo is no longer available. Please re-add it and submit again.";
+
+class PublicRequestPhotoUnavailableError extends Error {
+  constructor() {
+    super(PUBLIC_REQUEST_PHOTO_UNAVAILABLE);
+    this.name = "PublicRequestPhotoUnavailableError";
+  }
+}
 
 /**
  * Test-only storage provider for leftover request-photo cleanup.
@@ -257,10 +269,11 @@ export type PublicIntakeDb = {
         businessId: string;
         category: string;
         visibility: string;
-        status: string;
+        status?: string;
+        purpose?: string;
       };
-      select: { id: true };
-    }) => Promise<Array<{ id: string }>>;
+      select: { id: true; status?: true };
+    }) => Promise<Array<{ id: string; status?: string }>>;
   };
   serviceRequest: {
     findFirst: (args: {
@@ -276,6 +289,7 @@ export type PublicIntakeDb = {
 };
 
 export type PublicIntakeTx = {
+  $queryRaw?: <T>(query: TemplateStringsArray, ...values: unknown[]) => Promise<T>;
   customer: {
     findFirst: (args: {
       where: { id: string; businessId: string };
@@ -736,9 +750,11 @@ async function createPublicServiceRequestInner(
     workAreaAnswers.push(checked.answer);
   }
 
-  const photoAssetIds = [
+  const submittedPhotoIds = [
     ...new Set((input.photoAssetIds ?? []).map((id) => id.trim()).filter(Boolean)),
   ];
+  const photoAssetIds = submittedPhotoIds.slice(0, MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP);
+  const overflowPhotoAssetIds = submittedPhotoIds.slice(MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP);
 
   const labels = requestedWorkLabels({
     items: parsed.tasks.map((task) =>
@@ -829,21 +845,26 @@ async function createPublicServiceRequestInner(
   const serviceIntent = serviceIntentFromFrequency(frequency);
   const recurrenceCadence = parseRecurrenceCadence(frequency);
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
-  const ownedPhotoIds =
+  const selectedOwnedPhotos =
     photoAssetIds.length > 0
-      ? (
-          await db.storedAsset.findMany({
-            where: {
-              id: { in: photoAssetIds },
-              businessId: business.id,
-              category: "CUSTOMER_PHOTO",
-              visibility: "PRIVATE",
-              status: "READY",
-            },
-            select: { id: true },
-          })
-        ).map((row) => row.id)
+      ? await db.storedAsset.findMany({
+          where: {
+            id: { in: photoAssetIds },
+            businessId: business.id,
+            category: "CUSTOMER_PHOTO",
+            visibility: "PRIVATE",
+            purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+          },
+          select: { id: true, status: true },
+        })
       : [];
+  if (selectedOwnedPhotos.some((row) => row.status !== "READY")) {
+    return { ok: false, error: PUBLIC_REQUEST_PHOTO_UNAVAILABLE };
+  }
+  const ownedReadyById = new Set(
+    selectedOwnedPhotos.filter((row) => row.status === "READY").map((row) => row.id),
+  );
+  const ownedPhotoIds = photoAssetIds.filter((id) => ownedReadyById.has(id));
 
   try {
     const written = await db.$transaction(async (tx) => {
@@ -1114,34 +1135,59 @@ async function createPublicServiceRequestInner(
         })),
       ].slice(0, MAX_INTAKE_PHOTOS);
 
+      const attachedAssetIds = photoRows
+        .map((row) => row.storedAssetId)
+        .filter((id): id is string => Boolean(id));
+      if (typeof tx.$queryRaw === "function") {
+        const rawTx = tx as Pick<Prisma.TransactionClient, "$queryRaw">;
+        for (const assetId of attachedAssetIds) {
+          const locked = await lockStoredAssetRowForUpdate(rawTx, business.id, assetId);
+          if (!locked || locked.status !== "READY") {
+            throw new PublicRequestPhotoUnavailableError();
+          }
+        }
+      }
+
       if (photoRows.length > 0) {
         await tx.serviceRequestPhoto.createMany({
           data: photoRows,
         });
       }
 
-      const attachedAssetIds = photoRows
-        .map((row) => row.storedAssetId)
-        .filter((id): id is string => Boolean(id));
       await rememberAttachedPublicRequestPhotos(tx, business.id, attachedAssetIds);
-      const leftoverAssetIds = ownedPhotoIds.filter((id) => !attachedAssetIds.includes(id));
+      const leftoverAssetIds = [
+        ...ownedPhotoIds.filter((id) => !attachedAssetIds.includes(id)),
+        ...overflowPhotoAssetIds,
+      ];
 
       return { requestId: request.id, leftoverAssetIds };
     });
 
-    if (written.leftoverAssetIds.length > 0) {
-      const leftoverDeps = leftoverRequestPhotoStorageDeps(db);
-      if (leftoverDeps) {
-        await releaseUnattachedPublicRequestPhotos(
-          leftoverDeps,
-          business.id,
-          written.leftoverAssetIds,
-        );
+    try {
+      if (written.leftoverAssetIds.length > 0) {
+        const leftoverDeps = leftoverRequestPhotoStorageDeps(db);
+        if (leftoverDeps) {
+          await releaseUnattachedPublicRequestPhotos(
+            leftoverDeps,
+            business.id,
+            written.leftoverAssetIds,
+          );
+        }
       }
+    } catch (error) {
+      console.error("Failed to release leftover public request photos after intake commit", {
+        businessId: business.id,
+        requestId: written.requestId,
+        leftoverAssetIds: written.leftoverAssetIds,
+        error,
+      });
     }
 
     return { ok: true, requestId: written.requestId };
   } catch (error) {
+    if (error instanceof PublicRequestPhotoUnavailableError) {
+      return { ok: false, error: PUBLIC_REQUEST_PHOTO_UNAVAILABLE };
+    }
     if (
       repeatVisitSourceJobId &&
       error instanceof Prisma.PrismaClientKnownRequestError &&

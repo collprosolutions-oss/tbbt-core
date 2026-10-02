@@ -13,6 +13,7 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   createPublicServiceRequest,
+  PUBLIC_REQUEST_PHOTO_UNAVAILABLE,
   publicIntakeSubmissionLockKey,
   publicIntakeTestHooks,
   publicIntakeStorageTestHooks,
@@ -32,6 +33,7 @@ const {
   attachRemainingPublicRequestFallbackPhotos,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
   putPublicRequestPhotoFromBytes,
   remainingIntakePhotoSlots,
   releaseExpiredUnattachedPublicRequestPhotos,
@@ -39,7 +41,12 @@ const {
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
 );
-const { StorageError, StorageQuotaError } = await import("@/lib/business-storage/types");
+const {
+  STORAGE_PENDING_TTL_MS,
+  StorageError,
+  StorageQuotaError,
+  UNATTACHED_REQUEST_PHOTO_TTL_MS,
+} = await import("@/lib/business-storage/types");
 const { MAX_INTAKE_PHOTOS } = await import("@/lib/service-request-work");
 const { VAULT_DOCUMENT_PURPOSE } = await import("@/lib/business-protection");
 const { servePrivateStoredAsset } = await import(
@@ -233,6 +240,49 @@ check(
     publicIntakeSrc.includes("leftoverAssetIds") &&
     requestPhotosSrc.includes("releaseExpiredUnattachedPublicRequestPhotos") &&
     requestPhotosSrc.includes("stampUnattachedRequestPhotoExpiry"),
+);
+check(
+  "Unattached request photos use a 24h attach TTL, not the 15-minute upload reservation",
+  UNATTACHED_REQUEST_PHOTO_TTL_MS === 24 * 60 * 60 * 1000 &&
+    UNATTACHED_REQUEST_PHOTO_TTL_MS >= 2 * 60 * 60 * 1000 &&
+    UNATTACHED_REQUEST_PHOTO_TTL_MS !== STORAGE_PENDING_TTL_MS &&
+    STORAGE_PENDING_TTL_MS === 15 * 60 * 1000 &&
+    requestPhotosSrc.includes("UNATTACHED_REQUEST_PHOTO_TTL_MS") &&
+    !requestPhotosSrc.includes("STORAGE_PENDING_TTL_MS") &&
+    requestPhotosSrc.includes("stampUnattachedRequestPhotoExpiry"),
+);
+const claimFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("async function claimUnattachedRequestPhotoInTx"),
+);
+const leftoverReleaseIdx = publicIntakeSrc.indexOf("releaseUnattachedPublicRequestPhotos");
+const leftoverTryIdx = publicIntakeSrc.lastIndexOf("try {", leftoverReleaseIdx);
+const leftoverCatchIdx = publicIntakeSrc.indexOf("} catch (error) {", leftoverReleaseIdx);
+const leftoverOkIdx = publicIntakeSrc.indexOf("return { ok: true, requestId: written.requestId }", leftoverReleaseIdx);
+check(
+  "Claim and intake attach take a StoredAsset row lock before READY->FAILED or insert",
+  claimFnSrc.includes("lockStoredAssetRowForUpdate") &&
+    claimFnSrc.includes("FOR UPDATE") &&
+    claimFnSrc.indexOf("FOR UPDATE") < claimFnSrc.indexOf('status: "FAILED"') &&
+    publicIntakeSrc.includes("lockStoredAssetRowForUpdate") &&
+    publicIntakeSrc.includes("FOR UPDATE") === false &&
+    publicIntakeSrc.includes("PublicRequestPhotoUnavailableError"),
+);
+check(
+  "Public intake caps photoAssetIds before lookup and isolates leftover release after commit",
+  publicIntakeSrc.includes("MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP") &&
+    MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP === 50 &&
+    publicIntakeSrc.includes("overflowPhotoAssetIds") &&
+    leftoverTryIdx > -1 &&
+    leftoverTryIdx < leftoverReleaseIdx &&
+    leftoverCatchIdx > leftoverReleaseIdx &&
+    leftoverOkIdx > leftoverCatchIdx &&
+    publicIntakeSrc.includes("Failed to release leftover public request photos after intake commit"),
+);
+check(
+  "A selected photo that is no longer READY is refused with a re-add message",
+  publicIntakeSrc.includes("PUBLIC_REQUEST_PHOTO_UNAVAILABLE") &&
+    PUBLIC_REQUEST_PHOTO_UNAVAILABLE.includes("re-add") &&
+    publicIntakeSrc.includes('row.status !== "READY"'),
 );
 const submissionLockSrc = readRepo("src/lib/public-intake-submission.ts");
 const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
@@ -1309,7 +1359,8 @@ try {
     abortedFailed.status === "FAILED" &&
       failedFinalizeError instanceof StorageError &&
       failedAfter?.status === "FAILED" &&
-      failedRequest.created.ok === true &&
+      failedRequest.created.ok === false &&
+      failedRequest.created.error === PUBLIC_REQUEST_PHOTO_UNAVAILABLE &&
       failedRequest.photos.length === 0,
   );
   check(
@@ -1348,7 +1399,8 @@ try {
     "Expired PENDING public-request photo is rejected, not attached, and not resurrected",
     expiredFinalizeError instanceof StorageError &&
       expiredAfter?.status !== "READY" &&
-      expiredRequest.created.ok === true &&
+      expiredRequest.created.ok === false &&
+      expiredRequest.created.error === PUBLIC_REQUEST_PHOTO_UNAVAILABLE &&
       expiredRequest.photos.length === 0,
   );
 
@@ -1386,7 +1438,8 @@ try {
     "Oversized public-request finalize keeps canonical StorageQuotaError and does not attach",
     oversizedError instanceof StorageQuotaError &&
       oversizedAfter?.status === "FAILED" &&
-      oversizedRequest.created.ok === true &&
+      oversizedRequest.created.ok === false &&
+      oversizedRequest.created.error === PUBLIC_REQUEST_PHOTO_UNAVAILABLE &&
       oversizedRequest.photos.length === 0,
   );
   check(
@@ -1394,6 +1447,101 @@ try {
     oversizedRetryError instanceof StorageError &&
       oversizedRetry?.status === "FAILED" &&
       oversizedRetry.publicPath == null,
+  );
+
+  console.log("\nDB — Unattached request-photo TTL keeps in-progress form photos");
+  let clockMs = Date.now();
+  const clockedDeps = {
+    ...storageDeps,
+    now: () => new Date(clockMs),
+  };
+  const lingerPhoto = await putPublicRequestPhotoFromBytes(clockedDeps, "collpro-reno", {
+    originalFilename: "linger-unattached.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const lingerStarted = clockMs;
+  clockMs = lingerStarted + STORAGE_PENDING_TTL_MS;
+  await authorizePublicRequestPhoto(clockedDeps, "collpro-reno", {
+    originalFilename: "sweep-at-15m.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  });
+  const lingerAt15m = await reloadAsset(lingerPhoto.id);
+  clockMs = lingerStarted + 2 * 60 * 60 * 1000;
+  await releaseExpiredUnattachedPublicRequestPhotos(clockedDeps, business.id);
+  const lingerAt2h = await reloadAsset(lingerPhoto.id);
+  check(
+    "Finalized-but-unattached request photo is not swept at 15 minutes or 2 hours",
+    lingerPhoto.status === "READY" &&
+      lingerPhoto.expiresAt != null &&
+      lingerPhoto.expiresAt.getTime() === lingerStarted + UNATTACHED_REQUEST_PHOTO_TTL_MS &&
+      lingerAt15m?.status === "READY" &&
+      lingerAt2h?.status === "READY",
+  );
+
+  const keepFirst = await putPublicRequestPhotoFromBytes(clockedDeps, "collpro-reno", {
+    originalFilename: "keep-first.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  clockMs += 30 * 60 * 1000;
+  const keepSecond = await putPublicRequestPhotoFromBytes(clockedDeps, "collpro-reno", {
+    originalFilename: "keep-second.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const keepFirstAfterSecond = await reloadAsset(keepFirst.id);
+  const lateSubmit = await createRequestWithPhotoIds(
+    "Thirty Minute Form",
+    `thirty-min-${randomUUID()}@example.com`,
+    [keepFirst.id, keepSecond.id],
+  );
+  check(
+    "Customer submitting after 30 minutes keeps the first finalized photo",
+    keepFirstAfterSecond?.status === "READY" &&
+      lateSubmit.created.ok === true &&
+      lateSubmit.photos.length === 2 &&
+      lateSubmit.photos.some((row) => row.storedAssetId === keepFirst.id) &&
+      lateSubmit.photos.some((row) => row.storedAssetId === keepSecond.id),
+  );
+
+  clockMs = lingerStarted + UNATTACHED_REQUEST_PHOTO_TTL_MS + 1;
+  const lingerSweep = await releaseExpiredUnattachedPublicRequestPhotos(
+    clockedDeps,
+    business.id,
+  );
+  const lingerAfterTtl = await reloadAsset(lingerPhoto.id);
+  check(
+    "Unattached request photo is swept only after the 24-hour attach TTL",
+    lingerSweep.released >= 1 && lingerAfterTtl?.status === "FAILED",
+  );
+
+  const vanished = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "vanished-selected.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  await prisma.storedAsset.update({
+    where: { id: vanished.id },
+    data: { status: "FAILED", deletedAt: new Date() },
+  });
+  const vanishedEmail = `vanished-${randomUUID()}@example.com`;
+  const vanishedSubmit = await createRequestWithPhotoIds(
+    "Vanished Selected",
+    vanishedEmail,
+    [vanished.id],
+  );
+  const vanishedRequest = await prisma.serviceRequest.findFirst({
+    where: { businessId: business.id, customer: { email: vanishedEmail } },
+    select: { id: true },
+  });
+  check(
+    "Selected photo that is no longer READY refuses submit and asks to re-add it",
+    vanishedSubmit.created.ok === false &&
+      vanishedSubmit.created.error === PUBLIC_REQUEST_PHOTO_UNAVAILABLE &&
+      vanishedSubmit.photos.length === 0 &&
+      vanishedRequest == null,
   );
 
   console.log("\nDB — Abandoned and overflow request photos release quota");
