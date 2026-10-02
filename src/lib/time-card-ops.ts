@@ -197,6 +197,49 @@ export async function lockTenantOwnedJob(
   return rows[0] ?? null;
 }
 
+/**
+ * Job rows a membership deactivation must serialize with assignment.
+ * Includes open assigned jobs and any job that still has RUNNING time
+ * (including a leftover clock on a completed job). Locked in id order
+ * after the schedule-reservation lock and before Membership locks.
+ */
+export async function lockJobsForMembershipClockClose(
+  db: Db,
+  businessId: string,
+  membershipId: string,
+): Promise<string[]> {
+  const running = await db.timeEntry.findMany({
+    where: {
+      businessId,
+      membershipId,
+      status: "RUNNING",
+      endedAt: null,
+      jobId: { not: null },
+    },
+    select: { jobId: true },
+  });
+  const assigned = await db.job.findMany({
+    where: {
+      businessId,
+      assignedMembershipId: membershipId,
+      status: { notIn: ["COMPLETED", "CANCELLED"] },
+    },
+    select: { id: true },
+  });
+  const jobIds = [
+    ...new Set(
+      [
+        ...running.map((row) => row.jobId),
+        ...assigned.map((row) => row.id),
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  ].sort();
+  for (const jobId of jobIds) {
+    await lockTenantOwnedJob(db, businessId, jobId);
+  }
+  return jobIds;
+}
+
 export function workerTimesheetWeekLockKey(
   businessId: string,
   membershipId: string,

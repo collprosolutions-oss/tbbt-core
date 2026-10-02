@@ -43,6 +43,7 @@ const auditedScripts = [
   "scripts/check-founder-handyman-launch.mjs",
   "scripts/check-handyman-schedule-field-day.mjs",
   "scripts/check-handyman-field-day-hardening.mjs",
+  "scripts/check-deactivate-reassign-deadlock.mjs",
   "scripts/check-owner-daily-ops.mjs",
   "scripts/check-invoice-credits.mjs",
 ];

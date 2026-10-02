@@ -1,14 +1,16 @@
 /**
  * Canonical Job assignment write.
  *
- * Lock order: tenant schedule-reservation advisory lock, then the
- * tenant-owned Job row FOR UPDATE. Conflict checks run after those
- * locks and before assignedMembershipId changes. Reassignment closes
- * the previous worker's RUNNING JOB time, then persistLaneArrivalWindows
+ * Lock order matches deactivation (#251): tenant schedule-reservation
+ * advisory lock, then the tenant-owned Job row FOR UPDATE, then
+ * Membership rows in id order. Conflict checks run after those locks
+ * and before assignedMembershipId changes. Reassignment closes the
+ * previous worker's RUNNING JOB time, then persistLaneArrivalWindows
  * re-reads under the same reservation. This path never sends a customer
  * message and never changes scheduledAt.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { lockTenantOwnedMemberships } from "@/lib/exact-active-membership";
 import { jobAssignmentRefusalMessage } from "@/lib/job-lifecycle";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
@@ -66,6 +68,11 @@ export async function applyAssignedMembershipChangeInTransaction(
 ) {
   const previousAssignee = input.lockedJob.assignedMembershipId;
   const nextAssignee = input.nextAssignedMembershipId;
+  await lockTenantOwnedMemberships(tx, input.businessId, [
+    input.actorMembershipId,
+    previousAssignee,
+    nextAssignee,
+  ]);
   await tx.job.update({
     where: { id: input.job.id },
     data: { assignedMembershipId: nextAssignee },
