@@ -120,6 +120,7 @@ npm run test:native-field-problem
 npm run test:native-field-recovery
 npm run test:collections-worklist
 npm run test:job-money-reconciliation
+npm run test:handyman-bank-reconciliation
 npm run test:bank-reconciliation
 npx tsc --noEmit
 npm run build
