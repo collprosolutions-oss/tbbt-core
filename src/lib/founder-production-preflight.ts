@@ -34,6 +34,8 @@ import {
   isTwilioCustomerMessagingConfigured,
 } from "@/lib/customer-messaging/config";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
+import { SCHEDULE_CALENDAR_FEED_PATH_PREFIX } from "@/lib/schedule-calendar-subscription/contract";
+import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
 import {
   isStudioWeeklyReminderCronPath,
   STUDIO_WEEKLY_REMINDER_CRON_PATH,
@@ -922,7 +924,7 @@ function evaluateInside(input: {
     title: "Webhook public reachability",
     status: "MANUAL",
     requirement: "REQUIRED",
-    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio status callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. isStripeWebhookPath and isCustomerMessagingWebhookPath allow those paths. This checker does not call Vercel.`,
+    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio status callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. Calendar clients GET ${PRODUCTION_APP_ORIGIN}${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/<token> with no TBBT session. isStripeWebhookPath, isCustomerMessagingWebhookPath, and isScheduleCalendarFeedPath allow those paths. This checker does not call Vercel.`,
   });
 
   const storageConfigured = isBusinessStorageConfigured();
@@ -1231,7 +1233,8 @@ function evaluateInside(input: {
     isPublicWebsitePath("/api/storage/public/asset") &&
     isStripeWebhookPath(STRIPE_WEBHOOK_PATH) &&
     isCustomerMessagingWebhookPath(CUSTOMER_MESSAGING_WEBHOOK_PATH) &&
-    isStudioWeeklyReminderCronPath(STUDIO_WEEKLY_REMINDER_CRON_PATH);
+    isStudioWeeklyReminderCronPath(STUDIO_WEEKLY_REMINDER_CRON_PATH) &&
+    isScheduleCalendarFeedPath(`${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/token`);
   drafts.push({
     id: "public_website_routes",
     category: "website",
@@ -1239,8 +1242,8 @@ function evaluateInside(input: {
     status: routesOk ? "PASS" : "BLOCKED",
     requirement: "REQUIRED",
     detail: routesOk
-      ? "Public site, storage, Stripe webhook, Twilio webhook, and cron paths match the existing allow helpers."
-      : "A public, webhook, or cron path helper no longer matches the production paths.",
+      ? "Public site, storage, Stripe webhook, Twilio webhook, cron, and calendar-feed paths match the existing allow helpers."
+      : "A public, webhook, cron, or calendar-feed path helper no longer matches the production paths.",
   });
 
   if (fakePayments || keyClass === "test" || keyClass === "restricted" || keyClass === "unexpected") {

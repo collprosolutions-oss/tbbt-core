@@ -116,6 +116,9 @@ const lifecycle = [
   ["Go-live owner screen", "src/components/settings/go-live-health-center.tsx"],
   ["Integration Center registry", "src/lib/integrations/registry.ts"],
   ["Integration Center owner screen", "src/app/(app)/integrations/page.tsx"],
+  ["Worker job reassignment request", "src/app/actions/job-reassignment-request.ts"],
+  ["Schedule calendar subscription feed", "src/app/calendar/feed/[token]/route.ts"],
+  ["Owner project document review", "src/app/actions/project-document-review.ts"],
 ];
 
 try {

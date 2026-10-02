@@ -212,7 +212,13 @@ check(
   !cliSrc.includes("migrate deploy") && !cliSrc.includes("npm run build") && !cliSrc.includes("prisma migrate"),
 );
 check("library does not repair Job rows", !libSrc.includes("DELETE FROM") && !libSrc.includes('UPDATE "Job"'));
-check("proxy still allows public site and webhook paths", proxySrc.includes("isStripeWebhookPath") && proxySrc.includes("isCustomerMessagingWebhookPath") && proxySrc.includes("isPublicWebsitePath"));
+check(
+  "proxy still allows public site, webhook, and calendar-feed paths",
+  proxySrc.includes("isStripeWebhookPath") &&
+    proxySrc.includes("isCustomerMessagingWebhookPath") &&
+    proxySrc.includes("isPublicWebsitePath") &&
+    proxySrc.includes("isScheduleCalendarFeedPath"),
+);
 check("cron authorization still fails closed without a secret", cronSrc.includes("if (!secret) return false"));
 check("npm preflight script is present", packageJson.scripts["preflight:founder"]?.includes("scripts/founder-production-preflight.mjs") === true);
 check("npm test script is present", packageJson.scripts["test:founder-production-preflight"]?.includes("scripts/check-founder-production-preflight.mjs") === true);
@@ -236,6 +242,11 @@ check("empty app url is missing", emptyReport.checks.find((item) => item.id === 
 check("recorded certification stays manual", emptyReport.checks.find((item) => item.id === "certification_recorded_green")?.status === "MANUAL");
 check("certification commands are listed", emptyReport.checks.find((item) => item.id === "certification_recorded_green")?.detail.includes("npm run test:production-certification") === true);
 check("public routes pass from existing helpers", emptyReport.checks.find((item) => item.id === "public_website_routes")?.status === "PASS");
+check(
+  "public routes include the sessionless calendar feed",
+  libSrc.includes("isScheduleCalendarFeedPath") &&
+    emptyReport.checks.find((item) => item.id === "public_website_routes")?.detail.includes("calendar-feed") === true,
+);
 check("launch clearance is not clear without production config", emptyReport.launchClearance === "NOT_CLEAR");
 check("exit code is 1 when nothing is blocked", preflightExitCode(emptyReport) === 1);
 check("formatted empty report has the manual label", emptyText.includes("[MANUAL VERIFICATION REQUIRED] Production database read-only probe"));
