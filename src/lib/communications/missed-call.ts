@@ -272,6 +272,7 @@ async function completePhoneLog(
     communicationId: string | null;
     followUpActionItemId: string | null;
     kind: string;
+    status: string;
     callbackNeeded: boolean;
     summary: string;
   },
@@ -283,7 +284,11 @@ async function completePhoneLog(
   const digits = normalizePhone(input.callerPhone);
   const usable = isUsableNormalizedPhone(digits);
   const summary = claimed.summary || input.summary.trim();
-  const callbackNeeded = claimed.callbackNeeded || Boolean(input.callbackNeeded);
+  // PHONE_LOG_PRESERVE_CLOSED
+  const alreadyClosed = claimed.status === "CLOSED";
+  const callbackNeeded = alreadyClosed
+    ? claimed.callbackNeeded
+    : claimed.callbackNeeded || Boolean(input.callbackNeeded);
   const kind = (claimed.kind as "MISSED_CALL" | "MANUAL_PHONE") || input.kind;
 
   const thread = customer
@@ -295,7 +300,7 @@ async function completePhoneLog(
     : null;
 
   let actionItemId = claimed.followUpActionItemId;
-  if (callbackNeeded) {
+  if (callbackNeeded && !alreadyClosed) {
     actionItemId = await ensureCallbackAction(db, access, {
       claimedId: claimed.id,
       idempotencyKey: input.idempotencyKey,
@@ -330,8 +335,12 @@ async function completePhoneLog(
       followUpActionItemId: actionItemId,
       requestId: input.requestId || null,
       jobId: input.jobId || null,
-      callbackNeeded,
-      status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
+      ...(alreadyClosed
+        ? {}
+        : {
+            callbackNeeded,
+            status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
+          }),
     },
   });
   if (thread) {
