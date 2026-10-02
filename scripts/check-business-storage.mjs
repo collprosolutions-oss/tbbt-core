@@ -531,7 +531,7 @@ try {
   check("Finalize claims PENDING atomically before READY accounting",
     serviceSrc.includes('id: asset.id,\n        businessId,\n        status: "PENDING"') &&
       serviceSrc.includes("claimed.count === 1") &&
-      serviceSrc.includes('if (current?.status === "READY") return current') &&
+      serviceSrc.includes('if (current?.status === "READY") return { kind: "ready" as const, asset: current }') &&
       serviceSrc.includes('throw new StorageError("That upload is no longer pending.")'));
 
   const abortTracker = trackDeletes(provider);

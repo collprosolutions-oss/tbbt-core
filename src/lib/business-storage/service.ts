@@ -222,6 +222,7 @@ export async function bestEffortCleanupOwnedObject(
   businessId: string,
   input: { bucket: string; storageKey: string },
 ) {
+  // Provider resolution and delete are both best-effort after DB commit.
   try {
     const provider = await resolveStorageProvider(deps);
     await bestEffortDeleteOwnedObject(provider, businessId, input);
