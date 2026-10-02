@@ -122,9 +122,15 @@ npm run test:collections-worklist
 npm run test:job-money-reconciliation
 npm run test:handyman-bank-reconciliation
 npm run test:bank-reconciliation
+npm run test:handyman-database-restore
 npx tsc --noEmit
 npm run build
 ```
+
+`test:handyman-database-restore` is a localhost-only dump/restore drill.
+It never connects to Production. A restored database has tenant rows and
+private-file **metadata**; it does not recreate R2 bytes. See
+`docs/DATABASE_RESTORE.md`.
 
 The isolated native field app lives in `apps/native`. It is not a WebView of the website. See `docs/NATIVE_FIELD.md`.
 
