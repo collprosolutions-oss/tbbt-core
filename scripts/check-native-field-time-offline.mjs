@@ -266,21 +266,17 @@ check(
       offlineCheckSrc,
     ),
 );
-const liveOverlapSection = offlineCheckSrc.slice(
-  offlineCheckSrc.indexOf("LIVE — Sync, retry, two-device conflict, overlap, timezone"),
-);
-const leftoverCollisionIdx = liveOverlapSection.indexOf(
-  "Leftover overlap seed 409s a colliding same-worker correction",
-);
-const leftoverIsolationSlice = liveOverlapSection.slice(
-  leftoverCollisionIdx,
-  liveOverlapSection.indexOf("Older edits go through a correction request"),
+const leftoverMarker = ["leftover", "overlap", "seed", "regression"].join("-");
+const leftoverRegressionSrc = offlineCheckSrc.slice(offlineCheckSrc.indexOf(leftoverMarker));
+const leftoverIsolationSlice = leftoverRegressionSrc.slice(
+  0,
+  leftoverRegressionSrc.indexOf("Older edits go through a correction request"),
 );
 check(
   "Pinned same-worker correction isolates the leftover overlap seed before retry",
-  leftoverCollisionIdx !== -1 &&
-    liveOverlapSection.includes("2026-10-02T11:45:00.000Z") &&
-    liveOverlapSection.includes("That correction would overlap another entry.") &&
+  leftoverRegressionSrc.startsWith(leftoverMarker) &&
+    leftoverIsolationSlice.includes("2026-10-02T11:45:00.000Z") &&
+    leftoverIsolationSlice.includes("That correction would overlap another entry.") &&
     leftoverIsolationSlice.includes("deleteMany") &&
     leftoverIsolationSlice.includes("jobId: overlapJob.id") &&
     leftoverIsolationSlice.includes("After isolating the leftover overlap seed"),
@@ -1646,6 +1642,7 @@ try {
     where: { jobId: replayAgedJob.id, businessId: businessA.id },
   });
 
+  // leftover-overlap-seed-regression
   // A wall-clock "now" of 2026-10-02T20:00Z makes now-8h15m → now-7h
   // propose 11:45-13:00, which overlaps the leftover 12:00-13:00 seed.
   // That 409 is a fixture collision, not a merged offline-sync write.
