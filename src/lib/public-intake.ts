@@ -84,6 +84,18 @@ export const publicIntakeStorageTestHooks: {
   bucketName?: string;
 } = {};
 
+function leftoverRequestPhotoStorageDeps(db: PublicIntakeDb) {
+  const client = db as unknown as PrismaClient;
+  if (typeof client.$transaction !== "function" || !("businessStorageAccount" in client)) {
+    return null;
+  }
+  return {
+    db: client,
+    provider: publicIntakeStorageTestHooks.provider,
+    bucketName: publicIntakeStorageTestHooks.bucketName,
+  };
+}
+
 export {
   claimPublicIntakeSubmission,
   publicIntakeSubmissionLockKey,
@@ -1118,15 +1130,14 @@ async function createPublicServiceRequestInner(
     });
 
     if (written.leftoverAssetIds.length > 0) {
-      await releaseUnattachedPublicRequestPhotos(
-        {
-          db: db as PrismaClient,
-          provider: publicIntakeStorageTestHooks.provider,
-          bucketName: publicIntakeStorageTestHooks.bucketName,
-        },
-        business.id,
-        written.leftoverAssetIds,
-      );
+      const leftoverDeps = leftoverRequestPhotoStorageDeps(db);
+      if (leftoverDeps) {
+        await releaseUnattachedPublicRequestPhotos(
+          leftoverDeps,
+          business.id,
+          written.leftoverAssetIds,
+        );
+      }
     }
 
     return { ok: true, requestId: written.requestId };
