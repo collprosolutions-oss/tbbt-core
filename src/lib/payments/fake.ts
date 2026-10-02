@@ -39,6 +39,19 @@ export function isFakePaymentProvider(
   );
 }
 
+type GlobalFakePayments = typeof globalThis & {
+  tbbtFakePaymentProvider?: FakePaymentProvider;
+};
+
+/** Process-wide fake adapter so Pay Invoice and test-checkout share sessions. */
+export function getSharedFakePaymentProvider(): FakePaymentProvider {
+  const globalForFake = globalThis as GlobalFakePayments;
+  if (!globalForFake.tbbtFakePaymentProvider) {
+    globalForFake.tbbtFakePaymentProvider = createFakePaymentProvider();
+  }
+  return globalForFake.tbbtFakePaymentProvider;
+}
+
 export type FakeAccountState = {
   accountId: string;
   chargesEnabled: boolean;

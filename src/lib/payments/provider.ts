@@ -3,28 +3,19 @@ import {
   isStripePlatformConfigured,
 } from "@/lib/payments/config";
 import {
-  createFakePaymentProvider,
+  getSharedFakePaymentProvider,
   type FakePaymentProvider,
 } from "@/lib/payments/fake";
 import { createStripePaymentProvider } from "@/lib/payments/stripe-adapter";
 import type { PaymentProvider } from "@/lib/payments/types";
 
-type GlobalFakePayments = typeof globalThis & {
-  tbbtFakePaymentProvider?: FakePaymentProvider;
-};
-
 let cached: PaymentProvider | null = null;
 
 export function getPaymentProvider(): PaymentProvider {
-  if (isFakePaymentsAdapterEnabled()) {
-    const globalForFake = globalThis as GlobalFakePayments;
-    if (!globalForFake.tbbtFakePaymentProvider) {
-      globalForFake.tbbtFakePaymentProvider = createFakePaymentProvider();
-    }
-    return globalForFake.tbbtFakePaymentProvider;
-  }
   if (!cached) {
-    cached = createStripePaymentProvider();
+    cached = isFakePaymentsAdapterEnabled()
+      ? getSharedFakePaymentProvider()
+      : createStripePaymentProvider();
   }
   return cached;
 }

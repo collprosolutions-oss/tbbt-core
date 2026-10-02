@@ -203,10 +203,24 @@ check(
 const providerSrc = read("src/lib/payments/provider.ts");
 check(
   "Fake checkout provider is process-wide so Pay Invoice and the test page share sessions",
-  providerSrc.includes("tbbtFakePaymentProvider") &&
-    providerSrc.includes("globalThis") &&
+  fakeSrc.includes("getSharedFakePaymentProvider") &&
+    fakeSrc.includes("tbbtFakePaymentProvider") &&
+    providerSrc.includes("getSharedFakePaymentProvider") &&
+    providerSrc.includes("getFakePaymentProvider") &&
     testCheckoutLib.includes("findInvoiceCheckoutSession") &&
-    testCheckoutLib.includes("applyVerifiedCheckoutPayment"),
+    testCheckoutLib.includes("applyVerifiedCheckoutPayment") &&
+    testCheckoutLib.includes("isFakePaymentsAdapterEnabled()"),
+);
+check(
+  "Test-checkout complete and cancel require the fake adapter",
+  testCheckoutLib.includes("if (!isFakePaymentsAdapterEnabled()") &&
+    read("src/app/payments/test-checkout/[sessionId]/complete/route.ts").includes(
+      "completeFakeTestCheckout",
+    ) &&
+    read("src/app/payments/test-checkout/[sessionId]/cancel/route.ts").includes(
+      "requireFakeTestCheckoutSession",
+    ) &&
+    read("src/lib/payments/config.ts").includes('process.env.VERCEL_ENV === "production"'),
 );
 check(
   "Mobile portal and estimate stay single-column, then widen",

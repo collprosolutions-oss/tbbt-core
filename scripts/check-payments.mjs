@@ -22,6 +22,8 @@ const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider, FAKE_PAYMENT_READY_ACCOUNTS_ENV } = await import(
   "@/lib/payments/fake"
 );
+const { isFakePaymentsAdapterEnabled } = await import("@/lib/payments/config");
+const { getFakePaymentProvider } = await import("@/lib/payments/provider");
 const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
   "@/lib/public-website-paths"
 );
@@ -714,9 +716,12 @@ try {
   );
   check(
     "Fake checkout sessions survive a Next.js module split",
-    providerSrc.includes("tbbtFakePaymentProvider") &&
+    fakeSrc.includes("getSharedFakePaymentProvider") &&
+      providerSrc.includes("getSharedFakePaymentProvider") &&
+      providerSrc.includes("getFakePaymentProvider") &&
       testCheckoutSrc.includes("findInvoiceCheckoutSession") &&
-      testCheckoutSrc.includes("applyVerifiedCheckoutPayment"),
+      testCheckoutSrc.includes("applyVerifiedCheckoutPayment") &&
+      testCheckoutSrc.includes("isFakePaymentsAdapterEnabled()"),
   );
   check(
     "Stripe adapter does not honor the local fake ready-account allowlist",
@@ -825,6 +830,10 @@ try {
     check(
       "VERCEL_ENV=production ignores the fake ready-account allowlist",
       productionThrew,
+    );
+    check(
+      "VERCEL_ENV=production disables the fake adapter so test-checkout cannot mark paid",
+      isFakePaymentsAdapterEnabled() === false && getFakePaymentProvider() === null,
     );
   } finally {
     if (savedFakeReady === undefined) delete process.env.TBBT_PAYMENTS_FAKE_READY;
