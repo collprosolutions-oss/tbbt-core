@@ -11,7 +11,7 @@ export function renderEsignAgreementPdf(input: {
   versionId: string;
   draftContent: string;
 }): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+  return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: "LETTER", margin: 50, compress: false });
     const chunks: Buffer[] = [];
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
