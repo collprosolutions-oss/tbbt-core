@@ -58,7 +58,10 @@ const {
   recordCustomerReportedCallbackOutcome,
   reviewCustomerReportedCallback,
 } = await import("@/lib/job-callback-ops");
-const { loadPortalJobCallbackView } = await import("@/lib/portal-job-callback-data");
+const {
+  findLatestResolvedJobCallback,
+  loadPortalJobCallbackView,
+} = await import("@/lib/portal-job-callback-data");
 const {
   countBusinessCommunications,
   countBusinessInvoices,
@@ -245,6 +248,24 @@ check(
     ) === false &&
     portalJobCallbackCooldownAvailableAt(cooldownNow).getTime() ===
       cooldownNow.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS,
+);
+const submitSrc = opsSrc.slice(opsSrc.indexOf("export async function submitPortalJobCallback"));
+const liveIdx = submitSrc.indexOf("findLiveJobByProjectToken");
+const lockIdx = submitSrc.indexOf("lockTenantOwnedJob");
+const recheckIdx = submitSrc.indexOf("assertLiveLockedProjectToken");
+const existingIdx = submitSrc.indexOf("findOpenPortalCallback");
+const cooldownIdx = submitSrc.indexOf("isPortalJobCallbackCoolingDown");
+const createIdx = submitSrc.indexOf("tx.jobCallback.create");
+check(
+  "Write order is live-token lookup, lock, post-lock re-check, existing callback, then cooldown",
+  liveIdx >= 0 &&
+    lockIdx > liveIdx &&
+    recheckIdx > lockIdx &&
+    existingIdx > recheckIdx &&
+    cooldownIdx > existingIdx &&
+    createIdx > cooldownIdx &&
+    opsSrc.includes("portalJobCallbackTestHooks.afterJobLock") &&
+    dataSrc.includes("findLiveJobByProjectToken"),
 );
 check(
   "Cooldown copy states the 24-hour wait and does not promise a visit or warranty",
@@ -691,6 +712,91 @@ try {
       laterCount === 2,
   );
 
+  const newestSeed = await createJob(businessA.id);
+  const oldestResolved = await submitPortalJobCallback(prisma, {
+    token: newestSeed.job.projectToken,
+    description: "Older resolved callback",
+    preferredContact: "PHONE",
+  });
+  if (!oldestResolved.ok) {
+    throw new Error(oldestResolved.error);
+  }
+  await reviewCustomerReportedCallback(prisma, ownerA, {
+    callbackId: oldestResolved.callbackId,
+  });
+  await recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+    callbackId: oldestResolved.callbackId,
+    outcome: "RECORDED_ONLY",
+  });
+  const newestResolved = await recordCustomerReportedCallback(prisma, ownerA, {
+    jobId: newestSeed.job.id,
+    description: "Newer resolved callback",
+    reportedVia: "PHONE",
+  });
+  await reviewCustomerReportedCallback(prisma, ownerA, {
+    callbackId: newestResolved.id,
+  });
+  await recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+    callbackId: newestResolved.id,
+    outcome: "RECORDED_ONLY",
+  });
+  const laterCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS * 2);
+  const earlierCreatedInside = new Date(Date.now() - 60_000);
+  await prisma.jobCallback.update({
+    where: { id: oldestResolved.callbackId },
+    data: { outcomeAt: earlierCreatedInside },
+  });
+  await prisma.jobCallback.update({
+    where: { id: newestResolved.id },
+    data: { outcomeAt: laterCreatedOutside },
+  });
+  const pickedInside = await findLatestResolvedJobCallback(
+    prisma,
+    businessA.id,
+    newestSeed.job.id,
+  );
+  const newestInsideView = await loadPortalJobCallbackView(
+    prisma,
+    newestSeed.job.projectToken,
+  );
+  const newestInsideSubmit = await submitPortalJobCallback(prisma, {
+    token: newestSeed.job.projectToken,
+    description: "Should follow the newest outcomeAt, not createdAt",
+    preferredContact: "EMAIL",
+  });
+  const earlierCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+  await prisma.jobCallback.update({
+    where: { id: oldestResolved.callbackId },
+    data: { outcomeAt: earlierCreatedOutside },
+  });
+  const pickedOutside = await findLatestResolvedJobCallback(
+    prisma,
+    businessA.id,
+    newestSeed.job.id,
+  );
+  const newestOutsideView = await loadPortalJobCallbackView(
+    prisma,
+    newestSeed.job.projectToken,
+  );
+  const newestOutsideSubmit = await submitPortalJobCallback(prisma, {
+    token: newestSeed.job.projectToken,
+    description: "Newest outcomeAt is outside the wait",
+    preferredContact: "TEXT",
+  });
+  check(
+    "Newest resolved callback wins the 24-hour cooldown",
+    pickedInside?.id === oldestResolved.callbackId &&
+      newestInsideView.status === "cooldown" &&
+      newestInsideSubmit.ok === false &&
+      newestInsideSubmit.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
+      pickedOutside?.id === oldestResolved.callbackId &&
+      newestOutsideView.status === "ready" &&
+      newestOutsideSubmit.ok === true &&
+      newestOutsideSubmit.alreadyExists === false &&
+      newestOutsideSubmit.callbackId !== oldestResolved.callbackId &&
+      newestOutsideSubmit.callbackId !== newestResolved.id,
+  );
+
   console.log("\nCONCURRENT — two token submits create one open callback");
   const concurrentSeed = await createJob(businessA.id);
   const raceA = trackClient(new PrismaClient({ datasourceUrl: testUrl }));
@@ -733,7 +839,7 @@ try {
   check(
     "Invoice / job / payment / communication counts stay honest",
     (await countBusinessInvoices(prisma, businessA.id)) === invoicesBefore &&
-      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 3 &&
+      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 4 &&
       (await countBusinessPayments(prisma, businessA.id)) === paymentsBefore &&
       (await countBusinessCommunications(prisma, businessA.id)) === commsBefore,
   );
