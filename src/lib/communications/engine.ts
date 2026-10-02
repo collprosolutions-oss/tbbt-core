@@ -246,10 +246,22 @@ export async function composeCustomerCommunication(
         if (!claimed.ok) {
           return blocked(claimed.reason, input.channel);
         }
-        if (claimed.alreadyAccepted) {
+        if (claimed.outcome === "accepted") {
           await finishMaintenanceMarkSent(db, access, relatedId);
           return {
             ok: true,
+            communicationId: claimed.communicationId,
+            threadId: null,
+            status: claimed.status as CommunicationSendResult["status"],
+            channel: input.channel,
+            provider: claimed.provider,
+            reused: true,
+            failureReason: claimed.failureReason,
+          };
+        }
+        if (claimed.outcome === "in_progress") {
+          return {
+            ok: false,
             communicationId: claimed.communicationId,
             threadId: null,
             status: claimed.status as CommunicationSendResult["status"],

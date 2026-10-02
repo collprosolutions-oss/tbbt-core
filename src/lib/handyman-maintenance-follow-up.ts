@@ -68,6 +68,9 @@ export const HANDYMAN_MAINTENANCE_NOT_OPEN_MESSAGE =
 export const HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE =
   "That maintenance reminder was already sent. A duplicate send was not attempted.";
 
+export const HANDYMAN_MAINTENANCE_IN_PROGRESS_MESSAGE =
+  "That maintenance reminder is already being sent. A duplicate send was not attempted.";
+
 export const HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE =
   "A customer reminder is already recorded or in progress for this follow-up. It was not cancelled.";
 

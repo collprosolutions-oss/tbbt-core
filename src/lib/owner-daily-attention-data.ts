@@ -22,6 +22,7 @@ import {
   type OwnerDailyDepositEstimateRecord,
   type OwnerDailyMaintenanceFollowUpRecord,
 } from "@/lib/owner-daily-attention";
+import { healAcceptedMaintenanceFollowUps } from "@/lib/handyman-maintenance-follow-up-ops";
 import { maintenanceFollowUpDueWhere } from "@/lib/handyman-maintenance-follow-up-data";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
@@ -354,6 +355,7 @@ export async function loadOwnerDailyMaintenanceFollowUpAttention(
   input: { todayStart: Date; take?: number },
 ): Promise<OwnerDailyLoadedList<OwnerDailyAttentionItem>> {
   const take = input.take ?? OWNER_DAILY_ATTENTION_TAKE;
+  await healAcceptedMaintenanceFollowUps(db, businessId);
   const rows = (await db.customerFollowUp.findMany({
     where: maintenanceFollowUpDueWhere({
       businessId,

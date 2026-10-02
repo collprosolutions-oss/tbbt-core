@@ -15,6 +15,7 @@ import {
   HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE,
   HANDYMAN_MAINTENANCE_CANCELLED_MESSAGE,
   HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE,
+  HANDYMAN_MAINTENANCE_IN_PROGRESS_MESSAGE,
   HANDYMAN_MAINTENANCE_COMPLETED_JOB_MESSAGE,
   HANDYMAN_MAINTENANCE_CUSTOMER_REQUIRED_MESSAGE,
   HANDYMAN_MAINTENANCE_DUE_REQUIRED_MESSAGE,
@@ -119,6 +120,38 @@ export function maintenanceFollowUpCommunicationBlocksSend(
 ) {
   if (!row) return false;
   return isAcceptedCustomerMessageStatus(row.status) || maintenanceFollowUpCommunicationInLease(row, now);
+}
+
+async function healMaintenanceFollowUpIfAccepted(
+  db: Db,
+  access: { businessId: string },
+  row: { id: string; status: string },
+  comms: Array<{ status: string }>,
+) {
+  if (row.status === "SENT" || row.status === "CANCELLED") return row;
+  if (!comms.some((comm) => isAcceptedCustomerMessageStatus(comm.status))) return row;
+  const healed = await markMaintenanceFollowUpSentAfterCompose(db, access, {
+    followUpId: row.id,
+  });
+  return healed ?? row;
+}
+
+export async function healAcceptedMaintenanceFollowUps(db: Db, businessId: string) {
+  const open = await db.customerFollowUp.findMany({
+    where: {
+      businessId,
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE,
+      status: { in: ["OPEN", "FAILED"] },
+    },
+    select: { id: true, status: true },
+  });
+  for (const row of open) {
+    const comms = await listMaintenanceFollowUpCommunications(db, {
+      businessId,
+      followUpId: row.id,
+    });
+    await healMaintenanceFollowUpIfAccepted(db, { businessId }, row, comms);
+  }
 }
 
 async function listMaintenanceFollowUpCommunications(
@@ -297,18 +330,22 @@ export async function cancelHandymanMaintenanceFollowUp(
         throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_UNKNOWN_MESSAGE);
       }
       if (row.status === "CANCELLED") return row;
-      if (row.status !== "OPEN") {
-        throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_NOT_OPEN_MESSAGE);
-      }
       const comms = await listMaintenanceFollowUpCommunications(tx, {
         businessId: access.businessId,
         followUpId: row.id,
       });
+      const healed = await healMaintenanceFollowUpIfAccepted(tx, access, row, comms);
+      if (healed.status === "SENT") {
+        throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE);
+      }
+      if (healed.status !== "OPEN") {
+        throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_NOT_OPEN_MESSAGE);
+      }
       if (comms.some((comm) => maintenanceFollowUpCommunicationBlocksSend(comm))) {
         throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE);
       }
       return tx.customerFollowUp.update({
-        where: { id: row.id },
+        where: { id: healed.id },
         data: { status: "CANCELLED", cancelledAt: new Date() },
         select: followUpSelect,
       });
@@ -351,6 +388,7 @@ export async function assertMaintenanceFollowUpComposeAllowed(
     businessId: access.businessId,
     followUpId: row.id,
   });
+  const healed = await healMaintenanceFollowUpIfAccepted(db, access, row, comms);
   const key = input.idempotencyKey?.trim() ?? "";
   const blocking = comms.filter((comm) => maintenanceFollowUpCommunicationBlocksSend(comm));
   if (blocking.length > 0) {
@@ -359,10 +397,10 @@ export async function assertMaintenanceFollowUpComposeAllowed(
     }
     return { ok: false, reason: HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE };
   }
-  if (row.status === "SENT") {
+  if (healed.status === "SENT") {
     return { ok: false, reason: HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE };
   }
-  if (row.status !== "OPEN" && row.status !== "FAILED") {
+  if (healed.status !== "OPEN" && healed.status !== "FAILED") {
     return { ok: false, reason: HANDYMAN_MAINTENANCE_NOT_SENDABLE_MESSAGE };
   }
   return { ok: true };
@@ -372,8 +410,8 @@ export type MaintenanceComposeClaim =
   | { ok: false; reason: string }
   | {
       ok: true;
+      outcome: "accepted" | "in_progress" | "claimed";
       communicationId: string;
-      alreadyAccepted: boolean;
       status: string;
       provider: string;
       failureReason: string | null;
@@ -409,8 +447,8 @@ export async function claimMaintenanceFollowUpCompose(
     if (sameKey && isAcceptedCustomerMessageStatus(sameKey.status)) {
       return {
         ok: true as const,
+        outcome: "accepted" as const,
         communicationId: sameKey.id,
-        alreadyAccepted: true,
         status: sameKey.status,
         provider: sameKey.provider,
         failureReason: sameKey.failureReason,
@@ -419,11 +457,11 @@ export async function claimMaintenanceFollowUpCompose(
     if (sameKey && maintenanceFollowUpCommunicationInLease(sameKey)) {
       return {
         ok: true as const,
+        outcome: "in_progress" as const,
         communicationId: sameKey.id,
-        alreadyAccepted: false,
         status: sameKey.status,
         provider: sameKey.provider,
-        failureReason: sameKey.failureReason,
+        failureReason: HANDYMAN_MAINTENANCE_IN_PROGRESS_MESSAGE,
       };
     }
 
@@ -454,8 +492,8 @@ export async function claimMaintenanceFollowUpCompose(
         : await tx.customerCommunication.create({ data });
       return {
         ok: true as const,
+        outcome: "claimed" as const,
         communicationId: created.id,
-        alreadyAccepted: false,
         status: created.status,
         provider: created.provider,
         failureReason: created.failureReason,
@@ -475,11 +513,15 @@ export async function claimMaintenanceFollowUpCompose(
         if (raced) {
           return {
             ok: true as const,
+            outcome: isAcceptedCustomerMessageStatus(raced.status)
+              ? ("accepted" as const)
+              : ("in_progress" as const),
             communicationId: raced.id,
-            alreadyAccepted: isAcceptedCustomerMessageStatus(raced.status),
             status: raced.status,
             provider: raced.provider,
-            failureReason: raced.failureReason,
+            failureReason: isAcceptedCustomerMessageStatus(raced.status)
+              ? raced.failureReason
+              : HANDYMAN_MAINTENANCE_IN_PROGRESS_MESSAGE,
           };
         }
       }
