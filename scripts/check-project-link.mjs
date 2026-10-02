@@ -602,7 +602,7 @@ try {
   jobProjectLinkTestHooks.beforeJobLock = undefined;
   jobProjectLinkTestHooks.afterJobLock = undefined;
   if (session) {
-    await session.close();
+    await session.cleanup();
   }
 }
 
