@@ -22,6 +22,19 @@ export { UNATTACHED_REQUEST_PHOTO_TTL_MS };
 export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
 /** Bound the public form's photoAssetIds list before any StoredAsset lookup. */
 export const MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP = 50;
+/** Keep leftover/overflow claim transactions short; extras release in later batches. */
+export const MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH = 50;
+
+export const requestPhotoTestHooks: {
+  afterStoredAssetLock?: (input: {
+    businessId: string;
+    assetId: string;
+  }) => Promise<void> | void;
+  beforeReleaseUnattached?: (input: {
+    businessId: string;
+    assetIds: string[];
+  }) => Promise<void> | void;
+} = {};
 const NOT_PRIVATE_REQUEST_PHOTO = "That photo is not a private request photo.";
 const REQUEST_PHOTO_CANNOT_BE_PUBLISHED = "Request photos cannot be published.";
 
@@ -53,7 +66,11 @@ export async function lockStoredAssetRowForUpdate(
       AND "businessId" = ${businessId}
     FOR UPDATE
   `;
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (row) {
+    await requestPhotoTestHooks.afterStoredAssetLock?.({ businessId, assetId });
+  }
+  return row;
 }
 
 export type PublicRequestFallbackPhotoFile = {
@@ -154,19 +171,29 @@ export async function releaseUnattachedPublicRequestPhotos(
 ) {
   const ids = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
   if (ids.length === 0) return { released: 0 };
+  await requestPhotoTestHooks.beforeReleaseUnattached?.({ businessId, assetIds: ids });
   const now = deps.now?.() ?? new Date();
-  const claimed = await deps.db.$transaction(async (tx) => {
-    const won: Array<{ bucket: string; storageKey: string }> = [];
-    for (const id of ids) {
-      const object = await claimUnattachedRequestPhotoInTx(tx, businessId, id, now);
-      if (object) won.push(object);
+  let released = 0;
+  for (
+    let offset = 0;
+    offset < ids.length;
+    offset += MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH
+  ) {
+    const batch = ids.slice(offset, offset + MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH);
+    const claimed = await deps.db.$transaction(async (tx) => {
+      const won: Array<{ bucket: string; storageKey: string }> = [];
+      for (const id of batch) {
+        const object = await claimUnattachedRequestPhotoInTx(tx, businessId, id, now);
+        if (object) won.push(object);
+      }
+      return won;
+    });
+    for (const object of claimed) {
+      await bestEffortCleanupOwnedObject(deps, businessId, object);
     }
-    return won;
-  });
-  for (const object of claimed) {
-    await bestEffortCleanupOwnedObject(deps, businessId, object);
+    released += claimed.length;
   }
-  return { released: claimed.length };
+  return { released };
 }
 
 export async function releaseExpiredUnattachedPublicRequestPhotos(
@@ -174,6 +201,7 @@ export async function releaseExpiredUnattachedPublicRequestPhotos(
   businessId: string,
 ) {
   const now = deps.now?.() ?? new Date();
+  const staleWithoutExpiry = new Date(now.getTime() - UNATTACHED_REQUEST_PHOTO_TTL_MS);
   const expired = await deps.db.storedAsset.findMany({
     where: {
       businessId,
@@ -181,8 +209,11 @@ export async function releaseExpiredUnattachedPublicRequestPhotos(
       purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
       category: "CUSTOMER_PHOTO",
       visibility: "PRIVATE",
-      expiresAt: { lte: now },
       serviceRequestPhotos: { none: {} },
+      OR: [
+        { expiresAt: { lte: now } },
+        { expiresAt: null, updatedAt: { lte: staleWithoutExpiry } },
+      ],
     },
     select: { id: true },
   });

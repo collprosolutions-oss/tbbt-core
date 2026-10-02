@@ -453,6 +453,16 @@ export type PublicIntakeTx = {
     }) => Promise<unknown>;
   };
   storedAsset: {
+    findMany: (args: {
+      where: {
+        id: { in: string[] };
+        businessId: string;
+        category: string;
+        visibility: string;
+        purpose?: string;
+      };
+      select: { id: true; status: true };
+    }) => Promise<Array<{ id: string; status: string }>>;
     updateMany: (args: {
       where: {
         id: { in: string[] };
@@ -845,6 +855,18 @@ async function createPublicServiceRequestInner(
   const serviceIntent = serviceIntentFromFrequency(frequency);
   const recurrenceCadence = parseRecurrenceCadence(frequency);
   const photoUrls = (input.photoUrls ?? []).filter(Boolean).slice(0, MAX_INTAKE_PHOTOS);
+  if (submissionId) {
+    const existingSubmission = await db.serviceRequest.findFirst({
+      where: {
+        businessId: business.id,
+        description: { contains: `${INTAKE_SUBMISSION_MARKER}${submissionId}` },
+      },
+      select: { id: true },
+    });
+    if (existingSubmission) {
+      return { ok: true, requestId: existingSubmission.id };
+    }
+  }
   const selectedOwnedPhotos =
     photoAssetIds.length > 0
       ? await db.storedAsset.findMany({
@@ -858,9 +880,6 @@ async function createPublicServiceRequestInner(
           select: { id: true, status: true },
         })
       : [];
-  if (selectedOwnedPhotos.some((row) => row.status !== "READY")) {
-    return { ok: false, error: PUBLIC_REQUEST_PHOTO_UNAVAILABLE };
-  }
   const ownedReadyById = new Set(
     selectedOwnedPhotos.filter((row) => row.status === "READY").map((row) => row.id),
   );
@@ -889,6 +908,23 @@ async function createPublicServiceRequestInner(
           select: { id: true },
         });
         if (existing) return { requestId: existing.id, leftoverAssetIds: [] as string[] };
+      }
+
+      const ownedInTx =
+        photoAssetIds.length > 0
+          ? await tx.storedAsset.findMany({
+              where: {
+                id: { in: photoAssetIds },
+                businessId: business.id,
+                category: "CUSTOMER_PHOTO",
+                visibility: "PRIVATE",
+                purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+              },
+              select: { id: true, status: true },
+            })
+          : [];
+      if (ownedInTx.some((row) => row.status !== "READY")) {
+        throw new PublicRequestPhotoUnavailableError();
       }
 
       let identityReview: IntakeIdentityReview | null = null;

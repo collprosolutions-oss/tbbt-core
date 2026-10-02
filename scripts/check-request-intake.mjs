@@ -34,9 +34,12 @@ const {
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
   MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
+  MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH,
   putPublicRequestPhotoFromBytes,
   remainingIntakePhotoSlots,
   releaseExpiredUnattachedPublicRequestPhotos,
+  releaseUnattachedPublicRequestPhotos,
+  requestPhotoTestHooks,
 } = await import("@/lib/business-storage/request-photos");
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
@@ -286,11 +289,26 @@ check(
     leftoverOkIdx > leftoverCatchIdx &&
     publicIntakeSrc.includes("Failed to release leftover public request photos after intake commit"),
 );
+const earlyReplayIdx = publicIntakeSrc.indexOf(
+  'description: { contains: `${INTAKE_SUBMISSION_MARKER}${submissionId}` }',
+);
+const vanishedRefuseIdx = publicIntakeSrc.lastIndexOf('row.status !== "READY"');
+const lockedReplayIdx = publicIntakeSrc.indexOf("claimPublicIntakeSubmission");
 check(
   "A selected photo that is no longer READY is refused with a re-add message",
   publicIntakeSrc.includes("PUBLIC_REQUEST_PHOTO_UNAVAILABLE") &&
     PUBLIC_REQUEST_PHOTO_UNAVAILABLE.includes("re-add") &&
     publicIntakeSrc.includes('row.status !== "READY"'),
+);
+check(
+  "Existing submission replay runs before the vanished-photo refuse",
+  earlyReplayIdx > -1 &&
+    vanishedRefuseIdx > earlyReplayIdx &&
+    lockedReplayIdx > -1 &&
+    vanishedRefuseIdx > lockedReplayIdx &&
+    MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH === 50 &&
+    requestPhotosSrc.includes("MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH") &&
+    requestPhotosSrc.includes("expiresAt: null, updatedAt:"),
 );
 const submissionLockSrc = readRepo("src/lib/public-intake-submission.ts");
 const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
@@ -459,7 +477,14 @@ if (push.status !== 0) {
 
 const require = createRequire(import.meta.url);
 const { PrismaClient, Prisma } = require("@prisma/client");
+const bootstrap = new PrismaClient({ datasourceUrl: baseUrl });
+try {
+  await bootstrap.$executeRawUnsafe(`ALTER ROLE postgres SET timezone = 'UTC'`);
+} finally {
+  await bootstrap.$disconnect();
+}
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+await prisma.$executeRawUnsafe(`SET timezone = 'UTC'`);
 const provider = new MemoryStorageProvider();
 const storageDeps = {
   db: prisma,
@@ -1269,7 +1294,7 @@ try {
       used: Number(account?.storageUsedBytes ?? 0),
     };
   }
-  async function createRequestWithPhotoIds(name, email, photoAssetIds) {
+  async function createRequestWithPhotoIds(name, email, photoAssetIds, submissionId) {
     const created = await createPublicServiceRequest(prisma, {
       slug: "collpro-reno",
       name,
@@ -1285,6 +1310,7 @@ try {
       includeOther: false,
       otherDescription: "",
       photoAssetIds,
+      submissionId,
     });
     const photos = created.ok
       ? await prisma.serviceRequestPhoto.findMany({
@@ -1552,6 +1578,261 @@ try {
       vanishedRequest == null,
   );
 
+  const ninePhotos = [];
+  for (let index = 0; index < MAX_INTAKE_PHOTOS + 1; index += 1) {
+    ninePhotos.push(
+      await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+        originalFilename: `nine-retry-${index}.png`,
+        mimeType: "image/png",
+        body: pngBytes,
+      }),
+    );
+  }
+  const nineSubmissionId = `ninephoto${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const nineEmail = `nine-retry-${randomUUID()}@example.com`;
+  const nineFirst = await createRequestWithPhotoIds(
+    "Nine Photo Retry",
+    nineEmail,
+    ninePhotos.map((row) => row.id),
+    nineSubmissionId,
+  );
+  const nineRetry = await createRequestWithPhotoIds(
+    "Nine Photo Retry",
+    nineEmail,
+    ninePhotos.map((row) => row.id),
+    nineSubmissionId,
+  );
+  const nineRows = await prisma.serviceRequest.findMany({
+    where: {
+      businessId: business.id,
+      description: { contains: `${INTAKE_SUBMISSION_MARKER}${nineSubmissionId}` },
+    },
+    select: { id: true },
+  });
+  const nineReleased = [];
+  for (const asset of ninePhotos) {
+    const row = await reloadAsset(asset.id);
+    if (!nineFirst.photos.some((photo) => photo.storedAssetId === asset.id)) {
+      nineReleased.push(row);
+    }
+  }
+  check(
+    "Retry with the same submissionId returns the existing request after leftover photo release",
+    nineFirst.created.ok === true &&
+      nineFirst.photos.length === MAX_INTAKE_PHOTOS &&
+      nineReleased.length === 1 &&
+      nineReleased[0]?.status === "FAILED" &&
+      nineRetry.created.ok === true &&
+      nineRetry.created.requestId === nineFirst.created.requestId &&
+      nineRows.length === 1,
+  );
+
+  const staleNullExpiry = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "stale-null-expiry.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const freshNullExpiry = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "fresh-null-expiry.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const staleUpdatedAt = new Date(Date.now() - UNATTACHED_REQUEST_PHOTO_TTL_MS - 60_000);
+  await prisma.storedAsset.update({
+    where: { id: staleNullExpiry.id },
+    data: { expiresAt: null, updatedAt: staleUpdatedAt },
+  });
+  await prisma.storedAsset.update({
+    where: { id: freshNullExpiry.id },
+    data: { expiresAt: null },
+  });
+  const nullExpirySweep = await releaseExpiredUnattachedPublicRequestPhotos(
+    storageDeps,
+    business.id,
+  );
+  const staleAfterSweep = await reloadAsset(staleNullExpiry.id);
+  const freshAfterSweep = await reloadAsset(freshNullExpiry.id);
+  check(
+    "Sweep releases READY unattached request photos with a null expiry older than 24h",
+    nullExpirySweep.released >= 1 &&
+      staleAfterSweep?.status === "FAILED" &&
+      freshAfterSweep?.status === "READY",
+  );
+
+  const leftoverFailPhotos = [];
+  for (let index = 0; index < MAX_INTAKE_PHOTOS + 1; index += 1) {
+    leftoverFailPhotos.push(
+      await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+        originalFilename: `leftover-fail-${index}.png`,
+        mimeType: "image/png",
+        body: pngBytes,
+      }),
+    );
+  }
+  const leftoverFailEmail = `leftover-fail-${randomUUID()}@example.com`;
+  let leftoverFailSubmit;
+  requestPhotoTestHooks.beforeReleaseUnattached = () => {
+    throw new Error("forced leftover release failure");
+  };
+  try {
+    leftoverFailSubmit = await createRequestWithPhotoIds(
+      "Leftover Fail",
+      leftoverFailEmail,
+      leftoverFailPhotos.map((row) => row.id),
+    );
+  } finally {
+    delete requestPhotoTestHooks.beforeReleaseUnattached;
+  }
+  const leftoverFailRequest = leftoverFailSubmit.created.ok
+    ? await prisma.serviceRequest.findFirst({
+        where: { id: leftoverFailSubmit.created.requestId, businessId: business.id },
+        select: { id: true },
+      })
+    : null;
+  check(
+    "Leftover release failure after commit still returns the created request",
+    leftoverFailSubmit.created.ok === true && leftoverFailRequest?.id === leftoverFailSubmit.created.requestId,
+  );
+
+  function createLockBarrier() {
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    let arrived;
+    const waiting = new Promise((resolve) => {
+      arrived = resolve;
+    });
+    return { held, waiting, arrived, release };
+  }
+
+  const sweepFirstPhoto = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "sweep-first-lock.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const sweepFirstEmail = `sweep-first-${randomUUID()}@example.com`;
+  const sweepClient = new PrismaClient({ datasourceUrl: testUrl });
+  const submitDuringSweep = new PrismaClient({ datasourceUrl: testUrl });
+  await sweepClient.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  await submitDuringSweep.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  const sweepBarrier = createLockBarrier();
+  requestPhotoTestHooks.afterStoredAssetLock = async ({ assetId }) => {
+    if (assetId !== sweepFirstPhoto.id) return;
+    sweepBarrier.arrived();
+    await sweepBarrier.held;
+  };
+  try {
+    const sweepFirstPromise = releaseUnattachedPublicRequestPhotos(
+      { ...storageDeps, db: sweepClient },
+      business.id,
+      [sweepFirstPhoto.id],
+    );
+    await sweepBarrier.waiting;
+    const submitDuringSweepPromise = createPublicServiceRequest(submitDuringSweep, {
+      slug: "collpro-reno",
+      name: "Sweep First",
+      email: sweepFirstEmail,
+      phone: "555-0418",
+      address: "",
+      streetAddress: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: "Sweep first lock",
+      catalogItemIds: [fan.id],
+      includeOther: false,
+      otherDescription: "",
+      photoAssetIds: [sweepFirstPhoto.id],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    sweepBarrier.release();
+    const [sweepFirstResult, submitDuringSweepResult] = await Promise.all([
+      sweepFirstPromise,
+      submitDuringSweepPromise,
+    ]);
+    const sweepFirstCustomer = await prisma.customer.findFirst({
+      where: { businessId: business.id, email: sweepFirstEmail },
+      select: { id: true },
+    });
+    const sweepFirstRequest = await prisma.serviceRequest.findFirst({
+      where: { businessId: business.id, customer: { email: sweepFirstEmail } },
+      select: { id: true },
+    });
+    const sweepFirstPhotoRow = await prisma.serviceRequestPhoto.findFirst({
+      where: { businessId: business.id, storedAssetId: sweepFirstPhoto.id },
+      select: { id: true },
+    });
+    check(
+      "Sweep-first row lock refuses submit with the re-add message and creates no rows",
+      sweepFirstResult.released === 1 &&
+        submitDuringSweepResult.ok === false &&
+        submitDuringSweepResult.error === PUBLIC_REQUEST_PHOTO_UNAVAILABLE &&
+        sweepFirstCustomer == null &&
+        sweepFirstRequest == null &&
+        sweepFirstPhotoRow == null,
+    );
+  } finally {
+    delete requestPhotoTestHooks.afterStoredAssetLock;
+    await sweepClient.$disconnect();
+    await submitDuringSweep.$disconnect();
+  }
+
+  const submitFirstPhoto = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "submit-first-lock.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const submitFirstEmail = `submit-first-${randomUUID()}@example.com`;
+  const submitClient = new PrismaClient({ datasourceUrl: testUrl });
+  const sweepDuringSubmit = new PrismaClient({ datasourceUrl: testUrl });
+  await submitClient.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  await sweepDuringSubmit.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  const submitBarrier = createLockBarrier();
+  requestPhotoTestHooks.afterStoredAssetLock = async ({ assetId }) => {
+    if (assetId !== submitFirstPhoto.id) return;
+    submitBarrier.arrived();
+    await submitBarrier.held;
+  };
+  try {
+    const submitFirstPromise = createPublicServiceRequest(submitClient, {
+      slug: "collpro-reno",
+      name: "Submit First",
+      email: submitFirstEmail,
+      phone: "555-0418",
+      address: "",
+      streetAddress: "12 Oak St",
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+      notes: "Submit first lock",
+      catalogItemIds: [fan.id],
+      includeOther: false,
+      otherDescription: "",
+      photoAssetIds: [submitFirstPhoto.id],
+    });
+    await submitBarrier.waiting;
+    const sweepDuringSubmitPromise = releaseUnattachedPublicRequestPhotos(
+      { ...storageDeps, db: sweepDuringSubmit },
+      business.id,
+      [submitFirstPhoto.id],
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    submitBarrier.release();
+    const [submitFirstResult, sweepDuringSubmitResult] = await Promise.all([
+      submitFirstPromise,
+      sweepDuringSubmitPromise,
+    ]);
+    check(
+      "Submit-first row lock attaches the photo and the waiting sweep releases 0",
+      submitFirstResult.ok === true && sweepDuringSubmitResult.released === 0,
+    );
+  } finally {
+    delete requestPhotoTestHooks.afterStoredAssetLock;
+    await submitClient.$disconnect();
+    await sweepDuringSubmit.$disconnect();
+  }
+
   console.log("\nDB — Abandoned and overflow request photos release quota");
   const abandonedBefore = await accountSnapshot(business.id);
   const abandoned = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
@@ -1622,6 +1903,29 @@ try {
       overflowLeftover.every((row) => row?.status === "FAILED") &&
       overflowAfter.used === overflowBefore.used + MAX_INTAKE_PHOTOS * pngBytes.length &&
       overflowAfter.reserved === overflowBefore.reserved,
+  );
+
+  const batchedReal = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "batched-overflow-real.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const batchedIds = [
+    ...Array.from({ length: MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH + 10 }, () =>
+      randomUUID(),
+    ),
+    batchedReal.id,
+  ];
+  const batchedRelease = await releaseUnattachedPublicRequestPhotos(
+    storageDeps,
+    business.id,
+    batchedIds,
+  );
+  const batchedAfter = await reloadAsset(batchedReal.id);
+  check(
+    "Overflow release batches ids beyond the lookup cap and still claims the real leftover",
+    batchedRelease.released === 1 && batchedAfter?.status === "FAILED",
+  );
   );
 
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");

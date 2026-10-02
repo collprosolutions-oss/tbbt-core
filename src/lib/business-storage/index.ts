@@ -110,7 +110,9 @@ export {
 } from "@/lib/business-storage/field-job-photos";
 export {
   MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
+  MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH,
   PUBLIC_REQUEST_PHOTO_PURPOSE,
+  requestPhotoTestHooks,
   abortPublicRequestPhoto,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
