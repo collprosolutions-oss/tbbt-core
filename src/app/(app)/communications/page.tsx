@@ -6,6 +6,7 @@ import { requireManagementPageAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { loadCommunicationsWorkspace } from "@/lib/communications/data";
 import { parseCommunicationArea } from "@/lib/communications/types";
+import { loadMaintenanceFollowUpComposeContext } from "@/lib/handyman-maintenance-follow-up-data";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -15,7 +16,12 @@ export const metadata: Metadata = {
 export default async function CommunicationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ area?: string; customerId?: string }>;
+  searchParams: Promise<{
+    area?: string;
+    customerId?: string;
+    relatedType?: string;
+    relatedId?: string;
+  }>;
 }) {
   const access = await requireManagementPageAccess();
   requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
@@ -23,6 +29,13 @@ export default async function CommunicationsPage({
   const source = await loadCommunicationsWorkspace(prisma, access, {
     customerId: params.customerId,
   });
+  const maintenanceReview =
+    params.relatedType === "CUSTOMER_FOLLOW_UP"
+      ? await loadMaintenanceFollowUpComposeContext(prisma, access, {
+          followUpId: params.relatedId,
+          customerId: params.customerId ?? source.selectedCustomerId,
+        })
+      : null;
 
   return (
     <PageContainer width="2xl">
@@ -34,6 +47,9 @@ export default async function CommunicationsPage({
         area={parseCommunicationArea(params.area)}
         source={source}
         businessName={access.workspace.business.name}
+        relatedType={params.relatedType}
+        relatedId={params.relatedId}
+        maintenanceReview={maintenanceReview}
       />
     </PageContainer>
   );

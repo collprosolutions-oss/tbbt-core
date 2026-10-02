@@ -19,7 +19,10 @@ import {
   attemptReviewRequestSms,
 } from "@/lib/customer-messaging/workflows";
 import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging/types";
-import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
+import {
+  isMaintenanceFollowUp,
+  isRetentionFollowUpTask,
+} from "@/lib/customer-follow-up-origin";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -271,6 +274,9 @@ async function resolveSmsTarget(
     if (!followUp) return { skip: "Follow-up is not in this business." };
     if (isRetentionFollowUpTask(followUp.origin)) {
       return { skip: "Retention follow-up tasks are owner-recorded only and are not sent." };
+    }
+    if (isMaintenanceFollowUp(followUp.origin)) {
+      return { skip: "Handyman maintenance follow-ups require explicit owner review and are not sent automatically." };
     }
     if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
       return { skip: "Follow-up is already recorded as sent or closed. Duplicate send was not attempted." };

@@ -347,6 +347,7 @@ export default async function DashboardPage() {
     { businessId: access.businessId, start: todayRange.start, timeZone },
   );
   const scheduleConflictAttention = dailyAttention.scheduleConflicts;
+  const maintenanceFollowUpAttention = dailyAttention.maintenanceFollowUps;
   const stripeCreditMismatchReviews = await listOpenStripeCreditMismatchReviews(
     prisma,
     access.businessId,
@@ -559,6 +560,18 @@ export default async function DashboardPage() {
         href: item.href,
         action: "Open",
       })),
+    },
+    {
+      title: OWNER_DAILY_GROUP_TITLES.maintenanceFollowUps,
+      count: maintenanceFollowUpAttention.count,
+      items: maintenanceFollowUpAttention.items,
+      moreNotShown: maintenanceFollowUpAttention.truncated,
+      scanLimited: maintenanceFollowUpAttention.scanLimited,
+      truncationLabel: ownerDailyTruncationLabel(
+        maintenanceFollowUpAttention.count,
+        maintenanceFollowUpAttention.items.length,
+        maintenanceFollowUpAttention.truncated,
+      ),
     },
   ].filter(ownerDailyKeepAttentionGroup);
 

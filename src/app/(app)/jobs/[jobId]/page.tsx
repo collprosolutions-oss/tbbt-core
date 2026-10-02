@@ -28,6 +28,7 @@ import { AddJobPhotoForm } from "@/components/jobs/add-job-photo-form";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobAftercarePanel } from "@/components/jobs/job-aftercare-panel";
+import { HandymanMaintenanceFollowUpPanel } from "@/components/jobs/handyman-maintenance-follow-up-panel";
 import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
 import { ProjectConversationPanel } from "@/components/jobs/project-conversation-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
@@ -123,6 +124,7 @@ import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { loadJobAftercareReview } from "@/lib/job-aftercare-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
 import { loadOwnerProjectConversationReview } from "@/lib/project-conversation-data";
+import { loadHandymanMaintenanceFollowUpReview } from "@/lib/handyman-maintenance-follow-up-data";
 import { loadJobProjectLinkReview } from "@/lib/project-link-data";
 
 export const metadata: Metadata = {
@@ -433,6 +435,11 @@ export default async function JobPage({
     job.id,
   );
   const jobAftercareReview = await loadJobAftercareReview(prisma, access, job.id);
+  const handymanMaintenanceReview = await loadHandymanMaintenanceFollowUpReview(
+    prisma,
+    access,
+    job.id,
+  );
   const jobProjectLinkReview = await loadJobProjectLinkReview(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
@@ -1214,6 +1221,26 @@ export default async function JobPage({
           </CardHeader>
           <CardContent>
             <ProjectConversationPanel review={projectConversationReview} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {handymanMaintenanceReview &&
+      (handymanMaintenanceReview.eligible ||
+        handymanMaintenanceReview.openFollowUp ||
+        handymanMaintenanceReview.history.length > 0) ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Handyman maintenance follow-up</CardTitle>
+            <CardDescription>
+              OWNER-set future maintenance task for this completed Handyman
+              job. It appears in the owner queue when due. Sending a customer
+              reminder requires an explicit owner review in Communications.
+              Does not create a recurring Cleaning visit or book a job.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <HandymanMaintenanceFollowUpPanel review={handymanMaintenanceReview} />
           </CardContent>
         </Card>
       ) : null}

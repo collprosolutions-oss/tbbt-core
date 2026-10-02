@@ -23,6 +23,10 @@ import {
   type CustomerMessageStatus,
 } from "@/lib/customer-messaging/types";
 import {
+  assertMaintenanceFollowUpComposeAllowed,
+  markMaintenanceFollowUpSentAfterCompose,
+} from "@/lib/handyman-maintenance-follow-up-ops";
+import {
   getMailConfig,
   isUsableEmail,
   sendTransactionalEmail,
@@ -194,6 +198,30 @@ export async function composeCustomerCommunication(
   }
   const relatedType = related.record?.relatedType ?? null;
   const relatedId = related.record?.relatedId ?? null;
+  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId) {
+    const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
+      followUpId: relatedId,
+      customerId: customer.id,
+    });
+    if (!gate.ok) {
+      return blocked(gate.reason, input.channel as CommunicationChannel);
+    }
+  }
+
+  const finishCompose = async (result: CommunicationSendResult) => {
+    if (
+      result.ok &&
+      (result.channel === "SMS" || result.channel === "EMAIL") &&
+      isAcceptedCustomerMessageStatus(result.status) &&
+      relatedType === "CUSTOMER_FOLLOW_UP" &&
+      relatedId
+    ) {
+      await markMaintenanceFollowUpSentAfterCompose(db, access, {
+        followUpId: relatedId,
+      });
+    }
+    return result;
+  };
 
   const settings = await db.businessSettings.findFirst({
     where: { businessId: access.businessId },
@@ -275,7 +303,7 @@ export async function composeCustomerCommunication(
         threadId: thread.id,
       });
     }
-    return {
+    return finishCompose({
       ok: result.ok,
       communicationId: result.communicationId,
       threadId: thread?.id ?? null,
@@ -284,11 +312,11 @@ export async function composeCustomerCommunication(
       provider: result.provider,
       reused: result.reused,
       failureReason: result.failureReason,
-    };
+    });
   }
 
   if (input.channel === "EMAIL") {
-    return sendRecordedEmail(db, {
+    return finishCompose(await sendRecordedEmail(db, {
       access,
       customer,
       threadId: thread?.id ?? null,
@@ -300,7 +328,7 @@ export async function composeCustomerCommunication(
       relatedId,
       eligibility,
       resumeCommunicationId: input.resumeCommunicationId,
-    });
+    }));
   }
 
   return recordNonProviderAttempt(db, {

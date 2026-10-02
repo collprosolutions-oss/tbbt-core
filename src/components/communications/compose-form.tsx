@@ -20,6 +20,7 @@ import {
   COMMUNICATION_COMPOSE_TEMPLATES,
   type CommunicationComposeTemplate,
 } from "@/lib/communications/types";
+import type { OwnerMaintenanceFollowUp } from "@/lib/handyman-maintenance-follow-up-data";
 
 const TEMPLATE_LABELS: Record<CommunicationComposeTemplate, string> = {
   estimate_follow_up: "Estimate follow-up",
@@ -38,6 +39,9 @@ export function ComposeCommunicationForm({
   customers,
   selectedCustomerId,
   businessName,
+  relatedType,
+  relatedId,
+  maintenanceReview,
 }: {
   customers: Array<{
     id: string;
@@ -49,6 +53,9 @@ export function ComposeCommunicationForm({
   }>;
   selectedCustomerId: string | null;
   businessName: string;
+  relatedType?: string;
+  relatedId?: string;
+  maintenanceReview?: OwnerMaintenanceFollowUp | null;
 }) {
   const [customerId, setCustomerId] = useState(selectedCustomerId ?? "");
   const [template, setTemplate] = useState<CommunicationComposeTemplate>("general");
@@ -188,6 +195,22 @@ export function ComposeCommunicationForm({
           />
         </div>
         <input type="hidden" name="attemptId" value={sendAttemptId} />
+        {relatedType ? <input type="hidden" name="relatedType" value={relatedType} /> : null}
+        {relatedId ? <input type="hidden" name="relatedId" value={relatedId} /> : null}
+        {maintenanceReview ? (
+          <div className="rounded-md border border-border/70 p-3 text-sm">
+            <p className="font-medium">Owner review — Handyman maintenance reminder</p>
+            <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+              {maintenanceReview.task}
+              {maintenanceReview.dueOnLabel ? ` · Due ${maintenanceReview.dueOnLabel}` : ""}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Review the message below, then send. Creating the follow-up did
+              not message the customer. Consent and the current phone number
+              are re-checked at send time.
+            </p>
+          </div>
+        ) : null}
         <Button type="submit" size="sm">
           Send or record
         </Button>

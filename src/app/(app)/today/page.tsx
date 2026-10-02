@@ -211,6 +211,7 @@ export default async function OwnerTodayPage() {
   );
   const materialDepositAttention = dailyAttention.materialDeposits;
   const scheduleConflictAttention = dailyAttention.scheduleConflicts;
+  const maintenanceFollowUpAttention = dailyAttention.maintenanceFollowUps;
   const unassignedToday = jobs.filter((job) => job.assignment.kind === "UNASSIGNED");
   const eligibleMembers = eligibleMemberRows.map((member) => ({
     id: member.id,
@@ -249,8 +250,8 @@ export default async function OwnerTodayPage() {
           <CardDescription>
             Unconfirmed appointments, unassigned today work, open field reports,
             additional-work and change orders, running time, unpaid material
-            deposits, scheduling conflicts, callbacks, and completed jobs that
-            still need an invoice.{" "}
+            deposits, scheduling conflicts, callbacks, due Handyman maintenance
+            follow-ups, and completed jobs that still need an invoice.{" "}
             {OWNER_TODAY_FIELD_COMPLETION_COPY}
           </CardDescription>
         </CardHeader>
@@ -266,6 +267,7 @@ export default async function OwnerTodayPage() {
             materialDepositAttention,
             scheduleConflictAttention,
             handoffItems,
+            maintenanceFollowUpAttention,
           }) ? (
             <p className="text-sm text-muted-foreground">Nothing waiting right now.</p>
           ) : null}
@@ -329,6 +331,13 @@ export default async function OwnerTodayPage() {
               scheduleConflictAttention.items.length,
               scheduleConflictAttention.scanLimited,
             )}
+          />
+          <OwnerDailyAttentionList
+            title={OWNER_DAILY_GROUP_TITLES.maintenanceFollowUps}
+            items={maintenanceFollowUpAttention.items}
+            count={maintenanceFollowUpAttention.count}
+            moreNotShown={maintenanceFollowUpAttention.truncated}
+            scanLimited={maintenanceFollowUpAttention.scanLimited}
           />
 
           {handoffItems.length > 0 ? (
