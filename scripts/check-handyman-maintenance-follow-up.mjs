@@ -1071,11 +1071,9 @@ try {
     task: "Race the reminder",
     dueOn: futureDue,
   });
-  const raceSendA = session.createClient();
-  const raceSendB = session.createClient();
   const sentBeforeRace = fakeSms.sent.length;
   const raceResults = await Promise.all([
-    composeCustomerCommunication(raceSendA, ownerA, {
+    composeCustomerCommunication(createClientA, ownerA, {
       customerId: raceSendJob.customer.id,
       channel: "SMS",
       purpose: "GENERAL",
@@ -1084,7 +1082,7 @@ try {
       relatedId: raceSendFollowUp.id,
       idempotencyKey: `sms-race-a-${randomUUID()}`,
     }),
-    composeCustomerCommunication(raceSendB, ownerA, {
+    composeCustomerCommunication(createClientB, ownerA, {
       customerId: raceSendJob.customer.id,
       channel: "SMS",
       purpose: "GENERAL",
@@ -1142,12 +1140,10 @@ try {
         dueOn: futureDue,
       });
       const key = `${channel.toLowerCase()}-same-${i}-${randomUUID()}`;
-      const clientA = session.createClient();
-      const clientB = session.createClient();
       const sentBefore =
         channel === "SMS" ? fakeSms.sent.length : fakeEmails.length;
       const results = await Promise.all([
-        composeCustomerCommunication(clientA, ownerA, {
+        composeCustomerCommunication(createClientA, ownerA, {
           customerId: job.customer.id,
           channel,
           purpose: "GENERAL",
@@ -1157,7 +1153,7 @@ try {
           relatedId: followUp.id,
           idempotencyKey: key,
         }),
-        composeCustomerCommunication(clientB, ownerA, {
+        composeCustomerCommunication(createClientB, ownerA, {
           customerId: job.customer.id,
           channel,
           purpose: "GENERAL",
@@ -1304,12 +1300,10 @@ try {
     fakeEmails.push(input);
     return { id: `fake-email:${input.idempotencyKey}` };
   });
-  const slowA = session.createClient();
-  const slowB = session.createClient();
   let slowResults;
   try {
     slowResults = await Promise.all([
-      composeCustomerCommunication(slowA, ownerA, {
+      composeCustomerCommunication(createClientA, ownerA, {
         customerId: slowJob.customer.id,
         channel: "EMAIL",
         purpose: "GENERAL",
@@ -1319,7 +1313,7 @@ try {
         relatedId: slowFollowUp.id,
         idempotencyKey: `email-slow-a-${randomUUID()}`,
       }),
-      composeCustomerCommunication(slowB, ownerA, {
+      composeCustomerCommunication(createClientB, ownerA, {
         customerId: slowJob.customer.id,
         channel: "EMAIL",
         purpose: "GENERAL",
@@ -1375,12 +1369,10 @@ try {
     fakeEmails.push(input);
     return { id: `fake-email:${input.idempotencyKey}` };
   });
-  const sameSlowA = session.createClient();
-  const sameSlowB = session.createClient();
   let sameSlowResults;
   try {
     sameSlowResults = await Promise.all([
-      composeCustomerCommunication(sameSlowA, ownerA, {
+      composeCustomerCommunication(createClientA, ownerA, {
         customerId: sameSlowJob.customer.id,
         channel: "EMAIL",
         purpose: "GENERAL",
@@ -1390,7 +1382,7 @@ try {
         relatedId: sameSlowFollowUp.id,
         idempotencyKey: sameSlowKey,
       }),
-      composeCustomerCommunication(sameSlowB, ownerA, {
+      composeCustomerCommunication(createClientB, ownerA, {
         customerId: sameSlowJob.customer.id,
         channel: "EMAIL",
         purpose: "GENERAL",
