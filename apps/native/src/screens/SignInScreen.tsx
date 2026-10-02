@@ -12,6 +12,8 @@ import {
 import { isApiError, signInNative } from "../api";
 import { secureChecklistDraftStorage } from "../checklist-draft-storage";
 import { applyChecklistDraftAccount } from "../checklist-drafts";
+import { secureTimeCardDraftStorage } from "../time-card-draft-storage";
+import { applyTimeCardDraftAccount } from "../time-card-drafts";
 import { writeSessionToken } from "../session";
 import type { NativeViewer, NativeWorkspace } from "../types";
 
@@ -43,6 +45,10 @@ export function SignInScreen({
         return;
       }
       await applyChecklistDraftAccount(secureChecklistDraftStorage, {
+        businessId: result.workspace.businessId,
+        membershipId: result.workspace.membershipId,
+      });
+      await applyTimeCardDraftAccount(secureTimeCardDraftStorage, {
         businessId: result.workspace.businessId,
         membershipId: result.workspace.membershipId,
       });

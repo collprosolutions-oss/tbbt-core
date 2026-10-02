@@ -11,6 +11,11 @@ import {
   applyChecklistDraftAccount,
   clearAllChecklistDrafts,
 } from "./src/checklist-drafts";
+import { secureTimeCardDraftStorage } from "./src/time-card-draft-storage";
+import {
+  applyTimeCardDraftAccount,
+  clearAllTimeCardDrafts,
+} from "./src/time-card-drafts";
 import { clearSessionToken, readSessionToken } from "./src/session";
 import type { NativeViewer, NativeWorkspace } from "./src/types";
 
@@ -51,6 +56,10 @@ export default function App() {
         businessId: restored.workspace.businessId,
         membershipId: restored.workspace.membershipId,
       });
+      await applyTimeCardDraftAccount(secureTimeCardDraftStorage, {
+        businessId: restored.workspace.businessId,
+        membershipId: restored.workspace.membershipId,
+      });
       setSession({ token, viewer: restored.viewer, workspace: restored.workspace });
     }
     setReady(true);
@@ -80,6 +89,7 @@ export default function App() {
       await signOutNative(session.token);
     }
     await clearAllChecklistDrafts(secureChecklistDraftStorage);
+    await clearAllTimeCardDrafts(secureTimeCardDraftStorage);
     await expireSession();
   }
 
