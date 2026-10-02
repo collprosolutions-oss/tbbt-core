@@ -13,6 +13,7 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { exactActiveMembershipHeld } from "@/lib/exact-active-membership";
+import { utcTimestampSql } from "@/lib/utc-timestamp-sql";
 import { evaluateCompleteJob, evaluateStartJob } from "@/lib/job-lifecycle";
 import {
   approvalSnapshot,
@@ -265,7 +266,7 @@ async function lockTenantOwnedTimeEntry(
   return rows[0] ?? null;
 }
 
-async function lockWorkerWeekTimeEntries(
+export async function lockWorkerWeekTimeEntries(
   db: Db,
   businessId: string,
   membershipId: string,
@@ -277,8 +278,8 @@ async function lockWorkerWeekTimeEntries(
     FROM "TimeEntry"
     WHERE "businessId" = ${businessId}
       AND "membershipId" = ${membershipId}
-      AND "startedAt" < ${end}
-      AND ("endedAt" IS NULL OR "endedAt" > ${start})
+      AND "startedAt" < ${utcTimestampSql(end)}
+      AND ("endedAt" IS NULL OR "endedAt" > ${utcTimestampSql(start)})
     ORDER BY id
     FOR UPDATE
   `;

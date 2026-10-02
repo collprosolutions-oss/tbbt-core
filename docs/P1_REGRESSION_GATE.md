@@ -43,11 +43,19 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
   `SHOW timezone` = `UTC`. That pair is Node `TZ=America/New_York`
   AND Postgres session timezone UTC (Postgres default; production).
   The gate fails fast with a clear message if `SHOW timezone` is not
-  UTC after that set. Do not treat a UTC-only pass as proof that the
-  helpers are session-timezone safe.
-- Native sign-in throttle, Saturday same-week approval, and Field
-  start proofs were matrix-verified (see below). The older
-  line-number list that used to live in this bullet is stale.
+  UTC after that set. Preserve this UTC contract for the normal
+  suites. Session-timezone safety is proven separately by
+  `scripts/check-p1-session-timezone-dates.mjs`, which opens its own
+  disposable local database and sets per-connection session
+  timezones via libpq `options` / `SET timezone` (never `ALTER
+  ROLE`). After that matrix, a default connection must still report
+  `SHOW timezone` = `UTC`.
+- Native sign-in throttle and Saturday same-week approval now pass
+  under Node `TZ=America/New_York` with Postgres session UTC, NY, or
+  LA (see the matrix below). Field start
+  (`Unconfirmed appointment refuses Start job`) already passed in
+  every native-field-api cell. The older line-number list that used
+  to live in this bullet is stale.
   `scripts/check-appointment-confirmation.mjs` "Field start has no
   owner override" (lines 92-95) is a separate stale static assertion
   that already fails on main: it expects
@@ -96,7 +104,7 @@ exists at the name below. Nothing was renamed.
 | migration-and-db-safety | `check-production-migrate.mjs` (static, no DB) |
 | customer-boundaries | `check-isolation.mjs`, `check-authorization.mjs`, `check-customer-merge.mjs`, `check-customer-csv-import.mjs`, `check-work-order-portal.mjs`, `check-client-portal-excellence.mjs`, `check-customer-messaging.mjs` |
 | transaction-races | `check-customer-merge.mjs`, `check-purchase-order-receipts.mjs`, `check-estimate-options.mjs`, `check-job-callback.mjs`, `check-time-cards.mjs`, `check-native-field-pickup.mjs` |
-| timekeeping | `check-time-cards.mjs`, `check-time-correction-requests.mjs`, `check-payroll.mjs`, `check-native-field-api.mjs`, `check-native-field-visit.mjs`, `check-native-field-activity.mjs`, `check-native-time-cards.mjs` |
+| timekeeping | `check-time-cards.mjs`, `check-time-correction-requests.mjs`, `check-payroll.mjs`, `check-native-field-api.mjs`, `check-native-field-visit.mjs`, `check-native-field-activity.mjs`, `check-native-time-cards.mjs`, `check-p1-session-timezone-dates.mjs` |
 | native-active-membership | `check-native-field-api.mjs`, `check-native-field-checklist.mjs`, `check-native-field-pickup.mjs`, `check-team-onboarding.mjs` |
 
 ## What must be added after each coding PR
@@ -129,45 +137,71 @@ the domain `scripts` list only after the coding PR creates them.
 
 - `scripts/check-p1-native-deactivate-after-token.mjs` — deactivate-after-token-issue tests across all native write routes
 
-## Timezone matrix (verified beyond UTC-only)
+## Timezone matrix (session-safe after the UTC-bind fix)
 
-Local disposable Postgres. Role timezone set with
-`ALTER ROLE tbbt SET timezone = '…'` and checked with `SHOW timezone`
-on a new connection. Cells are Node `TZ` × Postgres session timezone.
+Local disposable Postgres only. The P1 gate still forces and asserts
+Postgres session timezone UTC for the normal suites. The dedicated
+check `scripts/check-p1-session-timezone-dates.mjs` (`npm run
+test:p1-session-timezone-dates`) creates its own disposable database
+and sets per-connection session timezones
+(`UTC`, `America/New_York`, `America/Los_Angeles`,
+`Pacific/Auckland`) via libpq `options=-c TimeZone=…` plus `SET
+timezone`. It verifies `SHOW timezone` on that connection. It does
+not `ALTER ROLE`. After the workers exit, a default connection on
+the login role and on the disposable URL must still report
+`SHOW timezone` = `UTC`.
 
-Suites: `check-time-cards.mjs`, `check-native-field-api.mjs`,
-`check-time-correction-requests.mjs`, `check-payroll.mjs`,
-`check-native-field-activity.mjs` (full 4×3).
-`check-native-time-cards.mjs` on five representative cells.
+Workers run under Node `TZ=America/New_York` and
+`TZ=Pacific/Auckland`. Each cell proves:
 
-### Storage probe
+- five failed native sign-ins lock, and
+  `nativePasswordThrottleIsLocked` is true (also five simultaneous
+  wrong passwords)
+- stored `expiresAt` is now+lockout in real time (assert minute
+  offset and UTC wall text `2026-10-02 12:10:00`); the account is
+  locked before expiry and unlocked after a controlled clock; no
+  13-hour or negative-expiry artifacts
+- a Saturday→Sunday business-local crossing (NY and LA businesses;
+  DST weeks 2026-03-08 and 2026-11-01) is in that week's lock set,
+  approval of that week is refused while the crossing remains
+  (`WEEK_BOUNDARY_CROSSING_ERROR`), and neighbouring-week entries
+  are not locked
+
+### Storage probe (why the raw binds needed a cast)
 
 Prisma Client `DateTime` writes of `2026-09-20T02:00:00.000Z` into
-`TIMESTAMP(3)` (no time zone) round-trip unchanged under UTC, NY, and
-LA sessions (`shiftMs = 0`). The same instant written through
-`$queryRaw` `${Date}` shifts by the session offset: `0` under UTC,
-`-4h` under `America/New_York`, `-7h` under `America/Los_Angeles`.
+`TIMESTAMP(3)` (no time zone) still round-trip unchanged under UTC,
+NY, and LA sessions (`shiftMs = 0`). A raw `$queryRaw` `${Date}`
+parameter is interpreted in the session timezone and used to shift
+by the session offset (`0` / `-4h` / `-7h`). Application writes now
+go through `utcTimestampSql` in
+`src/lib/utc-timestamp-sql.ts`:
+`(${value.toISOString()}::timestamptz AT TIME ZONE 'UTC')`.
 
-### Suite cells (pass/fail counts)
+### Suite cells after the fix
 
-`ok/fail` are `ok  -` / `FAIL -` lines. Exit 0 is a pass.
+`ok/fail` are `ok  -` / `FAIL -` lines. Exit 0 is a pass. The
+previously failing Saturday-week approval and two native sign-in
+throttle assertions now also pass under NY/LA Postgres sessions.
 
 | Suite | Node TZ | PG session | Result |
 | --- | --- | --- | --- |
-| time-cards | any of NY, UTC, LA, Auckland | UTC | 229/0 pass |
-| time-cards | any of those four | NY or LA | 94/1 fail — `Approval of the Saturday week is refused while the crossing entry remains` |
-| native-field-api | any of those four | UTC | 130/0 pass |
-| native-field-api | any of those four | NY or LA | 128/2 fail — the two `NativeSignInThrottle` assertions |
+| time-cards | any of NY, UTC, LA, Auckland | UTC, NY, or LA | 229/0 pass |
+| native-field-api | any of those four | UTC, NY, or LA | 130/0 pass |
 | time-correction | all 12 cells | all 12 | 60/0 pass |
 | native-field-activity | all 12 cells | all 12 | 49/0 pass |
 | native-time-cards | NY×UTC, NY×NY, UTC×NY, LA×NY, Auckland×UTC | | 57/0 pass |
 | payroll | NY | UTC, NY, or LA | 60/0 pass |
-| payroll | UTC or Auckland | any | exit 1 (throws `There is no time to approve for this week`) |
+| payroll | UTC or Auckland | any | exit 1 (throws `This time crosses the business week`, the P1-08 `WEEK_BOUNDARY_CROSSING_ERROR`; not `There is no time to approve`) |
 | payroll | LA | any | 22/1 fail — `Approved TimesheetWeek is included` |
+| p1-session-timezone-dates | NY and Auckland | UTC, NY, LA, Auckland | dedicated matrix; must pass |
 
 Field start (`Unconfirmed appointment refuses Start job`) passed in
-every native-field-api cell. The Saturday/throttle failures depend on
-Postgres session timezone, not Node `TZ`.
+every native-field-api cell. Payroll failures under Node TZ other
+than `America/New_York` are a test artifact:
+`check-payroll.mjs:245` calls `weekRange(new Date())` with no
+business zone, so generated hours can sit on a Sunday week
+boundary.
 
 ### LA business / DST (Node `TZ=America/New_York`, business `America/Los_Angeles`)
 
@@ -179,36 +213,36 @@ JS week math is independent of Postgres and Node:
 - 2026-11-01 (fall-back) 00:00 and 01:30 stay in the Nov 1 week.
 
 Prisma Client persists the LA crossing instants with `shiftMs = 0`
-under UTC, NY, and LA sessions. `approveTimesheetWeek` refuses that
-Saturday week under Postgres UTC. Under Postgres NY or LA it throws
-`There is no time to approve for this week` because
-`lockWorkerWeekTimeEntries` `$queryRaw` Date binds miss the row.
+under UTC, NY, and LA sessions. `approveTimesheetWeek` now refuses
+that Saturday week under Postgres UTC, NY, and LA because
+`lockWorkerWeekTimeEntries` binds week bounds through
+`utcTimestampSql`.
 
-### Real application defects (not fixed here)
+### Application fixes
 
-Production session timezone is UTC, so these do not fire in
-production today. They are silent session-tz dependencies.
+1. `src/lib/native-session-limits.ts` write side — `$queryRaw`
+   INSERT binds `windowStartedAt` / `expiresAt` / timestamps through
+   `utcTimestampSql`, so stored `TIMESTAMP(3)` values are UTC wall
+   time regardless of `SHOW timezone`.
+2. Same file, read side — `nativePasswordThrottleIsLocked` compares
+   `expiresAt` in SQL with `utcTimestampSql(now)` (controlled clock
+   accepted). It no longer uses `row.expiresAt <= new Date()`.
+3. `src/lib/time-card-ops.ts` — `lockWorkerWeekTimeEntries` casts
+   `${end}` / `${start}` the same way so a Saturday-crossing entry
+   is in the lock set and neighbouring weeks are not.
 
-1. `src/lib/native-session-limits.ts:146-149` — `$queryRaw` INSERT
-   binds JS `Date` values into `TIMESTAMP(3)` without time zone
-   (`prisma/migrations/20260927200000_native_sign_in_throttle/migration.sql:10-11`).
-   A non-UTC session stores session-local wall time. Prisma then
-   reads it as UTC.
-2. `src/lib/native-session-limits.ts:119` —
-   `row.expiresAt <= new Date()` then treats the shifted expiry as
-   already past, so five wrong passwords do not lock.
-3. `src/lib/time-card-ops.ts:280-281` — `$queryRaw`
-   `"startedAt" < ${end} AND ("endedAt" IS NULL OR "endedAt" > ${start})`
-   binds week bounds through the same session conversion. Crossing
-   Saturday entries are omitted from the lock/load set, so
-   `approveTimesheetWeek` can approve (or find no rows) instead of
-   refusing `WEEK_BOUNDARY_CROSSING_ERROR`.
+A scan of other `$queryRaw` / `$executeRaw` sites found only these
+two application binds of JS `Date` into `TIMESTAMP(3)`.
+`src/lib/chief-of-staff/business-protection-specialist.ts` binds
+date strings through `to_date`, not JS Dates.
+`src/lib/saas-billing/schema.ts:138-140,155` still uses
+`CURRENT_TIMESTAMP` for the founder-trial backfill. That was left
+unchanged: the SQL is read by migrate / request-path schema checks,
+and rewriting it is not a trivial one-line bind fix.
 
 Prisma Client writes of the same columns do not shift. Request paths
 that pass a business IANA zone into `weekRange` / `startOfWeek` are
 Node-TZ safe. `startOfDay` / `startOfWeek` without a timezone
 (`src/lib/schedule.ts:56-58` and `:92-95`) fall back to Node local
-time; production pages pass a timezone. `check-payroll.mjs:245`
-calls `weekRange(new Date())` with no zone — that payroll matrix
-failure is a test artifact, not a payroll production bug.
+time; production pages pass a timezone.
 
