@@ -19,7 +19,10 @@ import {
   attemptReviewRequestSms,
 } from "@/lib/customer-messaging/workflows";
 import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging/types";
-import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
+import {
+  isMaintenanceFollowUp,
+  isRetentionFollowUpTask,
+} from "@/lib/customer-follow-up-origin";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -272,6 +275,9 @@ async function resolveSmsTarget(
     if (isRetentionFollowUpTask(followUp.origin)) {
       return { skip: "Retention follow-up tasks are owner-recorded only and are not sent." };
     }
+    if (isMaintenanceFollowUp(followUp.origin)) {
+      return { skip: "Handyman maintenance follow-ups require explicit owner review and are not sent automatically." };
+    }
     if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
       return { skip: "Follow-up is already recorded as sent or closed. Duplicate send was not attempted." };
     }
@@ -381,7 +387,7 @@ function acceptedChannel(status: string) {
   return status === "SENT" || isAcceptedCustomerMessageStatus(status);
 }
 
-async function recordWorkflowChannelResult(
+export async function recordWorkflowChannelResult(
   db: Db,
   businessId: string,
   event: { subjectType: string; subjectId: string },
@@ -467,6 +473,7 @@ async function recordWorkflowChannelResult(
     });
     if (!followUp || followUp.status === "SENT" || followUp.status === "CANCELLED") return;
     if (isRetentionFollowUpTask(followUp.origin)) return;
+    if (isMaintenanceFollowUp(followUp.origin)) return;
     if (accepted) {
       await db.customerFollowUp.update({
         where: { id: followUp.id },

@@ -3895,12 +3895,14 @@ model CustomerFollowUp {
   /// OPEN | SENT | FAILED | CANCELLED | DONE
   /// DONE is owner-completed retention work. It is never a send.
   status                String    @default("OPEN")
-  /// COMMUNICATION | RETENTION_TASK
+  /// COMMUNICATION | RETENTION_TASK | MAINTENANCE
   /// RETENTION_TASK is owner-recorded work and is excluded from due scans.
+  /// MAINTENANCE is an OWNER-set Handyman reminder. It is excluded from
+  /// due scans and never sent unless the OWNER reviews it in Communications.
   origin                String    @default("COMMUNICATION")
-  /// Optional owner-set calendar day for RETENTION_TASK work. Stored as
-  /// the start of that day in the business timezone. Never used to emit
-  /// CUSTOMER_FOLLOW_UP_DUE or send a message.
+  /// Optional owner-set calendar day for RETENTION_TASK or MAINTENANCE
+  /// work. Stored as the start of that day in the business timezone.
+  /// Never used to emit CUSTOMER_FOLLOW_UP_DUE or send a message.
   dueOn                 DateTime?
   notes                 String    @default("")
   cancelledAt           DateTime?

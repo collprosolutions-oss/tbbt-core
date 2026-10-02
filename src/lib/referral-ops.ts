@@ -16,6 +16,11 @@ import {
 } from "@/lib/mail";
 import { channelDeliveryAccepted } from "@/lib/reviews";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
+import {
+  followUpSkipsAutomaticSend,
+  isMaintenanceFollowUp,
+} from "@/lib/customer-follow-up-origin";
+import { HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE } from "@/lib/handyman-maintenance-follow-up";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -24,6 +29,16 @@ export class ReferralError extends Error {
     super(message);
     this.name = "ReferralError";
   }
+}
+
+function refuseSkippedFollowUpOrigin(origin: string | null | undefined) {
+  if (!followUpSkipsAutomaticSend(origin)) return;
+  if (isMaintenanceFollowUp(origin)) {
+    throw new ReferralError(HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE);
+  }
+  throw new ReferralError(
+    "Retention follow-up tasks are owner-recorded only and are not sent.",
+  );
 }
 
 export function referralErrorMessage(error: unknown, fallback: string) {
@@ -390,6 +405,7 @@ export async function sendCustomerFollowUp(
       where: { id: input.followUpId, ...access.scope },
     }),
   );
+  refuseSkippedFollowUpOrigin(row.origin);
   if (row.status !== "OPEN" && row.status !== "FAILED") {
     throw new ReferralError("Only an open or failed follow-up can be sent.");
   }
@@ -453,6 +469,7 @@ export async function markCustomerFollowUpSentManually(
       where: { id: input.followUpId, ...access.scope },
     }),
   );
+  refuseSkippedFollowUpOrigin(row.origin);
   if (row.status !== "OPEN" && row.status !== "FAILED") {
     throw new ReferralError("Only an open or failed follow-up can be marked sent manually.");
   }
@@ -478,6 +495,7 @@ export async function cancelCustomerFollowUp(
       where: { id: input.followUpId, ...access.scope },
     }),
   );
+  refuseSkippedFollowUpOrigin(row.origin);
   return db.customerFollowUp.update({
     where: { id: row.id },
     data: { status: "CANCELLED", cancelledAt: new Date() },

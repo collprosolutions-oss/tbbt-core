@@ -15,7 +15,10 @@ import {
   senderFrom,
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { isRetentionFollowUpTask } from "@/lib/customer-follow-up-origin";
+import {
+  isMaintenanceFollowUp,
+  isRetentionFollowUpTask,
+} from "@/lib/customer-follow-up-origin";
 import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/tenant-app-url";
 
@@ -323,6 +326,13 @@ export async function attemptAutomationEmail(
     if (!followUp) return { status: "SKIPPED", failureReason: "Follow-up is not in this business." };
     if (isRetentionFollowUpTask(followUp.origin)) {
       return { status: "SKIPPED", failureReason: "Retention follow-up tasks are owner-recorded only and are not sent." };
+    }
+    if (isMaintenanceFollowUp(followUp.origin)) {
+      return {
+        status: "SKIPPED",
+        failureReason:
+          "Handyman maintenance follow-ups require explicit owner review and are not sent automatically.",
+      };
     }
     if (followUp.status === "SENT" || followUp.status === "CANCELLED") {
       return { status: "SKIPPED", failureReason: "Follow-up is already recorded as sent or closed." };

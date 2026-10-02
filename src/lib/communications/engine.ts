@@ -22,6 +22,12 @@ import {
   type CustomerMessageRelatedType,
   type CustomerMessageStatus,
 } from "@/lib/customer-messaging/types";
+import { isMaintenanceFollowUp } from "@/lib/customer-follow-up-origin";
+import {
+  assertMaintenanceFollowUpComposeAllowed,
+  claimMaintenanceFollowUpCompose,
+  markMaintenanceFollowUpSentAfterCompose,
+} from "@/lib/handyman-maintenance-follow-up-ops";
 import {
   getMailConfig,
   isUsableEmail,
@@ -77,6 +83,32 @@ export const communicationEmailDispatchTestHooks: {
   afterClaim?: () => Promise<void> | void;
   beforeProviderSend?: (ctx?: { db: Db }) => Promise<void> | void;
 } = {};
+
+/**
+ * Test-only pause/fault points for MAINTENANCE compose. Production never
+ * assigns these. afterClaim runs after the short claim transaction commits
+ * and before the provider call. beforeMarkSent can force a mark-SENT failure.
+ */
+export const maintenanceComposeTestHooks: {
+  afterClaim?: () => Promise<void> | void;
+  beforeMarkSent?: () => Promise<void> | void;
+} = {};
+
+async function finishMaintenanceMarkSent(
+  db: Db,
+  access: { businessId: string },
+  followUpId: string,
+) {
+  try {
+    await maintenanceComposeTestHooks.beforeMarkSent?.();
+    await markMaintenanceFollowUpSentAfterCompose(db, access, { followUpId });
+  } catch (error) {
+    console.error(
+      "Failed to mark MAINTENANCE follow-up SENT after an accepted compose",
+      error,
+    );
+  }
+}
 
 export function setCommunicationEmailSender(sender: EmailSender | null) {
   emailSender = sender ?? sendTransactionalEmail;
@@ -194,6 +226,78 @@ export async function composeCustomerCommunication(
   }
   const relatedType = related.record?.relatedType ?? null;
   const relatedId = related.record?.relatedId ?? null;
+  let resumeCommunicationId = input.resumeCommunicationId ?? null;
+  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId) {
+    const followUp = await db.customerFollowUp.findFirst({
+      where: { id: relatedId, businessId: access.businessId },
+      select: { origin: true },
+    });
+    if (followUp && isMaintenanceFollowUp(followUp.origin)) {
+      if ((input.channel === "SMS" || input.channel === "EMAIL") && "$transaction" in db) {
+        const claimed = await claimMaintenanceFollowUpCompose(db as PrismaClient, access, {
+          followUpId: relatedId,
+          customerId: customer.id,
+          idempotencyKey: input.idempotencyKey,
+          channel: input.channel,
+          purpose,
+          subject: input.subject,
+          body: input.body,
+        });
+        if (!claimed.ok) {
+          return blocked(claimed.reason, input.channel);
+        }
+        if (claimed.outcome === "accepted") {
+          await finishMaintenanceMarkSent(db, access, relatedId);
+          return {
+            ok: true,
+            communicationId: claimed.communicationId,
+            threadId: null,
+            status: claimed.status as CommunicationSendResult["status"],
+            channel: input.channel,
+            provider: claimed.provider,
+            reused: true,
+            failureReason: claimed.failureReason,
+          };
+        }
+        if (claimed.outcome === "in_progress") {
+          return {
+            ok: false,
+            communicationId: claimed.communicationId,
+            threadId: null,
+            status: claimed.status as CommunicationSendResult["status"],
+            channel: input.channel,
+            provider: claimed.provider,
+            reused: true,
+            failureReason: claimed.failureReason,
+          };
+        }
+        resumeCommunicationId = claimed.communicationId;
+        await maintenanceComposeTestHooks.afterClaim?.();
+      } else {
+        const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
+          followUpId: relatedId,
+          customerId: customer.id,
+          idempotencyKey: input.idempotencyKey,
+        });
+        if (!gate.ok) {
+          return blocked(gate.reason, input.channel);
+        }
+      }
+    }
+  }
+
+  const finishCompose = async (result: CommunicationSendResult) => {
+    if (
+      result.ok &&
+      (result.channel === "SMS" || result.channel === "EMAIL") &&
+      isAcceptedCustomerMessageStatus(result.status) &&
+      relatedType === "CUSTOMER_FOLLOW_UP" &&
+      relatedId
+    ) {
+      await finishMaintenanceMarkSent(db, access, relatedId);
+    }
+    return result;
+  };
 
   const settings = await db.businessSettings.findFirst({
     where: { businessId: access.businessId },
@@ -259,7 +363,7 @@ export async function composeCustomerCommunication(
       idempotencyKey: input.idempotencyKey,
       body: input.body,
       initiatedByMembershipId: membershipIdOf(access),
-      resumeCommunicationId: input.resumeCommunicationId,
+      resumeCommunicationId,
     });
     if (result.communicationId && thread) {
       await db.customerCommunication.updateMany({
@@ -275,7 +379,7 @@ export async function composeCustomerCommunication(
         threadId: thread.id,
       });
     }
-    return {
+    return finishCompose({
       ok: result.ok,
       communicationId: result.communicationId,
       threadId: thread?.id ?? null,
@@ -284,11 +388,11 @@ export async function composeCustomerCommunication(
       provider: result.provider,
       reused: result.reused,
       failureReason: result.failureReason,
-    };
+    });
   }
 
   if (input.channel === "EMAIL") {
-    return sendRecordedEmail(db, {
+    return finishCompose(await sendRecordedEmail(db, {
       access,
       customer,
       threadId: thread?.id ?? null,
@@ -299,8 +403,8 @@ export async function composeCustomerCommunication(
       relatedType,
       relatedId,
       eligibility,
-      resumeCommunicationId: input.resumeCommunicationId,
-    });
+      resumeCommunicationId,
+    }));
   }
 
   return recordNonProviderAttempt(db, {

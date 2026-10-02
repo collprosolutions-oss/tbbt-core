@@ -14,11 +14,16 @@ import {
   OWNER_DAILY_CONFLICT_JOBS_TAKE,
   OWNER_DAILY_DEPOSIT_MAX_PAGES,
   OWNER_DAILY_DEPOSIT_PAGE_SIZE,
+  OWNER_DAILY_MAINTENANCE_FOLLOW_UP_SELECT,
   buildOwnerDailyMaterialDepositAttention,
+  buildOwnerDailyMaintenanceFollowUpAttention,
   buildOwnerDailyScheduleConflictAttention,
   type OwnerDailyAttentionItem,
   type OwnerDailyDepositEstimateRecord,
+  type OwnerDailyMaintenanceFollowUpRecord,
 } from "@/lib/owner-daily-attention";
+import { healAcceptedMaintenanceFollowUps } from "@/lib/handyman-maintenance-follow-up-ops";
+import { maintenanceFollowUpDueWhere } from "@/lib/handyman-maintenance-follow-up-data";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_JOB_SELECT,
@@ -312,6 +317,7 @@ export type OwnerDailyActionableAttention = {
   materialDeposits: OwnerDailyLoadedList<OwnerDailyAttentionItem>;
   scheduleConflicts: OwnerDailyConflictAttention;
   firstAwaitingJobs: OwnerTodayJobRecord[];
+  maintenanceFollowUps: OwnerDailyLoadedList<OwnerDailyAttentionItem>;
 };
 
 export async function loadOwnerDailyActionableAttention(
@@ -326,7 +332,7 @@ export async function loadOwnerDailyActionableAttention(
   },
 ): Promise<OwnerDailyActionableAttention> {
   const includeFirstAwaiting = input.includeFirstAwaiting !== false;
-  const [materialDeposits, scheduleConflicts, firstAwaitingJobs] =
+  const [materialDeposits, scheduleConflicts, firstAwaitingJobs, maintenanceFollowUps] =
     await Promise.all([
       loadOwnerDailyMaterialDepositAttention(db, input.businessId),
       loadOwnerDailyScheduleConflictAttention(db, input.businessId, {
@@ -336,6 +342,37 @@ export async function loadOwnerDailyActionableAttention(
       includeFirstAwaiting
         ? loadOwnerDailyFirstAwaitingJobs(db, input.scope, input.todayStart)
         : Promise.resolve([]),
+      loadOwnerDailyMaintenanceFollowUpAttention(db, input.businessId, {
+        todayStart: input.todayStart,
+      }),
     ]);
-  return { materialDeposits, scheduleConflicts, firstAwaitingJobs };
+  return { materialDeposits, scheduleConflicts, firstAwaitingJobs, maintenanceFollowUps };
+}
+
+export async function loadOwnerDailyMaintenanceFollowUpAttention(
+  db: DailyDb,
+  businessId: string,
+  input: { todayStart: Date; take?: number },
+): Promise<OwnerDailyLoadedList<OwnerDailyAttentionItem>> {
+  const take = input.take ?? OWNER_DAILY_ATTENTION_TAKE;
+  await healAcceptedMaintenanceFollowUps(db, businessId);
+  const rows = (await db.customerFollowUp.findMany({
+    where: maintenanceFollowUpDueWhere({
+      businessId,
+      todayStart: input.todayStart,
+    }),
+    select: OWNER_DAILY_MAINTENANCE_FOLLOW_UP_SELECT,
+    orderBy: [{ dueOn: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    take: take + 1,
+  })) as OwnerDailyMaintenanceFollowUpRecord[];
+  const allItems = buildOwnerDailyMaintenanceFollowUpAttention(rows, {
+    businessId,
+    todayStart: input.todayStart,
+  });
+  return {
+    items: allItems.slice(0, take),
+    count: allItems.length,
+    truncated: allItems.length > take,
+    scanLimited: false,
+  };
 }

@@ -12,6 +12,7 @@ import {
   type CommunicationArea,
 } from "@/lib/communications/types";
 import type { loadCommunicationsWorkspace } from "@/lib/communications/data";
+import type { OwnerMaintenanceFollowUp } from "@/lib/handyman-maintenance-follow-up-data";
 import { cn } from "@/lib/utils";
 
 type Source = Awaited<ReturnType<typeof loadCommunicationsWorkspace>>;
@@ -20,10 +21,16 @@ export function CommunicationsWorkspace({
   area,
   source,
   businessName,
+  relatedType,
+  relatedId,
+  maintenanceReview,
 }: {
   area: CommunicationArea;
   source: Source;
   businessName: string;
+  relatedType?: string;
+  relatedId?: string;
+  maintenanceReview?: OwnerMaintenanceFollowUp | null;
 }) {
   return (
     <div className="space-y-4">
@@ -62,6 +69,9 @@ export function CommunicationsWorkspace({
               customers={source.composeCustomers}
               selectedCustomerId={source.selectedCustomerId}
               businessName={businessName}
+              relatedType={relatedType}
+              relatedId={relatedId}
+              maintenanceReview={maintenanceReview}
             />
           </CardContent>
         </Card>

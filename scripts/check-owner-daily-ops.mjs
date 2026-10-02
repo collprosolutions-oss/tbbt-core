@@ -678,6 +678,7 @@ console.log("\nPURE — Inclusion, tenant fail-closed, and actionable hrefs");
     materialDepositAttention: { items: [], count: 0, truncated: false },
     scheduleConflictAttention: { items: [], count: 0, truncated: false },
     handoffItems: [],
+    maintenanceFollowUpAttention: { items: [], count: 0, truncated: false },
   };
   check(
     "Truncated empty list is not all-clear, keeps the Dashboard group, and attentionTotal is at least 1",
@@ -2125,6 +2126,7 @@ if (!MUTATION_CHILD) {
             materialDepositAttention,
             scheduleConflictAttention,
             handoffItems,
+            maintenanceFollowUpAttention,
           }) ? (`,
           `          {appointmentAttention.length === 0 &&
           unassignedToday.length === 0 &&
@@ -2135,7 +2137,8 @@ if (!MUTATION_CHILD) {
           runningTimeAttention.length === 0 &&
           materialDepositAttention.items.length === 0 &&
           scheduleConflictAttention.items.length === 0 &&
-          handoffItems.length === 0 ? (`,
+          handoffItems.length === 0 &&
+          maintenanceFollowUpAttention.items.length === 0 ? (`,
         );
       },
     },

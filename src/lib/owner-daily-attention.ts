@@ -44,6 +44,7 @@ export const OWNER_DAILY_GROUP_TITLES = {
   unpaidInvoices: "Unpaid invoices",
   fieldProblems: "Field reports needing attention",
   firstAwaiting: "Unconfirmed appointments",
+  maintenanceFollowUps: "Handyman maintenance follow-ups",
 } as const;
 
 export type OwnerDailyAttentionItem = {
@@ -508,6 +509,60 @@ export function buildOwnerDailyScheduleConflictAttention(
   return items;
 }
 
+export const OWNER_DAILY_MAINTENANCE_FOLLOW_UP_SELECT = {
+  id: true,
+  businessId: true,
+  customerId: true,
+  jobId: true,
+  status: true,
+  origin: true,
+  dueOn: true,
+  notes: true,
+  customer: { select: { name: true } },
+} as const;
+
+export type OwnerDailyMaintenanceFollowUpRecord = {
+  id: string;
+  businessId: string;
+  customerId: string;
+  jobId: string | null;
+  status: string;
+  origin: string;
+  dueOn: Date | null;
+  notes: string;
+  customer?: { name: string | null } | null;
+};
+
+export function buildOwnerDailyMaintenanceFollowUpItem(
+  row: OwnerDailyMaintenanceFollowUpRecord,
+  input: { businessId: string; todayStart: Date },
+): OwnerDailyAttentionItem | null {
+  if (row.businessId !== input.businessId) return null;
+  if (row.origin !== "MAINTENANCE") return null;
+  if (row.status !== "OPEN") return null;
+  if (!row.dueOn || row.dueOn.getTime() > input.todayStart.getTime()) return null;
+  const task = row.notes.trim() || "Maintenance follow-up";
+  return {
+    key: row.id,
+    name: row.customer?.name?.trim() || "Customer",
+    meta: task,
+    href: `/communications?area=compose&customerId=${encodeURIComponent(row.customerId)}&relatedType=CUSTOMER_FOLLOW_UP&relatedId=${encodeURIComponent(row.id)}`,
+    action: "Review",
+  };
+}
+
+export function buildOwnerDailyMaintenanceFollowUpAttention(
+  rows: readonly OwnerDailyMaintenanceFollowUpRecord[],
+  input: { businessId: string; todayStart: Date },
+): OwnerDailyAttentionItem[] {
+  const items: OwnerDailyAttentionItem[] = [];
+  for (const row of rows) {
+    const item = buildOwnerDailyMaintenanceFollowUpItem(row, input);
+    if (item) items.push(item);
+  }
+  return items;
+}
+
 export type OwnerDailyAttentionGroup = {
   title: string;
   count: number;
@@ -542,6 +597,7 @@ export type OwnerDailyTodayClearInput = {
   materialDepositAttention: OwnerDailyWaitingList;
   scheduleConflictAttention: OwnerDailyWaitingList;
   handoffItems: readonly unknown[];
+  maintenanceFollowUpAttention: OwnerDailyWaitingList;
 };
 
 export function ownerDailyTodayNothingWaiting(input: OwnerDailyTodayClearInput) {
@@ -556,7 +612,8 @@ export function ownerDailyTodayNothingWaiting(input: OwnerDailyTodayClearInput) 
     input.runningTimeAttention.length === 0 &&
     !ownerDailyHasWaitingAttention(input.materialDepositAttention) &&
     !ownerDailyHasWaitingAttention(input.scheduleConflictAttention) &&
-    input.handoffItems.length === 0
+    input.handoffItems.length === 0 &&
+    !ownerDailyHasWaitingAttention(input.maintenanceFollowUpAttention)
   );
   // OWNER_DAILY_TODAY_CLEAR_END
 }

@@ -4,6 +4,7 @@
  */
 
 import type { PrismaClient } from "@prisma/client";
+import { CUSTOMER_FOLLOW_UP_ORIGINS } from "@/lib/customer-follow-up-origin";
 import { startOfDay } from "@/lib/schedule";
 import {
   isReminderDue,
@@ -308,7 +309,10 @@ export async function loadReviewsSource(prisma: PrismaClient, businessId: string
       orderBy: { updatedAt: "desc" },
     }),
     followUps: await prisma.customerFollowUp.findMany({
-      where: scope,
+      where: {
+        ...scope,
+        origin: { not: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE },
+      },
       orderBy: { updatedAt: "desc" },
     }),
     communications: await prisma.customerCommunication.findMany({

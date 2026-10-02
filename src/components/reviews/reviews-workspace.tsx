@@ -29,6 +29,7 @@ import { FounderRegion } from "@/components/founder-design/region";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { isMaintenanceFollowUp } from "@/lib/customer-follow-up-origin";
 import { formatDate, formatMoney } from "@/lib/format";
 import { formatISODate } from "@/lib/schedule";
 import {
@@ -468,7 +469,7 @@ function GrowthBody({
           {source.followUps.map((row) => (
             <div key={row.id} className="space-y-2 rounded-md border p-3 text-sm">
               <p>{row.kind} · {row.status}</p>
-              {row.status === "OPEN" || row.status === "FAILED" ? (
+              {!isMaintenanceFollowUp(row.origin) && (row.status === "OPEN" || row.status === "FAILED") ? (
                 <div className="flex flex-wrap gap-2">
                   <ActionForm action={sendFollowUpAction}>
                     <input type="hidden" name="followUpId" value={row.id} />
@@ -480,7 +481,7 @@ function GrowthBody({
                   </ActionForm>
                 </div>
               ) : null}
-              {row.status !== "CANCELLED" ? (
+              {!isMaintenanceFollowUp(row.origin) && row.status !== "CANCELLED" ? (
                 <ActionForm action={cancelFollowUpAction}>
                   <input type="hidden" name="followUpId" value={row.id} />
                   <Button type="submit" size="sm" variant="outline">Cancel</Button>

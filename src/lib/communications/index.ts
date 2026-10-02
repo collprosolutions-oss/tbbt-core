@@ -27,6 +27,7 @@ export {
   EMAIL_DISPATCH_CLAIM_LEASE_MS,
   communicationEmailDispatchTestHooks,
   composeCustomerCommunication,
+  maintenanceComposeTestHooks,
   resetCommunicationEmailSender,
   setCommunicationEmailSender,
 } from "@/lib/communications/engine";
