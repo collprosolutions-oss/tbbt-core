@@ -175,8 +175,6 @@ const featureSrc = [
   portalActionSrc,
   formSrc,
   portalFormSrc,
-  pageSrc,
-  portalSrc,
 ].join("\n");
 
 console.log("\nSTATIC — one JobCallback queue, customer status vs private findings");

@@ -141,7 +141,7 @@ async function loadOwnedCallback(
     throw new JobCallbackError(JOB_CALLBACK_UNKNOWN_MESSAGE);
   }
   const row = await db.jobCallback.findFirst({
-    where: { id: callbackId, ...access.scope },
+    where: { id: callbackId },
     select: JOB_CALLBACK_CORE_SELECT,
   });
   if (!row) {
