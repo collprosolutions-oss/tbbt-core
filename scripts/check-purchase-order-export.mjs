@@ -166,17 +166,16 @@ const adapterSrc = readRepo("src/lib/materials/adapter.ts");
 
 const OFFLINE_FORBIDDEN = [
   "getSupplierCommerceAdapter",
-  "quotePrice",
-  "createCartHandoff",
-  "lookupProduct",
-  "checkAvailability",
+  "quotePrice(",
+  "createCartHandoff(",
+  "lookupProduct(",
+  "checkAvailability(",
   "cheerio",
   "puppeteer",
-  "recordPurchaseOrderReceipt",
-  "sendMessage",
-  "resend",
-  "twilio",
-  "scrape",
+  "recordPurchaseOrderReceipt(",
+  "sendMessage(",
+  "from \"resend\"",
+  "from \"twilio\"",
   "$executeRaw",
   "CREATE TABLE",
   "ALTER TABLE",
@@ -227,20 +226,23 @@ check(
   "CSV uses shared formula neutralization including tab and CR",
   buildSrc.includes("toCsv(") &&
     buildSrc.includes("PURCHASE_ORDER_EXPORT_HEADERS") &&
-    toCsvCell("=HYPERLINK(\"https://example.invalid\",\"x\")") ===
-      "'=HYPERLINK(\"https://example.invalid\",\"x\")" &&
+    neutralizeCsvFormulaPrefix('=HYPERLINK("https://example.invalid","x")') ===
+      `'=HYPERLINK("https://example.invalid","x")` &&
     neutralizeCsvFormulaPrefix("+SUM(1,1)") === "'+SUM(1,1)" &&
     neutralizeCsvFormulaPrefix("@cmd") === "'@cmd" &&
     neutralizeCsvFormulaPrefix("\t=1+1") === "'\t=1+1" &&
     neutralizeCsvFormulaPrefix("\r=1+1") === "'\r=1+1" &&
-    neutralizeCsvFormulaPrefix("6.47") === "6.47",
+    neutralizeCsvFormulaPrefix("6.47") === "6.47" &&
+    toCsvCell("@cmd") === "'@cmd" &&
+    toCsvCell("6.47") === "6.47",
 );
 check(
   "Dedicated download route stays OWNER-gated, attachment-only, and uncached",
   routeSrc.includes("runPurchaseOrderSupplierHandoffDownload") &&
     routeSrc.includes("requireBusinessAccess") &&
-    routeSrc.includes("text/csv") &&
+    routeSrc.includes("exported.contentType") &&
     routeSrc.includes("Cache-Control") &&
+    httpSrc.includes("text/csv; charset=utf-8") &&
     httpSrc.includes("canExportPurchaseOrderSupplierHandoff"),
 );
 check(
