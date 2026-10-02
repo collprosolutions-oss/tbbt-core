@@ -2,15 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { findLiveJobByProjectToken } from "@/lib/project-link-data";
+import {
+  approveCustomerChangeOrder,
+  CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR,
+  declineCustomerChangeOrder,
+} from "@/lib/public-change-order-ops";
 
 export type CustomerChangeOrderActionState = {
   status?: string;
   error?: string;
 };
-
-const GENERIC_ERROR = "This change order is not available.";
-const NOT_READY_ERROR = "This change order is not ready to respond to.";
 
 function readString(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -27,11 +28,10 @@ function readString(formData: FormData, key: string) {
  * belongs to a different Job than the token both resolve to the same
  * generic "not available" error, revealing nothing about what does or
  * doesn't exist.
+ *
+ * The write transaction locks the Job and re-checks the live token so an
+ * in-flight approve/decline cannot land after rotate/revoke commits.
  */
-async function findJobByToken(token: string) {
-  return findLiveJobByProjectToken(prisma, token, { id: true });
-}
-
 export async function approveChangeOrder(
   _prev: CustomerChangeOrderActionState,
   formData: FormData,
@@ -40,54 +40,18 @@ export async function approveChangeOrder(
   const changeOrderId = readString(formData, "changeOrderId");
 
   if (!token || !changeOrderId) {
-    return { error: GENERIC_ERROR };
+    return { error: CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR };
   }
 
-  const job = await findJobByToken(token);
-  if (!job) {
-    return { error: GENERIC_ERROR };
-  }
-
-  const changeOrder = await prisma.changeOrder.findFirst({
-    where: { id: changeOrderId, jobId: job.id },
-    select: { id: true, status: true },
+  const result = await approveCustomerChangeOrder(prisma, {
+    token,
+    changeOrderId,
   });
-
-  if (!changeOrder) {
-    return { error: GENERIC_ERROR };
+  if ("error" in result) {
+    return { error: result.error };
   }
-
-  if (changeOrder.status === "APPROVED") {
-    return { status: "APPROVED" };
-  }
-
-  if (changeOrder.status !== "SENT") {
-    return { error: NOT_READY_ERROR };
-  }
-
-  // Guarded transition: only ever flips a currently-SENT row, and the sent
-  // row's title/lineItems/total have been immutable since Send (see
-  // src/app/actions/change-order.ts), so this always binds the customer's
-  // approval to exactly the terms on record -- there is nothing else it
-  // could have drifted to.
-  const updated = await prisma.changeOrder.updateMany({
-    where: { id: changeOrder.id, jobId: job.id, status: "SENT" },
-    data: { status: "APPROVED", approvedAt: new Date() },
-  });
-
-  if (updated.count !== 1) {
-    const finalState = await prisma.changeOrder.findUnique({
-      where: { id: changeOrder.id },
-      select: { status: true },
-    });
-    if (finalState?.status === "APPROVED") {
-      return { status: "APPROVED" };
-    }
-    return { error: NOT_READY_ERROR };
-  }
-
   revalidatePath(`/p/${token}`);
-  return { status: "APPROVED" };
+  return { status: result.status };
 }
 
 export async function declineChangeOrder(
@@ -98,47 +62,16 @@ export async function declineChangeOrder(
   const changeOrderId = readString(formData, "changeOrderId");
 
   if (!token || !changeOrderId) {
-    return { error: GENERIC_ERROR };
+    return { error: CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR };
   }
 
-  const job = await findJobByToken(token);
-  if (!job) {
-    return { error: GENERIC_ERROR };
-  }
-
-  const changeOrder = await prisma.changeOrder.findFirst({
-    where: { id: changeOrderId, jobId: job.id },
-    select: { id: true, status: true },
+  const result = await declineCustomerChangeOrder(prisma, {
+    token,
+    changeOrderId,
   });
-
-  if (!changeOrder) {
-    return { error: GENERIC_ERROR };
+  if ("error" in result) {
+    return { error: result.error };
   }
-
-  if (changeOrder.status === "DECLINED") {
-    return { status: "DECLINED" };
-  }
-
-  if (changeOrder.status !== "SENT") {
-    return { error: NOT_READY_ERROR };
-  }
-
-  const updated = await prisma.changeOrder.updateMany({
-    where: { id: changeOrder.id, jobId: job.id, status: "SENT" },
-    data: { status: "DECLINED", declinedAt: new Date() },
-  });
-
-  if (updated.count !== 1) {
-    const finalState = await prisma.changeOrder.findUnique({
-      where: { id: changeOrder.id },
-      select: { status: true },
-    });
-    if (finalState?.status === "DECLINED") {
-      return { status: "DECLINED" };
-    }
-    return { error: NOT_READY_ERROR };
-  }
-
   revalidatePath(`/p/${token}`);
-  return { status: "DECLINED" };
+  return { status: result.status };
 }

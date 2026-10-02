@@ -4,8 +4,9 @@
  * unguessable projectToken — never a client-supplied businessId or jobId.
  *
  * Retired or revoked project tokens are refused by the live-token
- * resolver. Upload stores a PRIVATE DOCUMENT. It does not approve,
- * publish, message, invoice, or change Job status.
+ * resolver. Authorize and finalize both lock the Job and re-check the
+ * live token before writing. Upload stores a PRIVATE DOCUMENT. It does
+ * not approve, publish, message, invoice, or change Job status.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -60,12 +61,13 @@ const CLOSED_OR_CANCELLED_JOB_STATUSES = new Set(["CANCELLED", "CLOSED", "COMPLE
 
 /**
  * Test-only barriers. Production never sets these.
- * afterJobLock runs inside authorize's beforeCreate immediately after
- * lockJobForProjectDocument (Job FOR UPDATE) and before the in-transaction
- * recount. The default is undefined, so production is a no-op.
+ * afterJobLock runs inside authorize's beforeCreate and finalize's
+ * beforeClaim immediately after lockJobForProjectDocument (Job FOR UPDATE)
+ * and before the live-token re-check. The default is undefined, so
+ * production is a no-op.
  */
 export const projectDocumentTestHooks: {
-  afterJobLock?: () => Promise<void> | void;
+  afterJobLock?: (input?: { phase?: "authorize" | "finalize" }) => Promise<void> | void;
 } = {};
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -257,7 +259,7 @@ export async function authorizeProjectTokenDocument(
     {
       async beforeCreate(tx) {
         await lockJobForProjectDocument(tx, job);
-        await projectDocumentTestHooks.afterJobLock?.();
+        await projectDocumentTestHooks.afterJobLock?.({ phase: "authorize" });
         if (
           !(await assertLiveLockedProjectToken(tx, {
             jobId: job.id,
@@ -330,7 +332,21 @@ export async function finalizeProjectTokenDocument(
     throw new StorageError(PROJECT_DOCUMENT_TYPE_MISMATCH);
   }
 
-  const asset = await finalizeManagedUpload(deps, job.businessId, assetId);
+  const asset = await finalizeManagedUpload(deps, job.businessId, assetId, {
+    async beforeClaim(tx) {
+      await lockJobForProjectDocument(tx, job);
+      await projectDocumentTestHooks.afterJobLock?.({ phase: "finalize" });
+      if (
+        !(await assertLiveLockedProjectToken(tx, {
+          jobId: job.id,
+          businessId: job.businessId,
+          token,
+        }))
+      ) {
+        throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
+      }
+    },
+  });
   if (
     !isPrivateUnpublishedProjectDocument(asset) ||
     asset.jobId !== job.id ||

@@ -55,6 +55,12 @@ const { createCustomerAdditionalWorkRequest } = await import(
   "@/lib/additional-work-request"
 );
 const {
+  approveCustomerChangeOrder,
+  CUSTOMER_CHANGE_ORDER_NOT_READY_ERROR,
+  CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR,
+  declineCustomerChangeOrder,
+} = await import("@/lib/public-change-order-ops");
+const {
   addChangeOrderDraftLines,
   CUSTOM_QUOTE_DRAFT_MARKER,
 } = await import("@/lib/request-estimate-draft");
@@ -311,71 +317,45 @@ async function mirrorDismissAdditionalWorkRequest(access, requestId) {
   });
 }
 
-/** Mirrors src/app/actions/public-change-order.ts approveChangeOrder(). Token-scoped, no membership. */
+/** Token-scoped customer approve. Maps the locked write path to the suite's ok/reason shape. */
 async function mirrorApproveChangeOrderByToken(projectToken, changeOrderId) {
-  const job = await prisma.job.findUnique({
-    where: { projectToken },
-    select: { id: true },
+  const result = await approveCustomerChangeOrder(prisma, {
+    token: projectToken,
+    changeOrderId,
   });
-  if (!job) {
-    return { ok: false, reason: "not_found" };
-  }
-  const changeOrder = await prisma.changeOrder.findFirst({
-    where: { id: changeOrderId, jobId: job.id },
-    select: { id: true, status: true },
-  });
-  if (!changeOrder) {
-    return { ok: false, reason: "not_found" };
-  }
-  if (changeOrder.status !== "SENT") {
+  if (result.status === "APPROVED") return { ok: true };
+  if (result.error === CUSTOMER_CHANGE_ORDER_NOT_READY_ERROR) {
     return { ok: false, reason: "not_ready" };
   }
-  const updated = await prisma.changeOrder.updateMany({
-    where: { id: changeOrder.id, jobId: job.id, status: "SENT" },
-    data: { status: "APPROVED", approvedAt: new Date() },
-  });
-  return { ok: updated.count === 1 };
+  return { ok: false, reason: "not_found" };
 }
 
-/** Mirrors declineChangeOrder(). */
+/** Token-scoped customer decline. */
 async function mirrorDeclineChangeOrderByToken(projectToken, changeOrderId) {
-  const job = await prisma.job.findUnique({
-    where: { projectToken },
-    select: { id: true },
+  const result = await declineCustomerChangeOrder(prisma, {
+    token: projectToken,
+    changeOrderId,
   });
-  if (!job) {
-    return { ok: false, reason: "not_found" };
-  }
-  const changeOrder = await prisma.changeOrder.findFirst({
-    where: { id: changeOrderId, jobId: job.id },
-    select: { id: true, status: true },
-  });
-  if (!changeOrder) {
-    return { ok: false, reason: "not_found" };
-  }
-  if (changeOrder.status !== "SENT") {
+  if (result.status === "DECLINED") return { ok: true };
+  if (result.error === CUSTOMER_CHANGE_ORDER_NOT_READY_ERROR) {
     return { ok: false, reason: "not_ready" };
   }
-  const updated = await prisma.changeOrder.updateMany({
-    where: { id: changeOrder.id, jobId: job.id, status: "SENT" },
-    data: { status: "DECLINED", declinedAt: new Date() },
-  });
-  return { ok: updated.count === 1 };
+  return { ok: false, reason: "not_found" };
 }
 
-/** Mirrors src/app/actions/public-additional-work-request.ts requestAdditionalWork(). */
+/** Token-scoped customer additional-work submit. */
 async function mirrorRequestAdditionalWork(projectToken, description) {
-  const job = await prisma.job.findUnique({
-    where: { projectToken },
-    select: { id: true, businessId: true },
+  const created = await createCustomerAdditionalWorkRequest(prisma, {
+    token: projectToken,
+    notes: description,
   });
-  if (!job) {
+  if (!created.ok) {
     return { ok: false };
   }
-  const created = await prisma.additionalWorkRequest.create({
-    data: { businessId: job.businessId, jobId: job.id, description, source: "CUSTOMER" },
+  const request = await prisma.additionalWorkRequest.findFirst({
+    where: { id: created.requestId, jobId: created.jobId },
   });
-  return { ok: true, request: created };
+  return request ? { ok: true, request } : { ok: false };
 }
 
 const LINE_ITEM_SELECT = {
@@ -564,6 +544,35 @@ try {
   const adminAccessA = makeAccess(businessA.id, "ADMIN");
   const memberAccessA = makeAccess(businessA.id, "MEMBER");
   const ownerAccessB = makeAccess(businessB.id, "OWNER");
+
+  const changeOrderOpsSrc = readFileSync(
+    new URL("../src/lib/public-change-order-ops.ts", import.meta.url),
+    "utf8",
+  );
+  const additionalWorkSrc = readFileSync(
+    new URL("../src/lib/additional-work-request.ts", import.meta.url),
+    "utf8",
+  );
+  console.log("\nSTATIC — customer token writes lock the Job and re-check the live token");
+  check(
+    "Change-order approve/decline re-check Job.projectToken after FOR UPDATE",
+    changeOrderOpsSrc.includes("lockTenantOwnedJob") &&
+      changeOrderOpsSrc.includes("assertLiveLockedProjectToken") &&
+      changeOrderOpsSrc.indexOf("await lockTenantOwnedJob") <
+        changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+      changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") <
+        changeOrderOpsSrc.indexOf("changeOrder.updateMany") &&
+      CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR === "This change order is not available.",
+  );
+  check(
+    "Additional-work submit re-checks Job.projectToken after FOR UPDATE",
+    additionalWorkSrc.includes("lockTenantOwnedJob") &&
+      additionalWorkSrc.includes("assertLiveLockedProjectToken") &&
+      additionalWorkSrc.indexOf("await lockTenantOwnedJob") <
+        additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+      additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") <
+        additionalWorkSrc.indexOf("additionalWorkRequest.create"),
+  );
 
   console.log("\nTEST 1 — OWNER/ADMIN can create a DRAFT Change Order for a Job");
   const job1 = await createApprovedJob(businessA.id, customerA.id, propertyA.id, 1000, "Original kitchen faucet swap");
@@ -1159,7 +1168,7 @@ try {
   }
   const additionalWorkGrep = spawnSync(
     "grep",
-    ["-n", "businessId: job.businessId", "src/lib/additional-work-request.ts"],
+    ["-n", "businessId: locked.businessId", "src/lib/additional-work-request.ts"],
     { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
   );
   check(
