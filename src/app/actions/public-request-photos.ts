@@ -4,6 +4,7 @@ import {
   abortPublicRequestPhoto,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  releasePublicRequestPhotos,
 } from "@/lib/business-storage/request-photos";
 import {
   isBusinessStorageConfigured,
@@ -78,5 +79,21 @@ export async function abortPublicRequestPhotoUpload(input: {
     return {};
   } catch (error) {
     return { error: publicPhotoError(error) };
+  }
+}
+
+export async function releasePublicRequestPhotoUploads(input: {
+  slug: string;
+  assetIds: string[];
+}): Promise<{ released: number; error?: string }> {
+  try {
+    const result = await releasePublicRequestPhotos(
+      { db: prisma },
+      input.slug,
+      input.assetIds,
+    );
+    return { released: result.released };
+  } catch (error) {
+    return { released: 0, error: publicPhotoError(error) };
   }
 }

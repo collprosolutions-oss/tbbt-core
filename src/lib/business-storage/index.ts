@@ -53,6 +53,10 @@ export {
   STORAGE_KEY_FOLDERS,
   STORAGE_PENDING_TTL_MS,
   UNATTACHED_REQUEST_PHOTO_TTL_MS,
+  MAX_PUBLIC_INTAKE_REQUEST_PHOTOS,
+  MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
+  PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+  UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   STORED_ASSET_CATEGORIES,
@@ -119,8 +123,10 @@ export {
   lockStoredAssetRowForUpdate,
   putPublicRequestPhotoFromBytes,
   releaseExpiredUnattachedPublicRequestPhotos,
+  releasePublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,
   rememberAttachedPublicRequestPhotos,
+  sortedStoredAssetIds,
 } from "@/lib/business-storage/request-photos";
 export {
   PROJECT_DOCUMENT_PURPOSE,

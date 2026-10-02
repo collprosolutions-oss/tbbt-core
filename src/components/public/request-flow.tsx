@@ -26,7 +26,9 @@ import {
   abortPublicRequestPhotoUpload,
   authorizePublicRequestPhotoUpload,
   finalizePublicRequestPhotoUpload,
+  releasePublicRequestPhotoUploads,
 } from "@/app/actions/public-request-photos";
+import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import {
   catalogAsksMeasurements,
   formatCustomerMeasurement,
@@ -425,6 +427,7 @@ export function MultiServiceRequestFlow({
     }
     setPending(true);
     setError(null);
+    const uploadedAssetIds: string[] = [];
     try {
     const formData = new FormData();
     formData.set("submissionId", submissionIdRef.current.replace(/[^A-Za-z0-9_-]/g, ""));
@@ -481,7 +484,7 @@ export function MultiServiceRequestFlow({
     if (projectToken) {
       formData.set("projectToken", projectToken);
     }
-    for (const photo of photos) {
+    for (const photo of photos.slice(0, MAX_INTAKE_PHOTOS)) {
       const authorized = await authorizePublicRequestPhotoUpload({
         slug,
         originalFilename: photo.file.name,
@@ -489,6 +492,7 @@ export function MultiServiceRequestFlow({
         fileSizeBytes: photo.file.size,
       });
       if (!authorized.assetId || !authorized.uploadUrl) {
+        await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
         setError(authorized.error || "That photo could not be uploaded.");
         return;
       }
@@ -512,6 +516,7 @@ export function MultiServiceRequestFlow({
           formData.append("photos", photo.file);
           continue;
         }
+        uploadedAssetIds.push(finalized.assetId);
         formData.append("photoAssetId", finalized.assetId);
       } catch {
         await abortPublicRequestPhotoUpload({ slug, assetId: authorized.assetId });
@@ -550,6 +555,7 @@ export function MultiServiceRequestFlow({
       formData,
     );
     if (!result.ok) {
+      await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
       setError(result.error);
       return;
     }
@@ -560,6 +566,7 @@ export function MultiServiceRequestFlow({
       // Ignore storage failures after a successful submit.
     }
     } catch {
+      await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
       setError("This request could not be submitted. Please try again.");
     } finally {
       setPending(false);

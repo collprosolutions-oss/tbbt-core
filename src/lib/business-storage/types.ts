@@ -52,6 +52,14 @@ export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
  * never reuse STORAGE_PENDING_TTL_MS (the short upload-reservation TTL).
  */
 export const UNATTACHED_REQUEST_PHOTO_TTL_MS = 24 * 60 * 60 * 1000;
+/** Outstanding READY+PENDING public request photos that are not yet attached. */
+export const MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS = 200;
+/** Unattached public request photos may hold at most this fraction of the business quota. */
+export const UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO = 0.1;
+/** One public form attempt; must stay equal to MAX_INTAKE_PHOTOS. */
+export const MAX_PUBLIC_INTAKE_REQUEST_PHOTOS = 8;
+export const PUBLIC_REQUEST_PHOTO_CAP_REACHED =
+  "This site is receiving too many photos right now. Please try again in a few minutes.";
 export const WEBSITE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 /** Practical phone stills on the existing R2 presigned PUT path. */
 export const REQUEST_PHOTO_MAX_BYTES = 12 * 1024 * 1024;

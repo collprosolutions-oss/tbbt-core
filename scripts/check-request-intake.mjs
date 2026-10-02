@@ -33,13 +33,19 @@ const {
   attachRemainingPublicRequestFallbackPhotos,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  MAX_PUBLIC_INTAKE_REQUEST_PHOTOS,
   MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
+  MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
   MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH,
+  PUBLIC_REQUEST_PHOTO_CAP_REACHED,
   putPublicRequestPhotoFromBytes,
   remainingIntakePhotoSlots,
   releaseExpiredUnattachedPublicRequestPhotos,
+  releasePublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,
   requestPhotoTestHooks,
+  sortedStoredAssetIds,
+  UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
 } = await import("@/lib/business-storage/request-photos");
 const { authorizeManagedUpload, finalizeManagedUpload } = await import(
   "@/lib/business-storage/service"
@@ -206,6 +212,18 @@ check(
     intakeActionSrc.includes('.getAll("photos")') &&
     intakeActionSrc.includes("attachRemainingPublicRequestFallbackPhotos"),
 );
+check(
+  "Rejected public submit releases that attempt's unattached photos",
+  requestFlowSrc.includes("releasePublicRequestPhotoUploads") &&
+    requestFlowSrc.includes("uploadedAssetIds") &&
+    requestFlowSrc.includes("photos.slice(0, MAX_INTAKE_PHOTOS)") &&
+    requestFlowSrc.indexOf("releasePublicRequestPhotoUploads") <
+      requestFlowSrc.indexOf("setError(result.error)") &&
+    MAX_PUBLIC_INTAKE_REQUEST_PHOTOS === MAX_INTAKE_PHOTOS &&
+    MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS === 200 &&
+    UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO === 0.1 &&
+    PUBLIC_REQUEST_PHOTO_CAP_REACHED.includes("too many photos"),
+);
 const requestPhotosSrc = readRepo("src/lib/business-storage/request-photos.ts");
 const finalizeFnSrc = requestPhotosSrc.slice(
   requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
@@ -276,7 +294,10 @@ check(
     claimFnSrc.indexOf("lockStoredAssetRowForUpdate") < claimFnSrc.indexOf('status: "FAILED"') &&
     attachLockIdx > -1 &&
     attachInsertIdx > attachLockIdx &&
-    publicIntakeSrc.includes("PublicRequestPhotoUnavailableError"),
+    publicIntakeSrc.includes("PublicRequestPhotoUnavailableError") &&
+    requestPhotosSrc.includes("sortedStoredAssetIds") &&
+    publicIntakeSrc.includes(".sort((left, right)") &&
+    sortedStoredAssetIds(["b", "a", "b"]).join(",") === "a,b",
 );
 check(
   "Public intake caps photoAssetIds before lookup and isolates leftover release after commit",
@@ -1934,6 +1955,182 @@ try {
     batchedRelease.released === 1 && batchedAfter?.status === "FAILED",
   );
 
+  console.log("\nDB — Unattached public request photo cap and rejection release");
+  async function countUnattachedPublicPhotos(businessId) {
+    return prisma.storedAsset.count({
+      where: {
+        businessId,
+        purpose: "public-request-photo",
+        category: "CUSTOMER_PHOTO",
+        visibility: "PRIVATE",
+        deletedAt: null,
+        status: { in: ["READY", "PENDING"] },
+        serviceRequestPhotos: { none: {} },
+      },
+    });
+  }
+  const authorizeInput = {
+    originalFilename: "cap-race.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+  };
+  async function tryAuthorize(deps) {
+    try {
+      return {
+        ok: true,
+        asset: await authorizePublicRequestPhoto(deps, "collpro-reno", authorizeInput),
+      };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  const baselineUnattached = await countUnattachedPublicPhotos(business.id);
+  const attachedForCap = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "cap-attached.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  await createRequestWithPhotoIds(
+    "Cap Attached",
+    `cap-attached-${randomUUID()}@example.com`,
+    [attachedForCap.id],
+  );
+  requestPhotoTestHooks.unattachedCountCap = baselineUnattached + 1;
+  const afterAttachUnattached = await countUnattachedPublicPhotos(business.id);
+  const extraWhileAttached = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "cap-after-attach.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  check(
+    "Attached request photos do not consume the unattached public-photo cap",
+    afterAttachUnattached === baselineUnattached && extraWhileAttached.status === "READY",
+  );
+
+  requestPhotoTestHooks.unattachedCountCap = (await countUnattachedPublicPhotos(business.id)) + 1;
+  const capClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const capClientB = new PrismaClient({ datasourceUrl: testUrl });
+  await capClientA.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  await capClientB.$executeRawUnsafe(`SET timezone = 'UTC'`);
+  const capBarrier = createLockBarrier();
+  let firstCapLock = true;
+  requestPhotoTestHooks.afterUnattachedCapLock = async () => {
+    if (!firstCapLock) return;
+    firstCapLock = false;
+    capBarrier.arrived();
+    await capBarrier.held;
+  };
+  try {
+    const firstCap = tryAuthorize({ ...storageDeps, db: capClientA });
+    await capBarrier.waiting;
+    const secondCap = tryAuthorize({ ...storageDeps, db: capClientB });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    capBarrier.release();
+    const [capA, capB] = await Promise.all([firstCap, secondCap]);
+    const winners = [capA, capB].filter((row) => row.ok);
+    const losers = [capA, capB].filter((row) => !row.ok);
+    check(
+      "Unattached photo cap is enforced across two concurrent authorize connections",
+      winners.length === 1 &&
+        losers.length === 1 &&
+        losers[0].error instanceof StorageError &&
+        losers[0].error.message === PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+    );
+  } finally {
+    delete requestPhotoTestHooks.afterUnattachedCapLock;
+    delete requestPhotoTestHooks.unattachedCountCap;
+    await capClientA.$disconnect();
+    await capClientB.$disconnect();
+  }
+
+  requestPhotoTestHooks.unattachedCountCap = await countUnattachedPublicPhotos(business.id);
+  let blockedPublic = null;
+  try {
+    await authorizePublicRequestPhoto(storageDeps, "collpro-reno", authorizeInput);
+  } catch (error) {
+    blockedPublic = error;
+  }
+  const ownerStillUploads = await authorizeManagedUpload(storageDeps, business.id, {
+    category: "JOB_PHOTO",
+    purpose: "field-job-photo",
+    originalFilename: "owner-not-blocked.png",
+    mimeType: "image/png",
+    fileSizeBytes: pngBytes.length,
+    visibility: "PRIVATE",
+  });
+  delete requestPhotoTestHooks.unattachedCountCap;
+  check(
+    "Public unattached-photo cap does not block legitimate business uploads",
+    blockedPublic instanceof StorageError &&
+      blockedPublic.message === PUBLIC_REQUEST_PHOTO_CAP_REACHED &&
+      ownerStillUploads.asset.category === "JOB_PHOTO" &&
+      ownerStillUploads.asset.status === "PENDING",
+  );
+
+  const releaseOnce = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "release-once.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const releaseBefore = await accountSnapshot(business.id);
+  const firstRelease = await releasePublicRequestPhotos(storageDeps, "collpro-reno", [
+    releaseOnce.id,
+  ]);
+  const releaseMid = await accountSnapshot(business.id);
+  const secondRelease = await releasePublicRequestPhotos(storageDeps, "collpro-reno", [
+    releaseOnce.id,
+  ]);
+  const releaseAfter = await accountSnapshot(business.id);
+  check(
+    "Rejection release uncharges quota once and a second release is a no-op",
+    firstRelease.released === 1 &&
+      secondRelease.released === 0 &&
+      (await reloadAsset(releaseOnce.id))?.status === "FAILED" &&
+      releaseMid.used === releaseBefore.used - pngBytes.length &&
+      releaseAfter.used === releaseMid.used,
+  );
+
+  const foreignReleasePhoto = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "cross-tenant-release.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const foreignRelease = await releasePublicRequestPhotos(storageDeps, "other-handyman", [
+    foreignReleasePhoto.id,
+  ]);
+  check(
+    "Cross-tenant public photo release is a no-op",
+    foreignRelease.released === 0 &&
+      (await reloadAsset(foreignReleasePhoto.id))?.status === "READY",
+  );
+
+  const retryAfterReleaseId = `relretry${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const retryAfterReleasePhoto = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "retry-after-release.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const retryAfterReleaseFirst = await createRequestWithPhotoIds(
+    "Retry After Release",
+    `retry-after-release-${randomUUID()}@example.com`,
+    [retryAfterReleasePhoto.id],
+    retryAfterReleaseId,
+  );
+  await releasePublicRequestPhotos(storageDeps, "collpro-reno", [retryAfterReleasePhoto.id]);
+  const retryAfterReleaseSecond = await createRequestWithPhotoIds(
+    "Retry After Release",
+    `retry-after-release-${randomUUID()}@example.com`,
+    [retryAfterReleasePhoto.id],
+    retryAfterReleaseId,
+  );
+  check(
+    "Releasing attached photos after a successful submit does not break submissionId retry",
+    retryAfterReleaseFirst.created.ok === true &&
+      retryAfterReleaseSecond.created.ok === true &&
+      retryAfterReleaseSecond.created.requestId === retryAfterReleaseFirst.created.requestId,
+  );
+
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");
   function makeAccess(businessId) {
     return {
@@ -2286,6 +2483,28 @@ try {
     isoA.ok === true &&
       isoB.ok === true &&
       isoA.requestId !== isoB.requestId,
+  );
+  const sequentialToken = `seqbiz${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const sequentialA = await createPublicServiceRequest(
+    prisma,
+    publicIntakePayload("collpro-reno", fan.id, sequentialToken, "Seq Handy"),
+  );
+  const sequentialB = await createPublicServiceRequest(
+    prisma,
+    publicIntakePayload("other-handyman", otherItem.id, sequentialToken, "Seq Other"),
+  );
+  const sequentialBRow = sequentialB.ok
+    ? await prisma.serviceRequest.findFirst({
+        where: { id: sequentialB.requestId },
+        select: { id: true, businessId: true },
+      })
+    : null;
+  check(
+    "Same submissionId across two businesses does not return the other tenant's request",
+    sequentialA.ok === true &&
+      sequentialB.ok === true &&
+      sequentialA.requestId !== sequentialB.requestId &&
+      sequentialBRow?.businessId === other.id,
   );
 
   const customersBeforeHandoff = await prisma.customer.count({ where: { businessId: business.id } });

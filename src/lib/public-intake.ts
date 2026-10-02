@@ -1173,7 +1173,8 @@ async function createPublicServiceRequestInner(
 
       const attachedAssetIds = photoRows
         .map((row) => row.storedAssetId)
-        .filter((id): id is string => Boolean(id));
+        .filter((id): id is string => Boolean(id))
+        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
       if (typeof tx.$queryRaw === "function") {
         const rawTx = tx as Pick<Prisma.TransactionClient, "$queryRaw">;
         for (const assetId of attachedAssetIds) {
@@ -1194,7 +1195,7 @@ async function createPublicServiceRequestInner(
       const leftoverAssetIds = [
         ...ownedPhotoIds.filter((id) => !attachedAssetIds.includes(id)),
         ...overflowPhotoAssetIds,
-      ];
+      ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
       return { requestId: request.id, leftoverAssetIds };
     });

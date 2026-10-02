@@ -3,6 +3,7 @@ import {
   abortManagedUpload,
   authorizeManagedUpload,
   bestEffortCleanupOwnedObject,
+  ensureBusinessStorageAccount,
   finalizeManagedUpload,
   resolveStorageProvider,
   type StorageServiceDeps,
@@ -10,6 +11,9 @@ import {
 import { inspectRequestPhotoUpload } from "@/lib/business-storage/request-photo-rules";
 import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
+  MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
+  PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+  UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
   UNATTACHED_REQUEST_PHOTO_TTL_MS,
   StorageError,
 } from "@/lib/business-storage/types";
@@ -17,7 +21,13 @@ import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import { resolveSupportedImageMimeType } from "@/lib/storage";
 
 export { inspectRequestPhotoUpload, requestPhotoMaxBytesLabel } from "@/lib/business-storage/request-photo-rules";
-export { UNATTACHED_REQUEST_PHOTO_TTL_MS };
+export {
+  MAX_PUBLIC_INTAKE_REQUEST_PHOTOS,
+  MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
+  PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+  UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
+  UNATTACHED_REQUEST_PHOTO_TTL_MS,
+} from "@/lib/business-storage/types";
 
 export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
 /** Bound the public form's photoAssetIds list before any StoredAsset lookup. */
@@ -34,7 +44,16 @@ export const requestPhotoTestHooks: {
     businessId: string;
     assetIds: string[];
   }) => Promise<void> | void;
+  afterUnattachedCapLock?: () => Promise<void> | void;
+  unattachedCountCap?: number;
+  unattachedByteCap?: number;
 } = {};
+
+export function sortedStoredAssetIds(assetIds: string[]) {
+  return [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+}
 const NOT_PRIVATE_REQUEST_PHOTO = "That photo is not a private request photo.";
 const REQUEST_PHOTO_CANNOT_BE_PUBLISHED = "Request photos cannot be published.";
 
@@ -52,6 +71,86 @@ type LockedStoredAssetRow = {
   storageAccountId: string;
   storageKey: string;
 };
+
+function unattachedPublicRequestPhotoByteCeiling(limitBytes: number) {
+  const fromHook = requestPhotoTestHooks.unattachedByteCap;
+  if (typeof fromHook === "number" && Number.isFinite(fromHook)) {
+    return Math.max(0, Math.floor(fromHook));
+  }
+  return Math.max(0, Math.floor(limitBytes * UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO));
+}
+
+function unattachedPublicRequestPhotoCountCap() {
+  const fromHook = requestPhotoTestHooks.unattachedCountCap;
+  if (typeof fromHook === "number" && Number.isFinite(fromHook)) {
+    return Math.max(0, Math.floor(fromHook));
+  }
+  return MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS;
+}
+
+async function loadUnattachedPublicRequestUsage(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  excludeAssetId?: string,
+) {
+  const rows = await tx.storedAsset.findMany({
+    where: {
+      businessId,
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      category: "CUSTOMER_PHOTO",
+      visibility: "PRIVATE",
+      deletedAt: null,
+      status: { in: ["READY", "PENDING"] },
+      serviceRequestPhotos: { none: {} },
+      ...(excludeAssetId ? { id: { not: excludeAssetId } } : {}),
+    },
+    select: { fileSizeBytes: true },
+  });
+  return {
+    count: rows.length,
+    bytes: rows.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0),
+  };
+}
+
+async function assertUnattachedPublicRequestPhotoCapacity(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  input: { incomingCount: number; incomingBytes: number; limitBytes: number; excludeAssetId?: string },
+) {
+  const usage = await loadUnattachedPublicRequestUsage(tx, businessId, input.excludeAssetId);
+  const countCap = unattachedPublicRequestPhotoCountCap();
+  const byteCap = unattachedPublicRequestPhotoByteCeiling(input.limitBytes);
+  if (
+    usage.count + input.incomingCount > countCap ||
+    usage.bytes + input.incomingBytes > byteCap
+  ) {
+    throw new StorageError(PUBLIC_REQUEST_PHOTO_CAP_REACHED);
+  }
+}
+
+async function lockBusinessStorageAccountForUpdate(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+) {
+  await tx.$queryRaw`
+    SELECT id
+    FROM "BusinessStorageAccount"
+    WHERE "businessId" = ${businessId}
+    FOR UPDATE
+  `;
+}
+
+async function resolvePublicRequestPhotoLimitBytes(
+  deps: StorageServiceDeps,
+  businessId: string,
+) {
+  const account = await ensureBusinessStorageAccount(deps.db, businessId, {
+    bucketName: deps.bucketName,
+    defaultLimitBytes: deps.defaultLimitBytes,
+  });
+  const { resolveEffectiveStorageLimitBytes } = await import("@/lib/product-entitlements/limits");
+  return resolveEffectiveStorageLimitBytes(deps.db, businessId, account.storageLimitBytes);
+}
 
 export async function lockStoredAssetRowForUpdate(
   tx: AssetLockClient,
@@ -169,7 +268,7 @@ export async function releaseUnattachedPublicRequestPhotos(
   businessId: string,
   assetIds: string[],
 ) {
-  const ids = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
+  const ids = sortedStoredAssetIds(assetIds);
   if (ids.length === 0) return { released: 0 };
   await requestPhotoTestHooks.beforeReleaseUnattached?.({ businessId, assetIds: ids });
   const now = deps.now?.() ?? new Date();
@@ -221,7 +320,23 @@ export async function releaseExpiredUnattachedPublicRequestPhotos(
   return releaseUnattachedPublicRequestPhotos(
     deps,
     businessId,
-    expired.map((row) => row.id),
+    sortedStoredAssetIds(expired.map((row) => row.id)),
+  );
+}
+
+export async function releasePublicRequestPhotos(
+  deps: StorageServiceDeps,
+  slug: string,
+  assetIds: string[],
+) {
+  const business = await resolvePublicStorageBusiness(deps.db, slug);
+  if (!business) {
+    throw new StorageError("This request could not be submitted.");
+  }
+  return releaseUnattachedPublicRequestPhotos(
+    deps,
+    business.id,
+    sortedStoredAssetIds(assetIds).slice(0, MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP),
   );
 }
 
@@ -294,14 +409,30 @@ export async function authorizePublicRequestPhoto(
     throw new StorageError(inspection.error);
   }
   await releaseExpiredUnattachedPublicRequestPhotos(deps, business.id);
-  return authorizeManagedUpload(deps, business.id, {
-    category: "CUSTOMER_PHOTO",
-    purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
-    originalFilename: inspection.fileName,
-    mimeType: inspection.mimeType,
-    fileSizeBytes: inspection.fileSizeBytes,
-    visibility: "PRIVATE",
-  });
+  const limitBytes = await resolvePublicRequestPhotoLimitBytes(deps, business.id);
+  return authorizeManagedUpload(
+    deps,
+    business.id,
+    {
+      category: "CUSTOMER_PHOTO",
+      purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
+      originalFilename: inspection.fileName,
+      mimeType: inspection.mimeType,
+      fileSizeBytes: inspection.fileSizeBytes,
+      visibility: "PRIVATE",
+    },
+    {
+      async beforeCreate(tx) {
+        await lockBusinessStorageAccountForUpdate(tx, business.id);
+        await requestPhotoTestHooks.afterUnattachedCapLock?.();
+        await assertUnattachedPublicRequestPhotoCapacity(tx, business.id, {
+          incomingCount: 1,
+          incomingBytes: inspection.fileSizeBytes,
+          limitBytes,
+        });
+      },
+    },
+  );
 }
 
 export async function finalizePublicRequestPhoto(
@@ -326,6 +457,7 @@ export async function finalizePublicRequestPhoto(
   if (!isPrivateUnpublishedCustomerPhoto(candidate)) {
     throw new StorageError(NOT_PRIVATE_REQUEST_PHOTO);
   }
+  await releaseExpiredUnattachedPublicRequestPhotos(deps, business.id);
   if (candidate.status === "READY") {
     await stampUnattachedRequestPhotoExpiry(deps, business.id, candidate.id);
     return deps.db.storedAsset.findFirstOrThrow({
@@ -340,6 +472,18 @@ export async function finalizePublicRequestPhoto(
   ) {
     throw new StorageError(NOT_PRIVATE_REQUEST_PHOTO);
   }
+
+  const limitBytes = await resolvePublicRequestPhotoLimitBytes(deps, business.id);
+  await deps.db.$transaction(async (tx) => {
+    await lockBusinessStorageAccountForUpdate(tx, business.id);
+    await requestPhotoTestHooks.afterUnattachedCapLock?.();
+    await assertUnattachedPublicRequestPhotoCapacity(tx, business.id, {
+      incomingCount: 1,
+      incomingBytes: candidate.fileSizeBytes,
+      excludeAssetId: candidate.id,
+      limitBytes,
+    });
+  });
 
   const asset = await finalizeManagedUpload(deps, business.id, assetId);
   await stampUnattachedRequestPhotoExpiry(deps, business.id, asset.id);
