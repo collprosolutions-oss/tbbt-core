@@ -7,7 +7,8 @@
  * sibling Postgres database. HTTP checks run when APP_URL is reachable.
  * Those HTTP hits use the APP_URL process database (DATABASE_URL), not the
  * sibling test DB, so the suite upserts a local `collpro-reno` Business on
- * that database before fetching /hire and /r. It never publishes, never
+ * that database before fetching /hire and /r, plus one active Handyman
+ * catalog item if the services list is empty. It never publishes, never
  * changes production routing, and never overwrites an existing row.
  *
  * Run with:
