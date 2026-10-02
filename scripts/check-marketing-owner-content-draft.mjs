@@ -185,6 +185,17 @@ function fakeSucceedingProvider(calls, text = "Local faucet repair update. Revie
   };
 }
 
+function fakeThrowingProvider(calls, message = "provider exploded") {
+  return {
+    id: "fake",
+    connected: true,
+    async complete(request) {
+      calls.push(request);
+      throw new Error(message);
+    },
+  };
+}
+
 function fakeSecretFailureProvider(calls) {
   return {
     id: "fake",
@@ -253,10 +264,18 @@ try {
   );
   check(
     "sk- keys and the configured API key are redacted from stored failure reasons",
-    sanitizeSrc.includes("sk-[A-Za-z0-9_-]+") &&
+    sanitizeSrc.includes("(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}") &&
+      sanitizeSrc.includes("sk-proj-") &&
+      sanitizeSrc.includes("sk-svcacct-") &&
       /SECRET_VALUE_PATTERN[\s\S]*?\/gi/.test(sanitizeSrc) &&
       sanitizeSrc.includes("readAiApiKey") &&
       serviceSrc.includes("failureReason: sanitizeAiText(completed.error, 400)"),
+  );
+  check(
+    "Mark-FAILED after a throw is claimedAt-guarded",
+    ownerFnSrc.includes("claimedAt: reserved.interaction.claimedAt") &&
+      ownerFnSrc.includes('status: "PENDING"') &&
+      ownerFnSrc.includes("updateMany"),
   );
   check(
     "FAILED, VALIDATION_FAILED, and budget Unavailable rotate the attempt id",
@@ -616,6 +635,33 @@ try {
       !twoKeyText.includes("sk-abc-secondkeyBBB") &&
       !twoKeyText.includes("literal-configured-key-value-xyz"),
   );
+  const ordinaryWords = [
+    "task-force",
+    "risk-free",
+    "desk-side",
+    "disk-based",
+    "mask-wearing",
+    "Task-Force Plumbing",
+  ];
+  const ordinarySentence = "Task-Force Plumbing offers a risk-free estimate from the desk-side task-force using disk-based notes and mask-wearing staff.";
+  const ordinarySanitized = ordinaryWords.map((word) => sanitizeAiText(word));
+  const keyedOrdinary = sanitizeAiText(
+    `${ordinarySentence} leaked sk-abcdefghijklmnopqrstuv and sk-svcacct-secondkey456`,
+  );
+  check(
+    "Ordinary sk-hyphen words pass through while anchored keys are redacted",
+    ordinaryWords.every((word, index) => ordinarySanitized[index] === word) &&
+      sanitizeAiText(ordinarySentence) === ordinarySentence &&
+      keyedOrdinary.includes("task-force") &&
+      keyedOrdinary.includes("risk-free") &&
+      keyedOrdinary.includes("desk-side") &&
+      keyedOrdinary.includes("disk-based") &&
+      keyedOrdinary.includes("mask-wearing") &&
+      keyedOrdinary.includes("Task-Force Plumbing") &&
+      !keyedOrdinary.includes("sk-abcdefghijklmnopqrstuv") &&
+      !keyedOrdinary.includes("sk-svcacct-secondkey456") &&
+      keyedOrdinary.includes("[redacted]"),
+  );
 
   console.log("\nTEST — Cost bound refuses another provider call");
   const periodStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
@@ -821,6 +867,102 @@ try {
       freshCalls.length === 0 &&
       freshRow?.status === "PENDING" &&
       freshRow.id === freshPending.interactionId,
+  );
+
+  console.log("\nTEST — Throw after reserve marks FAILED and respects claimedAt");
+  const throwOwner = await prisma.user.create({
+    data: { name: "Throw Owner", email: `throw-draft-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const throwBusiness = await prisma.business.create({
+    data: {
+      name: "Throw Drafts",
+      slug: `throw-draft-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const throwMem = await prisma.membership.create({
+    data: { userId: throwOwner.id, businessId: throwBusiness.id, role: "OWNER" },
+  });
+  const throwAccess = makeAccess(throwBusiness.id, "OWNER", throwMem.id, throwOwner.id);
+  const throwAttemptId = randomUUID();
+  const throwCalls = [];
+  await expectError(
+    "Throwing provider surfaces the failure after reserve",
+    () =>
+      requestOwnerMarketingContentDraft(prisma, throwAccess, {
+        attemptId: throwAttemptId,
+        provider: fakeThrowingProvider(throwCalls),
+        budget: { burstLimit: 1000 },
+      }),
+    (error) => error instanceof Error && /exploded/.test(error.message),
+  );
+  const throwRow = await prisma.aiInteraction.findFirst({
+    where: {
+      businessId: throwBusiness.id,
+      idempotencyKey: `marketing:owner-content-draft:${throwBusiness.id}:${throwAttemptId}`,
+    },
+  });
+  check(
+    "Throw after reserve marks that PENDING row FAILED",
+    throwRow?.status === "FAILED" && throwCalls.length === 1,
+  );
+
+  const guardOwner = await prisma.user.create({
+    data: { name: "Guard Owner", email: `guard-draft-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const guardBusiness = await prisma.business.create({
+    data: {
+      name: "Guard Drafts",
+      slug: `guard-draft-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const guardMem = await prisma.membership.create({
+    data: { userId: guardOwner.id, businessId: guardBusiness.id, role: "OWNER" },
+  });
+  const guardAccess = makeAccess(guardBusiness.id, "OWNER", guardMem.id, guardOwner.id);
+  const guardAttemptId = randomUUID();
+  const guardNow = new Date();
+  const reclaimedAt = new Date(guardNow.getTime() + 5_000);
+  const guardCalls = [];
+  await expectError(
+    "Reclaimed worker still surfaces its throw",
+    () =>
+      requestOwnerMarketingContentDraft(prisma, guardAccess, {
+        attemptId: guardAttemptId,
+        now: guardNow,
+        provider: {
+          id: "fake",
+          connected: true,
+          async complete(request) {
+            guardCalls.push(request);
+            await prisma.aiInteraction.updateMany({
+              where: {
+                businessId: guardBusiness.id,
+                idempotencyKey: `marketing:owner-content-draft:${guardBusiness.id}:${guardAttemptId}`,
+                status: "PENDING",
+              },
+              data: { claimedAt: reclaimedAt },
+            });
+            throw new Error("reclaimed worker still throwing");
+          },
+        },
+        budget: { burstLimit: 1000 },
+      }),
+    (error) => error instanceof Error && /reclaimed worker/.test(error.message),
+  );
+  const guardRow = await prisma.aiInteraction.findFirst({
+    where: {
+      businessId: guardBusiness.id,
+      idempotencyKey: `marketing:owner-content-draft:${guardBusiness.id}:${guardAttemptId}`,
+    },
+  });
+  check(
+    "Losing worker cannot mark a reclaimed PENDING row FAILED",
+    guardRow?.status === "PENDING" &&
+      guardCalls.length === 1 &&
+      guardRow.claimedAt != null &&
+      guardRow.claimedAt.getTime() === reclaimedAt.getTime(),
   );
 } finally {
   if (previousAiKey == null) delete process.env.TBBT_AI_API_KEY;

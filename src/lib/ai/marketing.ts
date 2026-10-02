@@ -334,7 +334,7 @@ export async function marketingOwnerDraftBudgetUsed(
 
 type ReservedOwnerDraftSlot =
   | { kind: "existing"; interaction: { id: string; status: string; claimedAt: Date | null } }
-  | { kind: "reserved"; interaction: { id: string } }
+  | { kind: "reserved"; interaction: { id: string; claimedAt: Date | null } }
   | { kind: "exhausted"; reason: "MONTHLY" | "BURST" };
 
 async function reserveOwnerMarketingDraftSlot(
@@ -379,7 +379,7 @@ async function reserveOwnerMarketingDraftSlot(
         idempotencyKey: input.idempotencyKey,
         claimedAt: input.now,
       },
-      select: { id: true },
+      select: { id: true, claimedAt: true },
     });
     return { kind: "reserved", interaction };
   };
@@ -582,7 +582,11 @@ export async function requestOwnerMarketingContentDraft(
   } catch (error) {
     if (reserved.kind === "reserved") {
       await db.aiInteraction.updateMany({
-        where: { id: reserved.interaction.id, status: "PENDING" },
+        where: {
+          id: reserved.interaction.id,
+          status: "PENDING",
+          claimedAt: reserved.interaction.claimedAt,
+        },
         data: {
           status: "FAILED",
           failureReason: sanitizeAiText(error instanceof Error ? error.message : "owner draft failed", 400),
