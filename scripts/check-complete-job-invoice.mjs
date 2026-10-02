@@ -24,6 +24,10 @@ const {
 const {
   COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
   FIELD_COMPLETE_JOB_MESSAGE,
+  INVOICE_ALREADY_SENT_MESSAGE,
+  completedJobPageInvoiceMessage,
+  workOrderCardCompletedInvoiceMessage,
+  invoicePageStatusMessage,
   completeJobDraftInvoiceHref,
 } = await import("@/lib/complete-job-copy");
 const {
@@ -224,30 +228,88 @@ try {
   check(
     "field completion message does not claim an invoice was sent or drafted",
     FIELD_COMPLETE_JOB_MESSAGE ===
-      "Job completed. The owner will review and send the invoice when ready." &&
+      "This job is complete. The owner will review and send the invoice when ready." &&
       !/invoice was sent|sent automatically|invoice drafted/i.test(FIELD_COMPLETE_JOB_MESSAGE),
   );
+
+  const draftOnlyAttention = {
+    unbilled: true,
+    reason: "draft-only-invoice",
+    detail: "Completed job invoice has not been sent",
+    invoiceStatuses: ["DRAFT"],
+  };
   check(
-    "owner Complete Job surfaces show the draft message and invoice Send path",
-    copySrc.includes("COMPLETE_JOB_DRAFT_INVOICE_MESSAGE") &&
-      completeSrc.includes("ownerCompleteJobSuccessState") &&
-      jobActionSrc.includes("ownerCompleteJobSuccessState") &&
-      completeButtonSrc.includes("state.message") &&
-      completeButtonSrc.includes("Open invoice") &&
-      completeButtonSrc.includes("completeJobDraftInvoiceHref") &&
-      workOrderCardSrc.includes("COMPLETE_JOB_DRAFT_INVOICE_MESSAGE") &&
-      workOrderCardSrc.includes("MarkInvoiceSentButton") &&
-      jobPageSrc.includes("COMPLETE_JOB_DRAFT_INVOICE_MESSAGE") &&
-      invoicePageSrc.includes("COMPLETE_JOB_DRAFT_INVOICE_MESSAGE") &&
-      !completeButtonSrc.includes("invoice was sent") &&
-      !jobPageSrc.includes("invoice was sent automatically"),
+    "job page draft-only derived output is the Send prompt, not the generic unbilled detail",
+    completedJobPageInvoiceMessage(draftOnlyAttention) === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      completedJobPageInvoiceMessage(draftOnlyAttention) !== draftOnlyAttention.detail,
   );
   check(
-    "field and native complete copy does not claim send",
+    "job page other unbilled reasons keep their detail",
+    completedJobPageInvoiceMessage({
+      unbilled: true,
+      reason: "no-covering-invoice",
+      detail: "Completed job has unbilled approved work",
+      invoiceStatuses: [],
+    }) === "Completed job has unbilled approved work",
+  );
+  check(
+    "work-order card derived output is the Send prompt for a draft invoice",
+    workOrderCardCompletedInvoiceMessage("DRAFT") === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      workOrderCardCompletedInvoiceMessage("SENT") === null,
+  );
+  check(
+    "invoice page derived output is the Send prompt for a draft invoice",
+    invoicePageStatusMessage("DRAFT") === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
+      invoicePageStatusMessage("SENT", false) !== COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  );
+
+  const markJobCompleteFn = jobActionSrc.slice(
+    jobActionSrc.indexOf("export async function markJobComplete"),
+    jobActionSrc.indexOf(
+      "export async function",
+      jobActionSrc.indexOf("export async function markJobComplete") + 1,
+    ),
+  );
+  check(
+    "markJobComplete returns the draft success message and invoice href",
+    markJobCompleteFn.includes("...ownerCompleteJobSuccessState(result)") &&
+      markJobCompleteFn.includes("invoiceHref"),
+  );
+  check(
+    "job page Invoice card renders the derived draft-only helper",
+    jobPageSrc.includes("completedJobPageInvoiceMessage(") &&
+      !/billingAttention\.unbilled\s*\?\s*billingAttention\.detail/.test(jobPageSrc) &&
+      jobPageSrc.includes("MarkInvoiceSentButton") &&
+      jobPageSrc.includes("`/invoices/${invoice.id}`") &&
+      jobPageSrc.includes("`/invoices/${row.id}`"),
+  );
+  check(
+    "work-order card renders the derived draft message plus Send and Open invoice",
+    workOrderCardSrc.includes("workOrderCardCompletedInvoiceMessage(") &&
+      workOrderCardSrc.includes("{draftInvoicePrompt}") &&
+      workOrderCardSrc.includes("MarkInvoiceSentButton") &&
+      workOrderCardSrc.includes("`/invoices/${job.invoice.id}`") &&
+      !workOrderCardSrc.includes("invoice was sent"),
+  );
+  check(
+    "invoice page renders the derived draft message where Send lives",
+    invoicePageSrc.includes("invoicePageStatusMessage(") &&
+      invoicePageSrc.includes("MarkInvoiceSentButton") &&
+      !invoicePageSrc.includes("invoice was sent automatically"),
+  );
+  check(
+    "owner Complete Job button still exposes a transient Open invoice path",
+    completeButtonSrc.includes("state.message") &&
+      completeButtonSrc.includes("Open invoice") &&
+      completeButtonSrc.includes("completeJobDraftInvoiceHref") &&
+      !completeButtonSrc.includes("invoice was sent"),
+  );
+  check(
+    "field and native complete copy does not claim send or double the sentence",
     fieldButtonSrc.includes("state.message") &&
-      fieldPageSrc.includes("FIELD_COMPLETE_JOB_MESSAGE") &&
-      fieldPageSrc.includes("This job is complete.") &&
-      nativeJobSrc.includes("The owner will review and send the invoice when ready.") &&
+      fieldPageSrc.includes("{FIELD_COMPLETE_JOB_MESSAGE}") &&
+      !fieldPageSrc.includes("This job is complete. {FIELD_COMPLETE_JOB_MESSAGE}") &&
+      nativeJobSrc.includes(FIELD_COMPLETE_JOB_MESSAGE) &&
       !nativeJobSrc.includes("invoice was sent") &&
       todaySrc.includes("Owner Complete Job leaves a draft") &&
       bsosSrc.includes("Owner Complete Job leaves a draft until Send") &&
@@ -267,6 +329,7 @@ try {
     }).message === COMPLETE_JOB_DRAFT_INVOICE_MESSAGE &&
       completeJobDraftInvoiceHref("inv_draft") === "/invoices/inv_draft",
   );
+  check("copy helpers live next to the pinned draft message", copySrc.includes("completedJobPageInvoiceMessage"));
 
   const businessA = await prisma.business.create({
     data: { name: "Alpha Handyman", slug: "alpha-handyman", tradeCode: "HANDYMAN" },
@@ -525,7 +588,13 @@ try {
     invoiceId: invoice.id,
     businessName: businessA.name,
   });
-  check("duplicate send is idempotent", sentAgain.ok === true && sentAgain.newlySent === false);
+  check(
+    "duplicate send is idempotent already-sent success",
+    sentAgain.ok === true &&
+      sentAgain.newlySent === false &&
+      sentAgain.alreadySent === true &&
+      sentAgain.message === INVOICE_ALREADY_SENT_MESSAGE,
+  );
   check(
     "duplicate send does not emit a second INVOICE_SENT",
     (await prisma.businessEvent.count({
@@ -545,6 +614,74 @@ try {
   check("PDF contains keypad work", pdfText.includes("Keypad / Electronic Deadbolt Replacement"));
   check("PDF contains WORK PERFORMED", pdfText.includes("WORK PERFORMED"));
   check("PDF total is $375.00", pdfText.includes("$375.00"));
+
+  console.log("\nTEST — Concurrent double Send is already-sent success");
+  const concurrentWork = await createInProgressApprovedJob({
+    businessId: businessA.id,
+    customerId: customerA.id,
+    propertyId: propertyA.id,
+    customerName: customerA.name,
+    estimateTotal: 40,
+    estimateLines: [{ description: "Concurrent send", quantity: 1, unitPrice: 40, total: 40 }],
+  });
+  const concurrentCompleted = await completeJobAndDraftInvoice(prisma, {
+    businessId: businessA.id,
+    jobId: concurrentWork.job.id,
+    businessName: businessA.name,
+    actorMembershipId: ownerMem.id,
+  });
+  check(
+    "concurrent fixture stays DRAFT until send",
+    concurrentCompleted.ok === true && concurrentCompleted.invoiceStatus === "DRAFT",
+  );
+  const concurrentSends = await Promise.all([
+    sendDraftInvoiceIfNeeded(prisma, {
+      businessId: businessA.id,
+      invoiceId: concurrentCompleted.invoiceId,
+      businessName: businessA.name,
+    }),
+    sendDraftInvoiceIfNeeded(prisma, {
+      businessId: businessA.id,
+      invoiceId: concurrentCompleted.invoiceId,
+      businessName: businessA.name,
+    }),
+  ]);
+  check(
+    "both concurrent Send clicks succeed",
+    concurrentSends.every(
+      (result) =>
+        result.ok === true &&
+        result.status === "SENT" &&
+        result.error == null,
+    ),
+  );
+  check(
+    "exactly one concurrent click newly sends",
+    concurrentSends.filter((result) => result.ok && result.newlySent === true).length === 1,
+  );
+  check(
+    "the losing Send click is already-sent success, not a created-but-could-not-send error",
+    concurrentSends.some(
+      (result) =>
+        result.ok === true &&
+        result.newlySent === false &&
+        result.alreadySent === true &&
+        result.message === INVOICE_ALREADY_SENT_MESSAGE,
+    ) &&
+      concurrentSends.every(
+        (result) => result.error !== "The invoice was created but could not be sent.",
+      ),
+  );
+  check(
+    "concurrent Send emits INVOICE_SENT exactly once",
+    (await prisma.businessEvent.count({
+      where: {
+        businessId: businessA.id,
+        type: "INVOICE_SENT",
+        subjectId: concurrentCompleted.ok ? concurrentCompleted.invoiceId : "",
+      },
+    })) === 1,
+  );
 
   console.log("\nTEST B — Retrying Complete Job is idempotent");
   const retry = await completeJobAndDraftInvoice(prisma, {

@@ -21,7 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { requireManagementPageAccess } from "@/lib/access";
-import { COMPLETE_JOB_DRAFT_INVOICE_MESSAGE } from "@/lib/complete-job-copy";
+import { invoicePageStatusMessage } from "@/lib/complete-job-copy";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { backfillEmptyInvoiceWorkLines } from "@/lib/invoice-carry-forward";
@@ -325,15 +325,7 @@ export default async function InvoicePage({
             </>
           ) : null}
           <p>
-            {isDraft
-              ? COMPLETE_JOB_DRAFT_INVOICE_MESSAGE
-              : isSent
-                ? dueIsZero
-                  ? "Recorded payments already cover this invoice. Mark it paid when you are ready to close it."
-                  : "Record the remaining balance here once the customer pays."
-                : isPaid
-                  ? "This invoice is paid and cannot be reopened."
-                  : null}
+            {invoicePageStatusMessage(invoice.status, dueIsZero)}
           </p>
           <p>
             Job:{" "}

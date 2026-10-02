@@ -788,11 +788,8 @@ export async function markJobComplete(
   revalidatePath("/invoices");
   revalidatePath(`/jobs/${job.id}`);
   revalidatePath(`/invoices/${result.invoiceId}`);
-  const success = ownerCompleteJobSuccessState(result);
   return {
-    message: success.message,
-    invoiceId: success.invoiceId,
-    invoiceHref: success.invoiceHref,
+    ...ownerCompleteJobSuccessState(result),
     warning: result.warning,
   };
 }

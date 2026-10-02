@@ -323,7 +323,7 @@ export default async function FieldJobPage({
         {isInProgress ? <CompleteAssignedJobButton jobId={job.id} /> : null}
         {isCompleted ? (
           <p className="rounded-lg border border-dashed p-3 text-center text-sm text-muted-foreground">
-            This job is complete. {FIELD_COMPLETE_JOB_MESSAGE}
+            {FIELD_COMPLETE_JOB_MESSAGE}
           </p>
         ) : null}
       </div>

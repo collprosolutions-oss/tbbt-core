@@ -32,7 +32,7 @@ import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
-import { COMPLETE_JOB_DRAFT_INVOICE_MESSAGE } from "@/lib/complete-job-copy";
+import { completedJobPageInvoiceMessage } from "@/lib/complete-job-copy";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { RecordOwnerAppointmentConfirmationForm } from "@/components/jobs/record-owner-appointment-confirmation-form";
 import { OwnerAppointmentAttentionBanner } from "@/components/jobs/owner-appointment-attention-banner";
@@ -661,13 +661,12 @@ export default async function JobPage({
           <CardHeader>
             <CardTitle>Invoice</CardTitle>
             <CardDescription>
-              {billingAttention.unbilled
-                ? billingAttention.detail
-                : invoices.length === 0
-                  ? "Completing this job did not create an invoice. Create and send one from the approved work."
-                  : invoices.some((row) => row.status === "DRAFT")
-                    ? COMPLETE_JOB_DRAFT_INVOICE_MESSAGE
-                    : "Approved work on this job is billed. Opening an invoice will not rewrite it."}
+              {completedJobPageInvoiceMessage({
+                unbilled: billingAttention.unbilled,
+                reason: billingAttention.unbilled ? billingAttention.reason : undefined,
+                detail: billingAttention.unbilled ? billingAttention.detail : undefined,
+                invoiceStatuses: invoices.map((row) => row.status),
+              })}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

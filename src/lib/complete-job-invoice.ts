@@ -13,6 +13,7 @@
 import type { PrismaClient } from "@prisma/client";
 import {
   COMPLETE_JOB_DRAFT_INVOICE_MESSAGE,
+  INVOICE_ALREADY_SENT_MESSAGE,
   completeJobDraftInvoiceHref,
 } from "@/lib/complete-job-copy";
 import { persistDraftInvoiceFromCompletedJob } from "@/lib/invoice-carry-forward";
@@ -58,6 +59,8 @@ export type SendDraftInvoiceResult =
       status: string;
       newlySent: false;
       customerNotified: false;
+      alreadySent?: true;
+      message?: string;
     }
   | {
       ok: true;
@@ -135,6 +138,8 @@ export async function sendDraftInvoiceIfNeeded(
       status: invoice.status,
       newlySent: false,
       customerNotified: false,
+      alreadySent: true,
+      message: INVOICE_ALREADY_SENT_MESSAGE,
     };
   }
 
@@ -152,10 +157,24 @@ export async function sendDraftInvoiceIfNeeded(
   });
 
   if (updated.count !== 1) {
+    const raced = await db.invoice.findFirst({
+      where: { id: invoice.id, businessId: input.businessId },
+      select: { status: true },
+    });
+    if (raced?.status === "SENT" || raced?.status === "PAID") {
+      return {
+        ok: true,
+        status: raced.status,
+        newlySent: false,
+        customerNotified: false,
+        alreadySent: true,
+        message: INVOICE_ALREADY_SENT_MESSAGE,
+      };
+    }
     return {
       ok: false,
       error: "The invoice was created but could not be sent.",
-      status: "DRAFT",
+      status: raced?.status ?? "DRAFT",
     };
   }
 

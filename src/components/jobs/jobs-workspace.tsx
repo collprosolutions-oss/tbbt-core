@@ -7,7 +7,7 @@ import { AssignJobMemberForm, type EligibleMember } from "@/components/jobs/assi
 import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-button";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
-import { COMPLETE_JOB_DRAFT_INVOICE_MESSAGE } from "@/lib/complete-job-copy";
+import { workOrderCardCompletedInvoiceMessage } from "@/lib/complete-job-copy";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { StartJobButton } from "@/components/jobs/start-job-button";
 import { CreateInvoiceButton } from "@/components/invoices/create-invoice-button";
@@ -367,6 +367,7 @@ function JobDetailsPanel({
   const customerName = job.customer?.name ?? "Customer";
   const isCompleted = job.status === "COMPLETED";
   const isInProgress = job.status === "IN_PROGRESS";
+  const draftInvoicePrompt = workOrderCardCompletedInvoiceMessage(job.invoice?.status);
   const isScheduled = Boolean(job.scheduledAtLabel);
 
   return (
@@ -542,10 +543,10 @@ function JobDetailsPanel({
         {isCompleted ? (
           job.invoice ? (
             <div className="flex flex-col gap-2">
-              {job.invoice.status === "DRAFT" ? (
+              {draftInvoicePrompt ? (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    {COMPLETE_JOB_DRAFT_INVOICE_MESSAGE}
+                    {draftInvoicePrompt}
                   </p>
                   <MarkInvoiceSentButton invoiceId={job.invoice.id} />
                 </>
