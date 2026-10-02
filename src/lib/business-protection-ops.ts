@@ -15,7 +15,11 @@ import {
 } from "@/lib/authorization";
 import { isAiAttemptId } from "@/lib/ai/types";
 import { requireEsignProvider } from "@/lib/esign/provider";
-import { EsignProviderError, type VerifiedEsignCompletionEvent } from "@/lib/esign/types";
+import {
+  EsignProviderError,
+  isDefiniteEsignProviderRejection,
+  type VerifiedEsignCompletionEvent,
+} from "@/lib/esign/types";
 import { isUsableEmail } from "@/lib/mail";
 import {
   AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
@@ -59,6 +63,11 @@ import {
 import {
   allowedCompletionModes,
   assertDigitalSignatureAllowed,
+  ESIGN_CANCEL_STUCK_SEND_WARNING,
+  ESIGN_SEND_IN_PROGRESS_MESSAGE,
+  ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_STALE_SEND_MINUTES,
+  ESIGN_STALE_SEND_NOT_READY_MESSAGE,
   ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE,
   EsignBoundaryError,
   normalizeCompletionMode,
@@ -174,7 +183,7 @@ async function lockOwnedAgreementVersion(
   `;
 }
 
-const ESIGN_SENDING_MODE = "SENDING";
+export const ESIGN_SENDING_MODE = "SENDING";
 
 function boundEsignRequestId(
   agreement: { esignSignatureRequestId?: string | null },
@@ -1564,10 +1573,25 @@ export async function sendAgreementForEsign(
     }
 
     const storedRequestId = boundEsignRequestId(locked, current);
-    if (
-      (locked.signingMode === "PROVIDER_READY" || locked.signingMode === ESIGN_SENDING_MODE) &&
-      locked.completionAttemptKey
-    ) {
+    if (locked.signingMode === ESIGN_SENDING_MODE && locked.completionAttemptKey) {
+      if (locked.completionAttemptKey === attemptKey && storedRequestId) {
+        return {
+          agreement: locked,
+          version: current,
+          requestId: storedRequestId,
+          reused: true,
+          claimed: false,
+          previousSigningMode: locked.signingMode,
+          previousLifecycle: locked.lifecycleStatus,
+          unlockedVersion: false,
+        };
+      }
+      if (locked.completionAttemptKey === attemptKey) {
+        throw new BusinessProtectionError(ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+      }
+      throw new BusinessProtectionError(ESIGN_SEND_IN_PROGRESS_MESSAGE);
+    }
+    if (locked.signingMode === "PROVIDER_READY" && locked.completionAttemptKey) {
       if (locked.completionAttemptKey === attemptKey) {
         return {
           agreement: locked,
@@ -1619,6 +1643,7 @@ export async function sendAgreementForEsign(
         signingMode: ESIGN_SENDING_MODE,
         currentDraftVersionId: current.id,
         completionAttemptKey: attemptKey,
+        esignSendingClaimedAt: now,
       },
       include: { versions: { orderBy: { versionNumber: "asc" } } },
     });
@@ -1674,6 +1699,7 @@ export async function sendAgreementForEsign(
           lifecycleStatus: claim.previousLifecycle,
           signingMode: claim.previousSigningMode,
           completionAttemptKey: null,
+          esignSendingClaimedAt: null,
         },
       });
     });
@@ -1694,11 +1720,11 @@ export async function sendAgreementForEsign(
       actorMembershipId: membershipId(access),
     });
   } catch (error) {
-    await releaseClaim();
-    if (error instanceof EsignProviderError) {
+    if (isDefiniteEsignProviderRejection(error)) {
+      await releaseClaim();
       throw new BusinessProtectionError(error.message);
     }
-    throw error;
+    throw new BusinessProtectionError(ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
   }
 
   try {
@@ -1745,6 +1771,7 @@ export async function sendAgreementForEsign(
           currentDraftVersionId: current.id,
           completionAttemptKey: attemptKey,
           esignSignatureRequestId: created.requestId,
+          esignSendingClaimedAt: null,
         },
       });
       await writeProtectionAudit(tx, {
@@ -1758,7 +1785,6 @@ export async function sendAgreementForEsign(
           requestId: created.requestId,
           provider: adapter.id,
           attemptKey,
-          signerEmail,
         },
       });
       return {
@@ -1774,9 +1800,100 @@ export async function sendAgreementForEsign(
       };
     });
   } catch (error) {
-    await releaseClaim();
-    throw error;
+    if (error instanceof BusinessProtectionError || error instanceof EsignBoundaryError) {
+      throw error;
+    }
+    throw new BusinessProtectionError(ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
   }
+}
+
+export async function cancelStuckEsignSend(
+  db: Db,
+  access: BusinessAccess,
+  input: { agreementId: string; now?: Date },
+) {
+  requireOwnerForCompletion(access);
+  const now = input.now ?? new Date();
+  return runAgreementTransaction(db, async (tx) => {
+    await lockOwnedAgreement(tx, access, input.agreementId);
+    const agreement = await requireOwnedAgreement(tx, access, input.agreementId);
+    const version = currentVersion(agreement);
+    await lockOwnedAgreementVersion(tx, access, {
+      agreementId: agreement.id,
+      versionId: version.id,
+    });
+    const locked = await requireOwnedAgreement(tx, access, input.agreementId);
+    if (locked.signingMode !== ESIGN_SENDING_MODE || locked.esignSignatureRequestId) {
+      throw new BusinessProtectionError("That agreement does not have a stuck e-sign send claim.");
+    }
+    const claimedAt = locked.esignSendingClaimedAt;
+    if (!claimedAt || now.getTime() - claimedAt.getTime() < ESIGN_STALE_SEND_MINUTES * 60_000) {
+      throw new BusinessProtectionError(ESIGN_STALE_SEND_NOT_READY_MESSAGE);
+    }
+    const updated = await tx.businessAgreement.update({
+      where: { id: locked.id },
+      data: {
+        signingMode: "NOT_CONNECTED",
+        completionAttemptKey: null,
+        esignSendingClaimedAt: null,
+      },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "esign_send_claim_cancelled",
+      agreementId: locked.id,
+      previousValue: {
+        signingMode: locked.signingMode,
+        completionAttemptKey: locked.completionAttemptKey,
+        esignSendingClaimedAt: claimedAt.toISOString(),
+      },
+      newValue: {
+        warning: ESIGN_CANCEL_STUCK_SEND_WARNING,
+        signingMode: "NOT_CONNECTED",
+      },
+    });
+    return { agreement: updated, version: currentVersion(locked) };
+  });
+}
+
+async function resolveEsignWebhookActor(
+  db: Db,
+  metadata: { businessId: string; actorMembershipId: string },
+) {
+  const recorded = await db.membership.findFirst({
+    where: { id: metadata.actorMembershipId, businessId: metadata.businessId },
+    select: { id: true },
+  });
+  if (recorded) return recorded;
+  const owner = await db.membership.findFirst({
+    where: { businessId: metadata.businessId, role: "OWNER" },
+    select: { id: true },
+  });
+  if (owner) return owner;
+  throw new BusinessProtectionError("E-sign webhook actor is not available in that business.");
+}
+
+function esignRequestBinding(
+  agreement: {
+    signingMode: string;
+    completionAttemptKey: string | null;
+    esignSignatureRequestId?: string | null;
+  },
+  version: { esignSignatureRequestId?: string | null },
+  requestId: string,
+  attemptKey: string,
+) {
+  const stored = boundEsignRequestId(agreement, version);
+  if (stored === requestId) return { ok: true as const, bind: false };
+  if (
+    !stored &&
+    agreement.signingMode === ESIGN_SENDING_MODE &&
+    agreement.completionAttemptKey === attemptKey
+  ) {
+    return { ok: true as const, bind: true };
+  }
+  return { ok: false as const, bind: false };
 }
 
 export async function completeAgreementFromEsignWebhook(
@@ -1799,17 +1916,7 @@ export async function completeAgreementFromEsignWebhook(
     throw new BusinessProtectionError("E-sign webhook is missing the bound business, agreement, and version.");
   }
 
-  const actor = await db.membership.findFirst({
-    where: {
-      id: metadata.actorMembershipId,
-      businessId: metadata.businessId,
-      role: "OWNER",
-    },
-    select: { id: true },
-  });
-  if (!actor) {
-    throw new BusinessProtectionError("E-sign webhook actor is not an owner in that business.");
-  }
+  const actor = await resolveEsignWebhookActor(db, metadata);
 
   const preview = await db.businessAgreement.findFirst({
     where: { id: metadata.agreementId, businessId: metadata.businessId },
@@ -1831,7 +1938,8 @@ export async function completeAgreementFromEsignWebhook(
       "E-sign webhook is not bound to this exact business, agreement, and version.",
     );
   }
-  if (boundEsignRequestId(preview, previewVersion) !== requestId) {
+  const previewBinding = esignRequestBinding(preview, previewVersion, requestId, metadata.attemptKey);
+  if (!previewBinding.ok) {
     throw new BusinessProtectionError(
       "That agreement was not sent through the connected e-sign adapter for this request.",
     );
@@ -1885,10 +1993,28 @@ export async function completeAgreementFromEsignWebhook(
         "E-sign webhook is not bound to this exact business, agreement, and version.",
       );
     }
-    if (boundEsignRequestId(agreement, version) !== requestId) {
+    const binding = esignRequestBinding(agreement, version, requestId, metadata.attemptKey);
+    if (!binding.ok) {
       throw new BusinessProtectionError(
         "That agreement was not sent through the connected e-sign adapter for this request.",
       );
+    }
+    if (binding.bind) {
+      await tx.businessAgreementVersion.update({
+        where: { id: version.id },
+        data: { esignSignatureRequestId: requestId },
+      });
+      await tx.businessAgreement.update({
+        where: { id: agreement.id },
+        data: {
+          esignSignatureRequestId: requestId,
+          signingMode: "PROVIDER_READY",
+          esignSendingClaimedAt: null,
+        },
+      });
+      agreement.esignSignatureRequestId = requestId;
+      agreement.signingMode = "PROVIDER_READY";
+      version.esignSignatureRequestId = requestId;
     }
 
     const existingClaim = await tx.businessAgreementCompletionClaim.findUnique({
@@ -1909,7 +2035,10 @@ export async function completeAgreementFromEsignWebhook(
       );
     }
 
-    if (agreement.signingMode !== "PROVIDER_READY" || agreement.completionAttemptKey !== metadata.attemptKey) {
+    if (
+      (agreement.signingMode !== "PROVIDER_READY" && agreement.signingMode !== ESIGN_SENDING_MODE) ||
+      agreement.completionAttemptKey !== metadata.attemptKey
+    ) {
       throw new BusinessProtectionError(
         "That agreement was not sent through the connected e-sign adapter for this request.",
       );

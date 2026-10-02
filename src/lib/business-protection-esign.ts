@@ -29,6 +29,20 @@ export const ESIGN_PROVIDER_READY_MESSAGE =
 export const ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE =
   "Provider completion arrives through a verified webhook bound to the sent version. TBBT will not invent a digital signature from this form.";
 
+export const ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE =
+  "The e-sign send outcome is unknown. Check Dropbox Sign before sending again. TBBT did not invent a signature.";
+
+export const ESIGN_SEND_IN_PROGRESS_MESSAGE =
+  "This locked version already has an e-sign send in progress. The outcome may be unknown — check Dropbox Sign. Cancel the stuck send if it is stale.";
+
+export const ESIGN_CANCEL_STUCK_SEND_WARNING =
+  "Check Dropbox Sign first. This only clears a stuck local send claim. It does not cancel a live signature request.";
+
+export const ESIGN_STALE_SEND_NOT_READY_MESSAGE =
+  "That e-sign send is still in progress. Wait before canceling, and check Dropbox Sign first.";
+
+export const ESIGN_STALE_SEND_MINUTES = 15;
+
 export class EsignBoundaryError extends Error {
   constructor(message: string) {
     super(message);

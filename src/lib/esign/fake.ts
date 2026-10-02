@@ -56,12 +56,16 @@ export class FakeEsignProvider implements EsignProvider {
   readonly id = "fake" as const;
   private readonly requests = new Map<string, FakeRequest>();
   private failNextCreate = false;
+  private throwAfterCreate: Error | null = null;
+  private failNextDownload = false;
   private processedEventIds = new Set<string>();
   private createCalls = 0;
 
   reset() {
     this.requests.clear();
     this.failNextCreate = false;
+    this.throwAfterCreate = null;
+    this.failNextDownload = false;
     this.processedEventIds.clear();
     this.createCalls = 0;
   }
@@ -70,8 +74,21 @@ export class FakeEsignProvider implements EsignProvider {
     this.failNextCreate = true;
   }
 
+  createThenThrow(error?: Error) {
+    this.throwAfterCreate =
+      error ?? Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+  }
+
+  failNextSignedDownload() {
+    this.failNextDownload = true;
+  }
+
   createdRequestCount() {
     return this.createCalls;
+  }
+
+  lastCreatedRequestId() {
+    return [...this.requests.keys()].at(-1) ?? null;
   }
 
   rememberProcessedEvent(eventId: string) {
@@ -91,7 +108,10 @@ export class FakeEsignProvider implements EsignProvider {
   ): Promise<EsignSignatureRequestResult> {
     if (this.failNextCreate) {
       this.failNextCreate = false;
-      throw new EsignProviderError("Fake e-sign provider failed to create the signature request.");
+      throw new EsignProviderError("Fake e-sign provider failed to create the signature request.", {
+        outcome: "rejected",
+        statusCode: 400,
+      });
     }
     this.createCalls += 1;
     const requestId = `fake_sr_${randomUUID().replaceAll("-", "")}`;
@@ -100,10 +120,19 @@ export class FakeEsignProvider implements EsignProvider {
       input: { ...input },
       signedPdf: await buildFakeSignedPdf(input),
     });
+    if (this.throwAfterCreate) {
+      const error = this.throwAfterCreate;
+      this.throwAfterCreate = null;
+      throw error;
+    }
     return { requestId, signingUrl: `https://esign.test/sign/${requestId}` };
   }
 
   async downloadSignedDocument(requestId: string): Promise<Buffer> {
+    if (this.failNextDownload) {
+      this.failNextDownload = false;
+      throw new EsignProviderError("Fake e-sign provider could not download the signed document.");
+    }
     const row = this.requests.get(requestId);
     if (!row) {
       throw new EsignProviderError("Fake e-sign provider has no signed document for that request.");

@@ -22,6 +22,10 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { PROVIDER_SIGNED_DOCUMENT_NOTE, UPLOADED_SIGNED_DOCUMENT_NOTE } =
   await import("@/lib/business-protection");
 const {
+  ESIGN_CANCEL_STUCK_SEND_WARNING,
+  ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_STALE_SEND_MINUTES,
+  ESIGN_STALE_SEND_NOT_READY_MESSAGE,
   ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE,
   EsignBoundaryError,
   normalizeCompletionMode,
@@ -48,8 +52,10 @@ const {
   saveAgreementAnswers,
   saveAgreementDraftContent,
   sendAgreementForEsign,
+  cancelStuckEsignSend,
   BusinessProtectionError,
 } = await import("@/lib/business-protection-ops");
+const { isFakeEsignAdapterEnabled } = await import("@/lib/esign/config");
 
 resetEsignProviderCache();
 
@@ -182,6 +188,32 @@ check(
     readRepo("src/lib/esign/dispatch.ts").includes('return authenticated("request_mismatch")') &&
     readRepo("src/lib/esign/dispatch.ts").includes("status: 200, hello: true"),
 );
+check(
+  "Retriable download failures return 503 so Dropbox retries",
+  readRepo("src/lib/esign/dispatch.ts").includes('return retriable("document_not_ready")') &&
+    readRepo("src/lib/esign/dispatch.ts").includes('return retriable("provider_download_failed")') &&
+    readRepo("src/lib/esign/dispatch.ts").includes("status: 503, hello: false"),
+);
+check(
+  "OWNER Send releases a claim only on a definite 4xx rejection",
+  sendFn.includes("isDefiniteEsignProviderRejection") &&
+    sendFn.includes("ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE") &&
+    !/catch \(error\) \{\s*await releaseClaim\(\);/.test(sendFn),
+);
+check("OWNER can cancel a stale SENDING claim", opsSrc.includes("cancelStuckEsignSend") && workspaceSrc.includes("Cancel stuck e-sign send"));
+const createdAudit = opsSrc.slice(
+  opsSrc.indexOf('action: "esign_request_created"'),
+  opsSrc.indexOf('action: "esign_request_created"') + 500,
+);
+check("esign_request_created audit omits signerEmail", createdAudit.includes("esign_request_created") && !createdAudit.includes("signerEmail"));
+const previousNodeEnv = process.env.NODE_ENV;
+process.env.NODE_ENV = "production";
+resetEsignProviderCache();
+check("Fake adapter is blocked when NODE_ENV=production", isFakeEsignAdapterEnabled() === false);
+if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+else process.env.NODE_ENV = previousNodeEnv;
+resetEsignProviderCache();
+check("Fake adapter returns after NODE_ENV restore", isFakeEsignAdapterEnabled() === true && getFakeEsignProvider()?.id === "fake");
 check("Webhook route returns the official Hello API Event Received body", routeSrc.includes(ESIGN_WEBHOOK_HELLO));
 check("Webhook path is exact", isEsignWebhookPath("/api/esign/webhook") && ESIGN_WEBHOOK_PATH === "/api/esign/webhook" && !isEsignWebhookPath("/api/esign/webhook/extra"));
 check("Auth proxy allows the e-sign webhook without a session", proxySrc.includes("isEsignWebhookPath") && proxySrc.includes("api/esign/webhook"));
@@ -327,6 +359,104 @@ try {
       sendAttemptKey: randomUUID(),
     });
   }, (error) => error instanceof ForbiddenError);
+
+  const timeoutNda = await readyNda(prisma, ownerA, "Create-then-timeout NDA");
+  const timeoutKey = randomUUID();
+  const createsBeforeTimeout = fake.createdRequestCount();
+  fake.createThenThrow();
+  await expectError("Create-then-timeout keeps the SENDING claim", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: timeoutNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: timeoutKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const afterTimeout = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: timeoutNda.id },
+  });
+  const timeoutRequestId = fake.lastCreatedRequestId();
+  check(
+    "Ambiguous create leaves SENT/SENDING with no stored request id",
+    afterTimeout.lifecycleStatus === "SENT" &&
+      afterTimeout.signingMode === "SENDING" &&
+      !afterTimeout.esignSignatureRequestId &&
+      Boolean(afterTimeout.esignSendingClaimedAt) &&
+      fake.createdRequestCount() === createsBeforeTimeout + 1,
+  );
+  await expectError("Same-key retry after unknown create does not send again", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: timeoutNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: timeoutKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  check(
+    "Create-then-throw retry does not create a second provider request",
+    fake.createdRequestCount() === createsBeforeTimeout + 1,
+  );
+  await expectError("Fresh SENDING claim cannot be canceled yet", () => {
+    return cancelStuckEsignSend(prisma, ownerA, { agreementId: timeoutNda.id });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_STALE_SEND_NOT_READY_MESSAGE);
+  await prisma.businessAgreement.update({
+    where: { id: timeoutNda.id },
+    data: { esignSendingClaimedAt: new Date(Date.now() - (ESIGN_STALE_SEND_MINUTES + 1) * 60_000) },
+  });
+  const cancelled = await cancelStuckEsignSend(prisma, ownerA, { agreementId: timeoutNda.id });
+  check(
+    "OWNER cancel clears a stale SENDING claim",
+    cancelled.agreement.signingMode === "NOT_CONNECTED" &&
+      !cancelled.agreement.completionAttemptKey &&
+      !cancelled.agreement.esignSendingClaimedAt,
+  );
+  const cancelAudit = await prisma.businessProtectionAuditLog.findFirst({
+    where: { agreementId: timeoutNda.id, action: "esign_send_claim_cancelled" },
+    orderBy: { changedAt: "desc" },
+  });
+  check(
+    "Stuck-send cancel is audited with the Dropbox Sign warning",
+    Boolean(cancelAudit?.newValue) && String(cancelAudit.newValue).includes(ESIGN_CANCEL_STUCK_SEND_WARNING),
+  );
+
+  const bindNda = await readyNda(prisma, ownerA, "Webhook binds stuck SENDING");
+  const bindKey = randomUUID();
+  fake.createThenThrow();
+  await expectError("Stuck bind send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: bindNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: bindKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const bindRequestId = fake.lastCreatedRequestId();
+  const bindPayload = fake.buildSignedWebhookPayload({
+    requestId: bindRequestId,
+    metadata: {
+      businessId: businessA.id,
+      agreementId: bindNda.id,
+      versionId: (await prisma.businessAgreementVersion.findFirstOrThrow({
+        where: { agreementId: bindNda.id, representationStatus: "SENT" },
+      })).id,
+      attemptKey: bindKey,
+      actorMembershipId: ownerMem.id,
+    },
+  });
+  const bindResult = await dispatchEsignWebhook(prisma, { rawJson: bindPayload.rawJson, storage });
+  const bound = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: bindNda.id },
+    include: { versions: true },
+  });
+  check(
+    "Authenticated webhook binds request id onto a matching SENDING claim",
+    bindResult.applied === true &&
+      bindResult.status === 200 &&
+      bound.signingMode === "PROVIDER_READY" &&
+      bound.esignSignatureRequestId === bindRequestId &&
+      bound.signedVersionId &&
+      bound.versions.some((row) => row.esignSignatureRequestId === bindRequestId),
+  );
 
   const sent = await sendAgreementForEsign(prisma, ownerA, {
     agreementId: failure.id,
@@ -634,7 +764,7 @@ try {
   const leftClient = new PrismaClient({ datasourceUrl: testUrl });
   const rightClient = new PrismaClient({ datasourceUrl: testUrl });
   try {
-    const [leftSend, rightSend] = await Promise.all([
+    const [leftSend, rightSend] = await Promise.allSettled([
       sendAgreementForEsign(leftClient, ownerA, {
         agreementId: raceSendReady.id,
         signerName: "Pat Counterparty",
@@ -652,13 +782,23 @@ try {
       where: { id: raceSendReady.id },
       include: { versions: true },
     });
+    const fulfilled = [leftSend, rightSend].filter((row) => row.status === "fulfilled");
+    const unknown = [leftSend, rightSend].filter(
+      (row) =>
+        row.status === "rejected" &&
+        row.reason instanceof BusinessProtectionError &&
+        row.reason.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
+    );
     check(
       "Two concurrent OWNER Sends create exactly one provider request",
       fake.createdRequestCount() === createsBefore + 1 &&
         Boolean(afterConcurrentSend.esignSignatureRequestId) &&
-        afterConcurrentSend.versions.filter((row) => row.esignSignatureRequestId).length === 1,
+        afterConcurrentSend.versions.filter((row) => row.esignSignatureRequestId).length === 1 &&
+        fulfilled.length + unknown.length === 2,
     );
-    const returnedIds = [leftSend.requestId, rightSend.requestId].filter(Boolean);
+    const returnedIds = fulfilled
+      .map((row) => row.value.requestId)
+      .filter(Boolean);
     check(
       "Concurrent sends share at most the one stored request id",
       returnedIds.every((id) => id === afterConcurrentSend.esignSignatureRequestId),
@@ -679,6 +819,132 @@ try {
   check(
     "No orphan READY vault assets remain after replay or lost races",
     readyVaultAssets.every((row) => referenced.has(row.id)),
+  );
+
+  const downloadRetry = await readyNda(prisma, ownerA, "Download retry NDA");
+  const downloadSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: downloadRetry.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  fake.failNextSignedDownload();
+  const notReadyPayload = fake.buildSignedWebhookPayload({ requestId: downloadSend.requestId });
+  const notReadyResult = await dispatchEsignWebhook(prisma, {
+    rawJson: notReadyPayload.rawJson,
+    storage,
+  });
+  const stillSent = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: downloadRetry.id },
+  });
+  check(
+    "Provider download failure returns 503 so Dropbox retries",
+    notReadyResult.status === 503 &&
+      notReadyResult.hello === false &&
+      notReadyResult.reason === "provider_download_failed" &&
+      stillSent.lifecycleStatus === "SENT" &&
+      !stillSent.signedVersionId,
+  );
+  const retryDownload = await dispatchEsignWebhook(prisma, {
+    rawJson: notReadyPayload.rawJson,
+    storage,
+  });
+  check(
+    "Later download retry completes the agreement",
+    retryDownload.applied === true && retryDownload.status === 200 && retryDownload.hello === true,
+  );
+
+  const demoteNda = await readyNda(prisma, ownerA, "Demoted actor NDA");
+  const demoteSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: demoteNda.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  const extraOwnerUser = await prisma.user.create({
+    data: { name: "Second Owner", email: `owner2-esign-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const extraOwnerMem = await prisma.membership.create({
+    data: { userId: extraOwnerUser.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const extraOwnerAccess = makeAccess(businessA.id, "OWNER", extraOwnerMem.id, {
+    userId: extraOwnerUser.id,
+    businessName: businessA.name,
+  });
+  await prisma.membership.update({ where: { id: ownerMem.id }, data: { role: "ADMIN" } });
+  const demotePayload = fake.buildSignedWebhookPayload({ requestId: demoteSend.requestId });
+  const demoteResult = await dispatchEsignWebhook(prisma, { rawJson: demotePayload.rawJson, storage });
+  const demotedComplete = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: demoteNda.id },
+  });
+  check(
+    "Demoted OWNER actor still completes a genuine webhook",
+    demoteResult.applied === true &&
+      demoteResult.status === 200 &&
+      demotedComplete.signedVersionId === demoteSend.version.id &&
+      demotedComplete.completedByMembershipId === ownerMem.id,
+  );
+
+  await prisma.membership.update({ where: { id: ownerMem.id }, data: { role: "OWNER" } });
+  const removedNda = await readyNda(prisma, extraOwnerAccess, "Removed actor NDA");
+  const removedSend = await sendAgreementForEsign(prisma, extraOwnerAccess, {
+    agreementId: removedNda.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  await prisma.membership.update({ where: { id: extraOwnerMem.id }, data: { role: "MEMBER" } });
+  const removedPayload = fake.buildSignedWebhookPayload({
+    requestId: removedSend.requestId,
+    metadata: {
+      businessId: businessA.id,
+      agreementId: removedNda.id,
+      versionId: removedSend.version.id,
+      attemptKey: removedSend.agreement.completionAttemptKey ?? "",
+      actorMembershipId: `removed-owner-${randomUUID()}`,
+    },
+  });
+  const removedResult = await dispatchEsignWebhook(prisma, { rawJson: removedPayload.rawJson, storage });
+  const removedComplete = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: removedNda.id },
+  });
+  check(
+    "Removed OWNER actor falls back to a current OWNER instead of dropping the webhook",
+    removedResult.applied === true &&
+      removedResult.status === 200 &&
+      removedComplete.signedVersionId === removedSend.version.id &&
+      removedComplete.completedByMembershipId === ownerMem.id,
+  );
+
+  const neverOwner = await readyNda(prisma, ownerA, "Never-owner actor NDA");
+  const neverSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: neverOwner.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  const foreignActorPayload = fake.buildSignedWebhookPayload({
+    requestId: neverSend.requestId,
+    metadata: {
+      businessId: businessA.id,
+      agreementId: neverOwner.id,
+      versionId: neverSend.version.id,
+      attemptKey: neverSend.agreement.completionAttemptKey ?? "",
+      actorMembershipId: otherMem.id,
+    },
+  });
+  const foreignActorResult = await dispatchEsignWebhook(prisma, {
+    rawJson: foreignActorPayload.rawJson,
+    storage,
+  });
+  const neverComplete = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: neverOwner.id },
+  });
+  check(
+    "Webhook actor OWNER check falls back only within the bound business",
+    foreignActorResult.applied === true &&
+      neverComplete.completedByMembershipId === ownerMem.id &&
+      neverComplete.signedVersionId === neverSend.version.id,
   );
 
   await expectError("Foreign owner cannot send this tenant's agreement", () => {

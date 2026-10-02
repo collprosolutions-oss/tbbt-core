@@ -37,7 +37,7 @@ export function getFakeEsignWebhookKey(): string {
 }
 
 export function isFakeEsignAdapterEnabled(): boolean {
-  if (process.env.VERCEL_ENV === "production") {
+  if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") {
     return false;
   }
   return process.env.TBBT_ESIGN_ADAPTER === "fake";

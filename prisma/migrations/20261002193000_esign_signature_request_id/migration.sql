@@ -7,6 +7,9 @@
 ALTER TABLE "BusinessAgreement"
   ADD COLUMN IF NOT EXISTS "esignSignatureRequestId" TEXT;
 
+ALTER TABLE "BusinessAgreement"
+  ADD COLUMN IF NOT EXISTS "esignSendingClaimedAt" TIMESTAMP(3);
+
 ALTER TABLE "BusinessAgreementVersion"
   ADD COLUMN IF NOT EXISTS "esignSignatureRequestId" TEXT;
 

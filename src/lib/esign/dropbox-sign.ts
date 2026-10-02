@@ -79,11 +79,19 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       const clientId = getDropboxSignClientId();
       if (clientId) form.set("client_id", clientId);
 
-      const response = await fetch(`${DROPBOX_SIGN_API_ORIGIN}${DROPBOX_SIGN_SEND_PATH}`, {
-        method: "POST",
-        headers: { Authorization: basicAuthHeader(apiKey) },
-        body: form,
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${DROPBOX_SIGN_API_ORIGIN}${DROPBOX_SIGN_SEND_PATH}`, {
+          method: "POST",
+          headers: { Authorization: basicAuthHeader(apiKey) },
+          body: form,
+        });
+      } catch {
+        throw new EsignProviderError(
+          "Dropbox Sign send outcome is unknown. Check Dropbox Sign before sending again.",
+          { outcome: "unknown" },
+        );
+      }
       const body = (await response.json().catch(() => null)) as {
         signature_request?: { signature_request_id?: unknown; signing_url?: unknown };
         error?: { error_msg?: unknown };
@@ -91,14 +99,21 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       if (!response.ok) {
         const detail =
           typeof body?.error?.error_msg === "string" ? body.error.error_msg : "send failed";
-        throw new EsignProviderError(`Dropbox Sign could not create the signature request (${detail}).`);
+        const outcome = response.status >= 400 && response.status < 500 ? "rejected" : "unknown";
+        throw new EsignProviderError(
+          `Dropbox Sign could not create the signature request (${detail}).`,
+          { outcome, statusCode: response.status },
+        );
       }
       const requestId =
         typeof body?.signature_request?.signature_request_id === "string"
           ? body.signature_request.signature_request_id
           : "";
       if (!requestId) {
-        throw new EsignProviderError("Dropbox Sign did not return a signature_request_id.");
+        throw new EsignProviderError(
+          "Dropbox Sign send outcome is unknown. Check Dropbox Sign before sending again.",
+          { outcome: "unknown", statusCode: response.status },
+        );
       }
       return {
         requestId,

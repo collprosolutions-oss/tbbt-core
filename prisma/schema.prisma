@@ -5309,6 +5309,8 @@ model BusinessAgreement {
   signingMode                           String    @default("NOT_CONNECTED")
   /// Provider signature_request_id bound at OWNER Send. Required on webhook.
   esignSignatureRequestId               String?
+  /// When OWNER Send claimed SENDING. Used to expire a stuck claim.
+  esignSendingClaimedAt                 DateTime?
   completedByMembershipId               String?
   completedAt                           DateTime?
   completionNotes                       String?

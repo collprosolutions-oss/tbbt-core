@@ -3,10 +3,10 @@
  * payload is trusted. Completion binds the signed file to the exact
  * business, agreement, version, and stored provider request id.
  *
- * Authenticated events always return HTTP 200 + Hello API Event Received,
- * including terminal outcomes (already complete, mismatch). Dropbox Sign
- * treats non-200 as a callback failure and will clear the account URL.
- * Failed event_hash stays 400.
+ * Terminal authenticated outcomes return HTTP 200 + Hello API Event
+ * Received (already applied/complete, mismatch, ignored). Dropbox Sign
+ * treats non-200 as a callback failure; retriable download failures
+ * therefore return 503 so the provider retries. Failed event_hash stays 400.
  */
 import { DROPBOX_SIGN_COMPLETION_EVENTS } from "@/lib/esign/dropbox-sign";
 import { requireEsignProvider } from "@/lib/esign/provider";
@@ -20,6 +20,7 @@ import type { StorageServiceDeps } from "@/lib/business-storage/service";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 export const ESIGN_WEBHOOK_HELLO = "Hello API Event Received";
+export const ESIGN_SENDING_MODE = "SENDING";
 
 export type EsignWebhookResult = {
   applied: boolean;
@@ -32,6 +33,24 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 function authenticated(reason: string, applied = false): EsignWebhookResult {
   return { applied, reason, status: 200, hello: true };
+}
+
+function retriable(reason: string): EsignWebhookResult {
+  return { applied: false, reason, status: 503, hello: false };
+}
+
+function canBindDuringSending(agreement: {
+  signingMode: string;
+  completionAttemptKey: string | null;
+  esignSignatureRequestId: string | null;
+  esignSendingClaimedAt?: Date | null;
+}, version: { esignSignatureRequestId?: string | null } | undefined, attemptKey: string) {
+  return (
+    agreement.signingMode === ESIGN_SENDING_MODE &&
+    agreement.completionAttemptKey === attemptKey &&
+    !agreement.esignSignatureRequestId &&
+    !version?.esignSignatureRequestId
+  );
 }
 
 async function alreadyClaimedWithoutDownload(
@@ -55,10 +74,13 @@ async function alreadyClaimedWithoutDownload(
   });
   if (!agreement) return null;
   const version = agreement.versions[0];
-  if (
-    agreement.esignSignatureRequestId !== event.requestId ||
-    version?.esignSignatureRequestId !== event.requestId
-  ) {
+  const storedMatches =
+    agreement.esignSignatureRequestId === event.requestId &&
+    version?.esignSignatureRequestId === event.requestId;
+  if (!storedMatches) {
+    if (canBindDuringSending(agreement, version, event.metadata.attemptKey)) {
+      return null;
+    }
     return authenticated("request_mismatch");
   }
   if (
@@ -120,9 +142,9 @@ export async function dispatchEsignWebhook(
     signedPdf = await provider.downloadSignedDocument(event.requestId);
   } catch (error) {
     if (error instanceof EsignProviderError && /still preparing/.test(error.message)) {
-      return authenticated("document_not_ready");
+      return retriable("document_not_ready");
     }
-    return authenticated("provider_download_failed");
+    return retriable("provider_download_failed");
   }
 
   try {
@@ -164,6 +186,9 @@ export async function dispatchEsignWebhook(
     }
     if (/was not sent through the connected e-sign adapter/.test(message)) {
       return authenticated("request_mismatch");
+    }
+    if (/actor is not available/.test(message)) {
+      return retriable("actor_unavailable");
     }
     if (/not an owner in that business/.test(message)) {
       return authenticated("tenant_mismatch");

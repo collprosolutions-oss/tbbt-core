@@ -13,6 +13,7 @@ import {
   markAgreementReadyAction,
   markAgreementSentAction,
   sendAgreementForEsignAction,
+  cancelStuckEsignSendAction,
   saveAgreementAnswersAction,
   saveAgreementDraftContentAction,
   updateVaultRecordAction,
@@ -45,6 +46,7 @@ import {
   isHighRiskAgreement,
   type AgreementType,
 } from "@/lib/business-protection-agreements";
+import { ESIGN_CANCEL_STUCK_SEND_WARNING } from "@/lib/business-protection-esign";
 import { selectedAgreementRisk, type ProtectionWorkspace } from "@/lib/business-protection-data";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -466,6 +468,10 @@ function AgreementDetail({
   const [readyState, readyAction, readyPending] = useActionState(markAgreementReadyAction, initial);
   const [sentState, sentAction, sentPending] = useActionState(markAgreementSentAction, initial);
   const [esignSendState, esignSendAction, esignSendPending] = useActionState(sendAgreementForEsignAction, initial);
+  const [esignCancelState, esignCancelAction, esignCancelPending] = useActionState(
+    cancelStuckEsignSendAction,
+    initial,
+  );
   const [completeState, completeAction, completePending] = useActionState(completeAgreementAction, initial);
   const [aiState, aiAction, aiPending] = useActionState(agreementAssistAction, initial);
   const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
@@ -646,6 +652,18 @@ function AgreementDetail({
                 Send locked version for e-sign
               </Button>
               <FormMessage state={esignSendState} />
+            </form>
+          ) : null}
+
+          {esignReady && canFinalize && selected.signingMode === "SENDING" ? (
+            <form action={esignCancelAction} className="space-y-2 rounded-md border border-amber-600/40 p-3">
+              <input type="hidden" name="agreementId" value={selected.id} />
+              <div className="text-sm font-medium">Stuck e-sign send</div>
+              <p className="text-xs text-muted-foreground">{ESIGN_CANCEL_STUCK_SEND_WARNING}</p>
+              <Button type="submit" variant="outline" disabled={esignCancelPending}>
+                Cancel stuck e-sign send
+              </Button>
+              <FormMessage state={esignCancelState} />
             </form>
           ) : null}
 

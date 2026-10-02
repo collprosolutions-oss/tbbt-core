@@ -2013,6 +2013,7 @@ check(
   "E-sign signature_request_id migration is additive and uses the reserved timestamp",
   !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(esignSignatureRequestIdMigration) &&
     esignSignatureRequestIdMigration.includes('ADD COLUMN IF NOT EXISTS "esignSignatureRequestId"') &&
+    esignSignatureRequestIdMigration.includes('ADD COLUMN IF NOT EXISTS "esignSendingClaimedAt"') &&
     esignSignatureRequestIdMigration.includes("Reserved timestamp 20261002193000") &&
     localNames.includes("20261002193000_esign_signature_request_id") &&
     localNames.includes("20261002050000_job_project_link") &&

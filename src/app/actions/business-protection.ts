@@ -22,6 +22,7 @@ import {
   markAgreementReady,
   markAgreementSent,
   sendAgreementForEsign,
+  cancelStuckEsignSend,
   releaseUnreferencedVaultAsset,
   saveAgreementAnswers,
   saveAgreementDraftContent,
@@ -336,6 +337,26 @@ export async function sendAgreementForEsignAction(
     };
   } catch (error) {
     return { error: businessProtectionErrorMessage(error, "That e-sign send could not be created.") };
+  }
+}
+
+export async function cancelStuckEsignSendAction(
+  _prev: ProtectionActionState,
+  formData: FormData,
+): Promise<ProtectionActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await cancelStuckEsignSend(prisma, access, {
+      agreementId: readString(formData, "agreementId"),
+    });
+    revalidateProtection();
+    return {
+      message:
+        "Cleared the stuck e-sign send claim. Check Dropbox Sign before sending again. TBBT did not invent a signature.",
+      agreementId: result.agreement.id,
+    };
+  } catch (error) {
+    return { error: businessProtectionErrorMessage(error, "That stuck e-sign send could not be cleared.") };
   }
 }
 

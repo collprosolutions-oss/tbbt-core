@@ -36,10 +36,32 @@ export type VerifiedEsignCompletionEvent = {
 };
 
 export class EsignProviderError extends Error {
-  constructor(message: string) {
+  readonly outcome: "rejected" | "unknown";
+  readonly statusCode: number | null;
+
+  constructor(
+    message: string,
+    options?: { outcome?: "rejected" | "unknown"; statusCode?: number | null },
+  ) {
     super(message);
     this.name = "EsignProviderError";
+    this.statusCode = options?.statusCode ?? null;
+    this.outcome =
+      options?.outcome ??
+      (this.statusCode !== null && this.statusCode >= 400 && this.statusCode < 500
+        ? "rejected"
+        : "unknown");
   }
+}
+
+export function isDefiniteEsignProviderRejection(error: unknown): error is EsignProviderError {
+  return (
+    error instanceof EsignProviderError &&
+    error.outcome === "rejected" &&
+    error.statusCode !== null &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500
+  );
 }
 
 /**
