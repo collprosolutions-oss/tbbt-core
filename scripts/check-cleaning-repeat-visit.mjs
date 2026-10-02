@@ -212,8 +212,8 @@ check(
 );
 check(
   "Token-only ownership; browser businessId/customerId/jobId are never authorization",
-  dataSrc.includes("where: { projectToken }") &&
-    opsSrc.includes("where: { projectToken: token }") &&
+  dataSrc.includes("findLiveJobByProjectToken") &&
+    opsSrc.includes("findLiveJobByProjectToken") &&
     pageSrc.includes("loadCleaningRepeatVisitPublicView") &&
     !actionSrc.includes('readString(formData, "businessId")') &&
     !actionSrc.includes('readString(formData, "customerId")') &&

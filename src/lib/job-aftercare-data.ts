@@ -23,6 +23,7 @@ import {
   type OwnerJobAftercare,
   type OwnerJobAftercareHistoryEvent,
 } from "@/lib/job-aftercare";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   JOB_CALLBACK_NO_WARRANTY_TERMS_MESSAGE,
   JOB_CALLBACK_WARRANTY_DISCLAIMER,
@@ -158,9 +159,9 @@ export async function loadPublishedAftercareForProjectToken(
 ): Promise<CustomerPublishedAftercare | null> {
   const token = projectToken.trim();
   if (!token) return null;
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: { id: true, businessId: true },
+  const job = await findLiveJobByProjectToken(db, token, {
+    id: true,
+    businessId: true,
   });
   if (!job) return null;
 

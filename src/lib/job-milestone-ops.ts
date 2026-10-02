@@ -7,6 +7,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, canAccessManagementConsole } from "@/lib/authorization";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   CUSTOMER_HIDDEN_BY_DEFAULT_MESSAGE,
@@ -209,9 +210,9 @@ export async function loadCustomerVisibleMilestonesForProjectToken(
   const token = projectToken.trim();
   if (!token) return null;
   try {
-    const job = await db.job.findUnique({
-      where: { projectToken: token },
-      select: { id: true, businessId: true },
+    const job = await findLiveJobByProjectToken(db, token, {
+      id: true,
+      businessId: true,
     });
     if (!job) return null;
     const rows = await db.jobMilestone.findMany({

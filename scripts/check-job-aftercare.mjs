@@ -230,7 +230,7 @@ check(
     dataSrc.includes("loadRecordedWarrantyTerms") &&
     dataSrc.includes("JOB_CALLBACK_WARRANTY_DISCLAIMER") &&
     dataSrc.includes('status: "PUBLISHED"') &&
-    dataSrc.includes("where: { projectToken: token }") &&
+    dataSrc.includes("findLiveJobByProjectToken") &&
     !dataSrc.includes("draftInstructions: true") === false &&
     dataSrc.includes("publishedInstructions: true") &&
     !/\.(create|update|delete|upsert|createMany|updateMany|deleteMany)\(/.test(dataSrc),

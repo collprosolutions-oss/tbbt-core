@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   parseSelectedTasks,
   requestedWorkLabels,
@@ -42,9 +43,9 @@ export async function createCustomerAdditionalWorkRequest(
   const includeOther = Boolean(input.includeOther);
   const otherDescription = (input.otherDescription ?? "").trim();
 
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: { id: true, businessId: true },
+  const job = await findLiveJobByProjectToken(db, token, {
+    id: true,
+    businessId: true,
   });
   if (!job) {
     return { ok: false, error: "This project link is not available." };

@@ -316,6 +316,10 @@ model Business {
   /// columns stay untouched. Concurrent Job-column chats do not collide.
   jobAftercareInstructions    JobAftercareInstruction[]
   jobAftercareEvents          JobAftercareEvent[]
+  /// OWNER rotate/revoke of a Job's customer project link. Separate tables
+  /// so Job columns stay untouched. Job.projectToken remains the live key.
+  jobProjectLinks             JobProjectLink[]
+  jobProjectLinkEvents        JobProjectLinkEvent[]
   /// Optional revocable calendar feed. Separate table so Job columns and
   /// Chat 4 assignment work stay untouched. Stores only sha256(token).
   scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
@@ -731,6 +735,8 @@ model Membership {
   publishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercarePublisher")
   unpublishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercareUnpublisher")
   jobAftercareEvents           JobAftercareEvent[]    @relation("JobAftercareEventActor")
+  updatedJobProjectLinks       JobProjectLink[]       @relation("JobProjectLinkActor")
+  jobProjectLinkEvents         JobProjectLinkEvent[]  @relation("JobProjectLinkEventActor")
   createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
   createdEquipmentMaintenanceEntries EquipmentMaintenanceEntry[] @relation("EquipmentMaintenanceCreator")
   recordedJobMilestones JobMilestone[] @relation("JobMilestoneRecorder")
@@ -1716,6 +1722,12 @@ model Job {
   /// Worker-requested reassignment. Request rows never rewrite Job columns
   /// until OWNER accept runs the canonical assignment write.
   reassignmentRequests    JobReassignmentRequest[]
+  /// OWNER rotate/revoke state for this Job's customer project link.
+  /// Relation only — Job columns stay unchanged. The live URL key remains
+  /// Job.projectToken; revoked/rotated tokens are refused by that unique
+  /// value plus this status row.
+  projectLink             JobProjectLink?
+  projectLinkEvents       JobProjectLinkEvent[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -2607,6 +2619,69 @@ model JobAftercareEvent {
   @@index([businessId])
   @@index([jobId])
   @@index([aftercareId, createdAt])
+}
+
+/// Current OWNER-controlled state of one Job's customer project link.
+/// One row per Job. Status ACTIVE means Job.projectToken is the live
+/// public URL. REVOKED means every /p/[token] read and action must
+/// refuse, including a burned unused Job.projectToken. Application code
+/// must never send email or SMS from these rows. Job columns stay
+/// unchanged — only the live projectToken value is replaced on rotate
+/// or revoke so historical Job/Invoice/communication rows are preserved.
+///
+/// Status: ACTIVE | REVOKED
+model JobProjectLink {
+  id                    String    @id @default(cuid())
+  businessId            String
+  jobId                 String    @unique
+  /// ACTIVE | REVOKED
+  status                String    @default("ACTIVE")
+  rotatedAt             DateTime?
+  revokedAt             DateTime?
+  updatedByMembershipId String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business  Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  updatedBy Membership? @relation("JobProjectLinkActor", fields: [updatedByMembershipId], references: [id], onDelete: SetNull)
+  events    JobProjectLinkEvent[]
+
+  @@index([businessId])
+  @@index([businessId, status])
+}
+
+/// Append-only project-link history. Application code must never update
+/// or delete an existing row. previousToken is the retired URL key.
+/// nextToken is the new live key after ROTATED and is null after REVOKED
+/// so a burned token is never published. This is the audit record.
+model JobProjectLinkEvent {
+  id                String   @id @default(cuid())
+  businessId        String
+  jobId             String
+  linkId            String
+  /// ROTATED | REVOKED
+  eventType         String
+  fromStatus        String?
+  toStatus          String
+  /// Retired Job.projectToken that must stop working immediately.
+  previousToken     String
+  /// Live token after ROTATED. Null after REVOKED.
+  nextToken         String?
+  actorMembershipId String
+  /// Non-sensitive JSON (action only). Never a customer message payload.
+  payload           String?
+  createdAt         DateTime @default(now())
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  link     JobProjectLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  actor    Membership    @relation("JobProjectLinkEventActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([previousToken])
+  @@index([businessId])
+  @@index([jobId, createdAt])
+  @@index([linkId, createdAt])
 }
 
 /// Optional, revocable calendar subscription for one membership + scope.

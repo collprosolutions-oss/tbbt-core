@@ -19,6 +19,7 @@ import { Prisma, type LineItemType, type PrismaClient } from "@prisma/client";
 import { resolveCurrentApprovedProjectTotal } from "@/lib/change-order";
 import { resolveCustomerMaterialsTotal } from "@/lib/customer-materials-total";
 import { resolveApprovedWorkOrderScope } from "@/lib/job-work-order";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import { attachEstimatePaymentsToInvoice } from "@/lib/project-payments";
 import {
   INVOICE_KIND_ORIGINAL,
@@ -321,14 +322,11 @@ export async function backfillEmptyInvoiceWorkLinesForProjectToken(
     return { ok: true, backfilled: false, reason: "no-invoice" };
   }
 
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: {
-      invoices: {
-        take: 1,
-        orderBy: { createdAt: "asc" },
-        select: { id: true, businessId: true },
-      },
+  const job = await findLiveJobByProjectToken(db, token, {
+    invoices: {
+      take: 1,
+      orderBy: { createdAt: "asc" },
+      select: { id: true, businessId: true },
     },
   });
 

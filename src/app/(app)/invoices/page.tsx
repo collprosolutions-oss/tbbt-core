@@ -24,6 +24,7 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { prisma } from "@/lib/prisma";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { listInvoiceCreditsGroupedByInvoiceId } from "@/lib/invoice-credits";
 import {
   invoicePaymentBreakdown,
@@ -262,11 +263,21 @@ export default async function InvoicesPage({
       })),
       jobId: invoice.job?.id ?? null,
       jobProjectToken: invoice.job?.projectToken ?? null,
+      jobProjectLinkActive: true,
       paidAtLabel: invoice.paidAt ? formatDateTime(invoice.paidAt) : null,
       paymentMethodLabel: paymentMethodLabel(invoice.paymentMethod),
       paymentReference: invoice.paymentReference,
     };
   });
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    invoices.flatMap((invoice) => (invoice.jobId ? [invoice.jobId] : [])),
+  );
+  for (const invoice of invoices) {
+    invoice.jobProjectLinkActive = invoice.jobId
+      ? projectLinkActive.get(invoice.jobId) ?? true
+      : true;
+  }
 
   const kpis: KpiCardProps[] = [
     {

@@ -21,6 +21,7 @@ import {
   toInvoiceDecimal,
 } from "@/lib/invoice-carry-forward";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   ensureBusinessPublicContactSchema,
   resolveBusinessPublicContact,
@@ -370,13 +371,10 @@ export async function loadInvoiceDocumentForProjectToken(
     return null;
   }
 
-  const job = await db.job.findUnique({
-    where: { projectToken: token },
-    select: {
-      invoices: {
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: { id: true, businessId: true, status: true, createdAt: true },
-      },
+  const job = await findLiveJobByProjectToken(db, token, {
+    invoices: {
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, businessId: true, status: true, createdAt: true },
     },
   });
 

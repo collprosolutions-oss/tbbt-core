@@ -38,6 +38,7 @@ import {
   ownerDailyTodayNothingWaiting,
 } from "@/lib/owner-daily-attention";
 import { loadOwnerDailyActionableAttention } from "@/lib/owner-daily-attention-data";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import {
   OWNER_TODAY_APPOINTMENT_TAKE,
   OWNER_TODAY_FIELD_COMPLETION_COPY,
@@ -171,6 +172,13 @@ export default async function OwnerTodayPage() {
     timeZone,
     viewerMembershipId,
   });
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    jobs.map((job) => job.jobId),
+  );
+  for (const job of jobs) {
+    job.projectLinkActive = projectLinkActive.get(job.jobId) ?? true;
+  }
   const appointmentAttention = buildOwnerTodayAppointmentAttention(appointmentJobs, {
     businessId: access.businessId,
     start: todayRange.start,

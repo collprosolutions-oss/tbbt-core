@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { canDownloadBusinessScheduleCalendar } from "@/lib/schedule-calendar-export";
 import { ScheduleCalendarSubscriptionPanel } from "@/components/schedule/schedule-calendar-subscription-panel";
+import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { loadScheduleCalendarSubscriptionStatus } from "@/lib/schedule-calendar-subscription";
 import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
@@ -586,8 +587,16 @@ export default async function JobsPage({
       appointmentConfirmationLabel: job.scheduledAt
         ? appointmentConfirmationLabel(effectiveAppointmentConfirmationStatus(job))
         : null,
+      projectLinkActive: true,
     };
   });
+  const projectLinkActive = await loadProjectLinkActiveByJobIds(
+    prisma,
+    jobs.map((job) => job.id),
+  );
+  for (const job of jobs) {
+    job.projectLinkActive = projectLinkActive.get(job.id) ?? true;
+  }
 
   const calendarSubscription = canDownloadBusinessScheduleCalendar(access.workspace.role)
     ? await loadScheduleCalendarSubscriptionStatus(prisma, access, "business")

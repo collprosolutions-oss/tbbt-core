@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 
 export type CustomerChangeOrderActionState = {
   status?: string;
@@ -28,13 +29,7 @@ function readString(formData: FormData, key: string) {
  * doesn't exist.
  */
 async function findJobByToken(token: string) {
-  if (!token) {
-    return null;
-  }
-  return prisma.job.findUnique({
-    where: { projectToken: token },
-    select: { id: true },
-  });
+  return findLiveJobByProjectToken(prisma, token, { id: true });
 }
 
 export async function approveChangeOrder(

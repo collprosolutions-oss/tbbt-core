@@ -72,6 +72,7 @@ import {
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
 } from "@/lib/job-callback";
 import { prisma } from "@/lib/prisma";
+import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 import {
   customerAppointmentStatusLabel,
   effectiveAppointmentConfirmationStatus,
@@ -135,9 +136,7 @@ export default async function CustomerProjectPortalPage({
   await ensureAppointmentConfirmationSchema(prisma);
 
   const job = token
-    ? await prisma.job.findUnique({
-        where: { projectToken: token },
-        select: {
+    ? await findLiveJobByProjectToken(prisma, token, {
           id: true,
           customerId: true,
           status: true,
