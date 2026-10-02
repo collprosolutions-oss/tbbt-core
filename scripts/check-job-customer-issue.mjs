@@ -229,6 +229,12 @@ check(
     schemaSrc.includes("model JobCallbackAttachment") &&
     schemaSrc.includes("ownerNotes") &&
     /category\s+String\?/.test(schemaSrc) &&
+    /ownerNotes\s+String\?/.test(
+      schemaSrc.slice(
+        schemaSrc.indexOf("model JobCallback {"),
+        schemaSrc.indexOf("model JobCallbackEvent"),
+      ),
+    ) &&
     !schemaSrc.includes("model JobCustomerIssue") &&
     !schemaSrc.includes("model JobCustomerIssueEvent") &&
     !schemaSrc.includes("model JobCustomerIssueAttachment") &&
