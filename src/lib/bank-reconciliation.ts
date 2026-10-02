@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { formatISODate } from "@/lib/schedule";
 import {
+  BANK_CSV_NUL_MESSAGE,
   BANK_MATCH_DATE_WINDOW_DAYS,
   BANK_REVERSAL_DATE_WINDOW_DAYS,
   EMPTY_BANK_CSV_MESSAGE,
@@ -30,6 +31,7 @@ import {
 export {
   BANK_RECONCILIATION_ROUTE,
   BANK_CREDITS_ARE_NOT_DEPOSITS_MESSAGE,
+  BANK_CSV_NUL_MESSAGE,
   BANK_CSV_REQUIRED_MESSAGE,
   BANK_IMPORT_NOT_AVAILABLE_MESSAGE,
   BANK_MATCH_ALREADY_DECIDED_MESSAGE,
@@ -180,11 +182,28 @@ export function normalizeImportHeader(value: string): string {
     .replace(/^_|_$/g, "");
 }
 
+/** Signed whole cents that fit in Postgres INTEGER / Prisma Int. */
+export const MAX_BANK_AMOUNT_CENTS = 2_147_483_647;
+export const MIN_BANK_AMOUNT_CENTS = -2_147_483_648;
+
 export function decodeCsvBytes(bytes: Uint8Array | Buffer): string {
   if (bytes.byteLength > MAX_BANK_CSV_BYTES) {
     throw new BankReconciliationError(FILE_TOO_LARGE_MESSAGE);
   }
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (view.includes(0)) {
+    throw new BankReconciliationError(BANK_CSV_NUL_MESSAGE);
+  }
+  if (
+    view.byteLength >= 2 &&
+    ((view[0] === 0xff && view[1] === 0xfe) || (view[0] === 0xfe && view[1] === 0xff))
+  ) {
+    throw new BankReconciliationError(BANK_CSV_NUL_MESSAGE);
+  }
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (text.includes("\u0000")) {
+    throw new BankReconciliationError(BANK_CSV_NUL_MESSAGE);
+  }
   if (/^\s*</.test(text)) {
     throw new BankReconciliationError(NOT_CSV_MESSAGE);
   }
@@ -295,8 +314,28 @@ export function daysBetweenPostedOn(a: string, b: string): number {
 }
 
 /**
+ * Commas are thousands separators only, in \d{1,3}(,\d{3})+ form.
+ * "12,50", "1,5", and "1,2,3" are invalid.
+ */
+function normalizeBankMoneyDigits(text: string): string | null {
+  const parts = text.split(".");
+  if (parts.length > 2) return null;
+  const [wholeRaw, fracRaw] = parts;
+  if (!wholeRaw) return null;
+  if (wholeRaw.includes(",")) {
+    if (!/^\d{1,3}(,\d{3})+$/.test(wholeRaw)) return null;
+  } else if (!/^\d+$/.test(wholeRaw)) {
+    return null;
+  }
+  if (fracRaw != null && !/^\d{1,2}$/.test(fracRaw)) return null;
+  const whole = wholeRaw.replace(/,/g, "");
+  return fracRaw != null ? `${whole}.${fracRaw}` : whole;
+}
+
+/**
  * Parse a bank money cell into signed whole cents. Rejects more than two
- * decimal places. Parentheses, leading minus, and DR/DEBIT mean outflow.
+ * decimal places, Int32 overflow, and commas that are not US thousands
+ * separators. Parentheses, leading minus, and DR/DEBIT mean outflow.
  */
 export function parseBankMoneyToCents(raw: string): number | null {
   let text = sanitizeImportText(raw, 40);
@@ -324,13 +363,16 @@ export function parseBankMoneyToCents(raw: string): number | null {
     text = text.slice(1).trim();
   }
 
-  text = text.replace(/[$,\s]/g, "");
-  if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
+  text = text.replace(/[$\s]/g, "");
+  const normalized = normalizeBankMoneyDigits(text);
+  if (!normalized || !/^\d+(\.\d{1,2})?$/.test(normalized)) return null;
 
-  const [whole, frac = ""] = text.split(".");
+  const [whole, frac = ""] = normalized.split(".");
   const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0"));
-  if (!Number.isSafeInteger(cents)) return null;
-  return negative ? -cents : cents;
+  if (!Number.isSafeInteger(cents) || cents > MAX_BANK_AMOUNT_CENTS) return null;
+  const signed = negative ? -cents : cents;
+  if (signed < MIN_BANK_AMOUNT_CENTS || signed > MAX_BANK_AMOUNT_CENTS) return null;
+  return signed;
 }
 
 export function moneyToCents(value: Prisma.Decimal | number | string): number | null {
@@ -545,6 +587,21 @@ export function flagDuplicateAndReversedRows(rows: ParsedBankRow[]): ParsedBankR
   return next;
 }
 
+export function markAlreadySeenBankRows(
+  rows: ParsedBankRow[],
+  priorFingerprints: Iterable<string>,
+): ParsedBankRow[] {
+  const seen = priorFingerprints instanceof Set ? priorFingerprints : new Set(priorFingerprints);
+  if (seen.size === 0) return rows;
+  for (const row of rows) {
+    if (row.reviewStatus === "INVALID" || row.reviewStatus === "DUPLICATE") continue;
+    if (seen.has(row.rowFingerprint)) {
+      row.reviewStatus = "ALREADY_SEEN";
+    }
+  }
+  return rows;
+}
+
 function candidateDate(value: Date, timeZone: string): string {
   return formatISODate(value, timeZone);
 }
@@ -665,7 +722,8 @@ export function summarizeBankWorkspace(
     (row) =>
       row.reviewStatus !== "INVALID" &&
       row.reviewStatus !== "DUPLICATE" &&
-      row.reviewStatus !== "REVERSED",
+      row.reviewStatus !== "REVERSED" &&
+      row.reviewStatus !== "ALREADY_SEEN",
   );
   const postedDepositCents = uniquePosted
     .filter((row) => row.direction === "DEPOSIT")

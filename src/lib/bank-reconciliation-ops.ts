@@ -24,6 +24,7 @@ import {
   decodeCsvBytes,
   FILE_TOO_LARGE_MESSAGE,
   hashCsvBytes,
+  markAlreadySeenBankRows,
   MAX_BANK_CSV_BYTES,
   OWNER_ONLY_BANK_RECONCILIATION_MESSAGE,
   parseBankCsv,
@@ -385,6 +386,18 @@ async function persistImport(
   }
 
   const parsed = parseBankCsv(decodeCsvBytes(input.bytes));
+  const fingerprints = [...new Set(parsed.map((row) => row.rowFingerprint))];
+  const priorRows =
+    fingerprints.length > 0
+      ? await db.bankReconciliationRow.findMany({
+          where: { businessId, rowFingerprint: { in: fingerprints } },
+          select: { rowFingerprint: true },
+        })
+      : [];
+  markAlreadySeenBankRows(
+    parsed,
+    priorRows.map((row) => row.rowFingerprint),
+  );
   const sources = await loadMatchSources(db, access);
   const suggestions = suggestBankMatches(parsed, sources);
   const totals = summarizeBankWorkspace(
@@ -480,69 +493,126 @@ function findOwnedRow(access: BankReconciliationAccess, workspace: BankReconcili
   return row;
 }
 
+function isUniqueConstraintViolation(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return true;
+  }
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  return code === "23505";
+}
+
+type LockedAcceptRow = {
+  matchId: string;
+  businessId: string;
+  importId: string;
+  rowId: string;
+  candidateKind: string;
+  candidateId: string;
+  matchStatus: string;
+  reviewStatus: string;
+};
+
 export async function acceptBankReconciliationMatch(
   db: Db,
   access: BankReconciliationAccess,
   input: { importId: string; matchId: string },
 ): Promise<BankReconciliationWorkspace> {
   requireOwnerReview(access);
-  const workspace = await loadOwnedBankReconciliation(db, access, input.importId);
-  const match = workspace.rows.flatMap((row) => row.matches).find((row) => row.id === input.matchId);
-  if (!match || match.businessId !== access.businessId || match.importId !== workspace.id) {
+  const importId = input.importId.trim();
+  const matchId = input.matchId.trim();
+  if (!importId || !matchId) {
     throw new BankReconciliationError(BANK_MATCH_NOT_AVAILABLE_MESSAGE);
   }
-  access.assertOwned(match);
-  const row = findOwnedRow(access, workspace, match.rowId);
-  if (row.reviewStatus === "DUPLICATE" || row.reviewStatus === "INVALID") {
-    throw new BankReconciliationError(BANK_ROW_NOT_REVIEWABLE_MESSAGE);
-  }
-  if (match.status === "ACCEPTED" && row.reviewStatus === "ACCEPTED") {
-    return workspace;
-  }
-  if (match.status === "REJECTED") {
-    throw new BankReconciliationError(BANK_MATCH_ALREADY_DECIDED_MESSAGE);
-  }
 
-  const alreadyAccepted = await db.bankReconciliationMatch.findFirst({
-    where: {
-      businessId: access.businessId,
-      importId: workspace.id,
-      candidateKind: match.candidateKind,
-      candidateId: match.candidateId,
-      status: "ACCEPTED",
-      id: { not: match.id },
-    },
-    select: { id: true },
-  });
-  if (alreadyAccepted) {
-    throw new BankReconciliationError(BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE);
-  }
+  try {
+    await db.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<LockedAcceptRow[]>`
+        SELECT
+          m.id AS "matchId",
+          m."businessId" AS "businessId",
+          m."importId" AS "importId",
+          m."rowId" AS "rowId",
+          m."candidateKind" AS "candidateKind",
+          m."candidateId" AS "candidateId",
+          m.status AS "matchStatus",
+          r."reviewStatus" AS "reviewStatus"
+        FROM "BankReconciliationMatch" m
+        INNER JOIN "BankReconciliationRow" r ON r.id = m."rowId"
+        WHERE m.id = ${matchId}
+          AND m."businessId" = ${access.businessId}
+          AND m."importId" = ${importId}
+          AND r."businessId" = ${access.businessId}
+        FOR UPDATE OF m, r
+      `;
+      const current = locked[0];
+      if (!current) {
+        throw new BankReconciliationError(BANK_MATCH_NOT_AVAILABLE_MESSAGE);
+      }
+      access.assertOwned(current);
 
-  await db.$transaction(async (tx) => {
-    await tx.bankReconciliationMatch.updateMany({
-      where: {
-        businessId: access.businessId,
-        importId: workspace.id,
-        rowId: row.id,
-        id: { not: match.id },
-        status: "SUGGESTED",
-      },
-      data: { status: "REJECTED", decidedAt: new Date(), decidedByMembershipId: membershipId(access) },
+      if (
+        current.reviewStatus === "DUPLICATE" ||
+        current.reviewStatus === "INVALID" ||
+        current.reviewStatus === "ALREADY_SEEN"
+      ) {
+        throw new BankReconciliationError(BANK_ROW_NOT_REVIEWABLE_MESSAGE);
+      }
+      if (current.matchStatus === "ACCEPTED" && current.reviewStatus === "ACCEPTED") {
+        return;
+      }
+      if (current.matchStatus === "REJECTED" || current.reviewStatus === "ACCEPTED") {
+        throw new BankReconciliationError(BANK_MATCH_ALREADY_DECIDED_MESSAGE);
+      }
+
+      const alreadyAccepted = await tx.bankReconciliationMatch.findFirst({
+        where: {
+          businessId: access.businessId,
+          candidateKind: current.candidateKind,
+          candidateId: current.candidateId,
+          status: "ACCEPTED",
+          id: { not: current.matchId },
+        },
+        select: { id: true },
+      });
+      if (alreadyAccepted) {
+        throw new BankReconciliationError(BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE);
+      }
+
+      const decidedAt = new Date();
+      const decidedByMembershipId = membershipId(access);
+      await tx.bankReconciliationMatch.updateMany({
+        where: {
+          businessId: access.businessId,
+          rowId: current.rowId,
+          id: { not: current.matchId },
+          status: "SUGGESTED",
+        },
+        data: { status: "REJECTED", decidedAt, decidedByMembershipId },
+      });
+      await tx.bankReconciliationMatch.update({
+        where: { id: current.matchId },
+        data: {
+          status: "ACCEPTED",
+          decidedAt,
+          decidedByMembershipId,
+        },
+      });
+      await tx.bankReconciliationRow.update({
+        where: { id: current.rowId },
+        data: { reviewStatus: "ACCEPTED" },
+      });
     });
-    await tx.bankReconciliationMatch.update({
-      where: { id: match.id },
-      data: {
-        status: "ACCEPTED",
-        decidedAt: new Date(),
-        decidedByMembershipId: membershipId(access),
-      },
-    });
-    await tx.bankReconciliationRow.update({
-      where: { id: row.id },
-      data: { reviewStatus: "ACCEPTED" },
-    });
-  });
-  return refreshWorkspaceCounts(db, access, workspace.id);
+  } catch (error) {
+    if (error instanceof BankReconciliationError) throw error;
+    if (isUniqueConstraintViolation(error)) {
+      throw new BankReconciliationError(BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE);
+    }
+    throw error;
+  }
+  return refreshWorkspaceCounts(db, access, importId);
 }
 
 export async function rejectBankReconciliationMatch(

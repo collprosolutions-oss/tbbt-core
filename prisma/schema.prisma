@@ -5704,7 +5704,7 @@ model BankReconciliationRow {
   direction            String
   rowFingerprint       String
   rawLine              String
-  /// UNMATCHED | CANDIDATE | DUPLICATE | REVERSED | INVALID | ACCEPTED | REJECTED | IGNORED
+  /// UNMATCHED | CANDIDATE | DUPLICATE | REVERSED | INVALID | ALREADY_SEEN | ACCEPTED | REJECTED | IGNORED
   reviewStatus         String
   invalidReason        String?
   reversalOfRowNumber  Int?
@@ -5746,6 +5746,10 @@ model BankReconciliationMatch {
   row       BankReconciliationRow    @relation(fields: [rowId], references: [id], onDelete: Cascade)
   decidedBy Membership?              @relation("BankReconciliationMatchDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
 
+  // One ACCEPTED match per (businessId, candidateKind, candidateId) and one
+  // ACCEPTED match per rowId are enforced by partial unique indexes in
+  // 20261002196000_bank_reconciliation_accepted_unique. Prisma cannot model
+  // those WHERE status = 'ACCEPTED' constraints here.
   @@unique([rowId, candidateKind, candidateId])
   @@index([businessId])
   @@index([importId])

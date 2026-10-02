@@ -28,6 +28,7 @@ export const BANK_ROW_REVIEW_STATUSES = [
   "DUPLICATE",
   "REVERSED",
   "INVALID",
+  "ALREADY_SEEN",
   "ACCEPTED",
   "REJECTED",
   "IGNORED",
@@ -54,6 +55,9 @@ export const EMPTY_BANK_CSV_MESSAGE = "CSV has no data rows.";
 
 export const INVALID_BANK_CSV_MESSAGE = "That CSV could not be read.";
 
+export const BANK_CSV_NUL_MESSAGE =
+  "That CSV contains NUL bytes and cannot be imported.";
+
 export const MISSING_BANK_COLUMNS_MESSAGE =
   "CSV must include a date column and an amount, debit, or credit column.";
 
@@ -78,7 +82,7 @@ export const BANK_MATCH_ALREADY_DECIDED_MESSAGE = "That match was already review
 export const BANK_MATCH_NOT_AVAILABLE_MESSAGE = "That suggested match is not available.";
 
 export const BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE =
-  "That recorded transaction is already accepted on another row in this workspace.";
+  "That recorded transaction is already accepted on another bank row.";
 
 export const BANK_ROW_NOT_REVIEWABLE_MESSAGE = "That bank row cannot be reviewed.";
 
@@ -94,6 +98,8 @@ export function bankRowStatusLabel(status: string): string {
       return "Reversed";
     case "INVALID":
       return "Invalid";
+    case "ALREADY_SEEN":
+      return "Already imported";
     case "ACCEPTED":
       return "Accepted";
     case "REJECTED":

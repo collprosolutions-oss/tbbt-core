@@ -53,7 +53,7 @@ function statusVariant(status: string): "outline" | "success" | "warning" | "des
   if (status === "ACCEPTED") return "success";
   if (status === "CANDIDATE") return "warning";
   if (status === "INVALID") return "destructive";
-  if (status === "REVERSED" || status === "DUPLICATE") return "secondary";
+  if (status === "REVERSED" || status === "DUPLICATE" || status === "ALREADY_SEEN") return "secondary";
   return "outline";
 }
 
@@ -118,7 +118,12 @@ function MatchReview({
 
 function RowIgnore({ importId, row }: { importId: string; row: ReconciliationRowView }) {
   const [state, action, pending] = useActionState(ignoreBankReconciliationRowAction, initialState);
-  if (row.reviewStatus === "ACCEPTED" || row.reviewStatus === "INVALID" || row.reviewStatus === "IGNORED") {
+  if (
+    row.reviewStatus === "ACCEPTED" ||
+    row.reviewStatus === "INVALID" ||
+    row.reviewStatus === "IGNORED" ||
+    row.reviewStatus === "ALREADY_SEEN"
+  ) {
     return null;
   }
   return (
@@ -244,7 +249,9 @@ export function ReconciliationWorkspace({
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No recorded Payment or Expense candidate in the same-cent, three-day window.
+                {row.reviewStatus === "ALREADY_SEEN"
+                  ? "This row was already imported in an earlier workspace."
+                  : "No recorded Payment or Expense candidate in the same-cent, three-day window."}
               </p>
             )}
             <RowIgnore importId={importId} row={row} />

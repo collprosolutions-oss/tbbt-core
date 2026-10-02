@@ -69,6 +69,9 @@ const uiSource = [
 const selfSrc = readRepo("scripts/check-bank-reconciliation.mjs");
 const authSrc = readRepo("src/lib/authorization.ts");
 const migrationSrc = readRepo("prisma/migrations/20261002190000_bank_reconciliation/migration.sql");
+const acceptedUniqueMigrationSrc = readRepo(
+  "prisma/migrations/20261002196000_bank_reconciliation_accepted_unique/migration.sql",
+);
 
 const {
   CAPABILITIES,
@@ -86,7 +89,9 @@ const {
   PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
 } = await import("@/lib/project-payments");
 const {
+  BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE,
   BANK_CREDITS_ARE_NOT_DEPOSITS_MESSAGE,
+  BANK_CSV_NUL_MESSAGE,
   BANK_CSV_REQUIRED_MESSAGE,
   BANK_NO_LIVE_FEED_MESSAGE,
   BANK_NOT_A_BALANCE_MESSAGE,
@@ -97,6 +102,8 @@ const {
   decodeCsvBytes,
   flagDuplicateAndReversedRows,
   hashCsvBytes,
+  markAlreadySeenBankRows,
+  MAX_BANK_AMOUNT_CENTS,
   MAX_BANK_CSV_BYTES,
   MAX_BANK_CSV_ROWS,
   moneyToCents,
@@ -125,6 +132,19 @@ check(
   migrationSrc.includes("BankReconciliationImport") &&
     migrationSrc.includes("CREATE TABLE IF NOT EXISTS") &&
     !migrationSrc.includes("DROP TABLE"),
+);
+check(
+  "accepted-match unique indexes are additive 20261002196000",
+  acceptedUniqueMigrationSrc.includes("BankReconciliationMatch_accepted_candidate_key") &&
+    acceptedUniqueMigrationSrc.includes("BankReconciliationMatch_accepted_row_key") &&
+    acceptedUniqueMigrationSrc.includes("WHERE status = 'ACCEPTED'") &&
+    acceptedUniqueMigrationSrc.includes("CREATE UNIQUE INDEX IF NOT EXISTS") &&
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(acceptedUniqueMigrationSrc),
+);
+check(
+  "original bank reconciliation migration was not rewritten for the indexes",
+  !migrationSrc.includes("BankReconciliationMatch_accepted_candidate_key") &&
+    !migrationSrc.includes("BankReconciliationMatch_accepted_row_key"),
 );
 check(
   "this verifier uses the shared disposable harness",
@@ -201,6 +221,33 @@ check(
     !featureSource.includes("sourceUrl") &&
     BANK_CSV_REQUIRED_MESSAGE.includes("does not connect to a bank"),
 );
+check(
+  "accept locks the match and row, checks inside the transaction, and maps P2002",
+  opsSrc.includes("FOR UPDATE OF m, r") &&
+    opsSrc.includes("$transaction") &&
+    opsSrc.includes('error.code === "P2002"') &&
+    /alreadyAccepted[\s\S]{0,220}businessId: access\.businessId/.test(opsSrc) &&
+    !/alreadyAccepted[\s\S]{0,220}importId: workspace\.id/.test(opsSrc),
+);
+check(
+  "overlapping files reuse rowFingerprint as ALREADY_SEEN",
+  parseSrc.includes("markAlreadySeenBankRows") &&
+    opsSrc.includes("markAlreadySeenBankRows") &&
+    parseSrc.includes("ALREADY_SEEN") &&
+    opsSrc.includes("ALREADY_SEEN"),
+);
+check(
+  "comma thousands must be \\d{1,3}(,\\d{3})+",
+  parseSrc.includes("/^\\d{1,3}(,\\d{3})+$/") &&
+    parseSrc.includes("normalizeBankMoneyDigits"),
+);
+check(
+  "Int32 overflow and NUL bytes are rejected before Postgres",
+  parseSrc.includes("MAX_BANK_AMOUNT_CENTS") &&
+    parseSrc.includes("2_147_483_647") &&
+    parseSrc.includes("BANK_CSV_NUL_MESSAGE") &&
+    parseSrc.includes('view.includes(0)'),
+);
 
 console.log("\nUNIT — cents, dates, duplicates, reversals, and workspace totals");
 check("$1,234.56 is 123456 cents", parseBankMoneyToCents("$1,234.56") === 123456);
@@ -210,6 +257,13 @@ check("50.00 CR is 5000 cents", parseBankMoneyToCents("50.00 CR") === 5000);
 check("-12.5 is -1250 cents", parseBankMoneyToCents("-12.5") === -1250);
 check("three decimal places are rejected", parseBankMoneyToCents("12.345") === null);
 check("empty amount is rejected", parseBankMoneyToCents("") === null);
+check("European 12,50 is not $1,250.00", parseBankMoneyToCents("12,50") === null);
+check("1,5 is not $15.00", parseBankMoneyToCents("1,5") === null);
+check("1,2,3 is not $123.00", parseBankMoneyToCents("1,2,3") === null);
+check("1,234 stays a thousands separator", parseBankMoneyToCents("1,234") === 123400);
+check("Int32 max 21474836.47 is accepted", parseBankMoneyToCents("21474836.47") === MAX_BANK_AMOUNT_CENTS);
+check("Int32 overflow 21474836.48 is rejected", parseBankMoneyToCents("21474836.48") === null);
+check("negative Int32 overflow is rejected", parseBankMoneyToCents("(21474836.48)") === null);
 check("Decimal 500.00 is 50000 cents", moneyToCents(new Prisma.Decimal("500.00")) === 50000);
 check("Decimal 85.40 is 8540 cents", moneyToCents("85.40") === 8540);
 check("3-cent-fraction Decimal is rejected", moneyToCents(new Prisma.Decimal("1.001")) === null);
@@ -244,6 +298,46 @@ check(
 check("quoted 1,200.00 is 120000 cents", parsedAmount[4].amountCents === 120000);
 check("parenthetical Amazon is -1200 cents", parsedAmount[5].amountCents === -1200);
 check("three-decimal row is invalid", parsedAmount[6].reviewStatus === "INVALID");
+
+const commaTrapCsv = [
+  "Date,Description,Amount",
+  '03/15/2026,EURO COMMA,"12,50"',
+  '03/16/2026,SHORT COMMA,"1,5"',
+  '03/17/2026,MULTI COMMA,"1,2,3"',
+  "03/18/2026,OVERFLOW,21474836.48",
+].join("\n");
+const parsedCommaTrap = parseBankCsv(commaTrapCsv);
+check(
+  "false thousands commas and Int32 overflow are INVALID rows",
+  parsedCommaTrap.length === 4 && parsedCommaTrap.every((row) => row.reviewStatus === "INVALID"),
+);
+
+let nulRejected = false;
+try {
+  decodeCsvBytes(Buffer.from("Date,Description,Amount\n03/15/2026,ZELLE\u0000,500.00"));
+} catch (error) {
+  nulRejected = error instanceof BankReconciliationError && error.message === BANK_CSV_NUL_MESSAGE;
+}
+check("UTF-8 text with an embedded NUL is rejected", nulRejected);
+
+const utf16le = Buffer.from("Date,Description,Amount\n03/15/2026,ZELLE,500.00", "utf16le");
+let utf16Rejected = false;
+try {
+  decodeCsvBytes(utf16le);
+} catch (error) {
+  utf16Rejected = error instanceof BankReconciliationError && error.message === BANK_CSV_NUL_MESSAGE;
+}
+check("UTF-16/NUL CSV bytes are rejected before Postgres", utf16Rejected);
+
+const alreadySeenMarked = markAlreadySeenBankRows(
+  parsedAmount.map((row) => ({ ...row })),
+  new Set([parsedAmount[0].rowFingerprint]),
+);
+check(
+  "prior fingerprint marks the matching row ALREADY_SEEN",
+  alreadySeenMarked[0].reviewStatus === "ALREADY_SEEN" &&
+    alreadySeenMarked[2].reviewStatus === "DUPLICATE",
+);
 
 const debitCsv = [
   "Posted Date,Payee,Debit,Credit,Balance",
@@ -313,6 +407,16 @@ const session = await openDisposableTestDatabase({
   setProcessEnv: true,
 });
 const prisma = session.prisma;
+await prisma.$executeRawUnsafe(`
+  CREATE UNIQUE INDEX IF NOT EXISTS "BankReconciliationMatch_accepted_candidate_key"
+  ON "BankReconciliationMatch" ("businessId", "candidateKind", "candidateId")
+  WHERE status = 'ACCEPTED'
+`);
+await prisma.$executeRawUnsafe(`
+  CREATE UNIQUE INDEX IF NOT EXISTS "BankReconciliationMatch_accepted_row_key"
+  ON "BankReconciliationMatch" ("rowId")
+  WHERE status = 'ACCEPTED'
+`);
 
 function makeAccess(business, role, membershipId) {
   return {
@@ -596,6 +700,217 @@ try {
 
   const decoded = decodeCsvBytes(Buffer.from(amountCsv));
   check("decodeCsvBytes round-trips the uploaded text", parseCsv(decoded).length === 8);
+
+  const overlapCsv = [
+    "Date,Description,Amount",
+    "03/15/2026,ZELLE FROM JANE DOE,500.00",
+    "03/21/2026,NEW DEPOSIT,75.00",
+  ].join("\n");
+  const overlap = await importBankCsv(prisma, ownerA, {
+    filename: "statement-overlap.csv",
+    bytes: Buffer.from(overlapCsv),
+  });
+  const overlapZelle = overlap.rows.find((row) => row.amountCents === 50000);
+  const overlapNew = overlap.rows.find((row) => row.amountCents === 7500);
+  check("overlapping statement is a new workspace", overlap.id !== first.id);
+  check(
+    "overlapping Zelle row is ALREADY_SEEN and not re-suggested",
+    overlapZelle?.reviewStatus === "ALREADY_SEEN" && (overlapZelle?.matches.length ?? 1) === 0,
+  );
+  check(
+    "new overlap row is still reviewable",
+    overlapNew?.reviewStatus === "UNMATCHED" && overlapNew?.amountCents === 7500,
+  );
+  check(
+    "already-seen overlap rows do not double-count posted deposits",
+    overlap.postedDepositCents === 7500,
+  );
+
+  const crlfBom = Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from(amountCsv.replace(/\n/g, "\r\n")),
+  ]);
+  check("CRLF/BOM copy is not the same SHA-256", hashCsvBytes(crlfBom) !== first.contentSha256);
+  const crlfCopy = await importBankCsv(prisma, ownerA, {
+    filename: "statement-crlf.csv",
+    bytes: crlfBom,
+  });
+  check("CRLF/BOM copy opens a second workspace", crlfCopy.id !== first.id);
+  check(
+    "CRLF/BOM copy marks previously imported unique rows ALREADY_SEEN",
+    crlfCopy.rows
+      .filter((row) => ["UNMATCHED", "CANDIDATE"].includes(row.reviewStatus) === false)
+      .length === crlfCopy.rows.length &&
+      crlfCopy.rows.some((row) => row.reviewStatus === "ALREADY_SEEN") &&
+      crlfCopy.rows.every((row) => row.matches.length === 0),
+  );
+
+  const sameAmountNewDesc = [
+    "Date,Description,Amount",
+    "03/15/2026,OTHER ZELLE,500.00",
+  ].join("\n");
+  const otherZelle = await importBankCsv(prisma, ownerA, {
+    filename: "other-zelle.csv",
+    bytes: Buffer.from(sameAmountNewDesc),
+  });
+  const otherZelleRow = otherZelle.rows.find((row) => row.amountCents === 50000);
+  const otherZelleMatch = otherZelleRow?.matches.find((match) => match.candidateId === payment500.id);
+  check("different-text $500 still suggests the already-accepted payment", Boolean(otherZelleMatch));
+  let businessWideGuard = false;
+  try {
+    await acceptBankReconciliationMatch(prisma, ownerA, {
+      importId: otherZelle.id,
+      matchId: otherZelleMatch.id,
+    });
+  } catch (error) {
+    businessWideGuard =
+      error instanceof BankReconciliationError &&
+      error.message === BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE;
+  }
+  check("accepted-candidate guard is business-wide", businessWideGuard);
+
+  let nulImportRejected = false;
+  try {
+    await importBankCsv(prisma, ownerA, {
+      filename: "utf16.csv",
+      bytes: Buffer.from("Date,Description,Amount\n03/15/2026,ZELLE,500.00", "utf16le"),
+    });
+  } catch (error) {
+    nulImportRejected =
+      error instanceof BankReconciliationError && error.message === BANK_CSV_NUL_MESSAGE;
+  }
+  check("NUL/UTF-16 import fails with a BankReconciliationError", nulImportRejected);
+
+  const overflowCsv = [
+    "Date,Description,Amount",
+    "03/25/2026,TOO BIG,21474836.48",
+  ].join("\n");
+  const overflowImport = await importBankCsv(prisma, ownerA, {
+    filename: "overflow.csv",
+    bytes: Buffer.from(overflowCsv),
+  });
+  check(
+    "Int32 overflow persists as INVALID instead of throwing",
+    overflowImport.rows[0]?.reviewStatus === "INVALID" && overflowImport.invalidCount === 1,
+  );
+
+  const racePayment = await prisma.payment.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      invoiceId: invoice.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: new Prisma.Decimal("250.00"),
+      method: "ZELLE_BANK_TRANSFER",
+      note: "Race deposit",
+      receivedAt: new Date("2026-03-22T16:00:00.000Z"),
+    },
+  });
+  const twoRowRaceCsv = [
+    "Date,Description,Amount",
+    "03/22/2026,RACE DEPOSIT A,250.00",
+    "03/23/2026,RACE DEPOSIT B,250.00",
+  ].join("\n");
+  const twoRowRace = await importBankCsv(prisma, ownerA, {
+    filename: "race-two-rows.csv",
+    bytes: Buffer.from(twoRowRaceCsv),
+  });
+  const raceRowA = twoRowRace.rows.find((row) => row.description.includes("RACE DEPOSIT A"));
+  const raceRowB = twoRowRace.rows.find((row) => row.description.includes("RACE DEPOSIT B"));
+  const raceMatchA = raceRowA?.matches.find((match) => match.candidateId === racePayment.id);
+  const raceMatchB = raceRowB?.matches.find((match) => match.candidateId === racePayment.id);
+  check("two-row race has the same payment on both rows", Boolean(raceMatchA && raceMatchB));
+
+  const clientA = session.createClient();
+  const clientB = session.createClient();
+  const twoRowSettled = await Promise.allSettled([
+    acceptBankReconciliationMatch(clientA, ownerA, {
+      importId: twoRowRace.id,
+      matchId: raceMatchA.id,
+    }),
+    acceptBankReconciliationMatch(clientB, ownerA, {
+      importId: twoRowRace.id,
+      matchId: raceMatchB.id,
+    }),
+  ]);
+  const twoRowAccepted = twoRowSettled.filter((result) => result.status === "fulfilled");
+  const twoRowRejected = twoRowSettled.filter((result) => result.status === "rejected");
+  const twoRowError = twoRowRejected[0]?.reason;
+  const acceptedForRacePayment = await prisma.bankReconciliationMatch.count({
+    where: {
+      businessId: tenantA.business.id,
+      candidateKind: "PAYMENT",
+      candidateId: racePayment.id,
+      status: "ACCEPTED",
+    },
+  });
+  check(
+    "concurrent accepts of one payment against two rows leave one ACCEPTED",
+    twoRowAccepted.length === 1 &&
+      twoRowRejected.length === 1 &&
+      twoRowError instanceof BankReconciliationError &&
+      acceptedForRacePayment === 1,
+  );
+
+  const oneRowPayA = await prisma.payment.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      invoiceId: invoice.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: new Prisma.Decimal("300.00"),
+      method: "CHECK",
+      note: "Race one row A",
+      receivedAt: new Date("2026-03-24T16:00:00.000Z"),
+    },
+  });
+  const oneRowPayB = await prisma.payment.create({
+    data: {
+      businessId: tenantA.business.id,
+      customerId: tenantA.customer.id,
+      invoiceId: invoice.id,
+      purpose: PAYMENT_PURPOSE_INVOICE_BALANCE,
+      amount: new Prisma.Decimal("300.00"),
+      method: "CHECK",
+      note: "Race one row B",
+      receivedAt: new Date("2026-03-24T16:00:00.000Z"),
+    },
+  });
+  const oneRowRace = await importBankCsv(prisma, ownerA, {
+    filename: "race-one-row.csv",
+    bytes: Buffer.from("Date,Description,Amount\n03/24/2026,RACE ONE ROW,300.00\n"),
+  });
+  const oneRow = oneRowRace.rows.find((row) => row.description.includes("RACE ONE ROW"));
+  const oneRowMatchA = oneRow?.matches.find((match) => match.candidateId === oneRowPayA.id);
+  const oneRowMatchB = oneRow?.matches.find((match) => match.candidateId === oneRowPayB.id);
+  check("one-row race has two payment candidates", Boolean(oneRowMatchA && oneRowMatchB));
+
+  const clientC = session.createClient();
+  const clientD = session.createClient();
+  const oneRowSettled = await Promise.allSettled([
+    acceptBankReconciliationMatch(clientC, ownerA, {
+      importId: oneRowRace.id,
+      matchId: oneRowMatchA.id,
+    }),
+    acceptBankReconciliationMatch(clientD, ownerA, {
+      importId: oneRowRace.id,
+      matchId: oneRowMatchB.id,
+    }),
+  ]);
+  const oneRowAccepted = oneRowSettled.filter((result) => result.status === "fulfilled");
+  const oneRowRejected = oneRowSettled.filter((result) => result.status === "rejected");
+  const oneRowError = oneRowRejected[0]?.reason;
+  const acceptedOnOneRow = await prisma.bankReconciliationMatch.count({
+    where: { businessId: tenantA.business.id, rowId: oneRow.id, status: "ACCEPTED" },
+  });
+  check(
+    "concurrent accepts on one row map the unique violation to BankReconciliationError",
+    oneRowAccepted.length === 1 &&
+      oneRowRejected.length === 1 &&
+      oneRowError instanceof BankReconciliationError &&
+      !(oneRowError instanceof Prisma.PrismaClientKnownRequestError) &&
+      acceptedOnOneRow === 1,
+  );
 
   if (failures > 0) {
     throw new Error(`${failures} bank reconciliation check(s) failed.`);
