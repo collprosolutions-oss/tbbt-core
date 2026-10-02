@@ -846,7 +846,9 @@ check(
   lockFnSrc.includes("FROM \"StoredAsset\"") &&
     lockFnSrc.includes("FOR UPDATE") &&
     claimFnSrc.includes("lockStoredAssetRowForUpdate") &&
-    claimFnSrc.indexOf("lockStoredAssetRowForUpdate") < claimFnSrc.indexOf('status: "FAILED"') &&
+    claimFnSrc.includes("claimReadyUsedBytesOnce") &&
+    claimFnSrc.indexOf("lockStoredAssetRowForUpdate") <
+      claimFnSrc.indexOf('nextStatus: "FAILED"') &&
     attachLockIdx > -1 &&
     attachInsertIdx > attachLockIdx &&
     publicIntakeSrc.includes("PublicRequestPhotoUnavailableError") &&
@@ -1044,8 +1046,9 @@ check(
     claimReadyUsedSrc.indexOf("storedAsset.updateMany") <
       claimReadyUsedSrc.indexOf("storageUsedBytes: { decrement: current.fileSizeBytes }") &&
     expenseClaimSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
+    expenseClaimSrc.includes("claimReadyUsedBytesOnce") &&
     expenseClaimSrc.indexOf("lockBusinessStorageAccountForUpdate") <
-      expenseClaimSrc.indexOf("storedAsset.updateMany") &&
+      expenseClaimSrc.indexOf("claimReadyUsedBytesOnce") &&
     attachLockBlock.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
     attachLockBlock.indexOf("lockBusinessStorageAccountForUpdate") <
       attachLockBlock.indexOf("lockStoredAssetRowForUpdate"),

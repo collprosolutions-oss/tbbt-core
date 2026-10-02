@@ -33,6 +33,7 @@ export {
   abortBusinessUpload,
   abortManagedUpload,
   assertOwnedStoredAsset,
+  claimReadyUsedBytesOnce,
   discardReadyManagedUpload,
   managedStorageWriteTestHooks,
   authorizeBusinessUpload,

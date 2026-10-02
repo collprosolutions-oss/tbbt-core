@@ -23,6 +23,7 @@ import {
   abortManagedUpload,
   authorizeManagedUpload,
   bestEffortCleanupOwnedObject,
+  claimReadyUsedBytesOnce,
   finalizeManagedUpload,
   resolveStorageProvider,
   type StorageServiceDeps,
@@ -275,22 +276,19 @@ async function claimUnreferencedExpenseReceiptInTx(
     include: { storageAccount: true },
   });
   if (!asset || asset.status !== "READY") return null;
-  const updated = await tx.storedAsset.updateMany({
-    where: {
-      id: asset.id,
-      businessId: access.businessId,
+  const claimed = await claimReadyUsedBytesOnce(tx as Prisma.TransactionClient, {
+    businessId: access.businessId,
+    assetId: asset.id,
+    accountId: asset.storageAccountId,
+    now,
+    nextStatus: "DELETED",
+    match: {
       purpose: EXPENSE_RECEIPT_PURPOSE,
-      status: "READY",
+      category: EXPENSE_RECEIPT_CATEGORY,
+      visibility: "PRIVATE",
     },
-    data: { status: "DELETED", deletedAt: now, publicPath: null },
   });
-  if (updated.count !== 1) return null;
-  if (asset.fileSizeBytes > 0) {
-    await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
-    });
-  }
+  if (!claimed.claimed) return null;
   return {
     bucket: asset.storageAccount.bucketName,
     storageKey: asset.storageKey,

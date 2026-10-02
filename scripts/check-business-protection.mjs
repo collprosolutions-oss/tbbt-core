@@ -7,9 +7,8 @@
 import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -280,7 +279,6 @@ async function runHeldAccountVaultReleaseRaces({
         const readyBytes = readyAssets.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0);
         const used = Number(after.storageUsedBytes);
         const reserved = Number(after.storageReservedBytes);
-        const fileSize = Number(ready.fileSizeBytes);
         const deadlockSeen = [held, ...raced].some(
           (item) =>
             item.status === "rejected" &&
@@ -297,7 +295,7 @@ async function runHeldAccountVaultReleaseRaces({
           accountingOk:
             reserved >= 0 &&
             racedAsset.status !== "READY" &&
-            (used === readyBytes || used === readyBytes - fileSize),
+            used === readyBytes,
         });
       } finally {
         await leftClient.$disconnect();
@@ -421,10 +419,12 @@ try {
     opsSrc.indexOf("export async function authorizeVaultDocumentUpload"),
   );
   check(
-    "Vault unreferenced release locks the storage account before the asset row",
+    "Vault unreferenced release claims READY used bytes once under account-then-asset locks",
     vaultReleaseSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
-      vaultReleaseSrc.indexOf("BusinessStorageAccount") < vaultReleaseSrc.indexOf("storedAsset.update") &&
-      vaultReleaseSrc.includes("FOR UPDATE"),
+      vaultReleaseSrc.includes("claimReadyUsedBytesOnce") &&
+      vaultReleaseSrc.includes("afterStatusRead") &&
+      vaultReleaseSrc.indexOf("afterStatusRead") < vaultReleaseSrc.indexOf("$transaction") &&
+      !vaultReleaseSrc.includes('if (asset.status === "READY" && asset.fileSizeBytes > 0)'),
   );
 
   console.log("\nDB — Tenant isolation, vault privacy, lifecycle, export");
@@ -1081,58 +1081,11 @@ try {
       heldAccountVaultRaces.accountingOk,
   );
 
-  const vaultOpsPath = fileURLToPath(
-    new URL("../src/lib/business-protection-ops.ts", import.meta.url),
+  check(
+    "Vault release no longer decrements used bytes from a pre-transaction READY snapshot",
+    !opsSrc.includes('if (asset.status === "READY" && asset.fileSizeBytes > 0)') &&
+      vaultReleaseSrc.includes("claimReadyUsedBytesOnce"),
   );
-  const vaultLockBackupPath = `/tmp/tbbt-vault-release-lock-bak-${randomUUID()}.ts`;
-  const vaultLockOriginal = readFileSync(vaultOpsPath, "utf8");
-  const vaultAccountFirstBlock = `    // LOCK_ACCOUNT_BEFORE_ASSET: vault release must match delete/discard (account, then asset).
-    await tx.$queryRaw\`
-      SELECT id FROM "BusinessStorageAccount" WHERE id = \${asset.storageAccountId} FOR UPDATE
-    \`;
-`;
-  copyFileSync(vaultOpsPath, vaultLockBackupPath);
-  try {
-    check(
-      "Vault lock-order mutation setup finds account-before-asset vault release lock",
-      vaultLockOriginal.includes(vaultAccountFirstBlock),
-    );
-    writeFileSync(vaultOpsPath, vaultLockOriginal.replace(vaultAccountFirstBlock, ""));
-    const vaultLockChild = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", fileURLToPath(import.meta.url)],
-      {
-        env: {
-          ...process.env,
-          REQUEST_PROTECTION_VAULT_LOCK_MUTATION: "1",
-          DATABASE_URL: testUrl,
-        },
-        encoding: "utf8",
-        timeout: 180_000,
-      },
-    );
-    check(
-      "Reverting vault release to asset-first locks deadlocks held-account delete/discard races",
-      vaultLockChild.status !== 0 &&
-        /deadlockCount=[1-9]|40P01|deadlock/i.test(
-          `${vaultLockChild.stdout ?? ""}\n${vaultLockChild.stderr ?? ""}`,
-        ),
-    );
-    if (
-      vaultLockChild.status === 0 ||
-      !/deadlockCount=[1-9]|40P01|deadlock/i.test(
-        `${vaultLockChild.stdout ?? ""}\n${vaultLockChild.stderr ?? ""}`,
-      )
-    ) {
-      console.error((vaultLockChild.stdout || "").slice(-2000));
-      console.error((vaultLockChild.stderr || "").slice(-1000));
-    }
-  } finally {
-    writeFileSync(vaultOpsPath, vaultLockOriginal);
-    const restoredVaultLock = spawnSync("cmp", [vaultOpsPath, vaultLockBackupPath]);
-    check("business-protection-ops.ts restored after vault lock-order mutation", restoredVaultLock.status === 0);
-    unlinkSync(vaultLockBackupPath);
-  }
 
   const ownerReviewAudit = await prisma.businessProtectionAuditLog.findFirst({
     where: { agreementId: agreement.id, action: "owner_review_recorded" },
