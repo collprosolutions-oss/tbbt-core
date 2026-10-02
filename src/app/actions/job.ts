@@ -413,16 +413,16 @@ export async function scheduleJob(
         scheduleRefusal = "That job could not be scheduled.";
         return;
       }
+      const lockedRefusal = jobScheduleRefusalMessage(current.status);
+      if (lockedRefusal) {
+        scheduleRefusal = lockedRefusal;
+        return;
+      }
       const fresh = await tx.job.findFirst({
         where: { id: job.id, businessId: access.businessId },
       });
       if (!fresh) {
         scheduleRefusal = "That job could not be scheduled.";
-        return;
-      }
-      const lockedRefusal = jobScheduleRefusalMessage(fresh.status);
-      if (lockedRefusal) {
-        scheduleRefusal = lockedRefusal;
         return;
       }
 
