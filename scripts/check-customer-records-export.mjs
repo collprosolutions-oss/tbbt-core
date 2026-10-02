@@ -12,7 +12,9 @@
 import { register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { crc32 as zlibCrc32 } from "node:zlib";
 import { openDisposableTestDatabase } from "./disposable-test-database.mjs";
 
@@ -334,14 +336,18 @@ check(
     zipStoreSrc.includes("neutralizeCsvFormulaPrefix") &&
     zipStoreSrc.includes("CSV_NUMERIC_CELL"),
 );
+const downloadHelperSrc = httpSrc.slice(
+  httpSrc.indexOf("export async function runCustomerRecordsExportDownload"),
+);
 check(
   "Customer-records download helper owns the OWNER gate and the audit write",
-  httpSrc.includes("if (!canExportCustomerRecords(access.workspace.role))") &&
-    httpSrc.includes('return { ok: false, status: 403, error: "Forbidden" }') &&
-    httpSrc.includes("await recordCustomerRecordsExportAudit(prisma, access, document)") &&
-    httpSrc.indexOf("canExportCustomerRecords") < httpSrc.indexOf("buildCustomerRecordsExport") &&
-    httpSrc.indexOf("recordCustomerRecordsExportAudit") >
-      httpSrc.indexOf("const document = await buildCustomerRecordsExport"),
+  downloadHelperSrc.includes("if (!canExportCustomerRecords(access.workspace.role))") &&
+    downloadHelperSrc.includes('return { ok: false, status: 403, error: "Forbidden" }') &&
+    downloadHelperSrc.includes("await recordCustomerRecordsExportAudit(prisma, access, document)") &&
+    downloadHelperSrc.indexOf("canExportCustomerRecords") <
+      downloadHelperSrc.indexOf("buildCustomerRecordsExport") &&
+    downloadHelperSrc.indexOf("await recordCustomerRecordsExportAudit") >
+      downloadHelperSrc.indexOf("const document = await buildCustomerRecordsExport"),
 );
 check(
   "Customer-records contract includes time cards and permitted project-document references",
@@ -1472,13 +1478,21 @@ try {
     zipEntries.length > 0 &&
       zipEntries.every((entry) => entry.crc === (zlibCrc32(entry.data) >>> 0)),
   );
-  const unzipTest = spawnSync("unzip", ["-t", "-qq"], {
-    input: builtZip.bytes,
-    encoding: "buffer",
-  });
+  let unzipOk = false;
+  let unzipMissing = false;
+  const unzipDir = mkdtempSync(join(tmpdir(), "tbbt-settings-zip-"));
+  try {
+    const unzipPath = join(unzipDir, "tbbt-export.zip");
+    writeFileSync(unzipPath, builtZip.bytes);
+    const unzipTest = spawnSync("unzip", ["-t", "-qq", unzipPath]);
+    unzipMissing = unzipTest.error?.code === "ENOENT";
+    unzipOk = unzipTest.status === 0;
+  } finally {
+    rmSync(unzipDir, { recursive: true, force: true });
+  }
   check(
     "unzip -t accepts the Settings ZIP when unzip is available",
-    unzipTest.error?.code === "ENOENT" || unzipTest.status === 0,
+    unzipMissing || unzipOk,
   );
   check(
     "Time-card note formula prefix is neutralized in the ZIP CSV",
