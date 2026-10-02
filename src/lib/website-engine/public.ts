@@ -40,6 +40,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export type PublicWebsiteView = {
   source: "snapshot" | "compatibility";
+  /** Exact WebsitePublish row this view was loaded from. Null on compatibility. */
+  publishId: string | null;
   versionNumber: number | null;
   publishedAt: Date | null;
   snapshot: PublishedWebsiteSnapshot | null;
@@ -221,6 +223,7 @@ async function loadCompatibilityView(slug: string, db: Db): Promise<PublicWebsit
   if (!site) return null;
   return {
     source: "compatibility",
+    publishId: null,
     versionNumber: null,
     publishedAt: null,
     snapshot: null,
@@ -253,6 +256,7 @@ export async function loadPublicWebsiteView(
         }
         return {
           source: "snapshot",
+          publishId: publish.id,
           versionNumber: publish.versionNumber,
           publishedAt: publish.publishedAt,
           snapshot,

@@ -62,7 +62,11 @@ import {
 } from "@/lib/intake-snapshot";
 import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
 import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops";
-import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
+import {
+  parseWebsiteSnapshot,
+  readReferencedWebsitePublishId,
+  type PublishedWebsiteSnapshot,
+} from "@/lib/website-engine/snapshot";
 import {
   snapshotIntakeSchemaForTrade,
   snapshotServiceAreaRecords,
@@ -187,6 +191,16 @@ export type PublicIntakeInput = {
    * submit the snapshot they displayed after a later website publish.
    */
   tenantIntakeSnapshotId?: string | null;
+  /**
+   * Exact WebsitePublish displayed when the public hire form loaded.
+   * Server-resolved against the slug business. A missing, cross-tenant,
+   * or corrupt reference fails closed. Omitting the id uses the current
+   * published pointer when one exists (new tabs). Already-opened forms
+   * send the id they displayed so a later owner publish cannot change
+   * service-city qualification. A service deactivated after that publish
+   * is rejected even if the opened snapshot still lists it.
+   */
+  websitePublishId?: string | null;
   /**
    * Server-resolved existing customer. Never accepted from the browser.
    * Used by the Cleaning repeat-visit path after projectToken verification.
@@ -519,33 +533,68 @@ async function liveMatchedServiceAreaId(
   }
 }
 
+async function loadOwnedWebsiteSnapshot(
+  db: PublicIntakeDb,
+  business: { id: string },
+  safeSlug: string,
+  publishId: string,
+): Promise<PublishedWebsiteSnapshot | null> {
+  if (!db.websitePublish) return null;
+  try {
+    const publish = await db.websitePublish.findFirst({
+      where: { id: publishId, businessId: business.id },
+    });
+    if (!publish) return null;
+    const parsed = parseWebsiteSnapshot(publish.snapshotJson);
+    if (parsed.business.id === business.id && parsed.business.slug === safeSlug) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 async function resolveIntakePublishedSnapshot(
   db: PublicIntakeDb,
   safeSlug: string,
+  websitePublishId?: string | null,
 ): Promise<{
   business: { id: string; tradeCode?: string; publishedWebsiteId?: string | null };
   publishedSnapshot: PublishedWebsiteSnapshot | null;
+  referencedPublishInvalid?: boolean;
 } | null> {
   const business = await db.business.findUnique({
     where: { slug: safeSlug },
     select: { id: true, tradeCode: true, publishedWebsiteId: true },
   });
   if (!business) return null;
+
+  const referenced = readReferencedWebsitePublishId(websitePublishId);
+  if (referenced.provided) {
+    if (!referenced.publishId) {
+      return { business, publishedSnapshot: null, referencedPublishInvalid: true };
+    }
+    const publishedSnapshot = await loadOwnedWebsiteSnapshot(
+      db,
+      business,
+      safeSlug,
+      referenced.publishId,
+    );
+    if (!publishedSnapshot) {
+      return { business, publishedSnapshot: null, referencedPublishInvalid: true };
+    }
+    return { business, publishedSnapshot };
+  }
+
   let publishedSnapshot: PublishedWebsiteSnapshot | null = null;
   if (business.publishedWebsiteId && db.websitePublish) {
-    try {
-      const publish = await db.websitePublish.findFirst({
-        where: { id: business.publishedWebsiteId, businessId: business.id },
-      });
-      if (publish) {
-        const parsed = parseWebsiteSnapshot(publish.snapshotJson);
-        if (parsed.business.id === business.id && parsed.business.slug === safeSlug) {
-          publishedSnapshot = parsed;
-        }
-      }
-    } catch {
-      publishedSnapshot = null;
-    }
+    publishedSnapshot = await loadOwnedWebsiteSnapshot(
+      db,
+      business,
+      safeSlug,
+      business.publishedWebsiteId,
+    );
   }
   return { business, publishedSnapshot };
 }
@@ -582,11 +631,16 @@ async function createPublicServiceRequestInner(
     postalCode: input.postalCode ?? "",
   };
   const notes = input.notes.trim();
-  const published = await resolveIntakePublishedSnapshot(db, safeSlug);
-  if (!published) {
+  const published = await resolveIntakePublishedSnapshot(db, safeSlug, input.websitePublishId);
+  if (!published || published.referencedPublishInvalid) {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
   }
   const { business, publishedSnapshot } = published;
+  const referencedPublish = readReferencedWebsitePublishId(input.websitePublishId);
+  const historicalPublish =
+    referencedPublish.provided &&
+    Boolean(referencedPublish.publishId) &&
+    referencedPublish.publishId !== business.publishedWebsiteId;
   const configuredAreas = publishedSnapshot
     ? snapshotServiceAreaRecords(publishedSnapshot)
     : (input.configuredAreas ?? []);
@@ -668,7 +722,7 @@ async function createPublicServiceRequestInner(
       where: {
         id: { in: catalogIds },
         businessId: business.id,
-        ...(publishedSnapshot ? {} : { active: true }),
+        ...(publishedSnapshot && !historicalPublish ? {} : { active: true }),
       },
       select: {
         id: true,
