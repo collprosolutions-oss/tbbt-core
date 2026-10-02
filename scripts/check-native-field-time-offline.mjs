@@ -158,6 +158,23 @@ function check(label, condition) {
   }
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const clockNow = new Date();
+function fromNow(ms) {
+  return new Date(clockNow.getTime() + ms);
+}
+function isoFromNow(ms) {
+  return fromNow(ms).toISOString();
+}
+const applyNativeTimeCardSync = syncNativeAssignedTimeCardDraft;
+function syncPinned(db, access, jobId, input, options) {
+  return applyNativeTimeCardSync(db, access, jobId, input, {
+    now: clockNow,
+    ...options,
+  });
+}
+
 function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
@@ -266,6 +283,32 @@ check(
       offlineCheckSrc,
     ),
 );
+const leftoverMarker = ["leftover", "overlap", "seed", "regression"].join("-");
+const leftoverRegressionSrc = offlineCheckSrc.slice(offlineCheckSrc.indexOf(leftoverMarker));
+const leftoverIsolationSlice = leftoverRegressionSrc.slice(
+  0,
+  leftoverRegressionSrc.indexOf("Older edits go through a correction request"),
+);
+const liveMarker = ["live", "clock", "now", "fixtures"].join("-");
+const liveFixtureSrc = offlineCheckSrc.slice(offlineCheckSrc.indexOf(liveMarker));
+check(
+  "Pinned same-worker correction isolates the leftover overlap seed before retry",
+  leftoverRegressionSrc.startsWith(leftoverMarker) &&
+    leftoverIsolationSlice.includes("fromNow(-8 * HOUR_MS - 15 * MINUTE_MS)") &&
+    leftoverIsolationSlice.includes("That correction would overlap another entry.") &&
+    leftoverIsolationSlice.includes("deleteMany") &&
+    leftoverIsolationSlice.includes("jobId: overlapJob.id") &&
+    leftoverIsolationSlice.includes("After isolating the leftover overlap seed"),
+);
+check(
+  "LIVE sync fixtures are offsets from one clockNow, not a calendar day",
+  liveFixtureSrc.startsWith(liveMarker) &&
+    offlineCheckSrc.includes("isoFromNow(-8 * HOUR_MS)") &&
+    offlineCheckSrc.includes("isoFromNow(-7 * HOUR_MS)") &&
+    !/2026-10-0[234]T\d{2}:\d{2}:\d{2}\.000Z/.test(liveFixtureSrc) &&
+    offlineCheckSrc.includes("const clockNow = new Date()") &&
+    offlineCheckSrc.includes("now: clockNow"),
+);
 check(
   "Sign-out clears time drafts; restore 401/403 does not",
   appSrc.includes("clearAllTimeCardDrafts") &&
@@ -283,14 +326,17 @@ check(
 );
 
 const idle = emptyTimeCardClockSnapshot("SCHEDULED", "mem-a");
-const startAt = "2026-10-02T16:00:00.000Z";
+const startAt = isoFromNow(-4 * HOUR_MS);
+function isoFromStart(ms) {
+  return new Date(Date.parse(startAt) + ms).toISOString();
+}
 const emptySync = parseNativeTimeCardSyncJson("{}");
 const validSync = parseNativeTimeCardSyncJson(
   JSON.stringify({
     expectedFingerprint: timeCardStateFingerprint(idle),
     intents: [{ action: "START_JOB", intendedAt: startAt }],
   }),
-  new Date("2026-10-02T16:05:00.000Z"),
+  clockNow,
 );
 check(
   "Sync JSON requires a fingerprint plus at least one start or stop intent",
@@ -302,7 +348,7 @@ check(
     nativeDraftFingerprint(idle) === timeCardStateFingerprint(idle),
 );
 
-const boundNow = new Date("2026-10-02T17:00:00.000Z");
+const boundNow = clockNow;
 function parseBoundIntent(intendedAt) {
   return parseNativeTimeCardSyncJson(
     JSON.stringify({
@@ -351,8 +397,8 @@ const outOfOrderParse = parseNativeTimeCardSyncJson(
   JSON.stringify({
     expectedFingerprint: timeCardStateFingerprint(idle),
     intents: [
-      { action: "START_TRAVEL", intendedAt: "2026-10-02T16:50:00.000Z" },
-      { action: "START_JOB", intendedAt: "2026-10-02T16:40:00.000Z" },
+      { action: "START_TRAVEL", intendedAt: isoFromStart(50 * MINUTE_MS) },
+      { action: "START_JOB", intendedAt: isoFromStart(40 * MINUTE_MS) },
     ],
   }),
   boundNow,
@@ -406,7 +452,7 @@ try {
     snapshot: idle,
     draft: reloaded,
     action: "START_JOB",
-    now: new Date("2026-10-02T16:10:00.000Z"),
+    now: new Date(isoFromStart(10 * MINUTE_MS)),
   });
 } catch (error) {
   duplicateError = error;
@@ -416,7 +462,7 @@ const withStop = recordLocalTimeCardIntent({
   snapshot: idle,
   draft: reloaded,
   action: "STOP_JOB_TIME",
-  now: new Date("2026-10-02T18:00:00.000Z"),
+  now: new Date(isoFromStart(2 * HOUR_MS)),
 });
 let localOutOfOrderError = null;
 try {
@@ -425,7 +471,7 @@ try {
     snapshot: idle,
     draft: withStop,
     action: "START_TRAVEL",
-    now: new Date("2026-10-02T17:00:00.000Z"),
+    now: new Date(isoFromStart(HOUR_MS)),
   });
 } catch (error) {
   localOutOfOrderError = error;
@@ -489,7 +535,7 @@ await persistLocalTimeCardIntent(indexed, {
   scope: otherScope,
   snapshot: idle,
   action: "STOP_JOB_TIME",
-  now: new Date("2026-10-02T18:00:00.000Z"),
+  now: new Date(isoFromStart(2 * HOUR_MS)),
 });
 const beforeClear = await Promise.all([
   loadTimeCardDraft(indexed, scope),
@@ -535,19 +581,19 @@ await persistLocalTimeCardIntent(overflowStorage, {
   scope: overflowScope,
   snapshot: idle,
   action: "STOP_JOB_TIME",
-  now: new Date("2026-10-02T17:00:00.000Z"),
+  now: new Date(isoFromStart(HOUR_MS)),
 });
 await persistLocalTimeCardIntent(overflowStorage, {
   scope: overflowScope,
   snapshot: idle,
   action: "START_TRAVEL",
-  now: new Date("2026-10-02T17:05:00.000Z"),
+  now: new Date(isoFromStart(HOUR_MS + 5 * MINUTE_MS)),
 });
 await persistLocalTimeCardIntent(overflowStorage, {
   scope: overflowScope,
   snapshot: idle,
   action: "STOP_TRAVEL",
-  now: new Date("2026-10-02T17:20:00.000Z"),
+  now: new Date(isoFromStart(HOUR_MS + 20 * MINUTE_MS)),
 });
 let overflowError = null;
 try {
@@ -555,7 +601,7 @@ try {
     scope: overflowScope,
     snapshot: idle,
     action: "START_PICKUP",
-    now: new Date("2026-10-02T17:25:00.000Z"),
+    now: new Date(isoFromStart(HOUR_MS + 25 * MINUTE_MS)),
   });
 } catch (error) {
   overflowError = error;
@@ -905,7 +951,7 @@ try {
     customerName: "Stop Sync Canary",
     status: "IN_PROGRESS",
   });
-  const stopStartedAt = new Date("2026-10-02T14:00:00.000Z");
+  const stopStartedAt = fromNow(-6 * HOUR_MS);
   const retryJob = await createTimeJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -926,9 +972,9 @@ try {
     assignedMembershipId: memberMem.id,
     customerName: "Overlap Canary",
   });
-  const overlapStartedAt = "2026-10-02T12:00:00.000Z";
-  const overlapEndedAt = "2026-10-02T13:00:00.000Z";
-  const overlapIntentAt = "2026-10-02T12:30:00.000Z";
+  const overlapStartedAt = isoFromNow(-8 * HOUR_MS);
+  const overlapEndedAt = isoFromNow(-7 * HOUR_MS);
+  const overlapIntentAt = isoFromNow(-7 * HOUR_MS - 30 * MINUTE_MS);
   const earlierRunningJob = await createTimeJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -1086,7 +1132,7 @@ try {
   }
 
   console.log("\nAUTH — Assignment, tenant, and subscription refusals");
-  const stolen = await syncNativeAssignedTimeCardDraft(
+  const stolen = await syncPinned(
     prisma,
     otherAccess.access,
     memberJob.id,
@@ -1094,7 +1140,7 @@ try {
       { action: "START_JOB", intendedAt: startAt },
     ]),
   );
-  const cross = await syncNativeAssignedTimeCardDraft(
+  const cross = await syncPinned(
     prisma,
     betaAccess.access,
     memberJob.id,
@@ -1102,7 +1148,7 @@ try {
       { action: "START_JOB", intendedAt: startAt },
     ]),
   );
-  const unassigned = await syncNativeAssignedTimeCardDraft(
+  const unassigned = await syncPinned(
     prisma,
     memberAccess.access,
     unassignedJob.id,
@@ -1110,7 +1156,7 @@ try {
       { action: "START_JOB", intendedAt: startAt },
     ]),
   );
-  const blockedWrite = await syncNativeAssignedTimeCardDraft(
+  const blockedWrite = await syncPinned(
     prisma,
     blockedAccess.access,
     blockedJob.id,
@@ -1140,8 +1186,10 @@ try {
   );
 
   console.log("\nLIVE — Sync, retry, two-device conflict, overlap, timezone");
+  // live-clock-now-fixtures
   // Overlap runs first with its own closed interval so later start/stop
-  // fixtures do not share the same worker clock window.
+  // fixtures do not share the same worker clock window. That seed stays
+  // on this worker until the correction regression isolates it.
   await createReadyEntry({
     businessId: businessA.id,
     membershipId: memberMem.id,
@@ -1149,7 +1197,7 @@ try {
     startedAt: new Date(overlapStartedAt),
     endedAt: new Date(overlapEndedAt),
   });
-  const overlap = await syncNativeAssignedTimeCardDraft(
+  const overlap = await syncPinned(
     prisma,
     memberAccess.access,
     overlapJob.id,
@@ -1176,9 +1224,18 @@ try {
       String(overlap.error).includes("overlaps") &&
       overlapRows.length === 0,
   );
+  const overlapSeed = await prisma.timeEntry.findMany({
+    where: { jobId: overlapJob.id, businessId: businessA.id },
+  });
+  check(
+    "The refused overlapping start leaves the original closed seed and no merged running clock",
+    overlapSeed.length === 1 &&
+      overlapSeed[0].status === "READY" &&
+      overlapSeed[0].startedAt.toISOString() === overlapStartedAt &&
+      overlapSeed[0].endedAt?.toISOString() === overlapEndedAt,
+  );
 
-  const clockNow = new Date();
-  const runningSince = new Date(clockNow.getTime() - 30 * 60 * 1000);
+  const runningSince = fromNow(-30 * MINUTE_MS);
   const earlierStartAt = new Date(clockNow.getTime() - 2 * 60 * 60 * 1000).toISOString();
   await createRunningEntry({
     businessId: businessA.id,
@@ -1186,7 +1243,7 @@ try {
     jobId: earlierRunningJob.id,
     startedAt: runningSince,
   });
-  const earlierStart = await syncNativeAssignedTimeCardDraft(
+  const earlierStart = await syncPinned(
     prisma,
     memberAccess.access,
     earlierStartJob.id,
@@ -1217,7 +1274,7 @@ try {
 
   const travelEarlier = new Date(clockNow.getTime() - 10 * 60 * 1000).toISOString();
   const jobEarlier = new Date(clockNow.getTime() - 20 * 60 * 1000).toISOString();
-  const outOfOrderLive = await syncNativeAssignedTimeCardDraft(
+  const outOfOrderLive = await syncPinned(
     prisma,
     memberAccess.access,
     outOfOrderJob.id,
@@ -1238,7 +1295,7 @@ try {
   );
 
   const eightyDaysAgo = new Date(clockNow.getTime() - 80 * 24 * 60 * 60 * 1000).toISOString();
-  const oldStart = await syncNativeAssignedTimeCardDraft(
+  const oldStart = await syncPinned(
     prisma,
     memberAccess.access,
     oldStartJob.id,
@@ -1264,7 +1321,7 @@ try {
     jobId: longStopJob.id,
     startedAt: longStartedAt,
   });
-  const longStop = await syncNativeAssignedTimeCardDraft(
+  const longStop = await syncPinned(
     prisma,
     memberAccess.access,
     longStopJob.id,
@@ -1304,7 +1361,7 @@ try {
     jobId: earlierRunningJob.id,
     startedAt: equalRunningAt,
   });
-  const equalStart = await syncNativeAssignedTimeCardDraft(
+  const equalStart = await syncPinned(
     prisma,
     memberAccess.access,
     earlierStartJob.id,
@@ -1442,7 +1499,7 @@ try {
     jobId: forgottenSyncJob.id,
     startedAt: thirtyHoursAgo,
   });
-  const syncLongStart = await syncNativeAssignedTimeCardDraft(
+  const syncLongStart = await syncPinned(
     prisma,
     memberAccess.access,
     syncLongStartJob.id,
@@ -1496,7 +1553,7 @@ try {
     activityType: "MATERIAL_PICKUP",
     startedAt: longStartedAt,
   });
-  const longTravelStop = await syncNativeAssignedTimeCardDraft(
+  const longTravelStop = await syncPinned(
     prisma,
     memberAccess.access,
     longTravelJob.id,
@@ -1513,7 +1570,7 @@ try {
       },
     ),
   );
-  const longPickupStop = await syncNativeAssignedTimeCardDraft(
+  const longPickupStop = await syncPinned(
     prisma,
     memberAccess.access,
     longPickupJob.id,
@@ -1559,7 +1616,7 @@ try {
     },
   });
 
-  const futureSync = await syncNativeAssignedTimeCardDraft(
+  const futureSync = await syncPinned(
     prisma,
     memberAccess.access,
     oldStartJob.id,
@@ -1588,18 +1645,18 @@ try {
   const replayAgedPayload = syncPayload(replayAgedJob, memberMem.id, [
     { action: "START_JOB", intendedAt: replayAgedAt },
   ]);
-  const replayAgedFirst = await syncNativeAssignedTimeCardDraft(
+  const replayAgedFirst = await syncPinned(
     prisma,
     memberAccess.access,
     replayAgedJob.id,
     replayAgedPayload,
   );
-  const replayAgedSecond = await syncNativeAssignedTimeCardDraft(
+  const replayAgedSecond = await syncPinned(
     prisma,
     memberAccess.access,
     replayAgedJob.id,
     replayAgedPayload,
-    { now: new Date(clockNow.getTime() + 25 * 60 * 60 * 1000) },
+    { now: fromNow(25 * HOUR_MS) },
   );
   const replayAgedRows = await prisma.timeEntry.findMany({
     where: { jobId: replayAgedJob.id, businessId: businessA.id },
@@ -1616,8 +1673,12 @@ try {
     where: { jobId: replayAgedJob.id, businessId: businessA.id },
   });
 
-  const correctionStart = new Date(clockNow.getTime() - 8 * 60 * 60 * 1000);
-  const correctionEnd = new Date(clockNow.getTime() - 7 * 60 * 60 * 1000);
+  // leftover-overlap-seed-regression
+  // now-8h15m → now-7h overlaps the leftover now-8h → now-7h seed.
+  // That 409 is a fixture collision, not a merged offline-sync write.
+  const correctionStart = fromNow(-8 * HOUR_MS);
+  const correctionEnd = fromNow(-7 * HOUR_MS);
+  const proposedCorrectionStart = fromNow(-8 * HOUR_MS - 15 * MINUTE_MS);
   const correctionEntry = await createReadyEntry({
     businessId: businessA.id,
     membershipId: memberMem.id,
@@ -1625,18 +1686,43 @@ try {
     startedAt: correctionStart,
     endedAt: correctionEnd,
   });
-  const proposedCorrectionStart = new Date(correctionStart.getTime() - 15 * 60 * 1000);
-  const correctionRequest = await requestNativeTimeCorrection(prisma, memberAccess.access, {
+  const collidingCorrectionInput = {
     timeEntryId: correctionEntry.id,
     reason: "Offline tap was older than the sync window.",
     proposedStartDate: formatDateInput(proposedCorrectionStart, "America/New_York"),
     proposedStartTime: formatTimeInput(proposedCorrectionStart, "America/New_York"),
     proposedEndDate: formatDateInput(correctionEnd, "America/New_York"),
     proposedEndTime: formatTimeInput(correctionEnd, "America/New_York"),
+  };
+  const leftoverOverlapCollision = await requestNativeTimeCorrection(
+    prisma,
+    memberAccess.access,
+    collidingCorrectionInput,
+  );
+  check(
+    "Leftover overlap seed 409s a colliding same-worker correction",
+    leftoverOverlapCollision.ok === false &&
+      leftoverOverlapCollision.status === 409 &&
+      leftoverOverlapCollision.error === "That correction would overlap another entry.",
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: overlapJob.id, businessId: businessA.id },
   });
+  const correctionRequest = await requestNativeTimeCorrection(
+    prisma,
+    memberAccess.access,
+    collidingCorrectionInput,
+  );
   const correctionAfter = await prisma.timeEntry.findFirst({
     where: { id: correctionEntry.id },
   });
+  check(
+    "After isolating the leftover overlap seed, the same correction is PENDING",
+    correctionRequest.ok === true &&
+      correctionRequest.request.status === "PENDING" &&
+      correctionAfter?.startedAt.getTime() === correctionStart.getTime() &&
+      correctionAfter?.endedAt?.getTime() === correctionEnd.getTime(),
+  );
   check(
     "Older edits go through a correction request and do not rewrite the TimeEntry",
     correctionRequest.ok === true &&
@@ -1645,7 +1731,7 @@ try {
       correctionAfter?.endedAt?.getTime() === correctionEnd.getTime(),
   );
 
-  const deactivate = await syncNativeAssignedTimeCardDraft(
+  const deactivate = await syncPinned(
     prisma,
     deactivateAccess.access,
     deactivateJob.id,
@@ -1683,7 +1769,7 @@ try {
       deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
   );
 
-  const memberStart = await syncNativeAssignedTimeCardDraft(
+  const memberStart = await syncPinned(
     prisma,
     memberAccess.access,
     memberJob.id,
@@ -1717,7 +1803,7 @@ try {
       memberAfterStart.runningTime.startedAt === startAt,
   );
 
-  const replay = await syncNativeAssignedTimeCardDraft(
+  const replay = await syncPinned(
     prisma,
     memberAccess.access,
     memberJob.id,
@@ -1736,14 +1822,14 @@ try {
       replayRows[0].startedAt.toISOString() === startAt,
   );
 
-  const stopAt = "2026-10-02T15:30:00.000Z";
+  const stopAt = isoFromNow(-4 * HOUR_MS - 30 * MINUTE_MS);
   await createRunningEntry({
     businessId: businessA.id,
     membershipId: memberMem.id,
     jobId: stopJob.id,
     startedAt: stopStartedAt,
   });
-  const memberStop = await syncNativeAssignedTimeCardDraft(
+  const memberStop = await syncPinned(
     prisma,
     memberAccess.access,
     stopJob.id,
@@ -1777,7 +1863,7 @@ try {
 
   const startStopStart = new Date(Date.parse(startAt) + 10 * 60 * 1000).toISOString();
   const startStopEnd = new Date(Date.parse(startAt) + 20 * 60 * 1000).toISOString();
-  const startStop = await syncNativeAssignedTimeCardDraft(
+  const startStop = await syncPinned(
     prisma,
     memberAccess.access,
     startStopJob.id,
@@ -1803,13 +1889,13 @@ try {
   const retryPayload = syncPayload(retryJob, memberMem.id, [
     { action: "START_JOB", intendedAt: retryStart },
   ]);
-  const retryFirst = await syncNativeAssignedTimeCardDraft(
+  const retryFirst = await syncPinned(
     prisma,
     memberAccess.access,
     retryJob.id,
     retryPayload,
   );
-  const retrySecond = await syncNativeAssignedTimeCardDraft(
+  const retrySecond = await syncPinned(
     prisma,
     memberAccess.access,
     retryJob.id,
@@ -1832,13 +1918,13 @@ try {
   const conflictBase = syncPayload(conflictJob, memberMem.id, [
     { action: "START_JOB", intendedAt: deviceAStart },
   ]);
-  const deviceA = await syncNativeAssignedTimeCardDraft(
+  const deviceA = await syncPinned(
     prisma,
     memberAccess.access,
     conflictJob.id,
     conflictBase,
   );
-  const deviceB = await syncNativeAssignedTimeCardDraft(
+  const deviceB = await syncPinned(
     prisma,
     memberAccess.access,
     conflictJob.id,
@@ -1889,7 +1975,7 @@ try {
   ]).expectedFingerprint;
   const waitForPeer = createTwoPartyBarrier();
   const [left, right] = await Promise.all([
-    syncNativeAssignedTimeCardDraft(
+    syncPinned(
       prisma,
       memberAccess.access,
       concurrentJob.id,
@@ -1899,7 +1985,7 @@ try {
       },
       { afterInitialRead: waitForPeer },
     ),
-    syncNativeAssignedTimeCardDraft(
+    syncPinned(
       prisma,
       memberAccess.access,
       concurrentJob.id,
@@ -1922,12 +2008,12 @@ try {
     winners.length === 1 && staleLosers.length === 1 && concurrentRows.length === 1,
   );
 
-  const unconfirmed = await syncNativeAssignedTimeCardDraft(
+  const unconfirmed = await syncPinned(
     prisma,
     memberAccess.access,
     unconfirmedJob.id,
     syncPayload(unconfirmedJob, memberMem.id, [
-      { action: "START_JOB", intendedAt: "2026-10-02T16:30:00.000Z" },
+      { action: "START_JOB", intendedAt: isoFromStart(30 * MINUTE_MS) },
     ]),
   );
   check(
@@ -1937,12 +2023,12 @@ try {
       unconfirmed.error === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
   );
 
-  const race = await syncNativeAssignedTimeCardDraft(
+  const race = await syncPinned(
     prisma,
     memberAccess.access,
     raceJob.id,
     syncPayload(raceJob, memberMem.id, [
-      { action: "START_JOB", intendedAt: "2026-10-02T16:45:00.000Z" },
+      { action: "START_JOB", intendedAt: isoFromStart(45 * MINUTE_MS) },
     ]),
     {
       afterInitialRead: async () => {
@@ -1991,7 +2077,7 @@ try {
       sundayCivil.getTime() < laSundayWeek.end.getTime(),
   );
 
-  const laNow = new Date();
+  const laNow = clockNow;
   const currentLaWeek = weekRange(laNow, "America/Los_Angeles");
   await createReadyEntry({
     businessId: laBusiness.id,
@@ -2005,7 +2091,7 @@ try {
     timeZone: "America/Los_Angeles",
   });
   const approvedRecent = new Date(laNow.getTime() - 60_000).toISOString();
-  const approvedSync = await syncNativeAssignedTimeCardDraft(
+  const approvedSync = await syncPinned(
     prisma,
     laAccess.access,
     approvedJob.id,
