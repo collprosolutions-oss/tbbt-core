@@ -19,10 +19,14 @@
  * and provider tokens are never selected.
  *
  * Callers must pass access.businessId from requireBusinessAccess().
+ * Successful OWNER/ADMIN downloads write one SettingsAuditLog row
+ * (settingArea data-export, settingKey accountingExport) with filename
+ * metadata only. Preview/build, denials, and failed generation write none.
  */
 import type { MembershipRole, PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import { ForbiddenError, CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
   ACTIVE_EXPENSE_WHERE,
   EXPENSE_REVIEW_LABELS,
@@ -75,6 +79,8 @@ export const ACCOUNTING_TEXT_COLUMNS = [
 ] as const;
 
 export const BUSINESS_EXPORT_CAPABILITY = CAPABILITIES.MANAGE_SETTINGS;
+export const ACCOUNTING_EXPORT_AUDIT_AREA = "data-export" as const;
+export const ACCOUNTING_EXPORT_AUDIT_KEY = "accountingExport" as const;
 
 export const PAYMENT_PURPOSE_LABELS: Record<string, string> = {
   [PAYMENT_PURPOSE_MATERIAL_DEPOSIT]: "Material Deposit",
@@ -582,6 +588,36 @@ export async function buildAccountingExportZip(
   };
 }
 
+export type AccountingExportAccess = {
+  businessId: string;
+  workspace: {
+    role: MembershipRole;
+    membership: { id: string };
+  };
+};
+
+export function accountingExportAuditPayload(input: { filename: string }) {
+  return { filename: input.filename };
+}
+
+export async function recordAccountingExportAudit(
+  prisma: PrismaClient,
+  access: AccountingExportAccess,
+  exported: Pick<AccountingExportZipResult, "filename">,
+) {
+  if (!canExportBusinessData(access.workspace.role)) {
+    throw new ForbiddenError();
+  }
+  return writeSettingsAuditLog(prisma, {
+    businessId: access.businessId,
+    changedByMembershipId: access.workspace.membership.id,
+    settingArea: ACCOUNTING_EXPORT_AUDIT_AREA,
+    settingKey: ACCOUNTING_EXPORT_AUDIT_KEY,
+    previousValue: null,
+    newValue: accountingExportAuditPayload(exported),
+  });
+}
+
 export type AccountingExportDownloadResult =
   | {
       ok: true;
@@ -594,16 +630,23 @@ export type AccountingExportDownloadResult =
         "Cache-Control": string;
       };
     }
-  | { ok: false; status: 403; error: "Forbidden" };
+  | { ok: false; status: 403; error: "Forbidden" }
+  | { ok: false; status: 500; error: "Export failed" };
 
 export async function runAccountingExportDownload(
   prisma: PrismaClient,
-  access: { businessId: string; workspace: { role: MembershipRole } },
+  access: AccountingExportAccess,
 ): Promise<AccountingExportDownloadResult> {
   if (!canExportBusinessData(access.workspace.role)) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
-  const exported = await buildAccountingExportZip(prisma, access.businessId);
+  let exported: AccountingExportZipResult;
+  try {
+    exported = await buildAccountingExportZip(prisma, access.businessId);
+  } catch {
+    return { ok: false, status: 500, error: "Export failed" };
+  }
+  await recordAccountingExportAudit(prisma, access, exported);
   return {
     ok: true,
     status: 200,

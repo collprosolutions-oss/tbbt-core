@@ -55,6 +55,10 @@ const {
   buildBusinessExportZip,
   runBusinessExportDownload,
 } = await import("@/lib/business-export");
+const {
+  ACCOUNTING_EXPORT_AUDIT_AREA,
+  ACCOUNTING_EXPORT_AUDIT_KEY,
+} = await import("@/lib/accounting-export");
 const { PROJECT_DOCUMENT_PURPOSE } = await import("@/lib/business-storage/project-documents");
 const {
   ZIP_UTF8_NAME_FLAG,
@@ -377,6 +381,15 @@ check(
     businessExportSrc.includes("prisma.invoiceCredit.findMany") &&
     businessExportSrc.includes("credits:") &&
     businessExportSrc.includes("invoice-credits.csv"),
+);
+check(
+  "Accounting ZIP download reuses SettingsAuditLog data-export with a dedicated key",
+  accountingExportSrc.includes("runAccountingExportDownload") &&
+    accountingExportSrc.includes("recordAccountingExportAudit") &&
+    accountingExportSrc.includes("await recordAccountingExportAudit") &&
+    ACCOUNTING_EXPORT_AUDIT_AREA === "data-export" &&
+    ACCOUNTING_EXPORT_AUDIT_KEY === "accountingExport" &&
+    !isSecretSettingKey(ACCOUNTING_EXPORT_AUDIT_KEY),
 );
 check(
   "ZIP CRC-32 table uses the correct else-shift and formula text is neutralized",

@@ -26,6 +26,10 @@ const {
   runBusinessExportDownload,
 } = await import("@/lib/business-export");
 const {
+  ACCOUNTING_EXPORT_AUDIT_AREA,
+  ACCOUNTING_EXPORT_AUDIT_KEY,
+  accountingExportAuditPayload,
+  buildAccountingExportZip,
   canExportBusinessData,
   runAccountingExportDownload,
 } = await import("@/lib/accounting-export");
@@ -118,6 +122,15 @@ check(
     accountingRouteSrc.includes("runAccountingExportDownload") &&
     !accountingRouteSrc.includes("buildAccountingExportZip") &&
     !accountingRouteSrc.includes("canExportBusinessData"),
+);
+check(
+  "Accounting download audit stays on runAccountingExportDownload, not the route",
+  accountingSrc.includes("recordAccountingExportAudit") &&
+    accountingSrc.includes("await recordAccountingExportAudit") &&
+    ACCOUNTING_EXPORT_AUDIT_AREA === "data-export" &&
+    ACCOUNTING_EXPORT_AUDIT_KEY === "accountingExport" &&
+    !accountingRouteSrc.includes("recordAccountingExportAudit") &&
+    !accountingRouteSrc.includes("writeSettingsAuditLog"),
 );
 check(
   "project-documents.csv lists READY private portal references only",
@@ -427,13 +440,27 @@ try {
   const memberAccessA = makeAccess(businessA.id, "MEMBER", memberMemA.id);
   const ownerAccessB = makeAccess(businessB.id, "OWNER", ownerMemB.id);
 
+  await buildAccountingExportZip(prisma, businessA.id);
+  const previewAccountingAudits = await prisma.settingsAuditLog.count({
+    where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  check("Accounting ZIP preview/build writes no audit row", previewAccountingAudits === 0);
+
   const memberAccounting = await runAccountingExportDownload(prisma, memberAccessA);
   const memberBusiness = await runBusinessExportDownload(prisma, memberAccessA);
   const adminCustomer = await runCustomerRecordsExportDownload(prisma, adminAccessA);
+  const failedAccounting = await runAccountingExportDownload(
+    prisma,
+    makeAccess(`missing-${randomUUID()}`, "OWNER", ownerMemA.id),
+  );
+  const afterDeniedOrFailed = await prisma.settingsAuditLog.count({
+    where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
   check(
     "MEMBER cannot download the accounting ZIP or business ZIP",
     memberAccounting.ok === false &&
       memberAccounting.status === 403 &&
+      !("bytes" in memberAccounting) &&
       memberBusiness.ok === false &&
       memberBusiness.status === 403,
   );
@@ -441,11 +468,22 @@ try {
     "ADMIN still cannot download owner-only customer records",
     adminCustomer.ok === false && adminCustomer.status === 403,
   );
+  check(
+    "Denied requests and failed generation write no accounting audit and return no ZIP",
+    failedAccounting.ok === false &&
+      failedAccounting.status === 500 &&
+      !("bytes" in failedAccounting) &&
+      afterDeniedOrFailed === 0,
+  );
 
   const ownerAccounting = await runAccountingExportDownload(prisma, ownerAccessA);
+  const adminAccounting = await runAccountingExportDownload(prisma, adminAccessA);
   const otherAccounting = await runAccountingExportDownload(prisma, ownerAccessB);
-  check("OWNER accounting download succeeds", ownerAccounting.ok === true);
-  if (!ownerAccounting.ok || !otherAccounting.ok) {
+  check(
+    "OWNER and ADMIN accounting downloads succeed",
+    ownerAccounting.ok === true && adminAccounting.ok === true,
+  );
+  if (!ownerAccounting.ok || !adminAccounting.ok || !otherAccounting.ok) {
     throw new Error("OWNER accounting download failed");
   }
   const accountingFiles = readZipStoreFiles(ownerAccounting.bytes);
@@ -555,12 +593,40 @@ try {
   const customerAuditsA = await prisma.settingsAuditLog.findMany({
     where: { businessId: businessA.id, settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY },
   });
+  const accountingAuditsA = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+    orderBy: { changedAt: "asc" },
+  });
+  const accountingAuditsB = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessB.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+  });
+  const ownerAccountingAudit = accountingAuditsA.find((row) => row.changedByMembershipId === ownerMemA.id);
+  const adminAccountingAudit = accountingAuditsA.find((row) => row.changedByMembershipId === adminMemA.id);
+  const ownerAccountingPayload = ownerAccountingAudit ? JSON.parse(ownerAccountingAudit.newValue) : null;
   check(
     "Business ZIP download still writes the #279 businessExport audit row",
     businessAuditsA.length === 1 &&
       businessAuditsA[0].changedByMembershipId === ownerMemA.id &&
       businessAuditsA[0].settingArea === BUSINESS_EXPORT_AUDIT_AREA &&
       customerAuditsA.length === 1,
+  );
+  check(
+    "Each successful accounting ZIP download writes exactly one metadata-only audit row",
+    accountingAuditsA.length === 2 &&
+      Boolean(ownerAccountingAudit) &&
+      Boolean(adminAccountingAudit) &&
+      accountingAuditsB.length === 1 &&
+      ownerAccountingAudit.settingArea === ACCOUNTING_EXPORT_AUDIT_AREA &&
+      ownerAccountingAudit.previousValue === "null" &&
+      ownerAccountingPayload?.filename === ownerAccounting.filename &&
+      Object.keys(ownerAccountingPayload ?? {}).join(",") === "filename" &&
+      JSON.stringify(ownerAccountingPayload) ===
+        JSON.stringify(accountingExportAuditPayload({ filename: ownerAccounting.filename })) &&
+      !ownerAccountingAudit.newValue.includes(customerA.name) &&
+      !ownerAccountingAudit.newValue.includes(customerA.email) &&
+      !ownerAccountingAudit.newValue.includes("10 Alpha Street") &&
+      !ownerAccountingAudit.newValue.includes(customerB.name) &&
+      !accountingAuditsA.some((row) => row.changedByMembershipId === memberMemA.id),
   );
 
   console.log("\nMUTATION — dropping the unique project-document CSV fails the proof");
