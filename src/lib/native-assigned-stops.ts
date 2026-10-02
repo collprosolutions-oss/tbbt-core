@@ -6,9 +6,11 @@
  * same-business structured address (street, city, state, ZIP). Order is
  * recorded appointment time, then job id. This does not optimize travel,
  * geocode, or invent ETAs. Job-detail Directions stays on
- * `directionsUrl` / `directionsHref`.
+ * `directionsUrl` / `directionsHref`, gated by the same-business
+ * display guard so a foreign property street cannot leak.
  */
 import type { FieldJob } from "@/lib/field-jobs";
+import { directionsUrl } from "@/lib/directions";
 import { formatAddress } from "@/lib/format";
 import {
   OWNER_DAY_ROUTE_EXCLUDED_HEADING,
@@ -106,7 +108,7 @@ function compareAppointmentOrder(left: NativeAssignedStopJob, right: NativeAssig
 export type NativeAssignedJobDisplayProperty = {
   id?: string | null;
   businessId?: string | null;
-  addressLine1: string;
+  addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;
   region?: string | null;
@@ -120,7 +122,7 @@ function routeProperty(
   return {
     id: property.id ?? "",
     businessId: property.businessId ?? "",
-    addressLine1: property.addressLine1,
+    addressLine1: property.addressLine1 ?? "",
     addressLine2: property.addressLine2 ?? null,
     city: property.city ?? null,
     region: property.region ?? null,
@@ -146,6 +148,54 @@ export function nativeAssignedJobDisplayAddress(
   if (!owned) return null;
   const formatted = formatAddress(owned);
   return formatted.trim() ? formatted : null;
+}
+
+export const NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL = "Assigned job";
+
+/**
+ * Customer name first, then a same-business display address. Foreign
+ * or missing properties never fall back to the other tenant's street.
+ */
+export function nativeAssignedJobLabel(
+  job:
+    | {
+        customer?: { name?: string | null } | null;
+        property?: NativeAssignedJobDisplayProperty | null;
+      }
+    | null
+    | undefined,
+  businessId: string,
+  fallback: string | null = null,
+): string | null {
+  const customerName = job?.customer?.name?.trim();
+  if (customerName) return customerName;
+  return nativeAssignedJobDisplayAddress(job?.property ?? null, businessId) ?? fallback;
+}
+
+/**
+ * Per-job Directions for an assigned job. Same-business rows keep the
+ * existing `directionsUrl` (street-only is enough). Foreign or missing
+ * properties stay hidden so a corrupt cross-tenant link cannot leak
+ * the other business's street.
+ */
+export function nativeAssignedJobDirectionsHref(
+  property: NativeAssignedJobDisplayProperty | null | undefined,
+  businessId: string,
+): string | null {
+  if (nativeAssignedJobDisplayAddress(property, businessId) == null) {
+    return null;
+  }
+  return directionsUrl(
+    property
+      ? {
+          addressLine1: property.addressLine1 ?? "",
+          addressLine2: property.addressLine2,
+          city: property.city,
+          region: property.region,
+          postalCode: property.postalCode,
+        }
+      : null,
+  );
 }
 
 /** Maps waypoints are joined with `|`; a literal pipe would become an extra stop. */

@@ -26,7 +26,7 @@ import {
   type AppointmentJobFields,
 } from "@/lib/appointment-confirmation";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { directionsUrl, telHref } from "@/lib/directions";
+import { telHref } from "@/lib/directions";
 import { FIELD_JOB_SELECT, groupFieldJobs, type FieldJob } from "@/lib/field-jobs";
 import { formatDateTime } from "@/lib/format";
 import { loadAssignedCleaningVisitView } from "@/lib/cleaning-visit-data";
@@ -36,6 +36,7 @@ import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { dayRange, startOfDay, type DateRange } from "@/lib/schedule";
 import {
   buildNativeAssignedStopsMaps,
+  nativeAssignedJobDirectionsHref,
   nativeAssignedJobDisplayAddress,
   type NativeAssignedStopJob,
   type NativeAssignedStopsMaps,
@@ -736,7 +737,7 @@ export async function loadNativeAssignedJob(
     ...toNativeJobSummary(job, timeZone, access.businessId),
     customerPhone: job.customer?.phone ?? null,
     callHref: telHref(job.customer?.phone),
-    directionsHref: directionsUrl(job.property),
+    directionsHref: nativeAssignedJobDirectionsHref(job.property, access.businessId),
     confirmationLabel,
     accessLines: ownerAccessSummaryLines(job),
     scope: fieldSafeScope(job),

@@ -1,10 +1,13 @@
 /**
  * Native Today assigned-stop maps handoff — assignment + tenant isolation,
  * recorded appointment order, complete-address eligibility, the maps
- * stop cap, same-business display addresses, and waypoint sanitization.
+ * stop cap, same-business display addresses, job-detail Directions, and
+ * waypoint sanitization.
  *
  * Reuses completeStructuredRouteAddress and buildOwnerDayRouteMapsHandoff.
- * Does not invent a second Job-detail directionsHref.
+ * Does not invent a second Job-detail maps URL. Job-detail
+ * `directionsHref` stays on `directionsUrl` behind the same-business
+ * display guard so a foreign property street cannot leak.
  *
  * Dedicated database: tbbt_native_assigned_stops_test
  *
@@ -20,7 +23,8 @@ import { fileURLToPath } from "node:url";
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { hashPassword } = await import("@/lib/auth-crypto");
-const { resolveNativeFieldAccess, signInNativeField } = await import(
+const { directionsUrl } = await import("@/lib/directions");
+const { readBearerToken, resolveNativeFieldAccess, signInNativeField } = await import(
   "@/lib/native-session"
 );
 const { loadNativeAssignedJob, loadNativeToday } = await import("@/lib/native-field");
@@ -29,6 +33,7 @@ const {
   NATIVE_ASSIGNED_STOPS_DISCLAIMER,
   NATIVE_ASSIGNED_STOPS_MAPS_LINK_LABEL,
   buildNativeAssignedStopsMaps,
+  nativeAssignedJobDirectionsHref,
   nativeAssignedJobDisplayAddress,
   nativeAssignedStopsMapsFollowsAppointmentOrder,
   sanitizeNativeAssignedStopMapsAddress,
@@ -129,6 +134,42 @@ function mapsHasStreet(href, street) {
   return extractOwnerDayRouteMapsAddresses(href).some((address) => address.includes(street));
 }
 
+function bearer(token) {
+  return `Bearer ${token}`;
+}
+
+function payloadExposesStreet(payload, street) {
+  return JSON.stringify(payload ?? null).includes(street);
+}
+
+async function todayFromBearer(authorization, options) {
+  const resolved = await resolveNativeFieldAccess(prisma, {
+    token: readBearerToken(authorization),
+  });
+  if (!resolved.ok) {
+    return { ok: false, status: resolved.status, error: resolved.error };
+  }
+  return {
+    ok: true,
+    status: 200,
+    body: await loadNativeToday(prisma, resolved.access, options),
+  };
+}
+
+async function jobFromBearer(authorization, jobId) {
+  const resolved = await resolveNativeFieldAccess(prisma, {
+    token: readBearerToken(authorization),
+  });
+  if (!resolved.ok) {
+    return { ok: false, status: resolved.status, error: resolved.error };
+  }
+  const job = await loadNativeAssignedJob(prisma, resolved.access, jobId);
+  if (!job) {
+    return { ok: false, status: 404, error: "That job is not available." };
+  }
+  return { ok: true, status: 200, body: { job } };
+}
+
 const assignedStopsSrc = readRepo("src/lib/native-assigned-stops.ts");
 const nativeFieldSrc = readRepo("src/lib/native-field.ts");
 const jobScreenSrc = readRepo("apps/native/src/screens/JobScreen.tsx");
@@ -152,8 +193,14 @@ check(
     jobScreenSrc.includes("Linking.openURL(job.directionsHref") &&
     !jobScreenSrc.includes("Open assigned stops in maps") &&
     !jobScreenSrc.includes("assignedStops") &&
-    nativeFieldSrc.includes("directionsHref: directionsUrl(job.property)") &&
-    directionsSrc.includes("export function directionsUrl"),
+    nativeFieldSrc.includes(
+      "directionsHref: nativeAssignedJobDirectionsHref(job.property, access.businessId)",
+    ) &&
+    !nativeFieldSrc.includes("directionsHref: directionsUrl(job.property)") &&
+    assignedStopsSrc.includes("export function nativeAssignedJobDirectionsHref") &&
+    assignedStopsSrc.includes("nativeAssignedJobDisplayAddress(property, businessId)") &&
+    directionsSrc.includes("export function directionsUrl") &&
+    !directionsSrc.includes("businessId"),
 );
 check(
   "Native Today has one Open assigned stops in maps link and lists exclusions",
@@ -169,7 +216,9 @@ check(
     !ownerDayRouteTextHasForbiddenClaim(NATIVE_ASSIGNED_STOPS_DISCLAIMER) &&
     assignedStopsSrc.includes("does not rearrange") &&
     docsSrc.includes("Open assigned stops in maps") &&
-    docsSrc.includes("test:native-assigned-stops"),
+    docsSrc.includes("test:native-assigned-stops") &&
+    docsSrc.includes("nativeAssignedJobDirectionsHref") &&
+    docsSrc.includes("does not return that street on `address` or `directionsHref`"),
 );
 check(
   "Job address display reuses completeStructuredRouteAddress and hides foreign or missing properties",
@@ -392,29 +441,41 @@ check(
     sanitizedPipe.includes("Fort Myers"),
 );
 
+const incompleteProperty = {
+  id: "p-incomplete",
+  businessId: "biz-a",
+  addressLine1: incompleteStreet,
+  addressLine2: null,
+  city: null,
+  region: null,
+  postalCode: null,
+};
+const earlyProperty = { id: "p-early", businessId: "biz-a", ...completeAddress(earlyStreet) };
+const foreignProperty = { id: "p-beta", businessId: "biz-b", ...completeAddress(betaStreet) };
+const earlyDirections = directionsUrl(completeAddress(earlyStreet));
+const incompleteDirections = directionsUrl({
+  addressLine1: incompleteStreet,
+  addressLine2: null,
+  city: null,
+  region: null,
+  postalCode: null,
+});
 check(
   "Display address hides foreign or missing properties and shows street-only when incomplete",
   nativeAssignedJobDisplayAddress(null, "biz-a") === null &&
-    nativeAssignedJobDisplayAddress(
-      { id: "p-beta", businessId: "biz-b", ...completeAddress(betaStreet) },
-      "biz-a",
-    ) === null &&
-    nativeAssignedJobDisplayAddress(
-      {
-        id: "p-incomplete",
-        businessId: "biz-a",
-        addressLine1: incompleteStreet,
-        addressLine2: null,
-        city: null,
-        region: null,
-        postalCode: null,
-      },
-      "biz-a",
-    ) === incompleteStreet &&
-    nativeAssignedJobDisplayAddress(
-      { id: "p-early", businessId: "biz-a", ...completeAddress(earlyStreet) },
-      "biz-a",
-    ) === formatted(earlyStreet),
+    nativeAssignedJobDisplayAddress(foreignProperty, "biz-a") === null &&
+    nativeAssignedJobDisplayAddress(incompleteProperty, "biz-a") === incompleteStreet &&
+    nativeAssignedJobDisplayAddress(earlyProperty, "biz-a") === formatted(earlyStreet),
+);
+check(
+  "Per-job Directions keep same-business street-only URLs and hide foreign streets",
+  nativeAssignedJobDirectionsHref(null, "biz-a") === null &&
+    nativeAssignedJobDirectionsHref(foreignProperty, "biz-a") === null &&
+    !String(nativeAssignedJobDirectionsHref(foreignProperty, "biz-a") ?? "").includes(betaStreet) &&
+    nativeAssignedJobDirectionsHref(incompleteProperty, "biz-a") === incompleteDirections &&
+    nativeAssignedJobDirectionsHref(earlyProperty, "biz-a") === earlyDirections &&
+    Boolean(earlyDirections) &&
+    Boolean(incompleteDirections),
 );
 
 try {
@@ -526,7 +587,7 @@ try {
     scheduledAt: new Date("2026-10-01T18:00:00.000Z"),
     property: { ...completeAddress("200 Live Late Ave") },
   });
-  await createJob({
+  const liveIncomplete = await createJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
     customerName: "Live Incomplete",
@@ -603,7 +664,7 @@ try {
   const deactivatedMem = await prisma.membership.create({
     data: { userId: deactivatedUser.id, businessId: businessA.id, role: "MEMBER" },
   });
-  await createJob({
+  const liveDeactivated = await createJob({
     businessId: businessA.id,
     assignedMembershipId: deactivatedMem.id,
     customerName: "Live Deactivated",
@@ -647,9 +708,23 @@ try {
   }
 
   console.log("\nLIVE — Assignment, tenant isolation, order, and stop cap");
-  const memberToday = await loadNativeToday(prisma, memberAccess.access, { now });
-  const otherToday = await loadNativeToday(prisma, otherAccess.access, { now });
-  const betaToday = await loadNativeToday(prisma, betaAccess.access, { now });
+  const memberAuth = bearer(memberSignIn.token);
+  const otherAuth = bearer(otherSignIn.token);
+  const betaAuth = bearer(betaSignIn.token);
+  const deactivatedAuth = bearer(deactivatedSignIn.token);
+  const memberTodayRes = await todayFromBearer(memberAuth, { now });
+  const otherTodayRes = await todayFromBearer(otherAuth, { now });
+  const betaTodayRes = await todayFromBearer(betaAuth, { now });
+  check(
+    "Assigned-worker Bearer tokens load Today",
+    memberTodayRes.ok === true && otherTodayRes.ok === true && betaTodayRes.ok === true,
+  );
+  if (!memberTodayRes.ok || !otherTodayRes.ok || !betaTodayRes.ok) {
+    throw new Error("Native assigned-stops Today Bearer load failed.");
+  }
+  const memberToday = memberTodayRes.body;
+  const otherToday = otherTodayRes.body;
+  const betaToday = betaTodayRes.body;
   const memberHref = memberToday.assignedStops.href;
   const memberAddresses = extractOwnerDayRouteMapsAddresses(memberHref);
   const earlyComplete = completeStructuredRouteAddress(
@@ -737,7 +812,12 @@ try {
     select: { id: true, scheduledAt: true, assignedMembershipId: true, status: true },
     orderBy: { id: "asc" },
   });
-  const foreignDetail = await loadNativeAssignedJob(prisma, memberAccess.access, liveForeign.id);
+  const foreignDetailRes = await jobFromBearer(memberAuth, liveForeign.id);
+  const earlyDetailRes = await jobFromBearer(memberAuth, liveEarly.id);
+  const incompleteDetailRes = await jobFromBearer(memberAuth, liveIncomplete.id);
+  const foreignDetail = foreignDetailRes.body?.job ?? null;
+  const earlyDetail = earlyDetailRes.body?.job ?? null;
+  const incompleteDetail = incompleteDetailRes.body?.job ?? null;
   const incompleteToday = memberToday.today.find((job) => job.customerName === "Live Incomplete");
   const foreignToday = memberToday.today.find((job) => job.customerName === "Live Foreign Property");
   const jobsAfterDetail = await prisma.job.findMany({
@@ -746,12 +826,23 @@ try {
     orderBy: { id: "asc" },
   });
 
+  const expectedEarlyDirections = directionsUrl(completeAddress("10 Live Early St"));
+  const expectedIncompleteDirections = directionsUrl({
+    addressLine1: "12 Live Partial Row",
+    addressLine2: null,
+    city: null,
+    region: null,
+    postalCode: null,
+  });
   check(
-    "Foreign-property address is not exposed on job detail",
-    foreignDetail != null &&
+    "Foreign-property address and directionsHref are not exposed on job detail",
+    foreignDetailRes.ok === true &&
+      foreignDetail != null &&
       foreignDetail.id === liveForeign.id &&
       foreignDetail.address === null &&
-      !String(foreignDetail.address ?? "").includes("Foreign Leak") &&
+      foreignDetail.directionsHref === null &&
+      !payloadExposesStreet(foreignDetail, "Foreign Leak") &&
+      !payloadExposesStreet(foreignDetail, "88 Foreign Leak Ave") &&
       memberToday.assignedStops.excluded.some(
         (stop) =>
           stop.jobId === liveForeign.id &&
@@ -764,7 +855,25 @@ try {
     foreignToday != null &&
       foreignToday.address === null &&
       !memberToday.today.some((job) => String(job.address ?? "").includes("Foreign Leak")) &&
+      !payloadExposesStreet(memberToday, "Foreign Leak") &&
+      !payloadExposesStreet(memberToday, "88 Foreign Leak Ave") &&
       !mapsHasStreet(memberHref, "88 Foreign Leak Ave"),
+  );
+  check(
+    "Valid same-business job detail still has per-job Directions",
+    earlyDetailRes.ok === true &&
+      earlyDetail != null &&
+      earlyDetail.address === formatted("10 Live Early St") &&
+      earlyDetail.directionsHref === expectedEarlyDirections &&
+      String(earlyDetail.directionsHref ?? "").includes("10%20Live%20Early%20St"),
+  );
+  check(
+    "Street-only same-business job detail still has per-job Directions",
+    incompleteDetailRes.ok === true &&
+      incompleteDetail != null &&
+      incompleteDetail.address === "12 Live Partial Row" &&
+      incompleteDetail.directionsHref === expectedIncompleteDirections &&
+      String(incompleteDetail.directionsHref ?? "").includes("12%20Live%20Partial%20Row"),
   );
   check(
     "Loading job detail does not mutate schedule or assignment",
@@ -782,12 +891,91 @@ try {
       ),
   );
 
-  const deactivatedAccess = await resolveNativeFieldAccess(prisma, {
-    token: deactivatedSignIn.token,
+  const liveReassign = await createJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Live Reassign Keep",
+    scheduledAt: new Date("2026-10-01T17:30:00.000Z"),
+    property: { ...completeAddress("44 Reassign Keep St") },
   });
+  const expectedReassignDirections = directionsUrl(completeAddress("44 Reassign Keep St"));
+  const memberReassignBefore = await jobFromBearer(memberAuth, liveReassign.id);
+  const memberTodayBeforeReassign = await todayFromBearer(memberAuth, { now });
+  check(
+    "Assigned worker sees same-business address and Directions before reassignment",
+    memberReassignBefore.ok === true &&
+      memberTodayBeforeReassign.ok === true &&
+      memberReassignBefore.body.job.address === formatted("44 Reassign Keep St") &&
+      memberReassignBefore.body.job.directionsHref === expectedReassignDirections &&
+      memberTodayBeforeReassign.body.today.some(
+        (job) =>
+          job.id === liveReassign.id && job.address === formatted("44 Reassign Keep St"),
+      ),
+  );
+
+  await prisma.job.update({
+    where: { id: liveReassign.id },
+    data: { assignedMembershipId: otherMem.id },
+  });
+  const memberReassignAfter = await jobFromBearer(memberAuth, liveReassign.id);
+  const memberTodayAfterReassign = await todayFromBearer(memberAuth, { now });
+  const otherReassignAfter = await jobFromBearer(otherAuth, liveReassign.id);
+  const otherTodayAfterReassign = await todayFromBearer(otherAuth, { now });
+  check(
+    "Former assignee cannot load the reassigned job or its street",
+    memberReassignAfter.ok === false &&
+      memberReassignAfter.status === 404 &&
+      memberTodayAfterReassign.ok === true &&
+      !memberTodayAfterReassign.body.today.some((job) => job.id === liveReassign.id) &&
+      !payloadExposesStreet(memberReassignAfter, "44 Reassign Keep St") &&
+      !payloadExposesStreet(memberTodayAfterReassign.body, "44 Reassign Keep St"),
+  );
+  check(
+    "New assignee keeps valid per-job Directions after reassignment",
+    otherReassignAfter.ok === true &&
+      otherTodayAfterReassign.ok === true &&
+      otherReassignAfter.body.job.address === formatted("44 Reassign Keep St") &&
+      otherReassignAfter.body.job.directionsHref === expectedReassignDirections &&
+      otherTodayAfterReassign.body.today.some((job) => job.id === liveReassign.id),
+  );
+
+  await prisma.job.update({
+    where: { id: liveForeign.id },
+    data: { assignedMembershipId: otherMem.id },
+  });
+  const memberForeignAfterReassign = await jobFromBearer(memberAuth, liveForeign.id);
+  const otherForeignAfterReassign = await jobFromBearer(otherAuth, liveForeign.id);
+  const otherTodayForeign = await todayFromBearer(otherAuth, { now });
+  check(
+    "Reassigned foreign-property job still hides the other tenant's street",
+    memberForeignAfterReassign.ok === false &&
+      memberForeignAfterReassign.status === 404 &&
+      otherForeignAfterReassign.ok === true &&
+      otherTodayForeign.ok === true &&
+      otherForeignAfterReassign.body.job.address === null &&
+      otherForeignAfterReassign.body.job.directionsHref === null &&
+      !payloadExposesStreet(otherForeignAfterReassign.body, "Foreign Leak") &&
+      !payloadExposesStreet(otherTodayForeign.body, "Foreign Leak") &&
+      !payloadExposesStreet(otherTodayForeign.body, "88 Foreign Leak Ave"),
+  );
+
+  const deactivatedAccess = await resolveNativeFieldAccess(prisma, {
+    token: readBearerToken(deactivatedAuth),
+  });
+  const deactivatedTodayRes = await todayFromBearer(deactivatedAuth, { now });
+  const deactivatedJobRes = await jobFromBearer(deactivatedAuth, liveDeactivated.id);
   check(
     "Deactivated membership gets 403 from resolveNativeFieldAccess on Today",
     deactivatedAccess.ok === false && deactivatedAccess.status === 403,
+  );
+  check(
+    "Inactive membership Bearer token cannot load Today or job detail",
+    deactivatedTodayRes.ok === false &&
+      deactivatedTodayRes.status === 403 &&
+      deactivatedJobRes.ok === false &&
+      deactivatedJobRes.status === 403 &&
+      !payloadExposesStreet(deactivatedTodayRes, "9 Deactivated Hidden St") &&
+      !payloadExposesStreet(deactivatedJobRes, "9 Deactivated Hidden St"),
   );
   if (deactivatedAccess.ok) {
     const deactivatedToday = await loadNativeToday(prisma, deactivatedAccess.access, { now });
@@ -842,6 +1030,14 @@ if (!mutationChild) {
       file: "src/lib/native-assigned-stops.ts",
       search: '  return address.replaceAll("|", " ").replace(/\\s+/g, " ").trim();',
       replace: "  return address.trim();",
+    },
+    {
+      label: "directionsHref guard",
+      file: "src/lib/native-assigned-stops.ts",
+      search:
+        "  if (nativeAssignedJobDisplayAddress(property, businessId) == null) {\n    return null;\n  }",
+      replace:
+        "  if (false && nativeAssignedJobDisplayAddress(property, businessId) == null) {\n    return null;\n  }",
     },
   ];
 

@@ -20,9 +20,9 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { hashPassword } = await import("@/lib/auth-crypto");
 const { ForbiddenError } = await import("@/lib/authorization");
-const { resolveNativeFieldAccess, revokeNativeSession, signInNativeField } = await import(
-  "@/lib/native-session"
-);
+const { readBearerToken, resolveNativeFieldAccess, revokeNativeSession, signInNativeField } =
+  await import("@/lib/native-session");
+const { loadNativeAssignedJob, loadNativeToday } = await import("@/lib/native-field");
 const { readCappedRequestText } = await import("@/lib/native-session-limits");
 const {
   NATIVE_TIME_CARD_JSON_MAX_BYTES,
@@ -117,6 +117,28 @@ function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3_600_000);
 }
 
+function bearer(token) {
+  return `Bearer ${token}`;
+}
+
+function payloadExposesStreet(payload, street) {
+  return JSON.stringify(payload ?? null).includes(street);
+}
+
+async function timeCardsFromBearer(authorization, options) {
+  const resolved = await resolveNativeFieldAccess(prisma, {
+    token: readBearerToken(authorization),
+  });
+  if (!resolved.ok) {
+    return { ok: false, status: resolved.status, error: resolved.error };
+  }
+  return {
+    ok: true,
+    status: 200,
+    body: await loadNativeTimeCards(prisma, resolved.access, options),
+  };
+}
+
 async function withTimeout(promise, ms) {
   let timer;
   try {
@@ -173,6 +195,10 @@ const nativeTypesSrc = readRepo("apps/native/src/types.ts");
 const appSrc = readRepo("apps/native/App.tsx");
 const docsSrc = readRepo("docs/NATIVE_FIELD.md");
 const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
+const fieldHomeSrc = readRepo("src/app/field/page.tsx");
+const fieldJobSrc = readRepo("src/app/field/jobs/[jobId]/page.tsx");
+const fieldCardSrc = readRepo("src/components/field/field-job-card.tsx");
+const reassignSrc = readRepo("src/lib/job-reassignment-request-ops.ts");
 
 console.log("\nSTATIC — Canonical request write, owner surface, and Time-cards reload");
 check(
@@ -280,7 +306,24 @@ check(
     docsSrc.includes("requestTimeCorrection") &&
     docsSrc.includes("test:native-time-cards") &&
     docsSrc.includes("existing Time Cards surface") &&
-    docsSrc.includes("does not expose accept/decline"),
+    docsSrc.includes("does not expose accept/decline") &&
+    docsSrc.includes("nativeAssignedJobLabel"),
+);
+check(
+  "Time-card jobLabel gates the property street on the caller business",
+  opsSrc.includes("nativeAssignedJobLabel(entry.job, access.businessId)") &&
+    opsSrc.includes("property: { select: { id: true, businessId: true, addressLine1: true } }") &&
+    !opsSrc.includes("entry.job?.customer?.name ?? entry.job?.property?.addressLine1"),
+);
+check(
+  "Web field pages and reassignment labels reuse the same-business jobLabel helper",
+  fieldHomeSrc.includes("nativeAssignedJobLabel") &&
+    fieldJobSrc.includes("nativeAssignedJobDirectionsHref") &&
+    fieldJobSrc.includes("nativeAssignedJobDisplayAddress") &&
+    fieldCardSrc.includes("nativeAssignedJobDisplayAddress") &&
+    reassignSrc.includes("nativeAssignedJobLabel") &&
+    !fieldHomeSrc.includes('job.property?.addressLine1 ?? "Assigned job"') &&
+    !reassignSrc.includes('row.job?.property?.addressLine1 ?? "Assigned job"'),
 );
 
 const emptyJson = parseNativeTimeCorrectionJson("{}");
@@ -367,6 +410,13 @@ try {
       passwordHash,
     },
   });
+  const adminUser = await prisma.user.create({
+    data: {
+      name: "Ava Admin",
+      email: `ava-${randomUUID()}@native-time-cards.example`,
+      passwordHash,
+    },
+  });
   const betaUser = await prisma.user.create({
     data: {
       name: "Bree Beta",
@@ -389,6 +439,14 @@ try {
       businessId: businessA.id,
       role: "MEMBER",
       hourlyWage: new Prisma.Decimal(20),
+    },
+  });
+  const adminMem = await prisma.membership.create({
+    data: {
+      userId: adminUser.id,
+      businessId: businessA.id,
+      role: "ADMIN",
+      hourlyWage: new Prisma.Decimal(28),
     },
   });
   const otherMem = await prisma.membership.create({
@@ -516,8 +574,111 @@ try {
     },
   });
 
+  const FOREIGN_STREET = "991 Secret Foreign Blvd";
+  const OWN_STREET = "10 Own Keep St";
+  const betaCustomer = await prisma.customer.create({
+    data: { businessId: businessB.id, name: "Beta Property Owner", phone: "555-0191" },
+  });
+  const foreignProperty = await prisma.property.create({
+    data: {
+      businessId: businessB.id,
+      customerId: betaCustomer.id,
+      addressLine1: FOREIGN_STREET,
+      city: "Fort Myers",
+      region: "FL",
+      postalCode: "33901",
+    },
+  });
+  const ownCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Own Street Customer", phone: "555-0110" },
+  });
+  const ownProperty = await prisma.property.create({
+    data: {
+      businessId: businessA.id,
+      customerId: ownCustomer.id,
+      addressLine1: OWN_STREET,
+      city: null,
+      region: null,
+      postalCode: null,
+    },
+  });
+
+  async function createNoCustomerForeignJob(assignedMembershipId) {
+    return prisma.job.create({
+      data: {
+        businessId: businessA.id,
+        customerId: null,
+        propertyId: foreignProperty.id,
+        assignedMembershipId,
+        projectToken: randomUUID(),
+        status: "SCHEDULED",
+        scheduledAt: new Date(),
+      },
+    });
+  }
+
+  const memberForeignJob = await createNoCustomerForeignJob(memberMem.id);
+  const adminForeignJob = await createNoCustomerForeignJob(adminMem.id);
+  const ownerForeignJob = await createNoCustomerForeignJob(ownerMem.id);
+  const memberOwnStreetJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: null,
+      propertyId: ownProperty.id,
+      assignedMembershipId: memberMem.id,
+      projectToken: randomUUID(),
+      status: "SCHEDULED",
+      scheduledAt: new Date(),
+    },
+  });
+
+  async function createEndedEntry(membershipId, jobId, note) {
+    return prisma.timeEntry.create({
+      data: {
+        businessId: businessA.id,
+        membershipId,
+        jobId,
+        activityType: "JOB",
+        status: "READY",
+        startedAt: hoursAgo(3),
+        endedAt: hoursAgo(2),
+        source: "CLOCK",
+        note,
+      },
+    });
+  }
+
+  const memberForeignEntry = await createEndedEntry(
+    memberMem.id,
+    memberForeignJob.id,
+    "Member foreign-property clock",
+  );
+  const adminForeignEntry = await createEndedEntry(
+    adminMem.id,
+    adminForeignJob.id,
+    "Admin foreign-property clock",
+  );
+  const ownerForeignEntry = await createEndedEntry(
+    ownerMem.id,
+    ownerForeignJob.id,
+    "Owner foreign-property clock",
+  );
+  const memberOwnStreetEntry = await createEndedEntry(
+    memberMem.id,
+    memberOwnStreetJob.id,
+    "Member own-street clock",
+  );
+
   const memberSignIn = await signInNativeField(prisma, {
     email: memberUser.email,
+    password,
+  });
+  const adminSignIn = await signInNativeField(prisma, {
+    email: adminUser.email,
+    password,
+  });
+  const ownerSignIn = await signInNativeField(prisma, {
+    email: ownerUser.email,
     password,
   });
   const otherSignIn = await signInNativeField(prisma, {
@@ -529,14 +690,28 @@ try {
     password,
   });
   check("Assigned worker can sign in", memberSignIn.ok === true);
-  if (!memberSignIn.ok || !otherSignIn.ok || !betaSignIn.ok) {
+  if (
+    !memberSignIn.ok ||
+    !adminSignIn.ok ||
+    !ownerSignIn.ok ||
+    !otherSignIn.ok ||
+    !betaSignIn.ok
+  ) {
     throw new Error("Native time-card fixture sign-in failed.");
   }
 
   const memberAccess = await resolveNativeFieldAccess(prisma, { token: memberSignIn.token });
+  const adminAccess = await resolveNativeFieldAccess(prisma, { token: adminSignIn.token });
+  const ownerAccess = await resolveNativeFieldAccess(prisma, { token: ownerSignIn.token });
   const otherAccess = await resolveNativeFieldAccess(prisma, { token: otherSignIn.token });
   const betaAccess = await resolveNativeFieldAccess(prisma, { token: betaSignIn.token });
-  if (!memberAccess.ok || !otherAccess.ok || !betaAccess.ok) {
+  if (
+    !memberAccess.ok ||
+    !adminAccess.ok ||
+    !ownerAccess.ok ||
+    !otherAccess.ok ||
+    !betaAccess.ok
+  ) {
     throw new Error("Native time-card fixture access failed.");
   }
 
@@ -557,6 +732,59 @@ try {
     "Own recorded time is requestable before a pending correction",
     memberCards.entries.find((entry) => entry.id === memberEntry.id)?.canRequest === true &&
       memberCards.entries.find((entry) => entry.id === memberEntry.id)?.requestStatus === null,
+  );
+
+  const memberAuth = bearer(memberSignIn.token);
+  const adminAuth = bearer(adminSignIn.token);
+  const ownerAuth = bearer(ownerSignIn.token);
+  const memberBearerCards = await timeCardsFromBearer(memberAuth);
+  const adminBearerCards = await timeCardsFromBearer(adminAuth);
+  const ownerBearerCards = await timeCardsFromBearer(ownerAuth);
+  const memberForeignToday = await loadNativeToday(prisma, memberAccess.access);
+  const memberForeignDetail = await loadNativeAssignedJob(
+    prisma,
+    memberAccess.access,
+    memberForeignJob.id,
+  );
+  function hiddenForeignLabel(entry) {
+    return entry != null && (entry.jobLabel === null || entry.jobLabel === "Assigned job");
+  }
+  check(
+    "MEMBER Bearer time-cards hide a foreign-property street",
+    memberBearerCards.ok === true &&
+      hiddenForeignLabel(
+        memberBearerCards.body.entries.find((entry) => entry.id === memberForeignEntry.id),
+      ) &&
+      !payloadExposesStreet(memberBearerCards.body, FOREIGN_STREET),
+  );
+  check(
+    "ADMIN Bearer time-cards hide a foreign-property street",
+    adminBearerCards.ok === true &&
+      hiddenForeignLabel(
+        adminBearerCards.body.entries.find((entry) => entry.id === adminForeignEntry.id),
+      ) &&
+      !payloadExposesStreet(adminBearerCards.body, FOREIGN_STREET),
+  );
+  check(
+    "OWNER Bearer time-cards hide a foreign-property street",
+    ownerBearerCards.ok === true &&
+      hiddenForeignLabel(
+        ownerBearerCards.body.entries.find((entry) => entry.id === ownerForeignEntry.id),
+      ) &&
+      !payloadExposesStreet(ownerBearerCards.body, FOREIGN_STREET),
+  );
+  check(
+    "Same-business street-only jobLabel stays on time-cards",
+    memberBearerCards.body.entries.find((entry) => entry.id === memberOwnStreetEntry.id)
+      ?.jobLabel === OWN_STREET,
+  );
+  check(
+    "Today and job detail also hide the foreign-property street",
+    memberForeignDetail != null &&
+      memberForeignDetail.address === null &&
+      memberForeignDetail.directionsHref === null &&
+      !payloadExposesStreet(memberForeignToday, FOREIGN_STREET) &&
+      !payloadExposesStreet(memberForeignDetail, FOREIGN_STREET),
   );
 
   const requested = await requestNativeTimeCorrection(prisma, memberAccess.access, {
@@ -1231,6 +1459,12 @@ if (!process.env.NATIVE_TIME_CARD_MUTATION_CHILD) {
       file: "src/lib/native-time-cards.ts",
       search: "weekStatus: week?.status",
       replace: "weekStatus: null",
+    },
+    {
+      label: "foreign jobLabel street",
+      file: "src/lib/native-time-cards.ts",
+      search: "jobLabel: nativeAssignedJobLabel(entry.job, access.businessId),",
+      replace: "jobLabel: entry.job?.customer?.name ?? entry.job?.property?.addressLine1 ?? null,",
     },
   ];
 

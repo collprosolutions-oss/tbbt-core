@@ -1,13 +1,23 @@
 import Link from "next/link";
 import { StatusBadge } from "@/components/status-badge";
-import { formatAddress, formatDateTime } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import type { FieldJob } from "@/lib/field-jobs";
+import { nativeAssignedJobDisplayAddress } from "@/lib/native-assigned-stops";
 
 /**
  * Large-tap-target Field Home list row. Links straight to the Field Job
  * page for that assigned job -- no separate "view details" step.
  */
-export function FieldJobCard({ job, timeZone }: { job: FieldJob; timeZone: string }) {
+export function FieldJobCard({
+  job,
+  timeZone,
+  businessId,
+}: {
+  job: FieldJob;
+  timeZone: string;
+  businessId: string;
+}) {
+  const address = nativeAssignedJobDisplayAddress(job.property, businessId);
   return (
     <Link
       href={`/field/jobs/${job.id}`}
@@ -18,10 +28,8 @@ export function FieldJobCard({ job, timeZone }: { job: FieldJob; timeZone: strin
           <p className="truncate text-base font-semibold">
             {job.customer?.name ?? "Customer"}
           </p>
-          {job.property ? (
-            <p className="truncate text-sm text-muted-foreground">
-              {formatAddress(job.property)}
-            </p>
+          {address ? (
+            <p className="truncate text-sm text-muted-foreground">{address}</p>
           ) : null}
           <p className="text-sm text-muted-foreground">
             {job.scheduledAt

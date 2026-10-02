@@ -846,7 +846,12 @@ try {
   check(
     "Today omits assigned overflow jobs beyond the cap",
     droppedOverflow.every((row) => !todayIds.includes(row.id)) &&
-      droppedOverflow.every((row) => !todayJson.includes(row.name)),
+      droppedOverflow.every(
+        (row) =>
+          ![...today.today, ...today.upcoming, ...today.completed].some(
+            (job) => job.customerName === row.name,
+          ),
+      ),
   );
   check(
     "Today returned count equals the cap and advertises truncation",

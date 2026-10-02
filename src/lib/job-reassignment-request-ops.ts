@@ -14,6 +14,10 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, ForbiddenError, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { writeAssignedMembershipAndLaneWindows } from "@/lib/job-assignment-ops";
+import {
+  NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL,
+  nativeAssignedJobLabel,
+} from "@/lib/native-assigned-stops";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   JOB_REASSIGNMENT_REQUEST_ALREADY_REASSIGNED_MESSAGE,
@@ -114,7 +118,7 @@ const REQUEST_SELECT = {
     select: {
       scheduledAt: true,
       customer: { select: { name: true } },
-      property: { select: { addressLine1: true } },
+      property: { select: { id: true, businessId: true, addressLine1: true } },
     },
   },
 } as const;
@@ -134,7 +138,7 @@ function toRequestRecord(row: {
   job?: {
     scheduledAt: Date | null;
     customer?: { name?: string | null } | null;
-    property?: { addressLine1?: string | null } | null;
+    property?: { id?: string | null; businessId?: string | null; addressLine1?: string | null } | null;
   } | null;
 }): JobReassignmentRequestRecord {
   return {
@@ -143,7 +147,9 @@ function toRequestRecord(row: {
     jobId: row.jobId,
     membershipId: row.membershipId,
     workerName: row.membership?.user?.name ?? "Worker",
-    jobLabel: row.job?.customer?.name ?? row.job?.property?.addressLine1 ?? "Assigned job",
+    jobLabel:
+      nativeAssignedJobLabel(row.job, row.businessId, NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL) ??
+      NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL,
     scheduledAt: row.job?.scheduledAt ?? null,
     reason: row.reason,
     status:

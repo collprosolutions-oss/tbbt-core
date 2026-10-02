@@ -17,6 +17,8 @@ export const FIELD_JOB_SELECT = {
   customer: { select: { name: true } },
   property: {
     select: {
+      id: true,
+      businessId: true,
       addressLine1: true,
       addressLine2: true,
       city: true,
@@ -33,6 +35,8 @@ export type FieldJob = {
   scheduledDurationMinutes: number | null;
   customer: { name: string } | null;
   property: {
+    id?: string;
+    businessId?: string;
     addressLine1: string;
     addressLine2: string | null;
     city: string | null;

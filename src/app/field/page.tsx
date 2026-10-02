@@ -5,6 +5,10 @@ import { JobReassignmentRequestForm } from "@/components/field/job-reassignment-
 import { FieldTimeClock } from "@/components/field/field-time-clock";
 import { FieldTimeCorrectionRequests } from "@/components/field/field-time-correction-requests";
 import { FIELD_JOB_SELECT, groupFieldJobs, isUpcomingFieldJob } from "@/lib/field-jobs";
+import {
+  NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL,
+  nativeAssignedJobLabel,
+} from "@/lib/native-assigned-stops";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
 import { addDays, formatISODate, startOfDay } from "@/lib/schedule";
@@ -95,7 +99,7 @@ export default async function FieldHomePage() {
       job: {
         select: {
           customer: { select: { name: true } },
-          property: { select: { addressLine1: true } },
+          property: { select: { id: true, businessId: true, addressLine1: true } },
         },
       },
       correctionRequests: {
@@ -154,7 +158,7 @@ export default async function FieldHomePage() {
       job: {
         select: {
           customer: { select: { name: true } },
-          property: { select: { addressLine1: true } },
+          property: { select: { id: true, businessId: true, addressLine1: true } },
         },
       },
     },
@@ -206,7 +210,8 @@ export default async function FieldHomePage() {
         <JobReassignmentRequestForm
           jobs={upcomingRequestableJobs.map((job) => ({
             id: job.id,
-            label: job.customer?.name ?? job.property?.addressLine1 ?? "Assigned job",
+            label: nativeAssignedJobLabel(job, field.businessId, NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL) ??
+              NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL,
           }))}
           requests={reassignmentRequests.map((request) => ({
             id: request.id,
@@ -228,14 +233,15 @@ export default async function FieldHomePage() {
                   TIME_ACTIVITY_LABELS[
                     isTimeActivityType(running.activityType) ? running.activityType : "OTHER"
                   ],
-                jobLabel: running.job?.customer?.name ?? running.job?.property?.addressLine1 ?? null,
+                jobLabel: nativeAssignedJobLabel(running.job, field.businessId),
                 startedAtLabel: formatTime(running.startedAt, timeZone),
               }
             : null
         }
         assignedJobs={jobs.map((job) => ({
           id: job.id,
-          label: job.customer?.name ?? job.property?.addressLine1 ?? "Assigned job",
+          label: nativeAssignedJobLabel(job, field.businessId, NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL) ??
+            NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL,
         }))}
       />
 
@@ -262,7 +268,7 @@ export default async function FieldHomePage() {
                 TIME_ACTIVITY_LABELS[
                   isTimeActivityType(entry.activityType) ? entry.activityType : "OTHER"
                 ],
-              jobLabel: entry.job?.customer?.name ?? entry.job?.property?.addressLine1 ?? null,
+              jobLabel: nativeAssignedJobLabel(entry.job, field.businessId),
               clockLabel: `${formatTime(entry.startedAt, timeZone)} – ${formatTime(entry.endedAt, timeZone)}`,
               startDate: formatDateInput(entry.startedAt, timeZone),
               startTime: formatTimeInput(entry.startedAt, timeZone),
@@ -284,13 +290,26 @@ export default async function FieldHomePage() {
         })}
       />
 
-      <JobGroup title="Today" jobs={groups.today} emptyLabel="Nothing assigned for today." timeZone={timeZone} />
-      <JobGroup title="Upcoming" jobs={groups.upcoming} emptyLabel="No upcoming jobs assigned." timeZone={timeZone} />
+      <JobGroup
+        title="Today"
+        jobs={groups.today}
+        emptyLabel="Nothing assigned for today."
+        timeZone={timeZone}
+        businessId={field.businessId}
+      />
+      <JobGroup
+        title="Upcoming"
+        jobs={groups.upcoming}
+        emptyLabel="No upcoming jobs assigned."
+        timeZone={timeZone}
+        businessId={field.businessId}
+      />
       <JobGroup
         title="Completed / Recent"
         jobs={groups.completed}
         emptyLabel="No completed jobs yet."
         timeZone={timeZone}
+        businessId={field.businessId}
       />
     </div>
   );
@@ -301,11 +320,13 @@ function JobGroup({
   jobs,
   emptyLabel,
   timeZone,
+  businessId,
 }: {
   title: string;
   jobs: ReturnType<typeof groupFieldJobs>["today"];
   emptyLabel: string;
   timeZone: string;
+  businessId: string;
 }) {
   return (
     <section className="space-y-2">
@@ -319,7 +340,7 @@ function JobGroup({
       ) : (
         <div className="space-y-2">
           {jobs.map((job) => (
-            <FieldJobCard key={job.id} job={job} timeZone={timeZone} />
+            <FieldJobCard key={job.id} job={job} timeZone={timeZone} businessId={businessId} />
           ))}
         </div>
       )}
