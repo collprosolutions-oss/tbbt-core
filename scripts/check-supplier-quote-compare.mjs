@@ -43,6 +43,7 @@ const {
   createSupplier,
   ensurePurchaseList,
   getSupplierCommerceAdapter,
+  linkPurchaseItemToExpense,
   listSupplierQuotes,
   MATERIAL_SUPPLIER_QUOTE_SCHEMA_SOURCE,
   MATERIALS_SUPPLIERS_SCHEMA_SOURCE,
@@ -52,6 +53,7 @@ const {
   selectSupplierQuoteForPurchaseList,
   SUPPLIER_COMMERCE_DISCONNECTED_LIMITATION,
   SUPPLIER_INTEGRATION_LICENSING_NOTICE,
+  updatePurchaseListItem,
 } = await import("@/lib/materials");
 
 const testDbName = "tbbt_supplier_quote_compare_test";
@@ -198,7 +200,7 @@ async function waitForGrantedPurchaseListItemLock(client) {
         WHERE c.relname = 'MaterialPurchaseListItem'
           AND l.granted
           AND a.datname = current_database()
-          AND a.state = 'active'
+          AND a.state IN ('active', 'idle in transaction')
           AND a.pid <> pg_backend_pid()
       `;
       return rows[0]?.pid ?? null;
@@ -233,6 +235,8 @@ try {
   const typesSrc = readRepo("src/lib/materials/types.ts");
   const adapterSrc = readRepo("src/lib/materials/adapter.ts");
   const actionsSrc = readRepo("src/app/actions/materials.ts");
+  const purchaseSrc = readRepo("src/lib/materials/purchase.ts");
+  const expenseLinkSrc = readRepo("src/lib/materials/expense-link.ts");
   const schema = readRepo("prisma/schema.prisma");
   const migration = readRepo(
     "prisma/migrations/20261002181000_material_supplier_quotes/migration.sql",
@@ -306,6 +310,19 @@ try {
       !/PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES = \[[^\]]*ORDERED/.test(typesSrc) &&
       quotesSrc.includes("already on a purchase order") &&
       quotesSrc.includes('status: { not: "CANCELLED" }'),
+  );
+  check(
+    "Edit-save keeps quoted plannedCost and expense-link uses plannedCost / quantity",
+    purchaseSrc.includes("postedDecimalEqualsStored") &&
+      purchaseSrc.includes("quoteCostForNeededQuantity") &&
+      purchaseSrc.includes("clearSelectedQuote") &&
+      expenseLinkSrc.includes("plannedCost.div(item.quantityNeeded)"),
+  );
+  check(
+    "createPurchaseOrder locks candidate items FOR UPDATE in a transaction",
+    purchaseSrc.includes("lockTenantOwnedPurchaseListItem") &&
+      purchaseSrc.includes("$transaction") &&
+      purchaseSrc.includes('item.supplierId !== input.supplierId'),
   );
 
   const liveAdapter = getSupplierCommerceAdapter();
@@ -460,6 +477,11 @@ try {
     "Future quote dates are rejected",
     async () => parseQuotedAt("2099-01-01", "America/New_York", now),
     (error) => /future/i.test(String(error.message)),
+  );
+  await expectError(
+    "Invalid civil date 2026-02-30 is rejected instead of rolling to March 2",
+    async () => parseQuotedAt("2026-02-30", "America/New_York", now),
+    (error) => /valid quote date/i.test(String(error.message)),
   );
 
   const ownerUser = await prisma.user.create({
@@ -1081,6 +1103,103 @@ try {
     (error) => /future/i.test(String(error.message)),
   );
 
+  console.log("\nTEST — Edit-save keeps quoted plannedCost");
+  const landedYard = await recordSupplierQuote(prisma, ownerA, {
+    materialId: longStock.id,
+    supplierId: depot.id,
+    quotedAt: "2026-10-02",
+    unit: "yd",
+    unitPrice: "10.00",
+    quantity: "1",
+    deliveryCost: "5.00",
+    availability: "IN_STOCK",
+  });
+  const saveItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: longStock.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+  });
+  const saveSelected = await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: saveItem.id,
+    quoteId: landedYard.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  const afterNotes = await updatePurchaseListItem(prisma, ownerA, {
+    itemId: saveItem.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+    plannedUnitCost: saveSelected.plannedUnitCost.toString(),
+    supplierId: depot.id,
+    status: "PLANNED",
+    notes: "notes only",
+  });
+  check(
+    "Notes-only save after $10/yd + $5 delivery keeps plannedCost 1005.00",
+    saveSelected.plannedCost.toString() === "1005" &&
+      afterNotes.plannedCost.toString() === "1005" &&
+      afterNotes.plannedUnitCost.eq(saveSelected.plannedUnitCost) &&
+      afterNotes.selectedQuoteId === landedYard.id &&
+      afterNotes.notes === "notes only",
+  );
+  const afterRoundedPost = await updatePurchaseListItem(prisma, ownerA, {
+    itemId: saveItem.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+    plannedUnitCost: "3.33",
+    supplierId: depot.id,
+    status: "PLANNED",
+    notes: "still notes",
+  });
+  check(
+    "Cents-rounded posted unit cost does not collapse a selected quote",
+    afterRoundedPost.plannedCost.toString() === "1005" &&
+      afterRoundedPost.selectedQuoteId === landedYard.id,
+  );
+  const afterSupplierEdit = await updatePurchaseListItem(prisma, ownerA, {
+    itemId: saveItem.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+    plannedUnitCost: afterRoundedPost.plannedUnitCost.toString(),
+    supplierId: yard.id,
+    status: "PLANNED",
+    notes: "changed supplier",
+  });
+  check(
+    "Changing supplierId clears the stale selectedQuoteId and keeps plannedCost",
+    afterSupplierEdit.selectedQuoteId === null &&
+      afterSupplierEdit.supplierId === yard.id &&
+      afterSupplierEdit.plannedCost.toString() === "1005",
+  );
+  const expenseItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: longStock.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+  });
+  await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: expenseItem.id,
+    quoteId: landedYard.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  const linkedExpense = await linkPurchaseItemToExpense(prisma, ownerA, {
+    itemId: expenseItem.id,
+    createExpense: true,
+    occurredOn: "2026-10-02",
+    quantityPurchased: "300",
+  });
+  check(
+    "Expense-link uses plannedCost / quantity so delivery is not dropped",
+    linkedExpense.actualCost.toString() === "1005",
+  );
+
   console.log("\nTEST — Selection refuses items already on a purchase order");
   check(
     "ORDERED items are not quote-selectable",
@@ -1257,6 +1376,171 @@ try {
       const before = [currentQuote, cheaperQuote].find((quoteRow) => quoteRow.id === row.id);
       return before && row.unitPrice.toString() === before.unitPrice.toString();
     }),
+  );
+
+  console.log("\nTEST — Select vs create-PO race loses one side");
+  async function installPauseTrigger(name, table, whenClause) {
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION ${name}() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_sleep(1);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${name} ON ${table}`);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER ${name}
+      ${whenClause}
+      EXECUTE FUNCTION ${name}()
+    `);
+  }
+  async function dropPauseTrigger(name, table) {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${name} ON ${table}`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS ${name}()`);
+  }
+
+  const poRaceEstimate = await prisma.estimate.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "DRAFT",
+      publicToken: randomUUID(),
+    },
+  });
+  const poRaceList = await ensurePurchaseList(prisma, ownerA, { estimateId: poRaceEstimate.id });
+
+  async function seedQuotedItem() {
+    const item = await addPurchaseListItem(prisma, ownerA, {
+      purchaseListId: poRaceList.id,
+      materialId: lumber.id,
+      name: lumber.name,
+      quantityNeeded: "30",
+      unit: "ft",
+    });
+    await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+      purchaseListItemId: item.id,
+      quoteId: currentQuote.id,
+      expectedSelectedQuoteId: null,
+      now,
+    });
+    return item;
+  }
+
+  const selectFirstItem = await seedQuotedItem();
+  let selectFirstResults = [];
+  const selectFirstPending = [];
+  await installPauseTrigger(
+    "tbbt_quote_select_vs_po_pause",
+    `"MaterialPurchaseListItem"`,
+    `BEFORE UPDATE OF "selectedQuoteId" ON "MaterialPurchaseListItem"
+     FOR EACH ROW
+     WHEN (NEW."selectedQuoteId" IS DISTINCT FROM OLD."selectedQuoteId")`,
+  );
+  try {
+    const selectFirst = selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+      purchaseListItemId: selectFirstItem.id,
+      quoteId: cheaperQuote.id,
+      expectedSelectedQuoteId: currentQuote.id,
+      now,
+    });
+    selectFirstPending.push(selectFirst);
+    const selectPid = await waitForGrantedPurchaseListItemLock(prismaHold);
+    const poWhileSelect = createPurchaseOrder(prismaRace, ownerA, {
+      purchaseListId: poRaceList.id,
+      supplierId: depot.id,
+      itemIds: [selectFirstItem.id],
+    });
+    selectFirstPending.push(poWhileSelect);
+    const poBlockedPid = await waitForBlockedByPid(prismaHold, selectPid);
+    selectFirstResults = await Promise.allSettled(selectFirstPending);
+    check(
+      "Select-first race blocks create-PO on the item lock",
+      Number(selectPid) > 0 && Number(poBlockedPid) > 0 && Number(poBlockedPid) !== Number(selectPid),
+    );
+  } catch (error) {
+    selectFirstResults = await Promise.allSettled(selectFirstPending);
+    throw error;
+  } finally {
+    await dropPauseTrigger("tbbt_quote_select_vs_po_pause", `"MaterialPurchaseListItem"`);
+  }
+  const selectFirstOk = selectFirstResults.filter((row) => row.status === "fulfilled");
+  const selectFirstFailed = selectFirstResults.filter((row) => row.status === "rejected");
+  const selectFirstAfter = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: selectFirstItem.id },
+  });
+  const selectFirstPo = await prisma.materialPurchaseOrderItem.findFirst({
+    where: {
+      purchaseListItemId: selectFirstItem.id,
+      purchaseOrder: { status: { not: "CANCELLED" } },
+    },
+    include: { purchaseOrder: true },
+  });
+  check(
+    "Select-first: quote B wins and create-PO for supplier A loses",
+    selectFirstOk.length === 1 &&
+      selectFirstFailed.length === 1 &&
+      selectFirstAfter.selectedQuoteId === cheaperQuote.id &&
+      selectFirstAfter.supplierId === yard.id &&
+      !selectFirstPo &&
+      /same supplier|already on a purchase order/i.test(String(selectFirstFailed[0].reason?.message ?? "")),
+  );
+
+  const poFirstItem = await seedQuotedItem();
+  let poFirstResults = [];
+  const poFirstPending = [];
+  await installPauseTrigger(
+    "tbbt_po_create_vs_quote_pause",
+    `"MaterialPurchaseOrder"`,
+    `BEFORE INSERT ON "MaterialPurchaseOrder" FOR EACH ROW`,
+  );
+  try {
+    const poFirst = createPurchaseOrder(prisma, ownerA, {
+      purchaseListId: poRaceList.id,
+      supplierId: depot.id,
+      itemIds: [poFirstItem.id],
+    });
+    poFirstPending.push(poFirst);
+    const poPid = await waitForGrantedPurchaseListItemLock(prismaHold);
+    const selectWhilePo = selectSupplierQuoteForPurchaseList(prismaRace, ownerA, {
+      purchaseListItemId: poFirstItem.id,
+      quoteId: cheaperQuote.id,
+      expectedSelectedQuoteId: currentQuote.id,
+      now,
+    });
+    poFirstPending.push(selectWhilePo);
+    const selectBlockedPid = await waitForBlockedByPid(prismaHold, poPid);
+    poFirstResults = await Promise.allSettled(poFirstPending);
+    check(
+      "Create-PO-first race blocks select on the item lock",
+      Number(poPid) > 0 && Number(selectBlockedPid) > 0 && Number(selectBlockedPid) !== Number(poPid),
+    );
+  } catch (error) {
+    poFirstResults = await Promise.allSettled(poFirstPending);
+    throw error;
+  } finally {
+    await dropPauseTrigger("tbbt_po_create_vs_quote_pause", `"MaterialPurchaseOrder"`);
+  }
+  const poFirstOk = poFirstResults.filter((row) => row.status === "fulfilled");
+  const poFirstFailed = poFirstResults.filter((row) => row.status === "rejected");
+  const poFirstAfter = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: poFirstItem.id },
+  });
+  const poFirstLine = await prisma.materialPurchaseOrderItem.findFirst({
+    where: {
+      purchaseListItemId: poFirstItem.id,
+      purchaseOrder: { status: { not: "CANCELLED" } },
+    },
+    include: { purchaseOrder: true },
+  });
+  check(
+    "Create-PO-first: supplier A PO wins and select of quote B loses",
+    poFirstOk.length === 1 &&
+      poFirstFailed.length === 1 &&
+      poFirstAfter.selectedQuoteId === currentQuote.id &&
+      poFirstAfter.supplierId === depot.id &&
+      poFirstLine?.purchaseOrder.supplierId === depot.id &&
+      /already on a purchase order/i.test(String(poFirstFailed[0].reason?.message ?? "")),
   );
 
   if (failures) {

@@ -51,9 +51,14 @@ export async function linkPurchaseItemToExpense(
 
   const quantityPurchased =
     decimalQuantity(input.quantityPurchased ?? item.quantityPurchased) ?? item.quantityNeeded;
-  const actualUnitCost =
-    decimalMoney(input.actualUnitCost ?? item.actualUnitCost ?? item.plannedUnitCost);
-  const actualCost = extendedCost(quantityPurchased, actualUnitCost);
+  const explicitUnit = input.actualUnitCost ?? item.actualUnitCost;
+  let actualUnitCost =
+    explicitUnit != null && explicitUnit !== "" ? decimalMoney(explicitUnit) : null;
+  let actualCost = extendedCost(quantityPurchased, actualUnitCost);
+  if (!actualCost && item.plannedCost && item.quantityNeeded && quantityPurchased) {
+    actualUnitCost = item.plannedCost.div(item.quantityNeeded);
+    actualCost = actualUnitCost.mul(quantityPurchased).toDecimalPlaces(2);
+  }
   if (!actualCost) {
     throw new MaterialsError("Enter the purchased quantity and actual cost before linking an expense.");
   }

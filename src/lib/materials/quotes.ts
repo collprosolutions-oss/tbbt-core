@@ -71,11 +71,12 @@ export function businessLocalQuoteDateInput(
 
 function parseCivilQuoteDate(raw: string, timeZone: string) {
   const match = raw.match(CIVIL_DATE_ONLY) ?? raw.match(CIVIL_UTC_MIDNIGHT);
-  if (!match) return null;
+  if (!match) return { kind: "other" as const };
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  return parseCivilDateInTimeZone(year, month, day, timeZone);
+  const at = parseCivilDateInTimeZone(year, month, day, timeZone);
+  return at ? { kind: "ok" as const, at } : { kind: "invalid" as const };
 }
 
 export function parseQuotedAt(
@@ -88,8 +89,13 @@ export function parseQuotedAt(
     at = Number.isNaN(raw.getTime()) ? null : raw;
   } else {
     const text = raw.trim();
-    at = parseCivilQuoteDate(text, timeZone);
-    if (!at) {
+    const civil = parseCivilQuoteDate(text, timeZone);
+    if (civil.kind === "invalid") {
+      throw new MaterialsError("Enter a valid quote date.");
+    }
+    if (civil.kind === "ok") {
+      at = civil.at;
+    } else {
       const parsed = new Date(text);
       at = Number.isNaN(parsed.getTime()) ? null : parsed;
     }

@@ -30,6 +30,11 @@ import {
   lockTenantOwnedPurchaseOrder,
   lockTenantOwnedPurchaseOrderItems,
 } from "@/lib/materials/po-lock";
+import {
+  lockTenantOwnedPurchaseListItem,
+  type LockedPurchaseListItemRow,
+} from "@/lib/materials/quote-lock";
+import { quoteCostForNeededQuantity } from "@/lib/materials/units";
 import { isPrismaUniqueViolation } from "@/lib/materials/unique";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -408,6 +413,30 @@ export type UpdatePurchaseListItemInput = {
   notes?: string | null;
 };
 
+function postedDecimalEqualsStored(
+  posted: string | number | null | undefined,
+  stored: Prisma.Decimal | null,
+) {
+  if (posted == null || posted === "") return stored == null;
+  if (stored == null) return false;
+  try {
+    const value = new Prisma.Decimal(String(posted).replace(/[$,\s]/g, ""));
+    return !value.isNaN() && value.eq(stored);
+  } catch {
+    return false;
+  }
+}
+
+function postedMoneyEqualsStoredCents(
+  posted: string | number | null | undefined,
+  stored: Prisma.Decimal | null,
+) {
+  if (posted == null || posted === "") return stored == null;
+  if (stored == null) return false;
+  const postedMoney = decimalMoney(posted);
+  return Boolean(postedMoney && postedMoney.eq(stored.toDecimalPlaces(2)));
+}
+
 export async function updatePurchaseListItem(
   db: Db,
   access: BusinessAccess,
@@ -416,7 +445,11 @@ export async function updatePurchaseListItem(
   const existing = access.assertOwned(
     await db.materialPurchaseListItem.findFirst({
       where: { id: input.itemId, businessId: access.businessId },
-      include: { purchaseList: true },
+      include: {
+        purchaseList: true,
+        selectedQuote: true,
+        material: { select: { packSize: true } },
+      },
     }),
   );
   await requirePurchaseListWriteAccess(db as PrismaClient, access, existing.purchaseList);
@@ -431,25 +464,64 @@ export async function updatePurchaseListItem(
     input.quantityNeeded != null && input.quantityNeeded !== ""
       ? decimalQuantity(input.quantityNeeded)
       : existing.quantityNeeded;
+  const quantityUnchanged =
+    input.quantityNeeded == null ||
+    input.quantityNeeded === "" ||
+    Boolean(nextQuantity && nextQuantity.eq(existing.quantityNeeded));
   if (input.quantityNeeded != null && input.quantityNeeded !== "") {
     if (!nextQuantity) {
       throw new MaterialsError("Enter a quantity greater than zero.");
     }
     data.quantityNeeded = nextQuantity;
   }
+  const nextUnit = input.unit != null ? input.unit.trim() || existing.unit : existing.unit;
+  const unitUnchanged = input.unit == null || nextUnit === existing.unit;
   if (input.unit != null) {
-    data.unit = input.unit.trim() || existing.unit;
+    data.unit = nextUnit;
   }
-  const nextPlanned =
-    input.plannedUnitCost !== undefined
-      ? decimalMoney(input.plannedUnitCost ?? null)
-      : existing.plannedUnitCost;
-  if (input.plannedUnitCost !== undefined) {
+  const nextSupplierId =
+    input.supplierId !== undefined ? input.supplierId || null : existing.supplierId;
+  const supplierUnchanged = (nextSupplierId || null) === (existing.supplierId || null);
+  const nextMaterialId =
+    input.materialId !== undefined ? input.materialId || null : existing.materialId;
+  const materialUnchanged = (nextMaterialId || null) === (existing.materialId || null);
+  const postedCostUnchanged =
+    input.plannedUnitCost === undefined ||
+    postedDecimalEqualsStored(input.plannedUnitCost, existing.plannedUnitCost) ||
+    (Boolean(existing.selectedQuoteId) &&
+      postedMoneyEqualsStoredCents(input.plannedUnitCost, existing.plannedUnitCost));
+  let clearSelectedQuote = Boolean(existing.selectedQuoteId) && (!supplierUnchanged || !materialUnchanged);
+  let nextPlanned = existing.plannedUnitCost;
+  if (input.plannedUnitCost !== undefined && !postedCostUnchanged) {
+    nextPlanned = decimalMoney(input.plannedUnitCost ?? null);
     data.plannedUnitCost = nextPlanned === null ? { set: null } : nextPlanned;
+    if (existing.selectedQuoteId) clearSelectedQuote = true;
   }
-  if (input.quantityNeeded != null || input.plannedUnitCost !== undefined) {
+  const quantityOrUnitChanged = !quantityUnchanged || !unitUnchanged;
+  if (existing.selectedQuoteId && existing.selectedQuote && quantityOrUnitChanged && !clearSelectedQuote) {
+    if (!nextQuantity) {
+      throw new MaterialsError("Enter a quantity greater than zero.");
+    }
+    const priced = quoteCostForNeededQuantity({
+      unitPrice: existing.selectedQuote.unitPrice,
+      fromUnit: existing.selectedQuote.unit,
+      toUnit: nextUnit,
+      neededQuantity: nextQuantity,
+      deliveryCost: existing.selectedQuote.deliveryCost,
+      packSize: existing.material?.packSize,
+    });
+    nextPlanned = priced.plannedUnitCost;
+    data.plannedUnitCost = priced.plannedUnitCost;
+    data.plannedCost = priced.plannedCost;
+  } else if (
+    !postedCostUnchanged ||
+    (input.quantityNeeded != null && !quantityUnchanged && (!existing.selectedQuoteId || clearSelectedQuote))
+  ) {
     const plannedCost = extendedCost(nextQuantity, nextPlanned);
     data.plannedCost = plannedCost === null ? { set: null } : plannedCost;
+  }
+  if (clearSelectedQuote) {
+    data.selectedQuote = { disconnect: true };
   }
   if (input.markupPercent !== undefined) {
     const markup =
@@ -607,21 +679,39 @@ export async function createPurchaseOrder(
   }
 
   const run = async (tx: Db) => {
-    const items = await tx.materialPurchaseListItem.findMany({
+    const candidates = await tx.materialPurchaseListItem.findMany({
       where: {
         businessId: access.businessId,
         purchaseListId: list.id,
         ...(input.itemIds?.length ? { id: { in: input.itemIds } } : {}),
-        status: { not: "CANCELLED" },
       },
+      select: { id: true },
     });
     if (input.itemIds?.length) {
-      const found = new Set(items.map((item) => item.id));
+      const found = new Set(candidates.map((item) => item.id));
       if (input.itemIds.some((id) => !found.has(id))) {
         throw new MaterialsError(
           "Every purchase-order item must belong to this purchase list and business.",
         );
       }
+    }
+    const lockedItems: LockedPurchaseListItemRow[] = [];
+    for (const id of [...candidates.map((item) => item.id)].sort((left, right) =>
+      left.localeCompare(right),
+    )) {
+      const locked = await lockTenantOwnedPurchaseListItem(tx, access.businessId, id);
+      if (!locked || locked.purchaseListId !== list.id) {
+        throw new MaterialsError(
+          "Every purchase-order item must belong to this purchase list and business.",
+        );
+      }
+      lockedItems.push(locked);
+    }
+    const items = lockedItems.filter((item) => item.status !== "CANCELLED");
+    if (input.itemIds?.length && items.length !== lockedItems.length) {
+      throw new MaterialsError(
+        "Every purchase-order item must belong to this purchase list and business.",
+      );
     }
     const selected = input.supplierId
       ? items.filter((item) => item.supplierId === input.supplierId)
@@ -643,6 +733,11 @@ export async function createPurchaseOrder(
     }
     for (const item of selected) {
       if (item.businessId !== access.businessId || item.purchaseListId !== list.id) {
+        throw new MaterialsError(
+          "Every purchase-order item must belong to this purchase list and business.",
+        );
+      }
+      if (item.status === "CANCELLED") {
         throw new MaterialsError(
           "Every purchase-order item must belong to this purchase list and business.",
         );
@@ -675,6 +770,9 @@ export async function createPurchaseOrder(
   };
 
   if (!input.attemptKey) {
+    if ("$transaction" in db) {
+      return (db as PrismaClient).$transaction((tx) => run(tx));
+    }
     return run(db);
   }
   const attemptKey = normalizeMaterialAttemptKey(input.attemptKey);
