@@ -146,7 +146,7 @@ try {
   const marketingActionSrc = readFileSync(new URL("../src/app/actions/marketing.ts", import.meta.url), "utf8");
   check(
     "Owner Generate actions request one bounded draft through the canonical provider",
-    marketingPageSrc.includes("loadMarketingSource(prisma, access.businessId)") &&
+    marketingPageSrc.includes("loadMarketingSource(prisma, access.businessId") &&
       generatePanelSrc.includes("Request content draft") &&
       generatePanelSrc.includes("MARKETING_AI_UNAVAILABLE_LABEL") &&
       generatePanelSrc.includes('name="attemptId"') &&

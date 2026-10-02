@@ -163,7 +163,8 @@ try {
       !draftSrc.includes("publishWebsite") &&
       !draftSrc.includes("customer-messaging") &&
       !draftSrc.includes("sendMessage") &&
-      !draftSrc.includes("social") &&
+      !draftSrc.includes("socialPublish") &&
+      !draftSrc.includes("facebook") &&
       draftSrc.includes("publishable: false") &&
       MARKETING_AI_DRAFT_REVIEW_ONLY_MESSAGE.includes("will not publish"),
   );
