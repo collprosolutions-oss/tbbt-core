@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireOperatingBusinessAccess } from "@/lib/saas-billing/enforce";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
+import { communicationsActionError } from "@/lib/communications/action-errors";
 import { prisma } from "@/lib/prisma";
 import { isAiAttemptId } from "@/lib/ai/types";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
@@ -11,7 +12,7 @@ import {
   isCommunicationAiAction,
   recordInboundCallEvent,
   recordMissedOrManualCall,
-  recordReceptionistCallbackDisposition,
+  executeReceptionistDispositionAction,
   runCommunicationAssist,
 } from "@/lib/communications";
 import {
@@ -148,22 +149,16 @@ export async function recordReceptionistDispositionAction(
 ): Promise<CommunicationsActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
-    requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
-    const result = await recordReceptionistCallbackDisposition(prisma, access, {
+    const result = await executeReceptionistDispositionAction(prisma, access, {
       phoneInteractionId: readString(formData, "phoneInteractionId"),
       browserBusinessId: readString(formData, "businessId") || null,
     });
-    revalidateCommunications(result.customerId ?? undefined);
-    if (!result.ok) {
-      return { error: result.failureReason ?? "That callback-needed item could not be marked handled." };
+    if (!result.error) {
+      revalidateCommunications(readString(formData, "customerId") || undefined);
     }
-    return {
-      message: result.reused
-        ? "That callback-needed item was already recorded as handled."
-        : "Callback-needed item recorded as handled. No call or message was sent.",
-    };
-  } catch {
-    return { error: "You do not have permission to do that." };
+    return result;
+  } catch (error) {
+    return communicationsActionError(error);
   }
 }
 

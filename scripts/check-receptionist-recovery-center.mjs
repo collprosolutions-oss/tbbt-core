@@ -12,9 +12,12 @@
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const mutationKind = process.env.RECEPTIONIST_RECOVERY_MUTATION ?? "";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -28,14 +31,16 @@ parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
 process.env.DATABASE_URL = testUrl;
 
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for receptionist recovery test database.");
-  process.exit(push.status ?? 1);
+if (!mutationKind) {
+  const push = spawnSync(
+    "npx",
+    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+  );
+  if (push.status !== 0) {
+    console.error("Failed to push schema for receptionist recovery test database.");
+    process.exit(push.status ?? 1);
+  }
 }
 
 const require = createRequire(import.meta.url);
@@ -57,6 +62,10 @@ const {
   RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
   RECEPTIONIST_MANUAL_DISPOSITION_KIND,
   RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
+  COMMUNICATIONS_PERMISSION_ERROR,
+  COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR,
+  communicationsActionError,
+  executeReceptionistDispositionAction,
   recordMissedOrManualCall,
   recordInboundCallEvent,
   recordReceptionistCallbackDisposition,
@@ -66,9 +75,12 @@ const {
 const { planSpecialists } = await import("@/lib/chief-of-staff");
 
 let failures = 0;
+let passes = 0;
 function check(label, condition) {
-  if (condition) console.log(`  ok  - ${label}`);
-  else {
+  if (condition) {
+    console.log(`  ok  - ${label}`);
+    passes += 1;
+  } else {
     console.error(`FAIL - ${label}`);
     failures += 1;
   }
@@ -145,8 +157,145 @@ async function seedBusiness(name) {
   };
 }
 
+async function proveClosedLogReplay() {
+  console.log("\nDB — CLOSED stays CLOSED on an idempotent missed-call replay");
+  const tenant = await seedBusiness("Closed Replay");
+  const key = `closed-replay-${randomUUID()}`;
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551212000",
+    summary: "Callback needed, then handled, then a stale form retries.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  check("Replay seed logged a callback-needed phone", logged.ok && Boolean(logged.phoneInteractionId));
+  await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  const beforeReplay = await loadReceptionistRecoveryCenter(prisma, tenant.access);
+  const replay = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551212000",
+    summary: "Callback needed, then handled, then a stale form retries.",
+    callbackNeeded: true,
+    idempotencyKey: key,
+  });
+  const after = await prisma.phoneInteraction.findFirst({
+    where: { id: logged.phoneInteractionId, businessId: tenant.business.id },
+  });
+  const afterCenter = await loadReceptionistRecoveryCenter(prisma, tenant.access);
+  const action = after?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: after.followUpActionItemId, businessId: tenant.business.id },
+      })
+    : null;
+  check(
+    "Replayed missed-call log keeps a CLOSED row closed",
+    replay.ok &&
+      replay.reused === true &&
+      after?.status === "CLOSED" &&
+      after.callbackNeeded === false &&
+      afterCenter.recordedCallbackNeededCount === beforeReplay.recordedCallbackNeededCount &&
+      !afterCenter.queue.some((row) => row.id === logged.phoneInteractionId) &&
+      action?.status === "DONE",
+  );
+}
+
+async function proveEventIdempotencyLookup() {
+  console.log("\nDB — Disposition event replay uses the pre-insert lookup");
+  const tenant = await seedBusiness("Disposition Lookup");
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551313000",
+    summary: "Lookup replay for the disposition event.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-lookup-${randomUUID()}`,
+  });
+  const first = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+    phoneInteractionId: logged.phoneInteractionId,
+  });
+  let replayedViaLookup = false;
+  let replayErrorCode = null;
+  try {
+    const second = await recordReceptionistCallbackDisposition(prisma, tenant.access, {
+      phoneInteractionId: logged.phoneInteractionId,
+    });
+    replayedViaLookup = second.ok && second.replayedViaLookup === true;
+  } catch (error) {
+    replayErrorCode = error?.code ?? error?.meta?.code ?? String(error?.message ?? error);
+    replayedViaLookup = false;
+  }
+  check("First disposition wrote the audit event", first.ok && first.replayedViaLookup === false);
+  check(
+    "Idempotent disposition replay uses the pre-insert lookup",
+    replayedViaLookup === true && replayErrorCode !== "25P02" && replayErrorCode !== "P2002",
+  );
+}
+
+async function proveDispositionActionRoleCheck() {
+  console.log("\nDB — Server action role check is distinct from unexpected errors");
+  const tenant = await seedBusiness("Disposition Action");
+  const logged = await recordMissedOrManualCall(prisma, tenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5551414000",
+    summary: "Action-layer role check.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-action-${randomUUID()}`,
+  });
+  const memberAction = await executeReceptionistDispositionAction(prisma, tenant.memberAccess, {
+    phoneInteractionId: logged.phoneInteractionId,
+    browserBusinessId: tenant.business.id,
+  });
+  const missing = await executeReceptionistDispositionAction(prisma, tenant.access, {
+    phoneInteractionId: "",
+    browserBusinessId: tenant.business.id,
+  });
+  const exploded = await executeReceptionistDispositionAction(
+    {
+      phoneInteraction: {
+        findFirst: async () => {
+          throw new Error("injected writer failure");
+        },
+      },
+    },
+    tenant.access,
+    { phoneInteractionId: logged.phoneInteractionId, browserBusinessId: tenant.business.id },
+  );
+  const mapped = communicationsActionError(new Error("injected disposition failure"));
+  const stillOpen = await prisma.phoneInteraction.findFirst({
+    where: { id: logged.phoneInteractionId, businessId: tenant.business.id },
+  });
+  check(
+    "Server action role check denies MEMBER with the permission error",
+    memberAction.error === COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Unexpected action errors are distinguishable from permission denials",
+    exploded.error === COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR &&
+      mapped.error === COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR &&
+      exploded.error !== COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Server action returns the writer failure, not a permission error, for a missing item",
+    missing.error === RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON &&
+      missing.error !== COMMUNICATIONS_PERMISSION_ERROR,
+  );
+  check(
+    "Denied or failed action writes do not close the callback-needed row",
+    stillOpen?.status === "CALLBACK_NEEDED" && stillOpen.callbackNeeded === true,
+  );
+}
+
 try {
+  if (mutationKind === "closed-preserve") {
+    await proveClosedLogReplay();
+  } else if (mutationKind === "event-idempotency-lookup") {
+    await proveEventIdempotencyLookup();
+  } else if (mutationKind) {
+    check(`unknown mutation ${mutationKind}`, false);
+  } else {
   const recoverySrc = readRepo("src/lib/communications/receptionist-recovery.ts");
+  const missedCallSrc = readRepo("src/lib/communications/missed-call.ts");
   const dispositionSrc = readRepo("src/lib/communications/receptionist-disposition.ts");
   const actionSrc = readRepo("src/app/actions/communications.ts");
   const formSrc = readRepo("src/components/communications/receptionist-disposition-form.tsx");
@@ -221,8 +370,27 @@ try {
       dispositionSrc.includes("contactClaimed: false") &&
       formSrc.includes("Record handled") &&
       formSrc.includes("disabled={pending}") &&
-      actionSrc.includes("recordReceptionistCallbackDisposition") &&
+      actionSrc.includes("executeReceptionistDispositionAction") &&
+      actionSrc.includes("communicationsActionError") &&
       actionSrc.includes('revalidatePath("/communications/receptionist")'),
+  );
+  check(
+    "Idempotent phone-log replay preserves CLOSED and the disposition event lookup is marked",
+    missedCallSrc.includes("PHONE_LOG_PRESERVE_CLOSED") &&
+      missedCallSrc.includes('const alreadyClosed = claimed.status === "CLOSED"') &&
+      missedCallSrc.includes("callbackNeeded && !alreadyClosed") &&
+      dispositionSrc.includes("RECEPTIONIST_DISPOSITION_IDEMPOTENCY_LOOKUP") &&
+      dispositionSrc.includes("replayedViaLookup: true"),
+  );
+  check(
+    "Disposition server action distinguishes ForbiddenError from unexpected errors",
+    actionSrc.includes("communicationsActionError(error)") &&
+      actionSrc.includes("executeReceptionistDispositionAction") &&
+      dispositionSrc.includes("roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)") &&
+      dispositionSrc.includes("throw new ForbiddenError()") &&
+      /export async function recordReceptionistDispositionAction\([\s\S]*?catch \(error\) \{\s*return communicationsActionError\(error\);\s*\}/.test(
+        actionSrc,
+      ),
   );
   check(
     "Voice remains disconnected and no Twilio voice/number provisioning is added",
@@ -1245,7 +1413,7 @@ try {
       spoofedBrowser.failureReason === RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
   );
   check(
-    "A missed call without callback-needed cannot be closed by this writer",
+    "Plain missed calls without callbackNeeded stay recorded attention; this writer does not clear them",
     ordinaryDecision.ok === false &&
       ordinaryDecision.failureReason === RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON &&
       afterOrdinary?.status === "LOGGED" &&
@@ -1266,6 +1434,7 @@ try {
     "Double-click reuses the same ReceptionistEvent and does not reopen or duplicate the write",
     knownSecond.ok &&
       knownSecond.reused === true &&
+      knownSecond.replayedViaLookup === true &&
       knownSecond.receptionistEventId === knownFirst.receptionistEventId &&
       knownSecond.status === "CLOSED" &&
       dispositionEvents.filter((row) => row.phoneInteractionId === knownCallback.phoneInteractionId).length ===
@@ -1369,6 +1538,11 @@ try {
       !racedCenter.queue.some((row) => row.id === racePhone.phoneInteractionId) &&
       [raceLeft.reused, raceRight.reused].filter(Boolean).length === 1,
   );
+
+  await proveClosedLogReplay();
+  await proveEventIdempotencyLookup();
+  await proveDispositionActionRoleCheck();
+  }
 } catch (error) {
   console.error(error);
   failures += 1;
@@ -1376,8 +1550,60 @@ try {
   await prisma.$disconnect();
 }
 
+if (!mutationKind && failures === 0) {
+  console.log("\nMUTATION — revert each guard and show the matching test fail cleanly");
+  const mutations = [
+    {
+      kind: "closed-preserve",
+      file: "src/lib/communications/missed-call.ts",
+      find: "  // PHONE_LOG_PRESERVE_CLOSED\n  const alreadyClosed = claimed.status === \"CLOSED\";",
+      replace: "  const alreadyClosed = false;",
+    },
+    {
+      kind: "event-idempotency-lookup",
+      file: "src/lib/communications/receptionist-disposition.ts",
+      find: "  // RECEPTIONIST_DISPOSITION_IDEMPOTENCY_LOOKUP\n  const existing = await db.receptionistEvent.findFirst({",
+      replace: "  const existing = null; await db.receptionistEvent.findFirst({",
+    },
+  ];
+  const scriptPath = fileURLToPath(import.meta.url);
+  for (const mutation of mutations) {
+    const abs = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(abs, "utf8");
+    if (!original.includes(mutation.find)) {
+      check(`mutation ${mutation.kind} found its target`, false);
+      continue;
+    }
+    writeFileSync(abs, original.replace(mutation.find, mutation.replace));
+    try {
+      const child = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", scriptPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DATABASE_URL: testUrl,
+            RECEPTIONIST_RECOVERY_MUTATION: mutation.kind,
+          },
+        },
+      );
+      const failedCleanly =
+        child.status !== 0 &&
+        !/PrismaClientKnownRequestError|25P02|Unique constraint/.test(`${child.stdout}\n${child.stderr}`);
+      check(`mutation ${mutation.kind} fails cleanly without a Postgres crash`, failedCleanly);
+      if (!failedCleanly) {
+        console.error(child.stdout.slice(-2500));
+        console.error(child.stderr.slice(-1500));
+      }
+    } finally {
+      writeFileSync(abs, original);
+    }
+  }
+}
+
 if (failures > 0) {
-  console.error(`\n${failures} receptionist recovery check(s) failed.`);
+  console.error(`\n${failures} receptionist recovery check(s) failed (${passes} passed).`);
   process.exit(1);
 }
-console.log("\nReceptionist recovery center checks passed.");
+console.log(`\nReceptionist recovery center checks passed (${passes} passed).`);

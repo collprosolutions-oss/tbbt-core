@@ -63,12 +63,18 @@ export {
   loadReceptionistRecoveryCenter,
 } from "@/lib/communications/receptionist-recovery";
 export {
+  COMMUNICATIONS_PERMISSION_ERROR,
+  COMMUNICATIONS_UNEXPECTED_DISPOSITION_ERROR,
+  communicationsActionError,
+} from "@/lib/communications/action-errors";
+export {
   PHONE_INTERACTION_CLOSED_STATUS,
   RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
   RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON,
   RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
   RECEPTIONIST_MANUAL_DISPOSITION_KIND,
   RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
+  executeReceptionistDispositionAction,
   phoneInteractionIsCallbackNeeded,
   phoneInteractionIsClosedDisposition,
   receptionistDispositionIdempotencyKey,

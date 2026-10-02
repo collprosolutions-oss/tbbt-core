@@ -4,7 +4,9 @@
  * disposition lives in receptionist-disposition.ts and uses canonical
  * PhoneInteraction CLOSED plus a ReceptionistEvent audit row.
  * Does not provision numbers, place calls, send SMS or email, create
- * leads, or invent a successful contact.
+ * leads, or invent a successful contact. Missed calls logged without
+ * callbackNeeded stay recorded attention in the bounded scan; they are
+ * facts, not open callback work, so this writer does not clear them.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
@@ -451,6 +453,8 @@ export async function loadReceptionistRecoveryCenter(
         lastCustomerCommunication: null,
         laterCommunicationRecorded: customer ? false : null,
         logLeadHref: customer ? null : OWNER_LOG_LEAD_HREF,
+        // Missed calls without callbackNeeded stay recorded attention.
+        // This writer only closes open callback work, not every MISSED_CALL fact.
         canRecordDisposition: phoneInteractionIsCallbackNeeded(row),
       },
     });

@@ -5,6 +5,10 @@
  * contact, or delete unknown-caller records.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { CAPABILITIES, ForbiddenError, roleHasCapability } from "@/lib/authorization";
+import {
+  communicationsActionError,
+} from "@/lib/communications/action-errors";
 import {
   requireCommunicationsCapability,
   type CommunicationAccess,
@@ -32,6 +36,7 @@ export type ReceptionistDispositionResult = {
   callbackNeeded: boolean | null;
   customerId: string | null;
   failureReason: string | null;
+  replayedViaLookup: boolean;
 };
 
 const PHONE_SELECT = {
@@ -55,6 +60,7 @@ function failed(failureReason: string): ReceptionistDispositionResult {
     callbackNeeded: null,
     customerId: null,
     failureReason,
+    replayedViaLookup: false,
   };
 }
 
@@ -68,6 +74,7 @@ function succeeded(
   },
   eventId: string,
   reused: boolean,
+  replayedViaLookup: boolean,
 ): ReceptionistDispositionResult {
   return {
     ok: true,
@@ -79,6 +86,7 @@ function succeeded(
     callbackNeeded: row.callbackNeeded,
     customerId: row.customerId,
     failureReason: null,
+    replayedViaLookup,
   };
 }
 
@@ -140,11 +148,12 @@ async function ensureDispositionEvent(
   },
 ) {
   const idempotencyKey = receptionistDispositionIdempotencyKey(input.phoneInteractionId);
+  // RECEPTIONIST_DISPOSITION_IDEMPOTENCY_LOOKUP
   const existing = await db.receptionistEvent.findFirst({
     where: { businessId: access.businessId, idempotencyKey },
     select: { id: true },
   });
-  if (existing) return { id: existing.id, reused: true };
+  if (existing) return { id: existing.id, reused: true, replayedViaLookup: true };
 
   try {
     const created = await db.receptionistEvent.create({
@@ -169,14 +178,14 @@ async function ensureDispositionEvent(
       },
       select: { id: true },
     });
-    return { id: created.id, reused: false };
+    return { id: created.id, reused: false, replayedViaLookup: false };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const raced = await db.receptionistEvent.findFirst({
         where: { businessId: access.businessId, idempotencyKey },
         select: { id: true },
       });
-      if (raced) return { id: raced.id, reused: true };
+      if (raced) return { id: raced.id, reused: true, replayedViaLookup: false };
     }
     throw error;
   }
@@ -251,7 +260,35 @@ export async function recordReceptionistCallbackDisposition(
         phoneInteractionId: current.id,
       });
       if (!next) return failed(RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON);
-      return succeeded(next, event.id, alreadyHandled || event.reused);
+      return succeeded(next, event.id, alreadyHandled || event.reused, event.replayedViaLookup);
     },
   );
+}
+
+export async function executeReceptionistDispositionAction(
+  db: Db,
+  access: CommunicationAccess,
+  input: {
+    phoneInteractionId: string;
+    browserBusinessId?: string | null;
+  },
+): Promise<{ error?: string; message?: string }> {
+  try {
+    if (!roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_COMMUNICATIONS)) {
+      throw new ForbiddenError();
+    }
+    const result = await recordReceptionistCallbackDisposition(db, access, input);
+    if (!result.ok) {
+      return {
+        error: result.failureReason ?? "That callback-needed item could not be marked handled.",
+      };
+    }
+    return {
+      message: result.reused
+        ? "That callback-needed item was already recorded as handled."
+        : "Callback-needed item recorded as handled. No call or message was sent.",
+    };
+  } catch (error) {
+    return communicationsActionError(error);
+  }
 }
