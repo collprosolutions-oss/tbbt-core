@@ -328,7 +328,7 @@ export async function composeCustomerCommunication(
   });
 
   if (input.channel === "SMS") {
-    if (!eligibility.permitted && !resumeCommunicationId) {
+    if (!eligibility.permitted) {
       return recordNonProviderAttempt(db, {
         access,
         customerId: customer.id,
