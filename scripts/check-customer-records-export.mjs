@@ -1524,6 +1524,7 @@ try {
   const invoiceRows = invoicesCsv ? parseCsv(invoicesCsv.data.toString("utf8")).records : [];
   const creditRows = creditsCsv ? parseCsv(creditsCsv.data.toString("utf8")).records : [];
   const creditedInvoiceRow = invoiceRows.find((row) => row["Invoice ID"] === creditedInvoice.id);
+  const recordedPaymentInvoiceRow = invoiceRows.find((row) => row["Invoice ID"] === invoiceA.id);
   check(
     "Business ZIP completeness keeps property links, estimate totals, and time-card activity",
     builtZipText.includes("propertyId") &&
@@ -1537,6 +1538,13 @@ try {
       !builtZipText.includes(projectToken) &&
       !builtZipText.includes(stripeSession) &&
       !builtZipText.includes("Key under mat"),
+  );
+  check(
+    "Recorded payment ZIP remaining follows #274 invoicePaymentBreakdown",
+    recordedPaymentInvoiceRow?.Total === "125.50" &&
+      recordedPaymentInvoiceRow?.["Amount Paid"] === "40.00" &&
+      recordedPaymentInvoiceRow?.["Amount Remaining"] === "85.50" &&
+      recordedPaymentInvoiceRow?.["Payment Basis"] === "RECORDED_PAYMENTS",
   );
   check(
     "Credited SENT invoice remaining is 70.00 and the credit row is exported",
