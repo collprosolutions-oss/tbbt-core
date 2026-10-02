@@ -93,6 +93,7 @@ const {
   BANK_CREDITS_ARE_NOT_DEPOSITS_MESSAGE,
   BANK_CSV_NUL_MESSAGE,
   BANK_CSV_REQUIRED_MESSAGE,
+  BANK_MATCH_ALREADY_DECIDED_MESSAGE,
   BANK_NO_LIVE_FEED_MESSAGE,
   BANK_NOT_A_BALANCE_MESSAGE,
   BANK_NOT_A_PAYMENT_MESSAGE,
@@ -222,12 +223,34 @@ check(
     BANK_CSV_REQUIRED_MESSAGE.includes("does not connect to a bank"),
 );
 check(
-  "accept locks the match and row, checks inside the transaction, and maps P2002",
-  opsSrc.includes("FOR UPDATE OF m, r") &&
+  "accept locks the row first, then the match, and maps unique and deadlock errors",
+  opsSrc.includes("FOR UPDATE OF r") &&
+    opsSrc.includes("FOR UPDATE OF m, r") &&
+    opsSrc.indexOf("FOR UPDATE OF r") < opsSrc.indexOf("FOR UPDATE OF m, r") &&
     opsSrc.includes("$transaction") &&
     opsSrc.includes('error.code === "P2002"') &&
+    opsSrc.includes("P2010") &&
+    opsSrc.includes("40P01") &&
     /alreadyAccepted[\s\S]{0,220}businessId: access\.businessId/.test(opsSrc) &&
     !/alreadyAccepted[\s\S]{0,220}importId: workspace\.id/.test(opsSrc),
+);
+check(
+  "accept, reject, ignore, load, and source each require OWNER review",
+  [
+    "acceptBankReconciliationMatch",
+    "rejectBankReconciliationMatch",
+    "ignoreBankReconciliationRow",
+    "loadOwnedBankReconciliation",
+    "loadOwnedBankSourceFile",
+  ].every((name) => {
+    const idx = opsSrc.indexOf(`export async function ${name}`);
+    return idx >= 0 && opsSrc.slice(idx, idx + 400).includes("requireOwnerReview");
+  }),
+);
+check(
+  "verifier applies the accepted-unique migration SQL",
+  selfSrc.includes("20261002196000_bank_reconciliation_accepted_unique") &&
+    selfSrc.includes("applyMigrationStatements(acceptedUniqueMigrationSrc)"),
 );
 check(
   "overlapping files reuse rowFingerprint as ALREADY_SEEN",
@@ -407,16 +430,21 @@ const session = await openDisposableTestDatabase({
   setProcessEnv: true,
 });
 const prisma = session.prisma;
-await prisma.$executeRawUnsafe(`
-  CREATE UNIQUE INDEX IF NOT EXISTS "BankReconciliationMatch_accepted_candidate_key"
-  ON "BankReconciliationMatch" ("businessId", "candidateKind", "candidateId")
-  WHERE status = 'ACCEPTED'
-`);
-await prisma.$executeRawUnsafe(`
-  CREATE UNIQUE INDEX IF NOT EXISTS "BankReconciliationMatch_accepted_row_key"
-  ON "BankReconciliationMatch" ("rowId")
-  WHERE status = 'ACCEPTED'
-`);
+function applyMigrationStatements(sql) {
+  return sql
+    .split(";")
+    .map((chunk) =>
+      chunk
+        .split("\n")
+        .filter((line) => !/^\s*--/.test(line))
+        .join("\n")
+        .trim(),
+    )
+    .filter(Boolean);
+}
+for (const statement of applyMigrationStatements(acceptedUniqueMigrationSrc)) {
+  await prisma.$executeRawUnsafe(statement);
+}
 
 function makeAccess(business, role, membershipId) {
   return {
@@ -613,6 +641,32 @@ try {
   const financeBefore = await prisma.businessFinanceConnection.count({ where: { businessId: tenantA.business.id } });
 
   const zelleMatch = zelleRow.matches.find((match) => match.candidateId === payment500.id);
+
+  async function expectAdminForbidden(label, work) {
+    let denied = false;
+    try {
+      await work();
+    } catch (error) {
+      denied = error instanceof ForbiddenError;
+    }
+    check(label, denied);
+  }
+  await expectAdminForbidden("ADMIN cannot accept a bank match", () =>
+    acceptBankReconciliationMatch(prisma, adminA, { importId: first.id, matchId: zelleMatch.id }),
+  );
+  await expectAdminForbidden("ADMIN cannot reject a bank match", () =>
+    rejectBankReconciliationMatch(prisma, adminA, { importId: first.id, matchId: zelleMatch.id }),
+  );
+  await expectAdminForbidden("ADMIN cannot ignore a bank row", () =>
+    ignoreBankReconciliationRow(prisma, adminA, { importId: first.id, rowId: amazonRow.id }),
+  );
+  await expectAdminForbidden("ADMIN cannot load a bank workspace", () =>
+    loadOwnedBankReconciliation(prisma, adminA, first.id),
+  );
+  await expectAdminForbidden("ADMIN cannot download the source CSV", () =>
+    loadOwnedBankSourceFile(prisma, adminA, first.id),
+  );
+
   const accepted = await acceptBankReconciliationMatch(prisma, ownerA, {
     importId: first.id,
     matchId: zelleMatch.id,
@@ -680,6 +734,11 @@ try {
   check(
     "tenant B does not see tenant A payments",
     tenantBImport.rows.every((row) => row.matches.every((match) => match.candidateId !== payment500.id)),
+  );
+  check(
+    "tenant A's rows never mark tenant B's rows ALREADY_SEEN",
+    tenantBImport.rows.every((row) => row.reviewStatus !== "ALREADY_SEEN") &&
+      tenantBImport.rows.some((row) => row.reviewStatus === "CANDIDATE" || row.reviewStatus === "UNMATCHED"),
   );
 
   let crossTenant = false;
@@ -908,6 +967,7 @@ try {
     oneRowAccepted.length === 1 &&
       oneRowRejected.length === 1 &&
       oneRowError instanceof BankReconciliationError &&
+      oneRowError.message === BANK_MATCH_ALREADY_DECIDED_MESSAGE &&
       !(oneRowError instanceof Prisma.PrismaClientKnownRequestError) &&
       acceptedOnOneRow === 1,
   );

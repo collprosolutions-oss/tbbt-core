@@ -493,15 +493,42 @@ function findOwnedRow(access: BankReconciliationAccess, workspace: BankReconcili
   return row;
 }
 
+function prismaErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object" || !("code" in error)) return "";
+  return String((error as { code?: unknown }).code ?? "");
+}
+
+function prismaMetaCode(error: unknown): string {
+  if (!error || typeof error !== "object" || !("meta" in error)) return "";
+  const meta = (error as { meta?: { code?: unknown } }).meta;
+  return String(meta?.code ?? "");
+}
+
+function prismaErrorText(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error ?? "");
+  const message = String((error as { message?: unknown }).message ?? "");
+  const meta = (error as { meta?: { message?: unknown; code?: unknown } }).meta;
+  return `${message} ${String(meta?.message ?? "")} ${String(meta?.code ?? "")}`;
+}
+
 function isUniqueConstraintViolation(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     return true;
   }
-  const code =
-    error && typeof error === "object" && "code" in error
-      ? String((error as { code?: unknown }).code ?? "")
-      : "";
-  return code === "23505";
+  const code = prismaErrorCode(error);
+  return code === "P2002" || code === "23505" || prismaMetaCode(error) === "23505";
+}
+
+function isDeadlockViolation(error: unknown): boolean {
+  const code = prismaErrorCode(error);
+  const metaCode = prismaMetaCode(error);
+  const text = prismaErrorText(error);
+  return (
+    code === "40P01" ||
+    code === "P2034" ||
+    metaCode === "40P01" ||
+    (code === "P2010" && (/40P01/.test(text) || /deadlock/i.test(text)))
+  );
 }
 
 type LockedAcceptRow = {
@@ -529,6 +556,20 @@ export async function acceptBankReconciliationMatch(
 
   try {
     await db.$transaction(async (tx) => {
+      const rowLock = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT r.id
+        FROM "BankReconciliationRow" r
+        JOIN "BankReconciliationMatch" m ON m."rowId" = r.id
+        WHERE m.id = ${matchId}
+          AND m."businessId" = ${access.businessId}
+          AND m."importId" = ${importId}
+          AND r."businessId" = ${access.businessId}
+        FOR UPDATE OF r
+      `;
+      if (!rowLock[0]) {
+        throw new BankReconciliationError(BANK_MATCH_NOT_AVAILABLE_MESSAGE);
+      }
+
       const locked = await tx.$queryRaw<LockedAcceptRow[]>`
         SELECT
           m.id AS "matchId",
@@ -609,6 +650,9 @@ export async function acceptBankReconciliationMatch(
     if (error instanceof BankReconciliationError) throw error;
     if (isUniqueConstraintViolation(error)) {
       throw new BankReconciliationError(BANK_CANDIDATE_ALREADY_ACCEPTED_MESSAGE);
+    }
+    if (isDeadlockViolation(error)) {
+      throw new BankReconciliationError(BANK_MATCH_ALREADY_DECIDED_MESSAGE);
     }
     throw error;
   }
