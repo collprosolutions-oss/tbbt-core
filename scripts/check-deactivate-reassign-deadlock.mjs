@@ -146,9 +146,9 @@ check(
     selfSrc.includes("FOR UPDATE") &&
     selfSrc.includes("deactivate-first") &&
     selfSrc.includes("reassign-first") &&
-    selfSrc.includes("new PrismaClient") &&
     selfSrc.includes("deactivateClient") &&
-    selfSrc.includes("reassignClient"),
+    selfSrc.includes("reassignClient") &&
+    selfSrc.includes("datasourceUrl"),
 );
 check(
   "setTeamMemberActive delegates to the shared write, not a parallel deactivate path",
