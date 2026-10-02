@@ -2473,7 +2473,9 @@ model JobProblemReport {
 /// Status: RECORDED -> UNDER_REVIEW -> OUTCOME_RECORDED.
 /// At most one open (RECORDED | UNDER_REVIEW) row per Job is enforced by
 /// a partial unique index in the migration, not here — Prisma cannot
-/// express that WHERE clause.
+/// express that WHERE clause. After OUTCOME_RECORDED, the project-token
+/// portal cannot file another request until 24 hours after outcomeAt.
+/// OWNER record on the same job is not cooled down.
 model JobCallback {
   id                       String    @id @default(cuid())
   businessId               String

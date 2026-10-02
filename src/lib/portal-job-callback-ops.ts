@@ -11,10 +11,12 @@ import {
   JOB_CALLBACK_OPEN_STATUSES,
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE,
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
   JOB_CALLBACK_PORTAL_DESCRIPTION_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE,
   completedSameBusinessJobEligible,
   formatPortalCallbackDescription,
+  isPortalJobCallbackCoolingDown,
   parsePortalJobCallbackDescription,
   parsePortalJobCallbackPreferredContact,
   parsePortalProjectToken,
@@ -25,6 +27,10 @@ import {
   countBusinessJobs,
   countBusinessPayments,
 } from "@/lib/job-callback-ops";
+import {
+  findLatestResolvedJobCallback,
+  resolvedJobCallbackAt,
+} from "@/lib/portal-job-callback-data";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export type PortalJobCallbackSubmitInput = {
@@ -117,6 +123,11 @@ export async function submitPortalJobCallback(
           jobId: locked.id,
           alreadyExists: true,
         };
+      }
+
+      const resolved = await findLatestResolvedJobCallback(tx, locked.businessId, locked.id);
+      if (isPortalJobCallbackCoolingDown(resolvedJobCallbackAt(resolved))) {
+        return { ok: false, error: JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE };
       }
 
       const owner = await findActiveOwnerMembership(tx, locked.businessId);
