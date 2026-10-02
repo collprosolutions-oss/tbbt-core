@@ -130,6 +130,7 @@ npm run test:production-migrate
 
 ```bash
 npm run test:website-engine
+npm run test:website-domain-verification
 npm run test:public-website
 npm run test:live-public-website
 npm run test:workforce-capacity
@@ -151,6 +152,6 @@ Public customer sites use:
 - Before the first publish, `/hire/[slug]` and `/r/[slug]` still assemble from live Business / catalog / image / service-area rows. CollPro stays on this path until it publishes.
 - After the first publish, owner drafts do not appear on the public site until the next Publish.
 - Rollback copies a historical snapshot into a new version. Old rows stay immutable.
-- `WebsiteHostBinding` is the future custom-domain boundary. `UNVERIFIED` hosts never route. This repo does not purchase domains or provision DNS.
+- `WebsiteHostBinding` is the custom-domain boundary. `UNVERIFIED`, unknown, and other-tenant hosts never route. OWNER Settings shows a read-only DNS/host verification state (Pending when the check cannot be completed). Typing a website URL does not mark a domain connected. This repo does not purchase domains or provision DNS.
 
 Certification checklist: `docs/PRODUCTION_CERTIFICATION.md`.

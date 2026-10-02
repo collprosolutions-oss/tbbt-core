@@ -28,6 +28,10 @@ import {
   type GoLiveDomainInput,
   type GoLiveInput,
 } from "@/lib/go-live";
+import {
+  goLiveDomainFromVerification,
+  verifyConfiguredWebsiteDomain,
+} from "@/lib/website-engine/domain-verification";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -50,16 +54,8 @@ export async function loadGoLiveDomainState(
   db: Db,
   businessId: string,
 ): Promise<GoLiveDomainInput> {
-  const bindings = await db.websiteHostBinding.findMany({
-    where: { businessId },
-    select: { hostname: true, status: true },
-    orderBy: { updatedAt: "desc" },
-  });
-  return {
-    verifiedHostname: bindings.find((row) => row.status === "VERIFIED")?.hostname ?? null,
-    unverifiedHostname: bindings.find((row) => row.status === "UNVERIFIED")?.hostname ?? null,
-    failedHostname: bindings.find((row) => row.status === "FAILED")?.hostname ?? null,
-  };
+  const verification = await verifyConfiguredWebsiteDomain(db, businessId);
+  return goLiveDomainFromVerification(verification);
 }
 
 export async function loadGoLiveInput(db: Db, businessId: string): Promise<GoLiveInput> {

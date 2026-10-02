@@ -42,6 +42,8 @@ export {
   resolvePublicRoot,
   authorizedPublicOrigin,
   publicOriginForSlug,
+  hostnameFromPublicWebsite,
+  normalizeHostname,
 } from "@/lib/website-engine/hosts";
 export {
   absolutePublicSitemapUrl,
@@ -86,3 +88,20 @@ export {
   setReviewWebsiteSelected,
 } from "@/lib/website-engine/draft";
 export { loadWebsitePublishPanelData } from "@/lib/website-engine/editor";
+export {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_VERIFICATION_LABELS,
+  WEBSITE_DOMAIN_VERIFICATION_STATES,
+  defaultWebsiteDomainDnsLookup,
+  expectedWebsiteDomainCnameTargets,
+  goLiveDomainFromVerification,
+  loadWebsiteDomainVerification,
+  resetWebsiteDomainDnsLookup,
+  setWebsiteDomainDnsLookup,
+  verifyConfiguredWebsiteDomain,
+  verifyHostnameForBusiness,
+  type WebsiteDomainDnsLookup,
+  type WebsiteDomainDnsRecords,
+  type WebsiteDomainVerification,
+  type WebsiteDomainVerificationState,
+} from "@/lib/website-engine/domain-verification";

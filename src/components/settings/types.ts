@@ -13,6 +13,7 @@ import type {
 import type { PublicSiteImageEditorSlot } from "@/lib/public-site-images";
 import type { SupplierPricingContextPayload } from "@/lib/material-pricing/types";
 import type { TestDataCleanupPreview } from "@/lib/test-data-cleanup-constants";
+import type { WebsiteDomainVerification } from "@/lib/website-engine/domain-verification";
 
 export type SettingsWorkspaceProps = {
   section: SettingsSection;
@@ -61,6 +62,7 @@ export type SettingsWorkspaceProps = {
       seoDescriptionRequest: string;
     };
   };
+  domainVerification?: WebsiteDomainVerification | null;
   websitePhotos?: {
     storageConfigured: boolean;
     storageUsage?: { usedBytes: number; limitBytes: number } | null;

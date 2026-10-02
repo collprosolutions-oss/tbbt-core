@@ -79,6 +79,9 @@ export async function buildPublicSitemap(
 
     const view = await loadPublicWebsiteView(slug, db);
     if (!view) return [];
+    if (resolved.kind === "tenant" && view.site.business.id !== resolved.businessId) {
+      return [];
+    }
     const origin = authorizedPublicOrigin(resolved, host);
     const paths = view.snapshot
       ? publishedSitemapPaths(view.snapshot)

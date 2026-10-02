@@ -160,6 +160,7 @@
     "test:cleaning-launch-pack": "node --experimental-strip-types scripts/check-cleaning-launch-pack.mjs",
     "test:plan-entitlements": "node --experimental-strip-types scripts/check-plan-entitlements.mjs",
     "test:website-engine": "node --experimental-strip-types scripts/check-website-engine.mjs",
+    "test:website-domain-verification": "node --experimental-strip-types scripts/check-website-domain-verification.mjs",
     "test:workforce-capacity": "node --experimental-strip-types scripts/check-workforce-capacity.mjs",
     "test:workforce-staffing": "node --experimental-strip-types scripts/check-workforce-staffing.mjs",
     "test:workforce-availability-request": "node --experimental-strip-types scripts/check-workforce-availability-request.mjs",

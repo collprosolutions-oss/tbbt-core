@@ -68,6 +68,11 @@ const { Prisma } = await import("@prisma/client");
 const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { goLiveCardById } = await import("@/lib/go-live");
 const { loadIntegrationCenter } = await import("@/lib/integrations");
+const {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  resetWebsiteDomainDnsLookup,
+  setWebsiteDomainDnsLookup,
+} = await import("@/lib/website-engine");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -1429,6 +1434,27 @@ try {
       status: "UNVERIFIED",
     },
   });
+  const publishA = await prisma.websitePublish.create({
+    data: {
+      businessId: tenantA.business.id,
+      versionNumber: 1,
+      status: "PUBLISHED",
+      schemaVersion: 1,
+      snapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      summary: "isolation-domain",
+      idempotencyKey: `iso-a-${tenantA.business.id}`,
+    },
+  });
+  await prisma.business.update({
+    where: { id: tenantA.business.id },
+    data: { publishedWebsiteId: publishA.id },
+  });
+  setWebsiteDomainDnsLookup(async (hostname) => {
+    if (hostname === "alpha-iso.example.test") {
+      return { cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] };
+    }
+    return { cnames: [], addresses: [] };
+  });
   const goLiveA = await loadGoLiveCenter(prisma, accessA);
   const goLiveB = await loadGoLiveCenter(prisma, accessB);
   check(
@@ -1466,6 +1492,7 @@ try {
   }
   console.log("Isolation check passed: business-scoped queries and production guards do not cross workspaces.");
 } finally {
+  resetWebsiteDomainDnsLookup();
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {

@@ -63,6 +63,11 @@ const {
   twilioImpliesAllFeaturesLive,
 } = await import("@/lib/go-live");
 const { loadGoLiveCenter, requireGoLiveAccess } = await import("@/lib/go-live-data");
+const {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  resetWebsiteDomainDnsLookup,
+  setWebsiteDomainDnsLookup,
+} = await import("@/lib/website-engine");
 const { isBusinessStorageConfigured } = await import("@/lib/business-storage");
 const { isTwilioCustomerMessagingConfigured } = await import("@/lib/customer-messaging/config");
 const { isAiProviderConnected } = await import("@/lib/ai/config");
@@ -425,6 +430,20 @@ try {
   }));
   check("Verified custom domain is LIVE", goLiveCardById(domainLive, "custom_domain")?.status === "LIVE" && classifyCustomDomain({ verifiedHostname: "jobs.example.test", unverifiedHostname: null, failedHostname: null }) === "LIVE");
   check("Unverified custom domain is PARTIAL", goLiveCardById(domainUnverified, "custom_domain")?.status === "PARTIAL" && classifyCustomDomain({ verifiedHostname: null, unverifiedHostname: "pending.example.test", failedHostname: null }) === "PARTIAL");
+  const domainPending = buildGoLiveCenter(sampleGoLiveInput({
+    domain: { verifiedHostname: null, unverifiedHostname: null, failedHostname: null, pendingHostname: "waiting.example.test" },
+  }));
+  check(
+    "Pending custom domain is PARTIAL and labeled Pending",
+    goLiveCardById(domainPending, "custom_domain")?.status === "PARTIAL" &&
+      /Pending/.test(goLiveCardById(domainPending, "custom_domain")?.currentState ?? "") &&
+      classifyCustomDomain({
+        verifiedHostname: null,
+        unverifiedHostname: null,
+        failedHostname: null,
+        pendingHostname: "waiting.example.test",
+      }) === "PARTIAL",
+  );
   check("No custom domain is NOT_CONFIGURED", classifyCustomDomain({ verifiedHostname: null, unverifiedHostname: null, failedHostname: null }) === "NOT_CONFIGURED");
 
   check("SaaS subscribed is LIVE", classifyStripeSaas({ configured: true, checkoutPossible: true, entitlementState: "subscribed_active", canOperate: true, statusLabel: "Subscribed" }) === "LIVE");
@@ -1013,6 +1032,27 @@ try {
   await prisma.websiteHostBinding.create({
     data: { businessId: businessB.id, hostname: "beta-pending.example.test", status: "UNVERIFIED" },
   });
+  const publishA = await prisma.websitePublish.create({
+    data: {
+      businessId: businessA.id,
+      versionNumber: 1,
+      status: "PUBLISHED",
+      schemaVersion: 1,
+      snapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      summary: "settings-domain",
+      idempotencyKey: `settings-a-${businessA.id}`,
+    },
+  });
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { publishedWebsiteId: publishA.id },
+  });
+  setWebsiteDomainDnsLookup(async (hostname) => {
+    if (hostname === "alpha-live.example.test") {
+      return { cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] };
+    }
+    return { cnames: [], addresses: [] };
+  });
   const goLiveA = await loadGoLiveCenter(prisma, ownerA);
   const goLiveB = await loadGoLiveCenter(prisma, ownerB);
   const domainA = goLiveCardById(goLiveA, "custom_domain");
@@ -1046,6 +1086,7 @@ try {
     failures === 0 ? "\nAll Settings checks passed." : `\n${failures} Settings check(s) failed.`,
   );
 } finally {
+  resetWebsiteDomainDnsLookup();
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {
