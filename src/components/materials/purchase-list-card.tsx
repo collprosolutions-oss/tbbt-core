@@ -122,6 +122,7 @@ export function PurchaseListCard({
   suppliers,
   canConvertTakeoff,
   canRecordReceipt,
+  canExportSupplierHandoff,
 }: {
   estimateId?: string | null;
   jobId?: string | null;
@@ -132,6 +133,7 @@ export function PurchaseListCard({
   suppliers: Array<{ id: string; name: string }>;
   canConvertTakeoff?: boolean;
   canRecordReceipt?: boolean;
+  canExportSupplierHandoff?: boolean;
 }) {
   const [convertState, convertAction, converting] = useActionState(
     convertTakeoffToPurchaseListAction,
@@ -262,6 +264,7 @@ export function PurchaseListCard({
             jobId={jobId}
             estimateId={estimateId}
             canRecordReceipt={Boolean(canRecordReceipt)}
+            canExportSupplierHandoff={Boolean(canExportSupplierHandoff)}
           />
         ))}
       </CardContent>
@@ -395,11 +398,13 @@ function PurchaseOrderStatusForm({
   jobId,
   estimateId,
   canRecordReceipt,
+  canExportSupplierHandoff,
 }: {
   order: PurchaseOrderView;
   jobId?: string | null;
   estimateId?: string | null;
   canRecordReceipt: boolean;
+  canExportSupplierHandoff: boolean;
 }) {
   const [state, action, pending] = useActionState(updatePurchaseOrderStatusAction, initial);
   const [receiptState, receiptAction, recording] = useActionState(
@@ -445,7 +450,20 @@ function PurchaseOrderStatusForm({
         <Button type="submit" size="sm" variant="outline" disabled={pending}>
           {pending ? "Saving…" : "Update PO"}
         </Button>
+        {canExportSupplierHandoff ? (
+          <Button asChild size="sm" variant="outline">
+            <a href={`/materials/purchase-orders/${order.id}/supplier-handoff/download`}>
+              Download supplier handoff CSV
+            </a>
+          </Button>
+        ) : null}
       </form>
+      {canExportSupplierHandoff ? (
+        <p className="text-xs text-muted-foreground">
+          Offline document only. Does not place a retailer order, call a supplier API,
+          scrape prices, record a stock receipt, or message a customer.
+        </p>
+      ) : null}
       {order.items.length > 0 ? (
         <ul className="space-y-1 text-sm">
           {order.items.map((item) => (
