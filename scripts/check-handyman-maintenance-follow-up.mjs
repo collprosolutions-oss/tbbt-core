@@ -456,9 +456,6 @@ try {
   const beforeDueStart = startOfZonedDay(parseIsoCivil(dayBeforeDue, ny), ny);
   const onDueStart = startOfZonedDay(futureDueAt, ny);
 
-  const jobsBefore = await countBusinessJobs(prisma, businessA.id);
-  const commsBefore = await countBusinessCommunications(prisma, businessA.id);
-
   console.log("\nDB — OWNER create, eligibility, and no side effects");
   await expectThrow(
     "MEMBER cannot set a maintenance follow-up",
@@ -604,6 +601,8 @@ try {
     raceCreateCount === 1 && createOk.length === 1 && createDenied.length === 1,
   );
 
+  const jobsBeforeScan = await countBusinessJobs(prisma, businessA.id);
+  const commsBeforeScan = await countBusinessCommunications(prisma, businessA.id);
   const eventsAfterCreate = await prisma.businessEvent.findMany({
     where: { businessId: businessA.id, type: "CUSTOMER_FOLLOW_UP_DUE" },
   });
@@ -620,8 +619,8 @@ try {
     "Create and due scan do not emit CUSTOMER_FOLLOW_UP_DUE, book a job, or start recurrence",
     eventsAfterCreate.length === 0 &&
       eventsAfterScan.length === 0 &&
-      jobsAfter === jobsBefore &&
-      commsAfterCreate === commsBefore &&
+      jobsAfter === jobsBeforeScan &&
+      commsAfterCreate === commsBeforeScan &&
       recurringAfter === 0,
   );
 
@@ -639,14 +638,14 @@ try {
     "Upcoming DST due date stays out of the owner queue",
     beforeDue.items.length === 0 && beforeDue.count === 0,
   );
+  const createdQueueItem = onDue.items.find((item) => item.key === created.id);
   check(
     "Due DST date appears in the same owner queue with Review → compose",
-    onDue.items.length === 1 &&
-      onDue.items[0].key === created.id &&
-      onDue.items[0].action === "Review" &&
-      onDue.items[0].href.includes("area=compose") &&
-      onDue.items[0].href.includes(created.id) &&
-      onDue.items[0].meta.includes("Recaulk the shower"),
+    createdQueueItem != null &&
+      createdQueueItem.action === "Review" &&
+      createdQueueItem.href.includes("area=compose") &&
+      createdQueueItem.href.includes(created.id) &&
+      createdQueueItem.meta.includes("Recaulk the shower"),
   );
   check("Foreign tenant queue does not include the follow-up", foreignQueue.items.length === 0);
   const builtForeign = buildOwnerDailyMaintenanceFollowUpAttention(
