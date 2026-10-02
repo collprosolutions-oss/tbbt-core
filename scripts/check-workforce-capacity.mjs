@@ -167,15 +167,32 @@ check(
     fkMigration.includes("idempotencyKey") &&
     !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(fkMigration),
 );
+const scheduleJobSrc = jobAction.slice(
+  jobAction.indexOf("export async function scheduleJob"),
+  jobAction.indexOf("export async function retryAppointmentNotification"),
+);
+const scheduleTxSrc = scheduleJobSrc.slice(scheduleJobSrc.indexOf("await prisma.$transaction"));
 check(
-  "scheduleJob always recomputes conflicts and binds an acknowledgement",
-  jobAction.includes("detectScheduleConflicts") &&
-    jobAction.includes("originalScheduledAt: job.scheduledAt") &&
+  "scheduleJob recomputes conflicts and acknowledgement after the job lock",
+  jobAction.includes("evaluateOwnedScheduleProposal") &&
+    jobAction.includes("detectScheduleConflicts") &&
     jobAction.includes("shouldAcceptConflictAcknowledgement") &&
     jobAction.includes("confirmOverlapAck") &&
     jobAction.includes("appointmentPositionOnDay") &&
     jobAction.includes("requiredProgression") &&
-    !jobAction.includes("if (!confirmOverlap)"),
+    !jobAction.includes("if (!confirmOverlap)") &&
+    !jobAction.includes("originalScheduledAt: job.scheduledAt") &&
+    scheduleTxSrc.includes("lockTenantOwnedJob") &&
+    scheduleTxSrc.includes("evaluateOwnedScheduleProposal") &&
+    scheduleTxSrc.indexOf("lockTenantOwnedJob") <
+      scheduleTxSrc.indexOf("evaluateOwnedScheduleProposal") &&
+    scheduleTxSrc.includes("job: fresh") &&
+    scheduleTxSrc.includes("shouldAcceptConflictAcknowledgement") &&
+    scheduleTxSrc.includes("currentAck: locked.currentAck") &&
+    scheduleTxSrc.indexOf("evaluateOwnedScheduleProposal") <
+      scheduleTxSrc.indexOf("tx.job.update") &&
+    scheduleTxSrc.indexOf("shouldAcceptConflictAcknowledgement") <
+      scheduleTxSrc.indexOf("tx.job.update"),
 );
 check(
   "Work Order copy derives first/later from the day lane, not scheduledAt boolean",
