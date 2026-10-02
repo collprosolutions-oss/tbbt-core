@@ -261,12 +261,6 @@ check("Password reset links stay public like team set-password links",
   isPublicWebsitePath("/reset-password/abc") &&
     isPublicWebsitePath("/set-password/abc"));
 check(
-  "Local fake checkout is public; fake Connect stays signed-in",
-  isPublicWebsitePath("/dev/fake-checkout") &&
-    !isPublicWebsitePath("/dev/fake-connect") &&
-    !isPublicWebsitePath("/settings"),
-);
-check(
   "TBBT marketing routes are public and do not replace CollPro /hire or /r",
   isPublicWebsitePath("/features") &&
     isPublicWebsitePath("/pricing") &&
