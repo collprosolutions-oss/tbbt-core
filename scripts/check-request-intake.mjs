@@ -1926,7 +1926,6 @@ try {
     "Overflow release batches ids beyond the lookup cap and still claims the real leftover",
     batchedRelease.released === 1 && batchedAfter?.status === "FAILED",
   );
-  );
 
   console.log("\nDB — Owner Log lead creates a real ServiceRequest");
   function makeAccess(businessId) {
