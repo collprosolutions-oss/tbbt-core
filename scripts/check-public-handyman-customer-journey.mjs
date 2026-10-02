@@ -154,6 +154,10 @@ check(
     packageSrc.includes("check-public-handyman-customer-journey.mjs"),
 );
 check(
+  "HTTP isolation waits for a production BUILD_ID, not a Turbopack .next/dev folder",
+  read("scripts/check-public-handyman-customer-journey.mjs").includes(".next/BUILD_ID"),
+);
+check(
   "Portal, estimate, and invoice stay token-only",
   portalPage.includes("where: { projectToken: token }") &&
     estimatePage.includes("loadEstimateDocumentByToken") &&
@@ -795,8 +799,8 @@ await withDisposableTestDatabase(
     check("Test checkout apply marks the invoice paid without a real charge", paid.applied === true);
 
     const repoRoot = root.endsWith("/") ? root : `${root}/`;
-    if (!existsSync(`${repoRoot}.next`)) {
-      console.log("\nHTTP skipped — no .next build output yet");
+    if (!existsSync(`${repoRoot}.next/BUILD_ID`)) {
+      console.log("\nHTTP skipped — no production .next build yet");
       return;
     }
 
