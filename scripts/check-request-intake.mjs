@@ -6,8 +6,9 @@
  */
 import { createRequire, register } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -104,6 +105,180 @@ const pngBytes = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082",
   "hex",
 );
+
+const NEAR_LIMIT_BYTES = 100_000;
+const NEAR_LIMIT_ROOM = 1_000;
+const NEAR_LIMIT_PHOTO = 1_000;
+
+async function seedTightStorageBusiness(prisma, input) {
+  const row = await prisma.business.create({
+    data: { name: input.name, slug: input.slug, tradeCode: "HANDYMAN" },
+  });
+  await prisma.businessStorageAccount.create({
+    data: {
+      businessId: row.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-request-photos",
+      namespacePrefix: `businesses/${row.id}`,
+      status: "ACTIVE",
+      storageLimitBytes: BigInt(input.limitBytes),
+      storageUsedBytes: BigInt(input.usedBytes),
+      storageReservedBytes: BigInt(input.reservedBytes ?? 0),
+    },
+  });
+  return row;
+}
+
+async function runNearLimitPublicPhotoQuotaRace({
+  prisma,
+  provider,
+  PrismaClient,
+  datasourceUrl,
+}) {
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  const tightSlug = `quota-tight-${suffix}`;
+  const otherSlug = `quota-other-${suffix}`;
+  const tight = await seedTightStorageBusiness(prisma, {
+    slug: tightSlug,
+    name: "Quota Tight",
+    usedBytes: NEAR_LIMIT_BYTES - NEAR_LIMIT_ROOM,
+    limitBytes: NEAR_LIMIT_BYTES,
+  });
+  const otherBiz = await seedTightStorageBusiness(prisma, {
+    slug: otherSlug,
+    name: "Quota Other",
+    usedBytes: 0,
+    limitBytes: NEAR_LIMIT_BYTES,
+  });
+  const deps = { db: prisma, provider, bucketName: "tbbt-request-photos" };
+  const photoBody = Buffer.alloc(NEAR_LIMIT_PHOTO);
+  const authorizeClients = await Promise.all(
+    Array.from({ length: 12 }, () => new PrismaClient({ datasourceUrl })),
+  );
+  let authorizes = [];
+  try {
+    authorizes = await Promise.all(
+      authorizeClients.map((db, index) =>
+        authorizePublicRequestPhoto({ ...deps, db }, tightSlug, {
+          originalFilename: `near-limit-${index}.png`,
+          mimeType: "image/png",
+          fileSizeBytes: NEAR_LIMIT_PHOTO,
+        }),
+      ),
+    );
+  } finally {
+    await Promise.all(authorizeClients.map((db) => db.$disconnect()));
+  }
+  const uploadTargets = authorizes.slice(0, 10);
+  await Promise.all(
+    uploadTargets.map((row) =>
+      provider.putObject({
+        bucket: row.account.bucketName,
+        key: row.asset.storageKey,
+        body: photoBody,
+        contentType: "image/png",
+      }),
+    ),
+  );
+  const finalizeClients = await Promise.all(
+    uploadTargets.map(() => new PrismaClient({ datasourceUrl })),
+  );
+  let finalized = [];
+  try {
+    finalized = await Promise.allSettled(
+      finalizeClients.map((db, index) =>
+        finalizePublicRequestPhoto({ ...deps, db }, tightSlug, uploadTargets[index].asset.id),
+      ),
+    );
+  } finally {
+    await Promise.all(finalizeClients.map((db) => db.$disconnect()));
+  }
+  const account = await prisma.businessStorageAccount.findUniqueOrThrow({
+    where: { businessId: tight.id },
+  });
+  const assets = await prisma.storedAsset.findMany({
+    where: { id: { in: uploadTargets.map((row) => row.asset.id) } },
+    select: { id: true, status: true, fileSizeBytes: true },
+  });
+  const ready = assets.filter((row) => row.status === "READY");
+  const failedRows = assets.filter((row) => row.status === "FAILED");
+  const quotaErrors = finalized.filter(
+    (row) => row.status === "rejected" && row.reason instanceof StorageQuotaError,
+  );
+  const leftoverPending = await prisma.storedAsset.findMany({
+    where: { id: { in: authorizes.slice(10).map((row) => row.asset.id) } },
+    select: { status: true },
+  });
+  let otherUpload = null;
+  try {
+    otherUpload = await putPublicRequestPhotoFromBytes(deps, otherSlug, {
+      originalFilename: "other-tenant-near-limit.png",
+      mimeType: "image/png",
+      body: photoBody,
+    });
+  } catch (error) {
+    otherUpload = error;
+  }
+  let ownerUpload = null;
+  try {
+    ownerUpload = await authorizeManagedUpload(deps, otherBiz.id, {
+      category: "JOB_PHOTO",
+      purpose: "field-job-photo",
+      originalFilename: "owner-near-limit.png",
+      mimeType: "image/png",
+      fileSizeBytes: NEAR_LIMIT_PHOTO,
+      visibility: "PRIVATE",
+    });
+  } catch (error) {
+    ownerUpload = error;
+  }
+  return {
+    used: Number(account.storageUsedBytes),
+    reserved: Number(account.storageReservedBytes),
+    limit: NEAR_LIMIT_BYTES,
+    authorizeOk:
+      authorizes.length === 12 && authorizes.every((row) => row.asset.status === "PENDING"),
+    readyCount: ready.length,
+    failedCount: failedRows.length,
+    quotaErrorCount: quotaErrors.length,
+    leftoverPendingOk: leftoverPending.every((row) => row.status === "PENDING"),
+    otherOk: otherUpload && !(otherUpload instanceof Error) && otherUpload.status === "READY",
+    ownerOk: ownerUpload && !(ownerUpload instanceof Error) && ownerUpload.asset.status === "PENDING",
+    readyBytes: ready.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0),
+  };
+}
+
+if (process.env.REQUEST_INTAKE_QUOTA_MUTATION === "1") {
+  const require = createRequire(import.meta.url);
+  const { PrismaClient } = require("@prisma/client");
+  const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+  const provider = new MemoryStorageProvider();
+  try {
+    const result = await runNearLimitPublicPhotoQuotaRace({
+      prisma,
+      provider,
+      PrismaClient,
+      datasourceUrl: process.env.DATABASE_URL,
+    });
+    const ok =
+      result.used <= result.limit &&
+      result.readyCount === 1 &&
+      result.failedCount === 9 &&
+      result.quotaErrorCount === 9;
+    if (!ok) {
+      console.error(
+        `FAIL - near-limit quota race used=${result.used} limit=${result.limit} ready=${result.readyCount} failed=${result.failedCount}`,
+      );
+    }
+    process.exit(ok ? 0 : 1);
+  } catch (error) {
+    console.error("FAIL - near-limit quota mutation child threw", error);
+    process.exit(1);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
 
 console.log("\nSTATIC — Private photos and reusable measurement config");
 check(
@@ -458,6 +633,21 @@ check(
     reservedHelperSrc.includes("PUBLIC_REQUEST_PHOTO_PURPOSE") &&
     reservedHelperSrc.includes("return 0") &&
     requestPhotosSrc.includes("row.status === \"READY\""),
+);
+const finalizeManagedSrc = storageServiceSrc.slice(
+  storageServiceSrc.indexOf("export async function finalizeManagedUpload"),
+  storageServiceSrc.indexOf("export async function finalizeBusinessUpload"),
+);
+check(
+  "Finalize re-checks entitled quota under the account lock before charging used bytes",
+  finalizeManagedSrc.indexOf("await options?.beforeClaim") <
+    finalizeManagedSrc.indexOf("lockStorageAccountRow") &&
+    finalizeManagedSrc.indexOf("lockStorageAccountRow") <
+      finalizeManagedSrc.indexOf("hasEnoughStorage") &&
+    finalizeManagedSrc.includes("failPendingAssetAndReleaseReservation") &&
+    finalizeManagedSrc.includes('kind: "quota"') &&
+    finalizeManagedSrc.includes("pendingReservationBytesToRelease") &&
+    storageServiceSrc.includes("width: 0"),
 );
 check(
   "Public request photo finalize is slug-authorized and ignores browser businessId",
@@ -2482,6 +2672,183 @@ try {
       unusedAccountAfterPut.reserved === unusedAccountBefore.reserved &&
       unusedAccountAfterPut.used === unusedAccountBefore.used + pngBytes.length &&
       (await sumUnattachedPublicPhotoBytes(business.id)) === unusedReadyBefore + pngBytes.length,
+  );
+
+  const nearLimit = await runNearLimitPublicPhotoQuotaRace({
+    prisma,
+    provider,
+    PrismaClient,
+    datasourceUrl: testUrl,
+  });
+  check(
+    "Near-limit concurrent public uploads never charge past the entitled storage quota",
+    nearLimit.authorizeOk &&
+      nearLimit.used <= nearLimit.limit &&
+      nearLimit.used === NEAR_LIMIT_BYTES - NEAR_LIMIT_ROOM + nearLimit.readyBytes &&
+      nearLimit.readyCount === 1 &&
+      nearLimit.failedCount === 9 &&
+      nearLimit.quotaErrorCount === 9 &&
+      nearLimit.leftoverPendingOk &&
+      nearLimit.reserved === 0 &&
+      nearLimit.otherOk &&
+      nearLimit.ownerOk,
+  );
+
+  const servicePath = fileURLToPath(new URL("../src/lib/business-storage/service.ts", import.meta.url));
+  const serviceBackupPath = `/tmp/tbbt-service-quota-bak-${randomUUID()}.ts`;
+  const originalServiceSrc = readFileSync(servicePath, "utf8");
+  const quotaRecheckBlock = `    if (
+      !hasEnoughStorage({
+        usedBytes: lockedAccount.storageUsedBytes,
+        reservedBytes: Number(lockedAccount.storageReservedBytes) - heldReserved,
+        incomingBytes: actual,
+        limitBytes,
+      })
+    ) {
+      await failPendingAssetAndReleaseReservation(tx, {
+        businessId,
+        assetId: asset.id,
+        storageAccountId: asset.storageAccountId,
+        purpose: asset.purpose,
+        fileSizeBytes: asset.fileSizeBytes,
+        width: asset.width,
+        now,
+      });
+      return { kind: "quota" as const };
+    }
+`;
+  copyFileSync(servicePath, serviceBackupPath);
+  try {
+    check(
+      "Finalize quota mutation setup finds the account-locked re-check",
+      originalServiceSrc.includes(quotaRecheckBlock),
+    );
+    writeFileSync(servicePath, originalServiceSrc.replace(quotaRecheckBlock, ""));
+    const quotaChild = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", fileURLToPath(import.meta.url)],
+      {
+        env: { ...process.env, REQUEST_INTAKE_QUOTA_MUTATION: "1", DATABASE_URL: testUrl },
+        encoding: "utf8",
+        timeout: 120_000,
+      },
+    );
+    check(
+      "Reverting the finalize quota re-check exceeds the storage limit",
+      quotaChild.status !== 0 &&
+        /used=109000|used=109000 limit=100000|ready=10/.test(
+          `${quotaChild.stdout ?? ""}\n${quotaChild.stderr ?? ""}`,
+        ),
+    );
+    if (
+      quotaChild.status === 0 ||
+      !/used=109000|ready=10/.test(`${quotaChild.stdout ?? ""}\n${quotaChild.stderr ?? ""}`)
+    ) {
+      console.error((quotaChild.stdout || "").slice(-2000));
+      console.error((quotaChild.stderr || "").slice(-1000));
+    }
+  } finally {
+    writeFileSync(servicePath, originalServiceSrc);
+    const restored = spawnSync("cmp", [servicePath, serviceBackupPath]);
+    check("service.ts restored after finalize-quota mutation", restored.status === 0);
+    unlinkSync(serviceBackupPath);
+  }
+
+  const legacySlug = `legacy-res-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const legacyBiz = await seedTightStorageBusiness(prisma, {
+    slug: legacySlug,
+    name: "Legacy Reserved",
+    usedBytes: 0,
+    limitBytes: NEAR_LIMIT_BYTES,
+  });
+  const legacyDeps = { ...storageDeps, db: prisma };
+  const legacyAbortAuth = await authorizePublicRequestPhoto(legacyDeps, legacySlug, {
+    originalFilename: "legacy-abort.png",
+    mimeType: "image/png",
+    fileSizeBytes: NEAR_LIMIT_PHOTO,
+  });
+  const legacyAbortBefore = await accountSnapshot(legacyBiz.id);
+  await prisma.storedAsset.update({
+    where: { id: legacyAbortAuth.asset.id },
+    data: { width: null },
+  });
+  await prisma.businessStorageAccount.update({
+    where: { businessId: legacyBiz.id },
+    data: { storageReservedBytes: { increment: NEAR_LIMIT_PHOTO } },
+  });
+  const legacyAborted = await abortPublicRequestPhoto(legacyDeps, legacySlug, legacyAbortAuth.asset.id);
+  const legacyAbortAfter = await accountSnapshot(legacyBiz.id);
+  check(
+    "Abort of a legacy reserved public PENDING row un-reserves those exact bytes",
+    legacyAborted.status === "FAILED" &&
+      legacyAbortBefore.reserved === 0 &&
+      legacyAbortAfter.reserved === 0 &&
+      legacyAbortAfter.used === legacyAbortBefore.used,
+  );
+
+  const legacyExpireAuth = await authorizePublicRequestPhoto(legacyDeps, legacySlug, {
+    originalFilename: "legacy-expire.png",
+    mimeType: "image/png",
+    fileSizeBytes: NEAR_LIMIT_PHOTO,
+  });
+  await prisma.storedAsset.update({
+    where: { id: legacyExpireAuth.asset.id },
+    data: { width: null, expiresAt: new Date(Date.now() - 1_000) },
+  });
+  await prisma.businessStorageAccount.update({
+    where: { businessId: legacyBiz.id },
+    data: { storageReservedBytes: { increment: NEAR_LIMIT_PHOTO } },
+  });
+  const legacyExpireBeforeAuth = await accountSnapshot(legacyBiz.id);
+  await authorizePublicRequestPhoto(legacyDeps, legacySlug, {
+    originalFilename: "legacy-expire-trigger.png",
+    mimeType: "image/png",
+    fileSizeBytes: NEAR_LIMIT_PHOTO,
+  });
+  const legacyExpired = await prisma.storedAsset.findUniqueOrThrow({
+    where: { id: legacyExpireAuth.asset.id },
+  });
+  const legacyExpireAfter = await accountSnapshot(legacyBiz.id);
+  check(
+    "Expire of a legacy reserved public PENDING row un-reserves those exact bytes",
+    legacyExpired.status === "FAILED" &&
+      legacyExpireBeforeAuth.reserved === NEAR_LIMIT_PHOTO &&
+      legacyExpireAfter.reserved === 0 &&
+      legacyExpireAfter.used === legacyExpireBeforeAuth.used,
+  );
+
+  const legacyFinalizeAuth = await authorizePublicRequestPhoto(legacyDeps, legacySlug, {
+    originalFilename: "legacy-finalize.png",
+    mimeType: "image/png",
+    fileSizeBytes: NEAR_LIMIT_PHOTO,
+  });
+  await provider.putObject({
+    bucket: legacyFinalizeAuth.account.bucketName,
+    key: legacyFinalizeAuth.asset.storageKey,
+    body: Buffer.alloc(NEAR_LIMIT_PHOTO),
+    contentType: "image/png",
+  });
+  await prisma.storedAsset.update({
+    where: { id: legacyFinalizeAuth.asset.id },
+    data: { width: null },
+  });
+  const legacyFinalizeBefore = await accountSnapshot(legacyBiz.id);
+  await prisma.businessStorageAccount.update({
+    where: { businessId: legacyBiz.id },
+    data: { storageReservedBytes: { increment: NEAR_LIMIT_PHOTO } },
+  });
+  const legacyFinalized = await finalizePublicRequestPhoto(
+    legacyDeps,
+    legacySlug,
+    legacyFinalizeAuth.asset.id,
+  );
+  const legacyFinalizeAfter = await accountSnapshot(legacyBiz.id);
+  check(
+    "Finalize of a legacy reserved public PENDING row un-reserves those exact bytes",
+    legacyFinalized.status === "READY" &&
+      legacyFinalizeBefore.reserved === 0 &&
+      legacyFinalizeAfter.reserved === 0 &&
+      legacyFinalizeAfter.used === legacyFinalizeBefore.used + NEAR_LIMIT_PHOTO,
   );
 
   const releaseOnce = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
