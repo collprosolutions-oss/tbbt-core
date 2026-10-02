@@ -210,7 +210,7 @@ export function buildSupplierQuoteComparison(input: {
   });
   let lowest: string | null = null;
   for (const row of rows) {
-    if (!row.neededLandedTotal || row.conversionError) continue;
+    if (!row.neededLandedTotal || row.conversionError || row.stale) continue;
     if (lowest == null || new Prisma.Decimal(row.neededLandedTotal).lt(lowest)) {
       lowest = row.neededLandedTotal;
     }
