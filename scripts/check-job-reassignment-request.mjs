@@ -998,37 +998,37 @@ try {
     },
     bRequest: "ok",
   });
-  const completedJob = await createAssignedJob({
+  const completedAfterRequestJob = await createAssignedJob({
     businessId: businessA.id,
     customerId: customer.id,
     assignedMembershipId: memberMem.id,
   });
-  const completedRequest = await requestJobReassignmentOp(prisma, memberA, {
-    jobId: completedJob.id,
+  const completedAfterRequest = await requestJobReassignmentOp(prisma, memberA, {
+    jobId: completedAfterRequestJob.id,
     reason: "Completed after request",
     now: NOW,
   });
   await prisma.job.update({
-    where: { id: completedJob.id },
+    where: { id: completedAfterRequestJob.id },
     data: { status: "COMPLETED" },
   });
-  const completedAssign = await assignMember(completedJob, helperMem.id);
+  const completedAfterAssign = await assignMember(completedAfterRequestJob, helperMem.id);
   check(
     "complete: assignment write is refused after the job completes",
-    completedAssign?.error === "A completed job cannot be assigned.",
+    completedAfterAssign?.error === "A completed job cannot be assigned.",
   );
-  const completedPending = await prisma.jobReassignmentRequest.findFirst({
-    where: { id: completedRequest.id, businessId: businessA.id },
+  const completedAfterPending = await prisma.jobReassignmentRequest.findFirst({
+    where: { id: completedAfterRequest.id, businessId: businessA.id },
   });
   check(
     "complete: pending request stays until the owner tries to accept",
-    completedPending?.status === "PENDING" && completedPending.decidedAt == null,
+    completedAfterPending?.status === "PENDING" && completedAfterPending.decidedAt == null,
   );
   await expectError(
     "complete: B is refused only by the real completed rule",
     () =>
       requestJobReassignmentOp(prisma, helperA, {
-        jobId: completedJob.id,
+        jobId: completedAfterRequestJob.id,
         reason: "Current complete",
         now: NOW,
       }),
@@ -1040,27 +1040,27 @@ try {
     "complete: Accept on A's old row refuses",
     () =>
       decideJobReassignmentRequestOp(prisma, ownerA, {
-        requestId: completedRequest.id,
+        requestId: completedAfterRequest.id,
         decision: "ACCEPT",
-        expectedUpdatedAt: completedPending.updatedAt,
+        expectedUpdatedAt: completedAfterPending.updatedAt,
         now: NOW,
       }),
     (error) =>
       error instanceof JobReassignmentRequestError &&
       error.message === JOB_REASSIGNMENT_REQUEST_COMPLETED_MESSAGE,
   );
-  const completedAfter = await prisma.job.findFirst({
-    where: { id: completedJob.id, businessId: businessA.id },
+  const completedAfterRow = await prisma.job.findFirst({
+    where: { id: completedAfterRequestJob.id, businessId: businessA.id },
   });
   check(
     "complete: A stays assigned; no customer appointment or communication rows",
-    completedAfter?.assignedMembershipId === memberMem.id &&
-      completedAfter?.status === "COMPLETED" &&
+    completedAfterRow?.assignedMembershipId === memberMem.id &&
+      completedAfterRow?.status === "COMPLETED" &&
       (await prisma.jobAppointmentEvent.count({
-        where: { jobId: completedJob.id, businessId: businessA.id },
+        where: { jobId: completedAfterRequestJob.id, businessId: businessA.id },
       })) === 0 &&
       (await prisma.customerCommunication.count({
-        where: { businessId: businessA.id, relatedId: completedJob.id },
+        where: { businessId: businessA.id, relatedId: completedAfterRequestJob.id },
       })) === 0,
   );
   await proveStaleRequestCleared({
