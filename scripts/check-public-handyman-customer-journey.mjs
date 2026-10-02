@@ -171,7 +171,8 @@ check(
     portalPage.includes("shouldShowProjectDocumentsCard") &&
     portalPage.includes("uploadOpen={documentUploadOpen}") &&
     docsUpload.includes("uploadOpen") &&
-    docsUpload.includes("This project is not accepting more documents."),
+    docsUpload.includes("This project is not accepting more documents.") &&
+    docsLib.includes("if (!reviewDelegate)"),
 );
 check(
   "Pay Invoice and Pay Deposit ignore a second tap",

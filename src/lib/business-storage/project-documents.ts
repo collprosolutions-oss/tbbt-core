@@ -488,8 +488,19 @@ async function loadProjectDocumentReviewsByAssetId(
       { status: string; reason: string | null; decidedAt: Date }
     >();
   }
+  // Stale Prisma clients (next-dev started before generate) have no
+  // projectDocumentReview delegate. Receipts still list; review status
+  // is omitted instead of 500ing the completed-job portal.
+  const reviewDelegate = (db as { projectDocumentReview?: typeof db.projectDocumentReview })
+    .projectDocumentReview;
+  if (!reviewDelegate) {
+    return new Map<
+      string,
+      { status: string; reason: string | null; decidedAt: Date }
+    >();
+  }
   try {
-    const rows = await db.projectDocumentReview.findMany({
+    const rows = await reviewDelegate.findMany({
       where: {
         businessId: input.businessId,
         jobId: input.jobId,
