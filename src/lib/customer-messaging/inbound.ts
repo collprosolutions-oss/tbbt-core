@@ -53,7 +53,7 @@ export type InboundConsentResult = {
 type ClaimIdentity = {
   provider: string;
   providerEventId: string;
-  eventKind: "inbound";
+  eventKind: "delivery" | "inbound";
 };
 
 function inboundEventLockKey(inbound: Pick<InboundSmsEvent, "provider" | "providerEventId">) {
@@ -113,6 +113,43 @@ export async function rememberCustomerMessagingWebhookEvent(
 ) {
   await ensureCustomerMessagingSchema(db);
   return rememberWebhookEvent(db, input);
+}
+
+export type WebhookEventClaim = "claimed" | "pending" | "completed";
+
+/**
+ * Delivery and inbound share the pending processedAt sentinel. A leftover
+ * pending row is retryable; only a completed timestamp is idempotent.
+ */
+export async function claimCustomerMessagingWebhookEvent(
+  db: Db,
+  input: {
+    provider: string;
+    providerEventId: string;
+    eventKind: "delivery" | "inbound";
+    businessId?: string | null;
+  },
+): Promise<WebhookEventClaim> {
+  await ensureCustomerMessagingSchema(db);
+  const identity: ClaimIdentity = {
+    provider: input.provider,
+    providerEventId: input.providerEventId,
+    eventKind: input.eventKind,
+  };
+  const remembered = await rememberWebhookEvent(db, input);
+  if (remembered === "recorded") return "claimed";
+  const existing = await loadInboundClaim(db, identity);
+  if (existing && isPendingWebhookProcessedAt(existing.processedAt)) {
+    return "pending";
+  }
+  return "completed";
+}
+
+export async function completeCustomerMessagingWebhookEvent(
+  db: Db,
+  input: { provider: string; providerEventId: string; eventKind: "delivery" | "inbound" },
+) {
+  await completeWebhookEvent(db, input);
 }
 
 async function completeWebhookEvent(

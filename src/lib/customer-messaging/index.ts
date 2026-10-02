@@ -43,6 +43,8 @@ export {
 export {
   applyInboundConsentEvent,
   claimedAtFromCuid,
+  claimCustomerMessagingWebhookEvent,
+  completeCustomerMessagingWebhookEvent,
   inboundConsentTestHooks,
 } from "@/lib/customer-messaging/inbound";
 export {
@@ -55,8 +57,11 @@ export {
   evaluateSmsEligibility,
 } from "@/lib/customer-messaging/eligibility";
 export {
+  SMS_DISPATCH_CLAIM_LEASE_MS,
   applyCustomerMessageDeliveryUpdate,
   attemptCustomerSms,
+  customerMessageDeliveryTestHooks,
+  customerSmsDispatchTestHooks,
   getCustomerCommunication,
   listCustomerCommunications,
   safeAttemptCustomerSms,

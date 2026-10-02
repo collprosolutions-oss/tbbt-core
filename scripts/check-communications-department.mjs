@@ -29,6 +29,7 @@ process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://communications-department.test";
 process.env.RESEND_API_KEY = "re_test_communications";
 process.env.EMAIL_FROM = "TBBT <comms@example.com>";
+process.env.TBBT_EMAIL_ADAPTER = "fake";
 delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
 delete process.env.VERCEL_ENV;
 delete process.env.TWILIO_ACCOUNT_SID;
@@ -57,6 +58,7 @@ const { scanScheduledBusinessEvents, ESTIMATE_NO_ACTION_AFTER_MS } = await impor
   "@/lib/automation/scan"
 );
 const {
+  communicationEmailDispatchTestHooks,
   composeCustomerCommunication,
   evaluateComposeChannelEligibility,
   evaluateEmailEligibility,
@@ -213,6 +215,24 @@ try {
     pageSrc.includes("MANAGE_COMMUNICATIONS") && pageSrc.includes("requireBusinessCapability"),
   );
   check(
+    "Communications page load never sends",
+    pageSrc.includes("loadCommunicationsWorkspace") &&
+      !pageSrc.includes("composeCustomerCommunication") &&
+      !pageSrc.includes("sendTransactionalEmail") &&
+      !pageSrc.includes("attemptCustomerSms") &&
+      dataSrc.includes("loadCustomerCommunicationHistory") &&
+      !dataSrc.includes("composeCustomerCommunication") &&
+      !dataSrc.includes("sendTransactionalEmail"),
+  );
+  check(
+    "Email compose claims the idempotency row before the provider send",
+    engineSrc.includes("decideEmailDispatch") &&
+      engineSrc.includes("communicationEmailDispatchTestHooks") &&
+      engineSrc.includes("tbbt-email:") &&
+      engineSrc.includes('if (decision.kind !== "send")') &&
+      engineSrc.includes("withEmailDispatchLock"),
+  );
+  check(
     "Compose never treats browser businessId as authority",
     engineSrc.includes("Browser businessId never authorizes") &&
       actionSrc.includes("browserBusinessId"),
@@ -352,10 +372,12 @@ try {
     },
   });
 
+  const fakeEmails = [];
   setCommunicationEmailSender(async (input) => {
     if (input.subject.includes("FAIL-PROVIDER")) {
       return { error: "The email provider failed." };
     }
+    fakeEmails.push(input);
     return { id: `fake-email:${input.idempotencyKey}` };
   });
   setCustomerMessagingProvider(createFakeCustomerMessagingProvider());
@@ -480,6 +502,69 @@ try {
     "Email send is idempotent",
     first.ok && second.reused && first.communicationId === second.communicationId,
   );
+  const afterIdempotentSends = fakeEmails.length;
+
+  console.log("\nDB — Concurrent email dispatch claims once");
+  const raceKey = `email-race-${randomUUID()}`;
+  const raceInput = {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    purpose: "GENERAL",
+    subject: "Race",
+    body: "Concurrent compose.",
+    idempotencyKey: raceKey,
+  };
+  const [raceLeft, raceRight] = await Promise.all([
+    composeCustomerCommunication(prisma, tenantA.access, raceInput),
+    composeCustomerCommunication(prisma, tenantA.access, raceInput),
+  ]);
+  const raceRows = await prisma.customerCommunication.findMany({
+    where: { businessId: tenantA.business.id, idempotencyKey: raceKey },
+  });
+  const raceSends = fakeEmails.filter((row) => row.idempotencyKey === raceKey);
+  check("Concurrent email compose calls the fake provider once", raceSends.length === 1);
+  check("Concurrent email compose writes one communication row", raceRows.length === 1);
+  check(
+    "Concurrent email compose shares one accepted send",
+    raceLeft.communicationId === raceRight.communicationId &&
+      raceLeft.communicationId === raceRows[0].id &&
+      [raceLeft, raceRight].some((row) => row.ok && row.status === "SENT"),
+  );
+  check(
+    "Concurrent email compose binds the tenant customer address",
+    raceSends[0]?.to === customerA.email && raceRows[0].destinationLast4 === "ava",
+  );
+  check(
+    "Sequential idempotent retry still did not double-send",
+    afterIdempotentSends === fakeEmails.length - 1,
+  );
+
+  const staleEmailKey = `email-stale-${randomUUID()}`;
+  communicationEmailDispatchTestHooks.beforeProviderSend = async () => {
+    await prisma.customer.update({
+      where: { id: customerA.id },
+      data: { email: `moved.${randomUUID().slice(0, 8)}@example.com` },
+    });
+  };
+  const staleEmail = await composeCustomerCommunication(prisma, tenantA.access, {
+    customerId: customerA.id,
+    channel: "EMAIL",
+    purpose: "GENERAL",
+    subject: "Stale destination",
+    body: "Should not send after the address changes.",
+    idempotencyKey: staleEmailKey,
+  });
+  communicationEmailDispatchTestHooks.beforeProviderSend = undefined;
+  const staleEmailSends = fakeEmails.filter((row) => row.idempotencyKey === staleEmailKey);
+  check(
+    "Email destination change after claim blocks the send",
+    staleEmail.status === "BLOCKED" && /destination changed/i.test(staleEmail.failureReason ?? ""),
+  );
+  check("Stale email destination never calls the fake provider", staleEmailSends.length === 0);
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: { email: "ava@example.com" },
+  });
 
   const failKey = `email-fail-${randomUUID()}`;
   const failed = await composeCustomerCommunication(prisma, tenantA.access, {
@@ -1163,6 +1248,8 @@ try {
   check("Role gate rejects MEMBER communications access", memberCapDenied);
 
   resetCommunicationEmailSender();
+  communicationEmailDispatchTestHooks.afterClaim = undefined;
+  communicationEmailDispatchTestHooks.beforeProviderSend = undefined;
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

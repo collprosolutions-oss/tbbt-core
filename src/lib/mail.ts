@@ -1,5 +1,35 @@
 import { Resend } from "resend";
 import { isTrustedVercelAppHost } from "@/lib/vercel-app-host";
+import {
+  createFakeTransactionalEmailSender,
+  isFakeEmailAdapterEnabled,
+  type FakeTransactionalEmailInput,
+} from "@/lib/mail-fake";
+
+export { isFakeEmailAdapterEnabled } from "@/lib/mail-fake";
+
+type TransactionalEmailSendResult = { id?: string; error?: string };
+type TransactionalEmailSender = (
+  input: FakeTransactionalEmailInput,
+) => Promise<TransactionalEmailSendResult>;
+
+const defaultFakeEmailSender = createFakeTransactionalEmailSender();
+let injectedEmailSender: TransactionalEmailSender | null = null;
+
+export function setTransactionalEmailSender(sender: TransactionalEmailSender | null) {
+  injectedEmailSender = sender;
+}
+
+export function resetTransactionalEmailSender() {
+  injectedEmailSender = null;
+  defaultFakeEmailSender.sent.length = 0;
+  defaultFakeEmailSender.failNext = false;
+  defaultFakeEmailSender.throwNext = false;
+}
+
+export function getFakeTransactionalEmailSender() {
+  return defaultFakeEmailSender;
+}
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -231,6 +261,13 @@ export async function sendTransactionalEmail(input: {
   idempotencyKey: string;
   kind: TransactionalEmailKind;
 }) {
+  if (injectedEmailSender) {
+    return injectedEmailSender(input);
+  }
+  if (isFakeEmailAdapterEnabled()) {
+    return defaultFakeEmailSender.send(input);
+  }
+
   const failure = transactionalEmailFailureMessage(input.kind);
   try {
     const resend = new Resend(input.apiKey);
