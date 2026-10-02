@@ -299,6 +299,8 @@ export default async function JobPage({
   const needsNotification = customerNotificationNeeded(job);
   const notificationMessage = notificationOwnerMessage(job);
   const isCompleted = job.status === "COMPLETED";
+  const isCancelled = job.status === "CANCELLED";
+  const isTerminal = isCompleted || isCancelled;
   const isInProgress = job.status === "IN_PROGRESS";
   const invoices = job.invoices;
   const invoice = invoices[0] ?? null;
@@ -456,7 +458,7 @@ export default async function JobPage({
               <Link href={`/field/jobs/${job.id}`}>Open Field View</Link>
             </Button>
           ) : null}
-          {!isCompleted && !isInProgress ? (
+          {!isTerminal && !isInProgress ? (
             <StartJobButton
               jobId={job.id}
               unpaidDepositWarning={unpaidDepositWarning}
@@ -737,12 +739,14 @@ export default async function JobPage({
       <Card>
         <CardHeader>
           <CardTitle>
-            {isCompleted || isScheduled ? "Appointment" : "Schedule Job"}
+            {isTerminal || isScheduled ? "Appointment" : "Schedule Job"}
           </CardTitle>
           <CardDescription>
             {isCompleted
               ? "Completed jobs keep their saved appointment and cannot be rescheduled."
-              : isScheduled
+              : isCancelled
+                ? "Cancelled jobs keep their saved appointment and cannot be rescheduled."
+                : isScheduled
                 ? "Reschedule this job without creating another job."
                 : "Choose a date, start time, and optional duration."}
           </CardDescription>
@@ -831,12 +835,12 @@ export default async function JobPage({
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              {isCompleted
+              {isTerminal
                 ? "This job was not scheduled."
                 : "No appointment yet."}
             </p>
           )}
-          {isCompleted ? null : (
+          {isTerminal ? null : (
             <>
               {isScheduled && appointmentStatus !== "CONFIRMED" ? (
                 <RecordOwnerAppointmentConfirmationForm
@@ -928,7 +932,13 @@ export default async function JobPage({
               ? `${job.assignedMembership.user.name} (${job.assignedMembership.user.email})`
               : "Unassigned"}
           </p>
-          {eligibleMembers.length === 0 ? (
+          {isTerminal ? (
+            <p className="text-muted-foreground">
+              {isCancelled
+                ? "A cancelled job cannot be assigned."
+                : "A completed job cannot be assigned."}
+            </p>
+          ) : eligibleMembers.length === 0 ? (
             <p className="text-muted-foreground">
               No team members yet. Invite a MEMBER to this business to assign
               jobs, or assign this job to yourself.

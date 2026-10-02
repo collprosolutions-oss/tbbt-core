@@ -277,6 +277,15 @@ export function highestSeverity(conflicts: ScheduleConflict[]): ConflictSeverity
   return null;
 }
 
+export function conflictsInvolvingJob(
+  conflicts: ScheduleConflict[],
+  jobId: string,
+) {
+  return conflicts.filter(
+    (conflict) => conflict.jobId === jobId || conflict.otherJobId === jobId,
+  );
+}
+
 export function describeConflicts(conflicts: ScheduleConflict[]): string | null {
   if (conflicts.length === 0) return null;
   return conflicts.map((row) => row.explanation).join(" ");

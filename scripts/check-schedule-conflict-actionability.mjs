@@ -57,6 +57,11 @@ const availability = readRepo("src/lib/availability.ts");
 const availabilityData = readRepo("src/lib/availability-data.ts");
 const scheduleLib = readRepo("src/lib/schedule.ts");
 const scheduleJobSrc = sourceOfExportedFunction(jobAction, "scheduleJob");
+const scheduleEvalSrc =
+  jobAction.slice(
+    jobAction.indexOf("async function evaluateOwnedScheduleProposal"),
+    jobAction.indexOf("export async function createJobFromEstimate"),
+  ) + scheduleJobSrc;
 
 const NY = "America/New_York";
 const LA = "America/Los_Angeles";
@@ -75,16 +80,16 @@ check(
 );
 check(
   "scheduleJob still evaluates availability with evaluateProposedSchedule",
-  scheduleJobSrc.includes("evaluateProposedSchedule") &&
-    scheduleJobSrc.includes("describeScheduleWarning") &&
-    scheduleJobSrc.includes("loadOccupiedJobs(prisma, access.businessId, job.id)"),
+  scheduleEvalSrc.includes("evaluateProposedSchedule") &&
+    scheduleEvalSrc.includes("describeScheduleWarning") &&
+    scheduleEvalSrc.includes("loadOccupiedJobs(db, input.businessId, input.job.id)"),
 );
 check(
   "Conflict acknowledgement is still recomputed server-side",
-  scheduleJobSrc.includes("confirmOverlapAck") &&
-    scheduleJobSrc.includes("shouldAcceptConflictAcknowledgement") &&
-    scheduleJobSrc.includes("conflictAcknowledgement") &&
-    !scheduleJobSrc.includes("Schedule anyway"),
+  scheduleEvalSrc.includes("confirmOverlapAck") &&
+    scheduleEvalSrc.includes("shouldAcceptConflictAcknowledgement") &&
+    scheduleEvalSrc.includes("conflictAcknowledgement") &&
+    !scheduleEvalSrc.includes("Schedule anyway"),
 );
 check("Owner form still has Schedule anyway after a warning", form.includes("Schedule anyway"));
 check(
@@ -136,15 +141,15 @@ check(
 );
 check(
   "No automatic reschedule of the other recorded Job",
-  !scheduleJobSrc.includes("laterJobsHurtByMove") === false &&
-    scheduleJobSrc.includes("Later jobs were not moved.") &&
-    !scheduleJobSrc.includes("prisma.job.update({") === false,
+  scheduleEvalSrc.includes("laterJobsHurtByMove") &&
+    scheduleEvalSrc.includes("Later jobs were not moved.") &&
+    scheduleEvalSrc.includes("tx.job.update({"),
 );
 check(
   "Existing appointment notification still runs after a material schedule",
   scheduleJobSrc.includes("notifyCustomerAppointmentProposed") &&
     scheduleJobSrc.includes("recordAppointmentEvent") &&
-    /await prisma\.job\.update\([\s\S]*notifyCustomerAppointmentProposed/.test(scheduleJobSrc),
+    /await tx\.job\.update\([\s\S]*notifyCustomerAppointmentProposed/.test(scheduleEvalSrc),
 );
 check(
   "Browser-submitted conflict IDs are not treated as proof of schedule state",
@@ -452,8 +457,10 @@ check(
 );
 check(
   "scheduleJob still gates the mutation on shouldAcceptConflictAcknowledgement === warn",
-  /shouldAcceptConflictAcknowledgement\([\s\S]*?\) === "warn"/.test(scheduleJobSrc) &&
-    /return \{[\s\S]*conflictAck: currentAck/.test(scheduleJobSrc),
+  /shouldAcceptConflictAcknowledgement\([\s\S]*?\) === "warn"/.test(scheduleEvalSrc) &&
+    /conflictAck: preview\.currentAck|conflictAck: locked\.currentAck|conflictAck: currentAck/.test(
+      scheduleEvalSrc,
+    ),
 );
 
 console.log(

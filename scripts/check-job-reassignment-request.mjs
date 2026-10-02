@@ -998,16 +998,59 @@ try {
     },
     bRequest: "ok",
   });
-  await proveStaleRequestCleared({
-    label: "complete",
-    afterRequest: async (job) => {
-      await prisma.job.update({
-        where: { id: job.id },
-        data: { status: "COMPLETED" },
-      });
-    },
-    bRequest: "completed",
+  const completedAfterRequestJob = await createAssignedJob({
+    businessId: businessA.id,
+    customerId: customer.id,
+    assignedMembershipId: memberMem.id,
   });
+  const completedAfterRequest = await requestJobReassignmentOp(prisma, memberA, {
+    jobId: completedAfterRequestJob.id,
+    reason: "Completed after request",
+    now: NOW,
+  });
+  await prisma.job.update({
+    where: { id: completedAfterRequestJob.id },
+    data: { status: "COMPLETED" },
+  });
+  const completedAfterAssign = await assignMember(completedAfterRequestJob, helperMem.id);
+  check(
+    "complete: assignment write is refused after the job completes",
+    completedAfterAssign?.error === "A completed job cannot be assigned.",
+  );
+  const completedAfterPending = await prisma.jobReassignmentRequest.findFirst({
+    where: { id: completedAfterRequest.id, businessId: businessA.id },
+  });
+  check(
+    "complete: pending request stays until the owner tries to accept",
+    completedAfterPending?.status === "PENDING" && completedAfterPending.decidedAt == null,
+  );
+  await expectError(
+    "complete: Accept on A's old row refuses",
+    () =>
+      decideJobReassignmentRequestOp(prisma, ownerA, {
+        requestId: completedAfterRequest.id,
+        decision: "ACCEPT",
+        expectedUpdatedAt: completedAfterPending.updatedAt,
+        now: NOW,
+      }),
+    (error) =>
+      error instanceof JobReassignmentRequestError &&
+      error.message === JOB_REASSIGNMENT_REQUEST_COMPLETED_MESSAGE,
+  );
+  const completedAfterRow = await prisma.job.findFirst({
+    where: { id: completedAfterRequestJob.id, businessId: businessA.id },
+  });
+  check(
+    "complete: A stays assigned; no customer appointment or communication rows",
+    completedAfterRow?.assignedMembershipId === memberMem.id &&
+      completedAfterRow?.status === "COMPLETED" &&
+      (await prisma.jobAppointmentEvent.count({
+        where: { jobId: completedAfterRequestJob.id, businessId: businessA.id },
+      })) === 0 &&
+      (await prisma.customerCommunication.count({
+        where: { businessId: businessA.id, relatedId: completedAfterRequestJob.id },
+      })) === 0,
+  );
   await proveStaleRequestCleared({
     label: "today",
     afterRequest: async (job) => {

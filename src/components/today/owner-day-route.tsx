@@ -171,7 +171,9 @@ export function OwnerDayRouteView({
                     <Link href={stop.jobHref}>Open job</Link>
                   </Button>
                 </div>
-                {canChangeAppointment ? (
+                {canChangeAppointment &&
+                stop.status !== "COMPLETED" &&
+                stop.status !== "CANCELLED" ? (
                   <OwnerDayRouteAppointmentForm
                     jobId={stop.jobId}
                     timeZone={view.timeZone}

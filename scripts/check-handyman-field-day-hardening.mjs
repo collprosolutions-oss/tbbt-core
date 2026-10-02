@@ -188,13 +188,16 @@ check(
     assignOpsSrc.includes("stopRunningAssignedJobTimeInTransaction") &&
     assignOpsSrc.includes("JOB_REASSIGNMENT_TIME_CLOSED_REASON"),
 );
+const lifecycleSrc = readRepo("src/lib/job-lifecycle.ts");
 check(
   "startJob / scheduleJob / owner confirm writes are status- or proposal-guarded",
   jobActionSrc.includes("jobWriteTestHooks") &&
     jobActionSrc.includes("updateMany") &&
     jobActionSrc.includes("status: job.status") &&
     jobActionSrc.includes("appointmentProposalId: job.appointmentProposalId") &&
-    jobActionSrc.includes("A completed job cannot be rescheduled."),
+    jobActionSrc.includes("jobScheduleRefusalMessage") &&
+    lifecycleSrc.includes("JOB_COMPLETED_CANNOT_RESCHEDULE_MESSAGE") &&
+    lifecycleSrc.includes("A completed job cannot be rescheduled."),
 );
 const scheduleFnSrc = jobActionSrc.slice(
   jobActionSrc.indexOf("export async function scheduleJob"),
@@ -202,7 +205,7 @@ const scheduleFnSrc = jobActionSrc.slice(
 );
 const scheduleTxSrc = scheduleFnSrc.slice(
   scheduleFnSrc.indexOf("await prisma.$transaction"),
-  scheduleFnSrc.indexOf("if (completedDuringWrite)"),
+  scheduleFnSrc.indexOf('if (write.kind === "refused")'),
 );
 const writeAssignSrc = assignOpsSrc.slice(
   assignOpsSrc.indexOf("export async function writeAssignedMembershipAndLaneWindows"),
@@ -213,8 +216,11 @@ check(
     scheduleTxSrc.includes("lockTenantOwnedJob") &&
     scheduleTxSrc.indexOf("lockBusinessScheduleReservation") <
       scheduleTxSrc.indexOf("lockTenantOwnedJob") &&
-    scheduleTxSrc.includes("current.status === \"COMPLETED\"") &&
-    !scheduleTxSrc.includes("tx.job.findFirst"),
+    scheduleTxSrc.includes("jobScheduleRefusalMessage(current.status)") &&
+    scheduleTxSrc.indexOf("lockTenantOwnedJob") <
+      scheduleTxSrc.indexOf("jobScheduleRefusalMessage(current.status)") &&
+    scheduleTxSrc.indexOf("jobScheduleRefusalMessage(current.status)") <
+      scheduleTxSrc.indexOf("tx.job.findFirst"),
 );
 check(
   "assignJobMember locks the Job after the advisory lock and closes the locked assignee",

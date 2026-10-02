@@ -9,6 +9,7 @@
  * message and never changes scheduledAt.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { jobAssignmentRefusalMessage } from "@/lib/job-lifecycle";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
   JOB_REASSIGNMENT_TIME_CLOSED_REASON,
@@ -127,6 +128,10 @@ export async function writeAssignedMembershipAndLaneWindows(
           throw new TimeCardError("That job could not be found.");
         }
         await input.afterJobLocked?.(tx, lockedJob);
+        const assignmentRefusal = jobAssignmentRefusalMessage(lockedJob.status);
+        if (assignmentRefusal) {
+          throw new TimeCardError(assignmentRefusal);
+        }
         await applyAssignedMembershipChangeInTransaction(tx, {
           businessId: input.businessId,
           job: input.job,
