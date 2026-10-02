@@ -28,12 +28,18 @@ const {
   qualifyServiceAddress,
   publicServiceCityPath,
   resolvePublicLocalPage,
+  serviceAreaCities,
   slugifyLocalPagePart,
 } = await import("@/lib/service-areas");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
-const { upsertServiceArea, setServiceAreaEnabled, ServiceAreaError } = await import(
-  "@/lib/service-area-ops"
-);
+const { loadPublicBusiness } = await import("@/lib/public-site-data");
+const {
+  listServiceAreas,
+  setServiceAreaEnabled,
+  ServiceAreaError,
+  syncPrimaryCityServiceAreaFromLabel,
+  upsertServiceArea,
+} = await import("@/lib/service-area-ops");
 const { createMarketingCampaign } = await import("@/lib/marketing-ops");
 const { nextContentStatus } = await import("@/lib/marketing");
 
@@ -171,9 +177,39 @@ try {
       parseServiceAreaLabelParts("Fort Myers").city === "Fort Myers",
   );
   check(
+    "Washington, PA and Indiana, PA parse as single cities, not states",
+    parseServiceAreaLabelParts("Washington, PA").city === "Washington" &&
+      parseServiceAreaLabelParts("Washington, PA").region === "PA" &&
+      parseServiceAreaLabelParts("Indiana, PA").city === "Indiana" &&
+      parseServiceAreaLabelParts("Indiana, PA").region === "PA",
+  );
+  check(
+    "Bare Washington / Indiana stay display-only",
+    parseServiceAreaLabelParts("Washington").city === "" &&
+      parseServiceAreaLabelParts("Indiana").city === "",
+  );
+  check(
+    "Reno. and Sparks NV. stay display-only junk punctuation",
+    parseServiceAreaLabelParts("Reno.").city === "" &&
+      parseServiceAreaLabelParts("Sparks NV.").city === "",
+  );
+  check(
+    "Broad marketing prose does not infer a city or region",
+    parseServiceAreaLabelParts("Serving homeowners across Western Pennsylvania").city === "" &&
+      parseServiceAreaLabelParts("Greater Reno area").city === "" &&
+      parseServiceAreaLabelParts("Northern Nevada, NV").city === "" &&
+      parseServiceAreaLabelParts("New York, NY").city === "",
+  );
+  check(
     "A free-text region is never stored from the label",
     parseServiceAreaLabelParts("Reno, Washoe County").region === null &&
       parseServiceAreaLabelParts("Reno, Sparks, Carson City").region === null,
+  );
+  const washingtonParse = parseServiceAreaLabelParts("Washington, PA");
+  const flippedWashington = { ...washingtonParse, city: "Pennsylvania" };
+  check(
+    "Mutation: swapping Washington, PA to a state name fails the official-city check",
+    !(flippedWashington.city === "Washington" && flippedWashington.region === "PA"),
   );
   check(
     "Unknown when no areas are configured",
@@ -395,6 +431,307 @@ try {
   check("Business B does not see A's service areas", betaAreas.length === 0);
   const betaCampaigns = await prisma.marketingCampaign.findMany({ where: { businessId: businessB.id } });
   check("Business B does not see A's campaigns", betaCampaigns.length === 1 && betaCampaigns[0].id === campaignB.id);
+
+  console.log("\nDB — #249 city-list and public-intake proofs");
+
+  function toConfiguredAreas(rows) {
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      label: row.label,
+      city: row.city,
+      region: row.region,
+      postalCode: row.postalCode,
+      enabled: row.enabled,
+      travelAdjustment:
+        row.travelAdjustment == null
+          ? null
+          : typeof row.travelAdjustment === "number"
+            ? row.travelAdjustment
+            : row.travelAdjustment.toNumber(),
+      minimumAdjustment:
+        row.minimumAdjustment == null
+          ? null
+          : typeof row.minimumAdjustment === "number"
+            ? row.minimumAdjustment
+            : row.minimumAdjustment.toNumber(),
+      notes: row.notes,
+    }));
+  }
+
+  function officialPaCityProofSafe(result) {
+    return Boolean(
+      result.created &&
+        result.areaCount === 1 &&
+        result.city === result.expectedCity &&
+        result.region === "PA" &&
+        result.cities.length === 1 &&
+        result.cities[0] === result.expectedCity &&
+        result.publicCities.length === 1 &&
+        result.publicCities[0] === result.expectedCity &&
+        result.qualification === "IN_AREA" &&
+        result.storedQualification === "IN_AREA" &&
+        result.otherQualification === "OUTSIDE_PREFERRED" &&
+        result.intakeOk === true &&
+        result.otherTenantCities.includes(result.expectedCity) === false,
+    );
+  }
+
+  function displayOnlyLabelSafe(result) {
+    return Boolean(
+      result.created === false &&
+        result.updated === false &&
+        result.areaCount === 0 &&
+        result.cities.length === 0 &&
+        result.publicCities.length === 0 &&
+        result.qualification === "UNKNOWN" &&
+        result.storedQualification === "UNKNOWN" &&
+        result.intakeOk === true,
+    );
+  }
+
+  async function proveOfficialPaCity(label, expectedCity, otherAccess) {
+    const token = randomUUID().slice(0, 8);
+    const business = await prisma.business.create({
+      data: {
+        name: `${expectedCity} Areas`,
+        slug: `${expectedCity.toLowerCase()}-areas-${token}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const ownerUser = await prisma.user.create({
+      data: {
+        name: `${expectedCity} Owner`,
+        email: `${expectedCity.toLowerCase()}-owner-${token}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, "OWNER", membership.id);
+    const sync = await syncPrimaryCityServiceAreaFromLabel(prisma, access, label);
+    const areas = await listServiceAreas(prisma, business.id);
+    const cities = serviceAreaCities(areas);
+    const publicSite = await loadPublicBusiness(business.slug, prisma);
+    const publicCities = publicSite?.configuredCities ?? [];
+    const qualification = qualifyServiceAddress(areas, { city: expectedCity });
+    const otherCity = expectedCity === "Washington" ? "Indiana" : "Washington";
+    const otherQualification = qualifyServiceAddress(areas, { city: otherCity });
+    const intake = await createPublicServiceRequest(prisma, {
+      slug: business.slug,
+      name: `${expectedCity} Homeowner`,
+      email: `${expectedCity.toLowerCase()}-intake-${token}@example.com`,
+      phone: "",
+      address: "",
+      streetAddress: "10 Main St",
+      city: expectedCity,
+      region: "PA",
+      postalCode: expectedCity === "Washington" ? "15301" : "15701",
+      notes: "Need a repair",
+      catalogItemIds: [],
+      includeOther: true,
+      otherDescription: "Repair",
+      configuredAreas: toConfiguredAreas(areas),
+    });
+    let storedQualification = null;
+    if (intake.ok) {
+      const request = await prisma.serviceRequest.findFirst({
+        where: { id: intake.requestId },
+        select: { serviceAreaQualification: true, businessId: true },
+      });
+      storedQualification = request?.serviceAreaQualification ?? null;
+      check(
+        `${label} intake stays on its tenant`,
+        request?.businessId === business.id,
+      );
+    }
+    const otherTenantAreas = await listServiceAreas(prisma, otherAccess.businessId);
+    const otherTenantCities = serviceAreaCities(otherTenantAreas);
+    return {
+      expectedCity,
+      created: sync.created,
+      areaCount: areas.length,
+      city: areas[0]?.city ?? null,
+      region: areas[0]?.region ?? null,
+      cities,
+      publicCities,
+      qualification: qualification.qualification,
+      otherQualification: otherQualification.qualification,
+      storedQualification,
+      intakeOk: intake.ok,
+      otherTenantCities,
+      access,
+      businessId: business.id,
+    };
+  }
+
+  async function proveDisplayOnlyLabel(label) {
+    const token = randomUUID().slice(0, 8);
+    const slugLabel = label.replace(/[^a-zA-Z]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "junk";
+    const business = await prisma.business.create({
+      data: {
+        name: `Display ${slugLabel}`,
+        slug: `display-${slugLabel}-${token}`,
+        tradeCode: "HANDYMAN",
+        publicServiceAreaLabel: label,
+      },
+    });
+    const ownerUser = await prisma.user.create({
+      data: {
+        name: `Display Owner ${token}`,
+        email: `display-owner-${token}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, "OWNER", membership.id);
+    const sync = await syncPrimaryCityServiceAreaFromLabel(prisma, access, label);
+    const areas = await listServiceAreas(prisma, business.id);
+    const cities = serviceAreaCities(areas);
+    const publicSite = await loadPublicBusiness(business.slug, prisma);
+    const publicCities = publicSite?.configuredCities ?? [];
+    const qualification = qualifyServiceAddress(areas, { city: "Reno" });
+    const intake = await createPublicServiceRequest(prisma, {
+      slug: business.slug,
+      name: "Display Homeowner",
+      email: `display-intake-${token}@example.com`,
+      phone: "",
+      address: "",
+      streetAddress: "200 Second St",
+      city: "Reno",
+      region: "NV",
+      postalCode: "89501",
+      notes: "Probe",
+      catalogItemIds: [],
+      includeOther: true,
+      otherDescription: "Probe",
+      configuredAreas: toConfiguredAreas(areas),
+    });
+    let storedQualification = null;
+    if (intake.ok) {
+      const request = await prisma.serviceRequest.findFirst({
+        where: { id: intake.requestId },
+        select: { serviceAreaQualification: true, businessId: true },
+      });
+      storedQualification = request?.serviceAreaQualification ?? null;
+      check(
+        `${JSON.stringify(label)} intake stays UNKNOWN on its tenant`,
+        request?.businessId === business.id && storedQualification === "UNKNOWN",
+      );
+    }
+    const saved = await prisma.business.findUnique({
+      where: { id: business.id },
+      select: { publicServiceAreaLabel: true },
+    });
+    return {
+      label,
+      labelSaved: saved?.publicServiceAreaLabel === label,
+      created: sync.created,
+      updated: sync.updated,
+      areaCount: areas.length,
+      cities,
+      publicCities,
+      qualification: qualification.qualification,
+      storedQualification,
+      intakeOk: intake.ok,
+      businessId: business.id,
+    };
+  }
+
+  const washington = await proveOfficialPaCity("Washington, PA", "Washington", ownerB);
+  const indiana = await proveOfficialPaCity("Indiana, PA", "Indiana", ownerA);
+  check(
+    "Washington, PA writes CITY Washington and qualifies public intake IN_AREA",
+    officialPaCityProofSafe(washington),
+  );
+  check(
+    "Indiana, PA writes CITY Indiana and qualifies public intake IN_AREA",
+    officialPaCityProofSafe(indiana),
+  );
+  check(
+    "Washington city list does not leak Indiana, and Indiana city list does not leak Washington",
+    washington.cities.includes("Indiana") === false &&
+      indiana.cities.includes("Washington") === false &&
+      washington.otherTenantCities.includes("Washington") === false &&
+      indiana.otherTenantCities.includes("Indiana") === false,
+  );
+  const washingtonOnIndiana = await prisma.serviceArea.findMany({
+    where: { businessId: indiana.businessId, city: "Washington" },
+  });
+  const indianaOnWashington = await prisma.serviceArea.findMany({
+    where: { businessId: washington.businessId, city: "Indiana" },
+  });
+  check(
+    "Tenant isolation: neither PA city row is stored on the other tenant",
+    washingtonOnIndiana.length === 0 && indianaOnWashington.length === 0,
+  );
+  const washingtonArea = await prisma.serviceArea.findFirst({
+    where: { businessId: washington.businessId },
+  });
+  try {
+    await setServiceAreaEnabled(prisma, ownerB, {
+      areaId: washingtonArea?.id ?? "missing-washington-area",
+      enabled: false,
+    });
+    check("Business B cannot disable Washington, PA on the other tenant", false);
+  } catch {
+    check("Business B cannot disable Washington, PA on the other tenant", true);
+  }
+  check(
+    "Mutation: dropping the Washington CITY row fails the official-city checker",
+    !officialPaCityProofSafe({
+      ...washington,
+      created: false,
+      areaCount: 0,
+      cities: [],
+      publicCities: [],
+      qualification: "UNKNOWN",
+      storedQualification: "UNKNOWN",
+    }),
+  );
+
+  const displayOnlyLabels = [
+    "Reno.",
+    "Sparks NV.",
+    "Greater Reno area",
+    "Serving homeowners across Western Pennsylvania",
+    "Washington",
+    "Indiana",
+  ];
+  const displayOnlyResults = [];
+  for (const label of displayOnlyLabels) {
+    const result = await proveDisplayOnlyLabel(label);
+    displayOnlyResults.push(result);
+    check(
+      `${JSON.stringify(label)} stays display-only and writes no CITY row`,
+      result.labelSaved === true && displayOnlyLabelSafe(result),
+    );
+  }
+  check(
+    "Reno. and Sparks NV. do not invent public city-list rows",
+    displayOnlyResults
+      .filter((row) => row.label === "Reno." || row.label === "Sparks NV.")
+      .every((row) => row.areaCount === 0 && row.publicCities.length === 0),
+  );
+  check(
+    "Every ambiguous or junk label kept display copy and an empty city list",
+    displayOnlyResults.every((row) => row.labelSaved && displayOnlyLabelSafe(row)),
+  );
+  check(
+    "Mutation: a junk Reno. CITY row fails the display-only checker",
+    !displayOnlyLabelSafe({
+      ...displayOnlyResults[0],
+      created: true,
+      areaCount: 1,
+      cities: ["Reno"],
+      publicCities: ["Reno"],
+      qualification: "IN_AREA",
+      storedQualification: "IN_AREA",
+    }),
+  );
 
   console.log(failures === 0 ? "\nAll service-area checks passed." : `\n${failures} service-area check(s) failed.`);
 } finally {

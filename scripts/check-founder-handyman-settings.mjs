@@ -275,6 +275,8 @@ try {
     "Reno NV 89501",
     "Reno Nevada",
     "Nevada",
+    "Washington",
+    "Indiana",
     "Northern Nevada",
     "Southwest Florida",
     "Reno or Sparks",
@@ -309,6 +311,8 @@ try {
     { label: "Kansas City, MO", city: "Kansas City", region: "MO" },
     { label: "Mt. Pleasant, SC", city: "Mt. Pleasant", region: "SC" },
     { label: "Las Vegas, NV", city: "Las Vegas", region: "NV" },
+    { label: "Washington, PA", city: "Washington", region: "PA" },
+    { label: "Indiana, PA", city: "Indiana", region: "PA" },
   ];
   for (const label of rejectedLabels) {
     const parsed = parseServiceAreaLabelParts(label);

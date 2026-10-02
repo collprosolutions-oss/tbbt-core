@@ -62,12 +62,26 @@ const NON_CITY_LABEL_WORD =
 const COMPASS_WORD =
   /^(?:north|south|east|west|northern|southern|eastern|western|southwest|southeast|northwest|northeast|central)$/i;
 
-function isStateOrCompassState(city: string) {
-  if (isUsStateName(city)) return true;
+function isCompassState(city: string) {
   const words = city.split(" ");
   if (words.length < 2) return false;
   if (!COMPASS_WORD.test(words[0] ?? "")) return false;
   return isUsStateName(words.slice(1).join(" "));
+}
+
+function isStateOrCompassState(city: string) {
+  if (isUsStateName(city)) return true;
+  return isCompassState(city);
+}
+
+/**
+ * Comma form "City, ST" may use a single-word state name as the city
+ * (Washington, PA / Indiana, PA). Multi-word official state names and
+ * compass regions stay display-only so they cannot become CITY rows.
+ */
+function isRegionNamedCity(city: string) {
+  if (isUsStateName(city) && /\s/.test(city)) return true;
+  return isCompassState(city);
 }
 
 function hasTrailingStateToken(city: string) {
@@ -101,6 +115,12 @@ function isUsableCityToken(city: string) {
  * and writes no CITY row. Internal abbreviation periods (St. Louis,
  * Mt. Pleasant) remain allowed because the city token still starts and
  * ends with a letter.
+ *
+ * State-named city decision: Washington, PA and Indiana, PA are one city
+ * plus a 2-letter state. Bare state names (Washington, Indiana) stay
+ * display-only. Multi-word official state names (New York, North Carolina)
+ * and compass regions (Northern Nevada) stay display-only. Broad marketing
+ * prose is never turned into geography.
  */
 export function parseServiceAreaLabelParts(label: string): {
   city: string;
@@ -131,7 +151,7 @@ export function parseServiceAreaLabelParts(label: string): {
       return empty;
     }
     region = regionRaw.toUpperCase();
-    if (isStateOrCompassState(city)) return empty;
+    if (isRegionNamedCity(city)) return empty;
   }
   if (!city || NON_CITY_LABEL_WORD.test(city) || !isUsableCityToken(city)) {
     return empty;
