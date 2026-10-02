@@ -227,8 +227,11 @@ export function recordedInvoiceArithmetic(
   const breakdown = invoicePaymentBreakdown({
     status: invoice.status,
     total: toDecimal(invoice.total),
-    payments: allocated,
-    credits: invoiceCredits,
+    payments: allocated.map((payment) => ({
+      purpose: payment.purpose,
+      amount: toDecimal(payment.amount),
+    })),
+    credits: invoiceCredits.map((credit) => ({ amount: toDecimal(credit.amount) })),
   });
   return {
     allocated,
@@ -370,7 +373,15 @@ export function proveJobMoney(records: JobMoneyRecords): JobMoneyProof {
     demandMoney(mismatches, "estimate-snapshot", "version-total-vs-lines", snapshotTotal, snapshotLineSum);
   }
 
-  const depositRequired = moneyNumber(suggestedMaterialDeposit(snapshotLines));
+  const depositRequired = moneyNumber(
+    suggestedMaterialDeposit(
+      snapshotLines.map((line) => ({
+        type: line.type,
+        total: toDecimal(line.total),
+        description: line.description ?? "",
+      })),
+    ),
+  );
   const depositPayments = records.payments.filter(
     (payment) => payment.purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
   );
@@ -451,10 +462,17 @@ export function proveJobMoney(records: JobMoneyRecords): JobMoneyProof {
   const billedRevenue = roundMoney(billedInvoices.reduce((sum, invoice) => sum + moneyNumber(invoice.total), 0));
   const outstanding = outstandingRemaining(
     collectedInvoices.map((invoice) => ({
-      ...invoice,
+      id: invoice.id,
       businessId: records.businessId,
-      createdAt: records.invoices.find((row) => row.id === invoice.id)?.createdAt ?? new Date(0),
+      status: invoice.status,
+      total: invoice.total,
       paidAt: invoice.paidAt ?? null,
+      createdAt: records.invoices.find((row) => row.id === invoice.id)?.createdAt ?? new Date(0),
+      customerId: invoice.customerId ?? null,
+      jobId: invoice.jobId ?? records.jobId,
+      kind: invoice.kind ?? null,
+      paymentMethod: invoice.paymentMethod ?? null,
+      paymentReference: invoice.paymentReference ?? null,
     })),
     collectedPayments,
     collectedCredits,

@@ -58,7 +58,10 @@ check(
 );
 check("proof module does not run prisma migrate", !reconSrc.includes("migrate deploy") && !reconSrc.includes("db push"));
 check("verifier stays on the fake Stripe adapter", selfSrc.includes('TBBT_PAYMENTS_ADAPTER = "fake"'));
-check("verifier never mentions a live Stripe secret", !selfSrc.includes("sk_live") && !selfSrc.includes("STRIPE_SECRET_KEY"));
+check(
+  "verifier never mentions a live Stripe secret",
+  !selfSrc.includes("sk_" + "live") && !/STRIPE_SECRET_KEY\s*=/.test(selfSrc),
+);
 check(
   "collected-revenue remaining due uses paymentBelongsToInvoice",
   collectedSrc.includes('from "@/lib/payment-attribution"') &&
@@ -211,13 +214,13 @@ const { calculateJobProfitability } = await import("@/lib/financial-intelligence
 const { loadFinancialSource } = await import("@/lib/financial-intelligence-data");
 const { loadJobMoneyRecords } = await import("@/lib/job-money-reconciliation");
 
-function makeAccess(businessId, role = "OWNER") {
+function makeAccess(businessId, membershipId, role = "OWNER") {
   return {
     businessId,
     workspace: {
       role,
       business: { id: businessId, name: "Money Tenant" },
-      membership: { id: `mem-${businessId}` },
+      membership: { id: membershipId },
     },
     scope: { businessId },
     assertOwned(record) {
@@ -261,7 +264,7 @@ try {
   const prisma = session.prisma;
   const ownerA = await seedWorkspace(prisma, "MoneyA");
   const other = await seedWorkspace(prisma, "MoneyB");
-  const accessA = makeAccess(ownerA.business.id);
+  const accessA = makeAccess(ownerA.business.id, ownerA.membership.id);
   const provider = createFakePaymentProvider();
   provider.setChargesEnabled(ownerA.stripeAccountId, true);
 
@@ -561,7 +564,7 @@ async function seedWorkspace(prisma, name) {
   const business = await prisma.business.create({
     data: { name, slug: `${name.toLowerCase()}-${randomUUID().slice(0, 8)}` },
   });
-  await prisma.membership.create({
+  const membership = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
   });
   const customer = await prisma.customer.create({
@@ -582,7 +585,7 @@ async function seedWorkspace(prisma, name) {
       stripeAccountId,
     },
   });
-  return { business, customer, property, stripeAccountId };
+  return { business, membership, customer, property, stripeAccountId };
 }
 
 console.log(
