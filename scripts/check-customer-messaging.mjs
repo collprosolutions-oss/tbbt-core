@@ -123,12 +123,7 @@ const {
   withTransactionalOptOutFooter,
 } = await import("@/lib/customer-messaging");
 
-delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
-delete process.env.VERCEL_ENV;
-delete process.env.TWILIO_ACCOUNT_SID;
-delete process.env.TWILIO_AUTH_TOKEN;
-delete process.env.TWILIO_MESSAGING_SERVICE_SID;
-delete process.env.TWILIO_FROM_NUMBER;
+clearCustomerMessagingEnv();
 
 let failures = 0;
 function check(label, condition) {
