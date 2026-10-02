@@ -11,9 +11,11 @@ import {
 } from "react-native";
 import {
   NATIVE_NETWORK_ERROR,
+  NATIVE_TIME_CARD_OFFLINE_MESSAGE,
   completeNativeJob,
   isApiError,
   isLostAssignment,
+  isNativeNetworkError,
   isSessionExpired,
   loadNativeJob,
   recordNativeJobVisit,
@@ -21,9 +23,24 @@ import {
   startNativeJob,
   stopNativeActivityTime,
   stopNativeJobRunningTime,
+  syncNativeJobTimeDraft,
   type NativeApiError,
 } from "../api";
 import { nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
+import { secureTimeCardDraftStorage } from "../time-card-draft-storage";
+import {
+  TIME_CARD_DRAFT_STORAGE_ERROR,
+  TimeCardDraftStorageError,
+  clearTimeCardDraft,
+  draftHasTimeCardAction,
+  loadTimeCardDraft,
+  persistLocalTimeCardIntent,
+  timeCardDraftActionLabel,
+  timeCardSnapshotFromJob,
+  type TimeCardDraft,
+  type TimeCardDraftAction,
+  type TimeCardDraftStorage,
+} from "../time-card-drafts";
 import type {
   NativeFieldActivityType,
   NativeJobDetail,
@@ -42,12 +59,14 @@ export function JobScreen({
   workspace,
   onBack,
   onSessionExpired,
+  storage = secureTimeCardDraftStorage,
 }: {
   token: string;
   jobId: string;
   workspace: NativeWorkspace;
   onBack: () => void;
   onSessionExpired: () => void;
+  storage?: TimeCardDraftStorage;
 }) {
   const [job, setJob] = useState<NativeJobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +79,16 @@ export function JobScreen({
     null,
   );
   const [unsyncedChecklist, setUnsyncedChecklist] = useState(false);
+  const [timeDraft, setTimeDraft] = useState<TimeCardDraft | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const requestGeneration = useRef(0);
   const actionsLocked = pending || refreshing;
+  const unsyncedTime = Boolean(timeDraft && timeDraft.intents.length > 0);
+  const timeScope = {
+    businessId: workspace.businessId,
+    membershipId: workspace.membershipId,
+    jobId,
+  };
 
   function beginAssignedRequest() {
     requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
@@ -96,6 +122,39 @@ export function JobScreen({
       requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
     };
   }, [jobId, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadTimeCardDraft(storage, timeScope)
+      .then((loaded) => {
+        if (!cancelled) setTimeDraft(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) setActionError(TIME_CARD_DRAFT_STORAGE_ERROR);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, storage, workspace.businessId, workspace.membershipId]);
+
+  function clockSnapshot(current: NativeJobDetail) {
+    return timeCardSnapshotFromJob({
+      jobStatus: current.status,
+      assignmentId: workspace.membershipId,
+      runningTime: current.runningTime,
+      travelTime: current.travelTime,
+      pickupTime: current.pickupTime,
+    });
+  }
+
+  async function recordOfflineIntent(action: TimeCardDraftAction, current: NativeJobDetail) {
+    const next = await persistLocalTimeCardIntent(storage, {
+      scope: timeScope,
+      snapshot: clockSnapshot(current),
+      action,
+    });
+    setTimeDraft(next);
+  }
 
   async function reloadAssignedJob(fallback: NativeJobDetail | null) {
     const generation = beginAssignedRequest();
@@ -134,23 +193,33 @@ export function JobScreen({
   }, [jobId, onSessionExpired, token]);
 
   async function startAssignedJob() {
-    if (actionsLocked) return;
+    if (actionsLocked || !job) return;
     setPending(true);
     setPendingAction("start");
     setActionError(null);
     try {
+      if (unsyncedTime) {
+        await recordOfflineIntent("START_JOB", job);
+        return;
+      }
       const result = await startNativeJob(token, jobId);
       if (isApiError(result)) {
         if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
+        if (isNativeNetworkError(result)) {
+          await recordOfflineIntent("START_JOB", job);
+          return;
+        }
         setActionError(result.error);
         return;
       }
       await reloadAssignedJob(result.job);
-    } catch {
-      setActionError(NATIVE_NETWORK_ERROR);
+    } catch (cause) {
+      setActionError(
+        cause instanceof TimeCardDraftStorageError ? cause.message : NATIVE_NETWORK_ERROR,
+      );
     } finally {
       setPending(false);
       setPendingAction(null);
@@ -158,23 +227,33 @@ export function JobScreen({
   }
 
   async function stopAssignedJobTime() {
-    if (actionsLocked) return;
+    if (actionsLocked || !job) return;
     setPending(true);
     setPendingAction("stop");
     setActionError(null);
     try {
+      if (unsyncedTime) {
+        await recordOfflineIntent("STOP_JOB_TIME", job);
+        return;
+      }
       const result = await stopNativeJobRunningTime(token, jobId);
       if (isApiError(result)) {
         if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
+        if (isNativeNetworkError(result)) {
+          await recordOfflineIntent("STOP_JOB_TIME", job);
+          return;
+        }
         setActionError(result.error);
         return;
       }
       await reloadAssignedJob(result.job);
-    } catch {
-      setActionError(NATIVE_NETWORK_ERROR);
+    } catch (cause) {
+      setActionError(
+        cause instanceof TimeCardDraftStorageError ? cause.message : NATIVE_NETWORK_ERROR,
+      );
     } finally {
       setPending(false);
       setPendingAction(null);
@@ -182,23 +261,35 @@ export function JobScreen({
   }
 
   async function startAssignedActivity(activityType: NativeFieldActivityType) {
-    if (actionsLocked) return;
+    if (actionsLocked || !job) return;
+    const action: TimeCardDraftAction =
+      activityType === "TRAVEL" ? "START_TRAVEL" : "START_PICKUP";
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "start-travel" : "start-pickup");
     setActionError(null);
     try {
+      if (unsyncedTime) {
+        await recordOfflineIntent(action, job);
+        return;
+      }
       const result = await startNativeActivityTime(token, jobId, activityType);
       if (isApiError(result)) {
         if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
+        if (isNativeNetworkError(result)) {
+          await recordOfflineIntent(action, job);
+          return;
+        }
         setActionError(result.error);
         return;
       }
       await reloadAssignedJob(result.job);
-    } catch {
-      setActionError(NATIVE_NETWORK_ERROR);
+    } catch (cause) {
+      setActionError(
+        cause instanceof TimeCardDraftStorageError ? cause.message : NATIVE_NETWORK_ERROR,
+      );
     } finally {
       setPending(false);
       setPendingAction(null);
@@ -206,31 +297,92 @@ export function JobScreen({
   }
 
   async function stopAssignedActivity(activityType: NativeFieldActivityType) {
-    if (actionsLocked) return;
+    if (actionsLocked || !job) return;
+    const action: TimeCardDraftAction =
+      activityType === "TRAVEL" ? "STOP_TRAVEL" : "STOP_PICKUP";
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "stop-travel" : "stop-pickup");
     setActionError(null);
     try {
+      if (unsyncedTime) {
+        await recordOfflineIntent(action, job);
+        return;
+      }
       const result = await stopNativeActivityTime(token, jobId, activityType);
       if (isApiError(result)) {
         if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
+        if (isNativeNetworkError(result)) {
+          await recordOfflineIntent(action, job);
+          return;
+        }
         setActionError(result.error);
         return;
       }
       await reloadAssignedJob(result.job);
-    } catch {
-      setActionError(NATIVE_NETWORK_ERROR);
+    } catch (cause) {
+      setActionError(
+        cause instanceof TimeCardDraftStorageError ? cause.message : NATIVE_NETWORK_ERROR,
+      );
     } finally {
       setPending(false);
       setPendingAction(null);
     }
   }
 
+  async function syncTimeDraft() {
+    if (!timeDraft || actionsLocked) return;
+    setPending(true);
+    setActionError(null);
+    try {
+      const result = await syncNativeJobTimeDraft(token, jobId, {
+        expectedFingerprint: timeDraft.expectedFingerprint,
+        intents: timeDraft.intents,
+      });
+      if (isApiError(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        if (result.error.includes("changed after your draft")) {
+          await reloadAssignedJob(job);
+        }
+        return;
+      }
+      try {
+        await clearTimeCardDraft(storage, timeScope);
+        setTimeDraft(null);
+      } catch {
+        setActionError(TIME_CARD_DRAFT_STORAGE_ERROR);
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_TIME_CARD_OFFLINE_MESSAGE);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function discardTimeDraft() {
+    if (actionsLocked) return;
+    try {
+      await clearTimeCardDraft(storage, timeScope);
+      setTimeDraft(null);
+      setActionError(null);
+    } catch {
+      setActionError(TIME_CARD_DRAFT_STORAGE_ERROR);
+    }
+  }
+
   async function completeAssignedJob() {
     if (actionsLocked) return;
+    if (unsyncedTime) {
+      setActionError("Sync or discard unsynced time before completing this job.");
+      return;
+    }
     if (unsyncedChecklist) {
       setActionError("Sync or discard unsynced checklist changes before completing this job.");
       return;
@@ -259,6 +411,10 @@ export function JobScreen({
 
   async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
     if (actionsLocked) return;
+    if (unsyncedTime) {
+      setActionError("Sync or discard unsynced time before recording a visit outcome.");
+      return;
+    }
     if (unsyncedChecklist) {
       setActionError(
         "Sync or discard unsynced checklist changes before recording a visit outcome.",
@@ -343,6 +499,14 @@ export function JobScreen({
                   }`
                 : "No running job time"}
           </Text>
+          {unsyncedTime ? (
+            <Text style={styles.unsynced}>Unsynced time · Saved on this phone</Text>
+          ) : null}
+          {timeDraft?.intents.map((intent) => (
+            <Text key={`${intent.action}-${intent.intendedAt}`} style={styles.unsyncedItem}>
+              {timeCardDraftActionLabel(intent.action)} · not approved server time
+            </Text>
+          )) ?? null}
           <Text style={styles.body}>
             {job.travelTime?.running
               ? `Travel running · Since ${job.travelTime.startedAtLabel ?? "now"}`
@@ -384,13 +548,17 @@ export function JobScreen({
               style={[styles.primaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "start" ? "Starting…" : "Start job"}
+                {pendingAction === "start"
+                  ? "Starting…"
+                  : draftHasTimeCardAction(timeDraft, "START_JOB")
+                    ? "Saved on this phone"
+                    : "Start job"}
               </Text>
             </Pressable>
           ) : job.startAction.reason ? (
             <Text style={styles.notice}>{job.startAction.reason}</Text>
           ) : null}
-          {job.stopTimeAction.available ? (
+          {job.stopTimeAction.available || draftHasTimeCardAction(timeDraft, "START_JOB") ? (
             <Pressable
               disabled={actionsLocked}
               onPress={() => {
@@ -399,7 +567,11 @@ export function JobScreen({
               style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "stop" ? "Stopping…" : "Stop job time"}
+                {pendingAction === "stop"
+                  ? "Stopping…"
+                  : draftHasTimeCardAction(timeDraft, "STOP_JOB_TIME")
+                    ? "Saved on this phone"
+                    : "Stop job time"}
               </Text>
             </Pressable>
           ) : null}
@@ -412,7 +584,11 @@ export function JobScreen({
               style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "start-travel" ? "Starting…" : "Start travel"}
+                {pendingAction === "start-travel"
+                  ? "Starting…"
+                  : draftHasTimeCardAction(timeDraft, "START_TRAVEL")
+                    ? "Saved on this phone"
+                    : "Start travel"}
               </Text>
             </Pressable>
           ) : null}
@@ -425,7 +601,11 @@ export function JobScreen({
               style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "stop-travel" ? "Stopping…" : "Stop travel"}
+                {pendingAction === "stop-travel"
+                  ? "Stopping…"
+                  : draftHasTimeCardAction(timeDraft, "STOP_TRAVEL")
+                    ? "Saved on this phone"
+                    : "Stop travel"}
               </Text>
             </Pressable>
           ) : null}
@@ -438,7 +618,11 @@ export function JobScreen({
               style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "start-pickup" ? "Starting…" : "Start material pickup"}
+                {pendingAction === "start-pickup"
+                  ? "Starting…"
+                  : draftHasTimeCardAction(timeDraft, "START_PICKUP")
+                    ? "Saved on this phone"
+                    : "Start material pickup"}
               </Text>
             </Pressable>
           ) : null}
@@ -451,8 +635,33 @@ export function JobScreen({
               style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
-                {pendingAction === "stop-pickup" ? "Stopping…" : "Stop material pickup"}
+                {pendingAction === "stop-pickup"
+                  ? "Stopping…"
+                  : draftHasTimeCardAction(timeDraft, "STOP_PICKUP")
+                    ? "Saved on this phone"
+                    : "Stop material pickup"}
               </Text>
+            </Pressable>
+          ) : null}
+          {unsyncedTime ? (
+            <Pressable
+              disabled={actionsLocked}
+              onPress={() => {
+                void syncTimeDraft();
+              }}
+              style={[styles.primaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
+            >
+              <Text style={styles.primaryActionLabel}>{pending ? "Syncing…" : "Sync time"}</Text>
+            </Pressable>
+          ) : null}
+          {unsyncedTime ? (
+            <Pressable
+              disabled={actionsLocked}
+              onPress={() => {
+                void discardTimeDraft();
+              }}
+            >
+              <Text style={styles.discard}>Discard unsynced time</Text>
             </Pressable>
           ) : null}
           {job.completeAction.available ? (
@@ -661,6 +870,21 @@ const styles = StyleSheet.create({
     color: "#fbbf24",
     fontSize: 15,
     lineHeight: 22,
+  },
+  unsynced: {
+    color: "#fbbf24",
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 22,
+  },
+  unsyncedItem: {
+    color: "#fbbf24",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  discard: {
+    color: "#93c5fd",
+    fontWeight: "600",
   },
   groupTitle: {
     color: "#9ca3af",

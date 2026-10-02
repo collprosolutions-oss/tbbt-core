@@ -199,6 +199,7 @@ const photoAuthorizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/phot
 const photoFinalizeRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/finalize/route.ts");
 const photoAbortRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/abort/route.ts");
 const photoPreviewRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/photos/[photoId]/route.ts");
+const timeSyncRouteSrc = readRepo("src/app/api/native/v1/jobs/[jobId]/time/sync/route.ts");
 const completeOpsSrc = readRepo("src/lib/native-field-ops.ts");
 const membershipGuardSrc = readRepo("src/lib/exact-active-membership.ts");
 const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
@@ -229,6 +230,7 @@ check(
     photoFinalizeRouteSrc.includes("readBearerToken") &&
     photoAbortRouteSrc.includes("readBearerToken") &&
     photoPreviewRouteSrc.includes("readBearerToken") &&
+    timeSyncRouteSrc.includes("readBearerToken") &&
     !sessionRouteSrc.includes("cookies(") &&
     !todayRouteSrc.includes("cookies(") &&
     !jobRouteSrc.includes("cookies(") &&
@@ -242,6 +244,8 @@ check(
     !photoFinalizeRouteSrc.includes("cookies(") &&
     !photoAbortRouteSrc.includes("cookies(") &&
     !photoPreviewRouteSrc.includes("cookies(") &&
+    !timeSyncRouteSrc.includes("cookies(") &&
+    timeSyncRouteSrc.includes("syncNativeAssignedTimeCardDraft") &&
     !completeOpsSrc.includes("cookies("),
 );
 check(

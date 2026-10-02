@@ -14,7 +14,9 @@
  * activity-time writes. Pickup item writes live in
  * `src/lib/native-field-pickup.ts` and reuse `recordAssignedJobPickup`.
  * Problem reports live in `src/lib/native-field-problems.ts` and reuse
- * `reportAssignedJobProblem`.
+ * `reportAssignedJobProblem`. Offline start/stop drafts sync through
+ * `src/lib/native-field-time-sync.ts` and reuse the same canonical
+ * time-card writes.
  *
  * Authorization is the same compound clause as Field Home and native
  * reads (`nativeAssignedJobWhere`: businessId + assignedMembershipId).

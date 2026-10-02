@@ -111,6 +111,7 @@ npm run test:native-field-photos
 npm run test:native-field-visit
 npm run test:native-field-checklist
 npm run test:native-field-checklist-offline
+npm run test:native-field-time-offline
 npm run test:native-field-activity
 npm run test:native-field-pickup
 npm run test:native-field-problem

@@ -28,6 +28,9 @@ export const NATIVE_NETWORK_ERROR =
 export const NATIVE_CHECKLIST_OFFLINE_MESSAGE =
   "Couldn't reach the server — your changes are still saved on this phone.";
 
+export const NATIVE_TIME_CARD_OFFLINE_MESSAGE =
+  "Couldn't reach the server — your start or stop is still saved on this phone.";
+
 async function parseJson(response: Response) {
   const text = await response.text();
   if (!text) return {};
@@ -80,6 +83,10 @@ export async function requestNativeJson<T>(
 }
 
 export { isLostAssignment, isSessionExpired };
+
+export function isNativeNetworkError(value: NativeApiError) {
+  return value.status == null && value.error === NATIVE_NETWORK_ERROR;
+}
 
 export async function signInNative(input: {
   email: string;
@@ -249,6 +256,42 @@ export async function stopNativeActivityTime(
     },
     "That time could not be stopped.",
   );
+}
+
+export async function syncNativeJobTimeDraft(
+  token: string,
+  jobId: string,
+  input: {
+    expectedFingerprint: string;
+    intents: Array<{ action: string; intendedAt: string }>;
+  },
+): Promise<{ job: NativeJobDetail; alreadySynced: boolean } | NativeApiError> {
+  try {
+    const response = await fetch(
+      nativeApiUrl(`/api/native/v1/jobs/${encodeURIComponent(jobId)}/time/sync`),
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(token),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+      },
+    );
+    const body = await parseJson(response);
+    if (!response.ok) {
+      return {
+        error:
+          typeof body.error === "string"
+            ? body.error
+            : "Those time-card changes could not be synced.",
+        status: response.status,
+      };
+    }
+    return body as unknown as { job: NativeJobDetail; alreadySynced: boolean };
+  } catch {
+    return { error: NATIVE_TIME_CARD_OFFLINE_MESSAGE };
+  }
 }
 
 export async function completeNativeJob(
