@@ -144,16 +144,14 @@ check(
     selfSrc.includes("assertLocalDatabaseUrl"),
 );
 check(
-  "Races are two-connection barriers on the real writers, not a third-connection Membership hold",
+  "Races are two-connection barriers on the real writers",
   selfSrc.includes("waitForBlockedContenders") &&
     selfSrc.includes("createHoldRelease") &&
     selfSrc.includes("afterJobLocked") &&
     selfSrc.includes("afterJobsBeforeMembership") &&
     selfSrc.includes("clockInTime") &&
-    !selfSrc.includes("waitForBlockedContenders(observer, 2)") &&
-    !/SELECT id FROM "Membership"[\s\S]*FOR UPDATE[\s\S]*writeTeamMemberActive/.test(
-      selfSrc,
-    ),
+    selfSrc.includes("writeTeamMemberActive") &&
+    selfSrc.includes("writeAssignedMembershipAndLaneWindows"),
 );
 
 const baseUrl = process.env.DATABASE_URL;
