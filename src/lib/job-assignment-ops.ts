@@ -68,10 +68,12 @@ export async function applyAssignedMembershipChangeInTransaction(
 ) {
   const previousAssignee = input.lockedJob.assignedMembershipId;
   const nextAssignee = input.nextAssignedMembershipId;
+  // Previous assignee first so unsorted lock order inverts against
+  // deactivate's [actor, worker] and id sorting stays load-bearing.
   await lockTenantOwnedMemberships(tx, input.businessId, [
-    input.actorMembershipId,
     previousAssignee,
     nextAssignee,
+    input.actorMembershipId,
   ]);
   await tx.job.update({
     where: { id: input.job.id },

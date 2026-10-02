@@ -240,6 +240,37 @@ export async function lockJobsForMembershipClockClose(
   return jobIds;
 }
 
+/**
+ * Job row first, then the actor Membership. Native start/stop already
+ * use this order; web clock-in / manual / correct / correction-request
+ * must match so OWNER deactivate and reassign cannot 40P01.
+ */
+async function lockJobThenActorMembership(
+  tx: Db,
+  input: {
+    businessId: string;
+    jobId?: string | null;
+    actorMembershipId: string;
+  },
+): Promise<TenantJobRow | null> {
+  let job: TenantJobRow | null = null;
+  if (input.jobId) {
+    job = await lockTenantOwnedJob(tx, input.businessId, input.jobId);
+    if (!job) {
+      throw new TimeCardError("That job is not in this business.");
+    }
+  }
+  if (
+    !(await exactActiveMembershipHeld(tx, {
+      businessId: input.businessId,
+      membershipId: input.actorMembershipId,
+    }))
+  ) {
+    throw new ForbiddenError();
+  }
+  return job;
+}
+
 export function workerTimesheetWeekLockKey(
   businessId: string,
   membershipId: string,
@@ -362,6 +393,7 @@ async function assertJobClockAccess(input: {
   workerMembershipId: string;
   jobId: string | null;
   activityType: TimeActivityType;
+  assignedMembershipId?: string | null;
 }) {
   if (jobRequiredForActivity(input.activityType)) {
     if (!input.jobId) {
@@ -370,12 +402,16 @@ async function assertJobClockAccess(input: {
   }
   if (!input.jobId) return;
 
-  const job = await loadJobInBusiness(input.db, input.businessId, input.jobId);
+  const assignedMembershipId =
+    input.assignedMembershipId !== undefined
+      ? input.assignedMembershipId
+      : (await loadJobInBusiness(input.db, input.businessId, input.jobId))
+          .assignedMembershipId;
   if (input.actorRole === "MEMBER") {
     if (input.workerMembershipId !== input.actorMembershipId) {
       throw new ForbiddenError();
     }
-    if (job.assignedMembershipId !== input.actorMembershipId) {
+    if (assignedMembershipId !== input.actorMembershipId) {
       throw new TimeCardError("You can only clock time on a job assigned to you.");
     }
   }
@@ -589,14 +625,21 @@ export async function clockInTime(
     await options.afterInitialRead();
   }
 
-  return db.$transaction(async (tx) => {
-    if (
-      !(await exactActiveMembershipHeld(tx, {
-        businessId: access.businessId,
-        membershipId: actorMembershipId,
-      }))
-    ) {
-      throw new ForbiddenError();
+  return db.$transaction(
+    async (tx) => {
+    const jobId = input.jobId ?? null;
+    const locked = await lockJobThenActorMembership(tx, {
+      businessId: access.businessId,
+      jobId,
+      actorMembershipId,
+    });
+    if (activityType === "JOB" && jobId) {
+      if (!locked) {
+        throw new TimeCardError("That job is not in this business.");
+      }
+      if (locked.status === "COMPLETED") {
+        throw new TimeCardError(COMPLETED_JOB_CLOCK_IN_ERROR);
+      }
     }
     await loadMembershipInBusiness(tx, access.businessId, workerMembershipId);
     await assertIntervalWeeksEditable(
@@ -613,19 +656,10 @@ export async function clockInTime(
       actorRole,
       actorMembershipId,
       workerMembershipId,
-      jobId: input.jobId ?? null,
+      jobId,
       activityType,
+      assignedMembershipId: locked?.assignedMembershipId,
     });
-
-    if (activityType === "JOB" && input.jobId) {
-      const locked = await lockTenantOwnedJob(tx, access.businessId, input.jobId);
-      if (!locked) {
-        throw new TimeCardError("That job is not in this business.");
-      }
-      if (locked.status === "COMPLETED") {
-        throw new TimeCardError(COMPLETED_JOB_CLOCK_IN_ERROR);
-      }
-    }
 
     const running = await tx.timeEntry.findMany({
       where: {
@@ -695,7 +729,9 @@ export async function clockInTime(
       next: toAuditSnapshot(created),
     });
     return created;
-  });
+    },
+    { maxWait: 10_000, timeout: 20_000 },
+  );
 }
 
 export async function clockOutTime(
@@ -725,14 +761,21 @@ export async function clockOutTime(
   }
 
   return db.$transaction(async (tx) => {
-    if (
-      !(await exactActiveMembershipHeld(tx, {
+    const peek = await tx.timeEntry.findFirst({
+      where: {
         businessId: access.businessId,
-        membershipId: actorMembershipId,
-      }))
-    ) {
-      throw new ForbiddenError();
-    }
+        membershipId: input.membershipId,
+        status: "RUNNING",
+        endedAt: null,
+      },
+      orderBy: { startedAt: "desc" },
+      select: { jobId: true },
+    });
+    await lockJobThenActorMembership(tx, {
+      businessId: access.businessId,
+      jobId: peek?.jobId ?? null,
+      actorMembershipId,
+    });
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
 
     const running = await tx.timeEntry.findFirst({
@@ -811,6 +854,11 @@ export async function createManualTimeEntry(
   const timeZone = accessTimeZone(access, input.timeZone);
 
   return db.$transaction(async (tx) => {
+    const locked = await lockJobThenActorMembership(tx, {
+      businessId: access.businessId,
+      jobId: input.jobId ?? null,
+      actorMembershipId,
+    });
     await loadMembershipInBusiness(tx, access.businessId, input.membershipId);
     await assertIntervalWeeksEditable(
       tx,
@@ -828,6 +876,7 @@ export async function createManualTimeEntry(
       workerMembershipId: input.membershipId,
       jobId: input.jobId ?? null,
       activityType,
+      assignedMembershipId: locked?.assignedMembershipId,
     });
 
     const overlaps = await overlappingEntries(
@@ -912,6 +961,11 @@ export async function correctTimeEntry(
     const endedAt = input.endedAt === undefined ? entry.endedAt : input.endedAt;
     const activityType = (input.activityType ?? entry.activityType) as TimeActivityType;
     const jobId = input.jobId === undefined ? entry.jobId : input.jobId;
+    const locked = await lockJobThenActorMembership(tx, {
+      businessId: access.businessId,
+      jobId,
+      actorMembershipId,
+    });
 
     if (endedAt && endedAt <= startedAt) {
       throw new TimeCardError("End time must be after start time.");
@@ -934,6 +988,7 @@ export async function correctTimeEntry(
       workerMembershipId: entry.membershipId,
       jobId,
       activityType,
+      assignedMembershipId: locked?.assignedMembershipId,
     });
 
     const overlaps = await overlappingEntries(
@@ -1056,6 +1111,16 @@ export async function requestTimeCorrection(
   }
 
   return db.$transaction(async (tx) => {
+    const peeked = await tx.timeEntry.findFirst({
+      where: { id: input.timeEntryId, businessId: access.businessId },
+      select: { jobId: true },
+    });
+    if (peeked?.jobId) {
+      const job = await lockTenantOwnedJob(tx, access.businessId, peeked.jobId);
+      if (!job) {
+        throw new TimeCardError("That job is not in this business.");
+      }
+    }
     // FOR UPDATE must run on this transaction client. A pre-transaction
     // PrismaClient lock is released immediately and does not serialize
     // a deactivation that lands before this write.

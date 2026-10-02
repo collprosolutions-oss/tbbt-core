@@ -1,18 +1,24 @@
 /**
- * OWNER deactivate vs OWNER reassign must not 40P01, and both commit
+ * OWNER deactivate vs OWNER reassign must not 40P01, and worker
+ * clock-in must use the same Job-then-Membership order so it cannot
+ * deadlock against either writer. Both deactivate/reassign commit
  * orders must leave no RUNNING time for an inactive worker, a
  * non-assignee, or a completed job.
  *
- * Uses the #251 lock order (schedule-reservation, then Job, then
- * Membership) and real two-connection barriers. Does not invent a new
+ * Real two-connection races: same-OWNER deactivate vs reassign (the
+ * main 40P01), deactivate vs clock-in, and reassign vs clock-in.
+ * Behavioral source mutations prove the reservation lock, Job locks,
+ * reassign Membership locks, and id sorting. Does not invent a new
  * workflow.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-deactivate-reassign-deadlock.mjs
  */
 import { register } from "node:module";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   assertLocalDatabaseUrl,
   openDisposableTestDatabase,
@@ -36,12 +42,6 @@ function check(label, ok) {
     console.error(`FAIL - ${label}`);
   }
   return ok;
-}
-
-function demand(label, ok) {
-  if (!check(label, ok)) {
-    throw new Error(label);
-  }
 }
 
 function readRepo(rel) {
@@ -84,6 +84,18 @@ async function waitForBlockedContenders(observer, minCount, timeoutMs = 15_000) 
   throw new Error(`timed out waiting for ${minCount} blocked contenders`);
 }
 
+async function expectBlocked(observer, label) {
+  try {
+    await waitForBlockedContenders(observer, 1);
+    check(label, true);
+    return true;
+  } catch (error) {
+    check(label, false);
+    console.error(`  ${label}:`, error.message);
+    return false;
+  }
+}
+
 function isPostgresDeadlock(error) {
   if (!error) return false;
   const code = error.code ?? error.meta?.code;
@@ -96,23 +108,35 @@ function isPostgresDeadlock(error) {
   );
 }
 
-console.log("\nSTATIC — deactivate and reassign share one lock order");
-const selfSrc = readRepo("scripts/check-deactivate-reassign-deadlock.mjs");
-const teamSrc = readRepo("src/app/actions/team.ts");
-const activeOpsSrc = readRepo("src/lib/team-member-active-ops.ts");
-const assignOpsSrc = readRepo("src/lib/job-assignment-ops.ts");
-const membershipSrc = readRepo("src/lib/exact-active-membership.ts");
-const timeCardOpsSrc = readRepo("src/lib/time-card-ops.ts");
-const writeAssignSrc = assignOpsSrc.slice(
-  assignOpsSrc.indexOf("export async function writeAssignedMembershipAndLaneWindows"),
-);
-const applyAssignSrc = assignOpsSrc.slice(
-  assignOpsSrc.indexOf("export async function applyAssignedMembershipChangeInTransaction"),
-);
-const writeActiveSrc = activeOpsSrc.slice(
-  activeOpsSrc.indexOf("export async function writeTeamMemberActive"),
-);
+function makeAccess(businessId, role, membershipId, timezone = "America/New_York") {
+  return {
+    businessId,
+    workspace: {
+      role,
+      membership: { id: membershipId },
+      business: { id: businessId, timezone },
+    },
+    scope: { businessId },
+    assertOwned(record) {
+      if (!record || record.businessId !== businessId) {
+        throw new Error("Record is not in the authorized business workspace.");
+      }
+      return record;
+    },
+  };
+}
 
+function writesClean(settled, count = 2) {
+  const slice = settled.slice(0, count);
+  const deadlock = slice.some(
+    (result) => result.status === "rejected" && isPostgresDeadlock(result.reason),
+  );
+  const writeRejected = slice.filter((result) => result.status === "rejected");
+  return { deadlock, writeRejected };
+}
+
+console.log("\nSTATIC — verifier uses production writers and the disposable harness");
+const selfSrc = readRepo("scripts/check-deactivate-reassign-deadlock.mjs");
 check(
   "Verifier reuses the disposable harness and local-database guard",
   selfSrc.includes('from "./disposable-test-database.mjs"') &&
@@ -120,49 +144,16 @@ check(
     selfSrc.includes("assertLocalDatabaseUrl"),
 );
 check(
-  "Both commit orders use a second-connection Membership hold and wait for ungranted locks",
+  "Races are two-connection barriers on the real writers, not a third-connection Membership hold",
   selfSrc.includes("waitForBlockedContenders") &&
     selfSrc.includes("createHoldRelease") &&
-    selfSrc.includes('SELECT id FROM "Membership"') &&
-    selfSrc.includes("FOR UPDATE") &&
-    selfSrc.includes("deactivate-first") &&
-    selfSrc.includes("reassign-first"),
-);
-check(
-  "setTeamMemberActive delegates to the shared write, not a parallel deactivate path",
-  teamSrc.includes("writeTeamMemberActive") &&
-    !teamSrc.includes("closeRunningTimeForMembershipInTransaction") &&
-    !/SELECT id FROM "Membership"/.test(teamSrc),
-);
-check(
-  "Deactivate lock order is reservation, then Jobs, then Memberships, then close time",
-  writeActiveSrc.includes("lockBusinessScheduleReservation") &&
-    writeActiveSrc.includes("lockJobsForMembershipClockClose") &&
-    writeActiveSrc.includes("lockTenantOwnedMemberships") &&
-    writeActiveSrc.indexOf("lockBusinessScheduleReservation") <
-      writeActiveSrc.indexOf("lockJobsForMembershipClockClose") &&
-    writeActiveSrc.indexOf("lockJobsForMembershipClockClose") <
-      writeActiveSrc.indexOf("lockTenantOwnedMemberships") &&
-    writeActiveSrc.indexOf("lockTenantOwnedMemberships") <
-      writeActiveSrc.indexOf("closeRunningTimeForMembershipInTransaction"),
-);
-check(
-  "Reassign lock order is reservation, then Job, then Memberships, then close time",
-  writeAssignSrc.indexOf("lockBusinessScheduleReservation") >= 0 &&
-    writeAssignSrc.indexOf("lockTenantOwnedJob") >
-      writeAssignSrc.indexOf("lockBusinessScheduleReservation") &&
-    applyAssignSrc.indexOf("lockTenantOwnedMemberships") >= 0 &&
-    applyAssignSrc.indexOf("lockTenantOwnedMemberships") <
-      applyAssignSrc.indexOf("assignedMembershipId: nextAssignee") &&
-    applyAssignSrc.indexOf("assignedMembershipId: nextAssignee") <
-      applyAssignSrc.indexOf("stopRunningAssignedJobTimeInTransaction"),
-);
-check(
-  "Membership locks are taken in sorted id order after Job locks",
-  membershipSrc.includes("lockTenantOwnedMemberships") &&
-    membershipSrc.includes("].sort()") &&
-    timeCardOpsSrc.includes("lockJobsForMembershipClockClose") &&
-    timeCardOpsSrc.includes("].sort()"),
+    selfSrc.includes("afterJobLocked") &&
+    selfSrc.includes("afterJobsBeforeMembership") &&
+    selfSrc.includes("clockInTime") &&
+    !selfSrc.includes("waitForBlockedContenders(observer, 2)") &&
+    !/SELECT id FROM "Membership"[\s\S]*FOR UPDATE[\s\S]*writeTeamMemberActive/.test(
+      selfSrc,
+    ),
 );
 
 const baseUrl = process.env.DATABASE_URL;
@@ -188,12 +179,19 @@ try {
   const { writeAssignedMembershipAndLaneWindows } = await import(
     "@/lib/job-assignment-ops"
   );
+  const { clockInTime } = await import("@/lib/time-card-ops");
+  const { lockTenantOwnedMemberships } = await import(
+    "@/lib/exact-active-membership"
+  );
+  const { lockBusinessScheduleReservation } = await import(
+    "@/lib/schedule-reservation"
+  );
   const { prisma } = await import("@/lib/prisma");
   const { PrismaClient } = await import("@prisma/client");
   locker = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
   observer = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
-  async function seedClockedInWorker(label) {
+  async function seedClockedInWorker(label, { clockedIn = true } = {}) {
     const suffix = `${label}-${randomUUID().slice(0, 8)}`;
     const business = await prisma.business.create({
       data: {
@@ -203,23 +201,16 @@ try {
         timezone: "America/New_York",
       },
     });
-    const deactivateOwnerUser = await prisma.user.create({
+    const ownerUser = await prisma.user.create({
       data: {
-        name: `Deactivate Owner ${label}`,
-        email: `deact-owner-${suffix}@example.com`,
-        passwordHash: "x",
-      },
-    });
-    const reassignOwnerUser = await prisma.user.create({
-      data: {
-        name: `Reassign Owner ${label}`,
-        email: `reassign-owner-${suffix}@example.com`,
+        name: `Owner ${label}`,
+        email: `owner-${suffix}@example.com`,
         passwordHash: "x",
       },
     });
     const workerUser = await prisma.user.create({
       data: {
-        name: `Clocked Worker ${label}`,
+        name: `Worker ${label}`,
         email: `worker-${suffix}@example.com`,
         passwordHash: "x",
       },
@@ -231,19 +222,8 @@ try {
         passwordHash: "x",
       },
     });
-    const deactivateOwner = await prisma.membership.create({
-      data: {
-        userId: deactivateOwnerUser.id,
-        businessId: business.id,
-        role: "OWNER",
-      },
-    });
-    const reassignOwner = await prisma.membership.create({
-      data: {
-        userId: reassignOwnerUser.id,
-        businessId: business.id,
-        role: "OWNER",
-      },
+    const owner = await prisma.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
     });
     const worker = await prisma.membership.create({
       data: { userId: workerUser.id, businessId: business.id, role: "MEMBER" },
@@ -270,18 +250,20 @@ try {
         assignedMembershipId: worker.id,
       },
     });
-    await prisma.timeEntry.create({
-      data: {
-        businessId: business.id,
-        membershipId: worker.id,
-        jobId: job.id,
-        activityType: "JOB",
-        status: "RUNNING",
-        startedAt,
-        endedAt: null,
-        source: "CLOCK",
-      },
-    });
+    if (clockedIn) {
+      await prisma.timeEntry.create({
+        data: {
+          businessId: business.id,
+          membershipId: worker.id,
+          jobId: job.id,
+          activityType: "JOB",
+          status: "RUNNING",
+          startedAt,
+          endedAt: null,
+          source: "CLOCK",
+        },
+      });
+    }
     const completedJob = await prisma.job.create({
       data: {
         businessId: business.id,
@@ -306,12 +288,12 @@ try {
     });
     return {
       business,
-      deactivateOwner,
-      reassignOwner,
+      owner,
       worker,
       replacement,
       job,
       completedJob,
+      memberAccess: makeAccess(business.id, "MEMBER", worker.id),
     };
   }
 
@@ -369,141 +351,347 @@ try {
     );
   }
 
-  async function runBarrierOrder(label, queueFirst) {
-    const fixture = await seedClockedInWorker(label);
+  function deactivate(fixture) {
+    return writeTeamMemberActive(prisma, {
+      businessId: fixture.business.id,
+      membershipId: fixture.worker.id,
+      actorMembershipId: fixture.owner.id,
+      active: false,
+    });
+  }
+
+  function reassign(fixture, afterJobLocked) {
+    return writeAssignedMembershipAndLaneWindows(prisma, {
+      businessId: fixture.business.id,
+      job: {
+        id: fixture.job.id,
+        scheduledAt: fixture.job.scheduledAt,
+        assignedMembershipId: fixture.worker.id,
+        status: "IN_PROGRESS",
+      },
+      nextAssignedMembershipId: fixture.replacement.id,
+      actorMembershipId: fixture.owner.id,
+      afterJobLocked,
+    });
+  }
+
+  function clockIn(fixture) {
+    return clockInTime(prisma, fixture.memberAccess, {
+      membershipId: fixture.worker.id,
+      activityType: "JOB",
+      jobId: fixture.job.id,
+    });
+  }
+
+  console.log("\nBEHAVIOR — same-OWNER deactivate vs reassign (main 40P01)");
+  {
+    const fixture = await seedClockedInWorker("same-owner-reassign-first");
+    const hold = createHoldRelease();
+    const reassignP = reassign(fixture, async () => {
+      hold.signalAcquired();
+      await hold.released;
+    });
+    await hold.acquired;
+    const deactivateP = deactivate(fixture);
+    await expectBlocked(observer, "Deactivate waits while reassign holds the Job");
+    hold.release();
+    const settled = await Promise.allSettled([reassignP, deactivateP]);
+    const { deadlock, writeRejected } = writesClean(settled);
+    check(
+      "Same-OWNER reassign-first (afterJobLocked) does not raise 40P01",
+      deadlock === false && writeRejected.length === 0,
+    );
+    if (writeRejected.length > 0) {
+      console.error("  same-owner reject:", writeRejected[0].reason);
+    }
+    const facts = await runningFacts(fixture);
+    check(
+      "Same-OWNER reassign-first leaves no RUNNING time for an inactive worker, non-assignee, or completed job",
+      outcomeInvariant(facts, fixture),
+    );
+
+    console.log("\nMUTATION — flipping any leftover RUNNING fact fails the invariant");
+    check(
+      "Invariant refuses leftover RUNNING on the inactive worker",
+      !outcomeInvariant({ ...facts, workerRunning: 1 }, fixture),
+    );
+    check(
+      "Invariant refuses leftover RUNNING for a non-assignee",
+      !outcomeInvariant({ ...facts, nonAssigneeRunning: 1 }, fixture),
+    );
+    check(
+      "Invariant refuses leftover RUNNING on the completed job",
+      !outcomeInvariant({ ...facts, completedRunning: 1 }, fixture),
+    );
+  }
+
+  console.log("\nBEHAVIOR — same-OWNER deactivate-first vs reassign");
+  {
+    const fixture = await seedClockedInWorker("same-owner-deactivate-first");
+    const hold = createHoldRelease();
+    const deactivateP = writeTeamMemberActive(prisma, {
+      businessId: fixture.business.id,
+      membershipId: fixture.worker.id,
+      actorMembershipId: fixture.owner.id,
+      active: false,
+      afterJobsBeforeMembership: async () => {
+        hold.signalAcquired();
+        await hold.released;
+      },
+    });
+    await hold.acquired;
+    const reassignP = reassign(fixture);
+    await expectBlocked(observer, "Reassign waits while deactivate holds Jobs");
+    hold.release();
+    const settled = await Promise.allSettled([deactivateP, reassignP]);
+    const { deadlock, writeRejected } = writesClean(settled);
+    check(
+      "Same-OWNER deactivate-first (afterJobsBeforeMembership) does not raise 40P01",
+      deadlock === false && writeRejected.length === 0,
+    );
+    if (writeRejected.length > 0) {
+      console.error("  deactivate-first reject:", writeRejected[0].reason);
+    }
+    check(
+      "Same-OWNER deactivate-first leaves no RUNNING time for an inactive worker, non-assignee, or completed job",
+      outcomeInvariant(await runningFacts(fixture), fixture),
+    );
+  }
+
+  console.log("\nBEHAVIOR — deactivate vs worker clock-in");
+  {
+    const fixture = await seedClockedInWorker("clock-in-vs-deactivate", {
+      clockedIn: false,
+    });
+    const hold = createHoldRelease();
+    const deactivateP = writeTeamMemberActive(prisma, {
+      businessId: fixture.business.id,
+      membershipId: fixture.worker.id,
+      actorMembershipId: fixture.owner.id,
+      active: false,
+      afterJobsBeforeMembership: async () => {
+        hold.signalAcquired();
+        await hold.released;
+      },
+    });
+    await hold.acquired;
+    const clockP = clockIn(fixture);
+    await expectBlocked(observer, "Clock-in waits while deactivate holds the Job");
+    hold.release();
+    const settled = await Promise.allSettled([deactivateP, clockP]);
+    const { deadlock } = writesClean(settled);
+    const deactivateRejected =
+      settled[0].status === "rejected" && !isPostgresDeadlock(settled[0].reason);
+    check(
+      "Deactivate vs clock-in (afterJobsBeforeMembership) does not raise 40P01",
+      deadlock === false && deactivateRejected === false,
+    );
+    if (deadlock) {
+      const reason = settled.find(
+        (result) => result.status === "rejected" && isPostgresDeadlock(result.reason),
+      )?.reason;
+      console.error("  clock-in vs deactivate deadlock:", reason);
+    }
+  }
+
+  console.log("\nBEHAVIOR — reassign vs previous-assignee clock-in");
+  {
+    const fixture = await seedClockedInWorker("clock-in-vs-reassign", {
+      clockedIn: false,
+    });
+    const hold = createHoldRelease();
+    const reassignP = reassign(fixture, async () => {
+      hold.signalAcquired();
+      await hold.released;
+    });
+    await hold.acquired;
+    const clockP = clockIn(fixture);
+    await expectBlocked(observer, "Clock-in waits while reassign holds the Job");
+    hold.release();
+    const settled = await Promise.allSettled([reassignP, clockP]);
+    const { deadlock } = writesClean(settled);
+    const reassignRejected =
+      settled[0].status === "rejected" && !isPostgresDeadlock(settled[0].reason);
+    check(
+      "Reassign vs clock-in (afterJobLocked) does not raise 40P01",
+      deadlock === false && reassignRejected === false,
+    );
+    if (deadlock) {
+      const reason = settled.find(
+        (result) => result.status === "rejected" && isPostgresDeadlock(result.reason),
+      )?.reason;
+      console.error("  clock-in vs reassign deadlock:", reason);
+    }
+  }
+
+  console.log("\nBEHAVIOR — reservation lock-wait");
+  {
+    const fixture = await seedClockedInWorker("reservation-wait");
     const hold = createHoldRelease();
     const holdTx = locker.$transaction(
       async (tx) => {
-        await tx.$queryRaw`
-          SELECT id FROM "Membership"
-          WHERE id = ${fixture.worker.id}
-            AND "businessId" = ${fixture.business.id}
-          FOR UPDATE
-        `;
+        await lockBusinessScheduleReservation(tx, fixture.business.id);
         hold.signalAcquired();
         await hold.released;
       },
       { timeout: 60_000, maxWait: 10_000 },
     );
     await hold.acquired;
-
-    const deactivate = () =>
-      writeTeamMemberActive(prisma, {
-        businessId: fixture.business.id,
-        membershipId: fixture.worker.id,
-        actorMembershipId: fixture.deactivateOwner.id,
-        active: false,
-      });
-    const reassign = () =>
-      writeAssignedMembershipAndLaneWindows(prisma, {
-        businessId: fixture.business.id,
-        job: {
-          id: fixture.job.id,
-          scheduledAt: fixture.job.scheduledAt,
-          assignedMembershipId: fixture.worker.id,
-          status: "IN_PROGRESS",
-        },
-        nextAssignedMembershipId: fixture.replacement.id,
-        actorMembershipId: fixture.reassignOwner.id,
-      });
-
-    const first =
-      queueFirst === "deactivate"
-        ? deactivate()
-        : reassign();
-    await waitForBlockedContenders(observer, 1);
-    const second =
-      queueFirst === "deactivate"
-        ? reassign()
-        : deactivate();
-    await waitForBlockedContenders(observer, 2);
+    const deactivateP = deactivate(fixture);
+    await expectBlocked(observer, "Deactivate waits on a held schedule-reservation lock");
     hold.release();
-    const settled = await Promise.allSettled([first, second, holdTx]);
-    const deadlock = settled.some(
-      (result) =>
-        result.status === "rejected" && isPostgresDeadlock(result.reason),
+    const settled = await Promise.allSettled([deactivateP, holdTx]);
+    const { deadlock, writeRejected } = writesClean(settled, 1);
+    check(
+      "Deactivate completes after the reservation is released",
+      deadlock === false && writeRejected.length === 0,
     );
-    const writeRejected = settled
-      .slice(0, 2)
-      .filter((result) => result.status === "rejected");
-    const writeErrors = settled
-      .slice(0, 2)
-      .filter(
-        (result) =>
-          result.status === "fulfilled" && result.value && result.value.error,
-      );
-    const facts = await runningFacts(fixture);
-    return {
-      fixture,
-      deadlock,
-      writeRejected,
-      writeErrors,
-      facts,
-      settled,
-    };
   }
 
-  console.log("\nBEHAVIOR — deactivate-first two-connection barrier");
-  const deactivateFirst = await runBarrierOrder("deactivate-first", "deactivate");
-  check(
-    "Deactivate-first barrier does not raise 40P01",
-    deactivateFirst.deadlock === false &&
-      deactivateFirst.writeRejected.length === 0,
-  );
-  if (deactivateFirst.writeRejected.length > 0) {
-    console.error("  deactivate-first reject:", deactivateFirst.writeRejected[0].reason);
+  console.log("\nBEHAVIOR — reassign waits on previous-assignee Membership after Job");
+  {
+    const fixture = await seedClockedInWorker("reassign-membership-wait");
+    const hold = createHoldRelease();
+    const holdTx = locker.$transaction(
+      async (tx) => {
+        await lockTenantOwnedMemberships(tx, fixture.business.id, [
+          fixture.worker.id,
+        ]);
+        hold.signalAcquired();
+        await hold.released;
+      },
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+    await hold.acquired;
+    const jobLocked = createHoldRelease();
+    const reassignP = reassign(fixture, async () => {
+      jobLocked.signalAcquired();
+    });
+    await jobLocked.acquired;
+    await expectBlocked(
+      observer,
+      "Reassign blocks on the previous assignee Membership after the Job lock",
+    );
+    hold.release();
+    const settled = await Promise.allSettled([reassignP, holdTx]);
+    const { deadlock, writeRejected } = writesClean(settled, 1);
+    check(
+      "Reassign completes after the previous assignee Membership is released",
+      deadlock === false && writeRejected.length === 0,
+    );
   }
-  if (deactivateFirst.writeErrors.length > 0) {
-    console.error("  deactivate-first write error:", deactivateFirst.writeErrors[0].value);
-  }
-  check(
-    "Deactivate-first leaves no RUNNING time for an inactive worker, non-assignee, or completed job",
-    outcomeInvariant(deactivateFirst.facts, deactivateFirst.fixture),
-  );
 
-  console.log("\nBEHAVIOR — reassign-first two-connection barrier");
-  const reassignFirst = await runBarrierOrder("reassign-first", "reassign");
-  check(
-    "Reassign-first barrier does not raise 40P01",
-    reassignFirst.deadlock === false && reassignFirst.writeRejected.length === 0,
-  );
-  if (reassignFirst.writeRejected.length > 0) {
-    console.error("  reassign-first reject:", reassignFirst.writeRejected[0].reason);
+  console.log("\nBEHAVIOR — Membership id sorting");
+  {
+    const fixture = await seedClockedInWorker("id-sort");
+    const left = prisma.$transaction(
+      async (tx) => {
+        await lockTenantOwnedMemberships(tx, fixture.business.id, [
+          fixture.owner.id,
+          fixture.worker.id,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      },
+      { timeout: 20_000, maxWait: 10_000 },
+    );
+    const right = locker.$transaction(
+      async (tx) => {
+        await lockTenantOwnedMemberships(tx, fixture.business.id, [
+          fixture.worker.id,
+          fixture.replacement.id,
+          fixture.owner.id,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      },
+      { timeout: 20_000, maxWait: 10_000 },
+    );
+    const settled = await Promise.allSettled([left, right]);
+    const { deadlock, writeRejected } = writesClean(settled);
+    check(
+      "Deactivate [actor, worker] vs reassign [previous, next, actor] does not 40P01",
+      deadlock === false && writeRejected.length === 0,
+    );
+    if (writeRejected.length > 0) {
+      console.error("  id-sort reject:", writeRejected[0].reason);
+    }
   }
-  if (reassignFirst.writeErrors.length > 0) {
-    console.error("  reassign-first write error:", reassignFirst.writeErrors[0].value);
-  }
-  check(
-    "Reassign-first leaves no RUNNING time for an inactive worker, non-assignee, or completed job",
-    outcomeInvariant(reassignFirst.facts, reassignFirst.fixture),
-  );
-
-  console.log("\nMUTATION — flipping any leftover RUNNING fact fails the invariant");
-  check(
-    "Invariant refuses leftover RUNNING on the inactive worker",
-    !outcomeInvariant(
-      { ...deactivateFirst.facts, workerRunning: 1 },
-      deactivateFirst.fixture,
-    ),
-  );
-  check(
-    "Invariant refuses leftover RUNNING for a non-assignee",
-    !outcomeInvariant(
-      { ...reassignFirst.facts, nonAssigneeRunning: 1 },
-      reassignFirst.fixture,
-    ),
-  );
-  check(
-    "Invariant refuses leftover RUNNING on the completed job",
-    !outcomeInvariant(
-      { ...reassignFirst.facts, completedRunning: 1 },
-      reassignFirst.fixture,
-    ),
-  );
+} catch (error) {
+  failed += 1;
+  console.error(error);
 } finally {
   await locker?.$disconnect();
   await observer?.$disconnect();
   await session.cleanup();
+}
+
+if (!process.env.DEADLOCK_MUTATION_CHILD) {
+  console.log(
+    "\nMUTATION — revert each lock and require a failing child concurrency run",
+  );
+  const childScript = fileURLToPath(import.meta.url);
+  const mutations = [
+    {
+      label: "reservation lock",
+      file: "src/lib/team-member-active-ops.ts",
+      search: "        await lockBusinessScheduleReservation(tx, input.businessId);\n",
+      replace: "",
+    },
+    {
+      label: "Job locks",
+      file: "src/lib/team-member-active-ops.ts",
+      search:
+        "        const jobIds = await lockJobsForMembershipClockClose(\n          tx,\n          input.businessId,\n          input.membershipId,\n        );\n",
+      replace: "        const jobIds = [];\n",
+    },
+    {
+      label: "reassign Membership locks",
+      file: "src/lib/job-assignment-ops.ts",
+      search:
+        "  await lockTenantOwnedMemberships(tx, input.businessId, [\n    previousAssignee,\n    nextAssignee,\n    input.actorMembershipId,\n  ]);\n",
+      replace: "",
+    },
+    {
+      label: "id sorting",
+      file: "src/lib/exact-active-membership.ts",
+      search:
+        "  const ids = [\n    ...new Set(membershipIds.filter((id): id is string => Boolean(id))),\n  ].sort();\n",
+      replace:
+        "  const ids = [\n    ...new Set(membershipIds.filter((id): id is string => Boolean(id))),\n  ];\n",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const target = fileURLToPath(new URL(`../${mutation.file}`, import.meta.url));
+    const original = readFileSync(target, "utf8");
+    if (!original.includes(mutation.search)) {
+      check(`mutation setup finds ${mutation.label}`, false);
+      continue;
+    }
+    writeFileSync(target, original.replace(mutation.search, mutation.replace));
+    try {
+      const child = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", childScript],
+        {
+          env: {
+            ...process.env,
+            DATABASE_URL: baseUrl,
+            DEADLOCK_MUTATION_CHILD: "1",
+          },
+          encoding: "utf8",
+          timeout: 180_000,
+        },
+      );
+      const childFailed = child.status !== 0;
+      check(`Mutation ${mutation.label} fails a real concurrency test`, childFailed);
+      if (!childFailed) {
+        console.error(child.stdout?.slice(-2000));
+        console.error(child.stderr?.slice(-2000));
+      }
+    } finally {
+      writeFileSync(target, original);
+    }
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
