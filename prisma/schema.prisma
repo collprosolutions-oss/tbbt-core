@@ -4268,8 +4268,10 @@ model WebsiteGalleryItem {
   @@index([catalogItemId])
 }
 
-/// Future custom-domain binding. UNVERIFIED rows never authorize public
-/// host resolution. This PR does not provision DNS or mark verified.
+/// Custom-domain binding. UNVERIFIED, unknown, and other-tenant hosts
+/// never authorize public host resolution. OWNER-visible verification
+/// is a read-only DNS/host check against this business and its published
+/// site. This model does not provision DNS or mark verified from text.
 model WebsiteHostBinding {
   id         String   @id @default(cuid())
   businessId String

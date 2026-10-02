@@ -136,6 +136,8 @@ const builder = read("src/lib/website-engine/builder.ts");
 const publish = read("src/lib/website-engine/publish.ts");
 const snapshot = read("src/lib/website-engine/snapshot.ts");
 const hosts = read("src/lib/website-engine/hosts.ts");
+const domainVerificationSrc = read("src/lib/website-engine/domain-verification.ts");
+const domainVerificationUi = read("src/components/settings/website-domain-verification.tsx");
 const publicView = read("src/lib/website-engine/public.ts");
 const formSrc = read("src/lib/website-engine/form.ts");
 const copySrc = read("src/lib/website-engine/copy.ts");
@@ -243,7 +245,21 @@ check(
     hosts.includes('kind: "unknown"') &&
     hosts.includes("resolvePublicRoot") &&
     hosts.includes("authorizedPublicOrigin") &&
+    hosts.includes("DNS verification is display-only") &&
+    !hosts.includes("verifyHostnameForBusiness") &&
     !hosts.includes("businessId:") === false,
+);
+check(
+  "Domain verification is read-only, OWNER-visible, and uses injectable DNS",
+  domainVerificationSrc.includes("setWebsiteDomainDnsLookup") &&
+    domainVerificationSrc.includes("PENDING") &&
+    domainVerificationSrc.includes("Never writes DNS") &&
+    domainVerificationSrc.includes("never treats a typed publicWebsite URL as connected") &&
+    domainVerificationSrc.includes("requireBusinessRole") &&
+    domainVerificationSrc.includes('"OWNER"') &&
+    domainVerificationUi.includes("Read-only OWNER check") &&
+    settingsPage.includes("loadWebsiteDomainVerification") &&
+    settingsWorkspace.includes("WebsiteDomainVerificationCard"),
 );
 check(
   "Stable websiteSlug is additive and unique within a business",
