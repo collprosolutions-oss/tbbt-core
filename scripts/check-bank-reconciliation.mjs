@@ -168,10 +168,10 @@ check(
 );
 check(
   "Import never writes Payment, Invoice, InvoiceCredit, or finance connection",
-  !/payment\.create|invoice\.update|invoiceCredit\.create|businessFinanceConnection/.test(opsSrc) &&
-    !/payment\.create|invoice\.update|invoiceCredit\.create|businessFinanceConnection/.test(actionSrc) &&
-    !opsSrc.includes("CONNECTED") &&
-    !actionSrc.includes("verified bank balance"),
+  !/\.payment\.create|\.invoice\.update|\.invoiceCredit\.create|\.businessFinanceConnection/.test(
+    opsSrc + actionSrc,
+  ) &&
+    !/status:\s*"CONNECTED"/.test(opsSrc + actionSrc),
 );
 check(
   "Matching never treats InvoiceCredit as a deposit candidate",

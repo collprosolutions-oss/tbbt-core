@@ -301,6 +301,7 @@ export async function listOwnedBankReconciliations(
     take: 20,
     select: {
       id: true,
+      businessId: true,
       sourceLabel: true,
       capturedAt: true,
       rowCount: true,
