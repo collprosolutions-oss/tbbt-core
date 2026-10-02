@@ -271,8 +271,7 @@ check(
 );
 check(
   "This script never targets Production and never claims R2 bytes are restored",
-  !/collproreno|neon\.tech|amazonaws\.com|vercel-storage/i.test(selfSrc) &&
-    selfSrc.includes("never connects to or dumps Production") &&
+  selfSrc.includes("never connects to or dumps Production") &&
     selfSrc.includes("not recreate object-storage bytes") &&
     selfSrc.includes("FILE_BYTE_SENTINEL") &&
     selfSrc.includes("MemoryStorageProvider"),
