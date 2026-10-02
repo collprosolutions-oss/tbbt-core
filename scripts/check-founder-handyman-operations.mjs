@@ -281,7 +281,9 @@ try {
     "@/app/actions/change-order"
   );
   const { approveChangeOrder } = await import("@/app/actions/public-change-order");
-  const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
+  const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+    "@/lib/complete-job-invoice"
+  );
   const { createInvoiceFromJob, markInvoicePaid } = await import("@/app/actions/invoice");
   const { persistDraftInvoiceFromCompletedJob } = await import("@/lib/invoice-carry-forward");
   const {
