@@ -142,7 +142,7 @@ check("Registry helper accepts the live registry", true);
 check(
   "Supported keys are the real first-party integrations",
   listSupportedIntegrationKeys().join(",") ===
-    "stripe_saas,stripe_connect,resend,r2,twilio_sms,custom_domain,ai_provider",
+    "stripe_saas,stripe_connect,resend,r2,twilio_sms,custom_domain,ai_provider,esign",
 );
 check(
   "Unsupported marketplace placeholders stay out of the live registry",
@@ -151,13 +151,13 @@ check(
   ),
 );
 check(
-  "Calendar / live accounting / bank / e-sign / supplier commerce / voice / social are excluded",
+  "Calendar / live accounting / bank / extra e-sign / supplier commerce / voice / social stay excluded",
   [
     "google_calendar",
     "finance_bank",
     "accounting_connection",
     "supplier_commerce",
-    "esign",
+    "adobe_sign",
     "voice_receptionist",
     "social_publishing",
   ].every((key) => UNSUPPORTED_INTEGRATIONS.some((item) => item.key === key)),
@@ -165,7 +165,7 @@ check(
 check(
   "Optional integrations keep the Go-live OPTIONAL requirement",
   INTEGRATION_REGISTRY.filter((item) =>
-    ["twilio_sms", "custom_domain", "ai_provider"].includes(item.key),
+    ["twilio_sms", "custom_domain", "ai_provider", "esign"].includes(item.key),
   ).every((item) => item.requirement === "OPTIONAL"),
 );
 check(
@@ -247,7 +247,7 @@ check(
 check(
   "Unsupported go-live placeholders are omitted",
   !center.items.some((item) =>
-    ["finance_bank", "supplier_commerce", "esign", "voice_receptionist", "social_publishing"].includes(
+    ["finance_bank", "supplier_commerce", "adobe_sign", "voice_receptionist", "social_publishing"].includes(
       item.key,
     ),
   ),

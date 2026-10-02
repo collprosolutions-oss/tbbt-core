@@ -1,10 +1,13 @@
 /**
  * Provider-neutral e-sign boundary.
  *
- * This PR does not connect a live e-sign provider and must not invent a
- * digital signature. Completion is recorded as external signing or a
- * manual signed-file upload.
+ * Dropbox Sign is the connected adapter when DROPBOX_SIGN_API_KEY is set.
+ * The fake adapter is local/script tests only. Form completion stays
+ * external signature or manual upload — TBBT will not invent a digital
+ * signature from a button click.
  */
+
+import { isEsignProviderConfigured } from "@/lib/esign/config";
 
 export const ESIGN_PROVIDER_STATUSES = ["NOT_CONNECTED", "PROVIDER_READY"] as const;
 export type EsignProviderStatus = (typeof ESIGN_PROVIDER_STATUSES)[number];
@@ -19,6 +22,12 @@ export type EsignCompletionMode = (typeof ESIGN_COMPLETION_MODES)[number];
 
 export const ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE =
   "No e-sign provider is connected. You can record an external signature or upload a signed PDF. TBBT will not invent a digital signature.";
+
+export const ESIGN_PROVIDER_READY_MESSAGE =
+  "A connected e-sign adapter is available. Only the owner can send a locked agreement version. The signed file is bound to that exact business, agreement, and version after a verified webhook. Manual upload and external completion still work. TBBT will not invent a digital signature.";
+
+export const ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE =
+  "Provider completion arrives through a verified webhook bound to the sent version. TBBT will not invent a digital signature from this form.";
 
 export class EsignBoundaryError extends Error {
   constructor(message: string) {
@@ -35,20 +44,21 @@ export function isEsignCompletionMode(value: string): value is EsignCompletionMo
   return (ESIGN_COMPLETION_MODES as readonly string[]).includes(value);
 }
 
-/**
- * Live provider credentials are out of scope. Always report NOT_CONNECTED
- * until a later PR wires a real provider.
- */
 export function resolveEsignProviderStatus(): EsignProviderStatus {
-  return "NOT_CONNECTED";
+  return isEsignProviderConfigured() ? "PROVIDER_READY" : "NOT_CONNECTED";
+}
+
+export function esignProviderMessage(
+  providerStatus: EsignProviderStatus = resolveEsignProviderStatus(),
+) {
+  return providerStatus === "PROVIDER_READY"
+    ? ESIGN_PROVIDER_READY_MESSAGE
+    : ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE;
 }
 
 export function allowedCompletionModes(
-  providerStatus: EsignProviderStatus = resolveEsignProviderStatus(),
+  _providerStatus: EsignProviderStatus = resolveEsignProviderStatus(),
 ): readonly EsignCompletionMode[] {
-  if (providerStatus === "PROVIDER_READY") {
-    return ["PROVIDER_READY", "EXTERNAL_SIGNATURE", "MANUAL_UPLOAD"];
-  }
   return ["EXTERNAL_SIGNATURE", "MANUAL_UPLOAD"];
 }
 
@@ -75,7 +85,7 @@ export function normalizeCompletionMode(
   const mode = (requested ?? "").trim();
   if (mode === "PROVIDER_READY") {
     assertDigitalSignatureAllowed(providerStatus);
-    return "PROVIDER_READY";
+    throw new EsignBoundaryError(ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE);
   }
   if (mode === "EXTERNAL_SIGNATURE" || mode === "MANUAL_UPLOAD") {
     return mode;
@@ -84,6 +94,6 @@ export function normalizeCompletionMode(
     return "EXTERNAL_SIGNATURE";
   }
   throw new EsignBoundaryError(
-    "Choose external signature or a signed-file upload. Digital signing is not connected.",
+    "Choose external signature or a signed-file upload. Digital signing is not invented here.",
   );
 }

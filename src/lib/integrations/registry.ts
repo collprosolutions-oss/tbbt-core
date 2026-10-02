@@ -86,6 +86,16 @@ export const INTEGRATION_REGISTRY: readonly IntegrationDefinition[] = [
       "Optional provider synthesis for entitled Coach asks. Recorded facts stay the source of truth. A key presence is not a live product claim.",
     settingsHref: "/settings?section=overview",
   },
+  {
+    key: "esign",
+    displayName: "Dropbox Sign e-sign",
+    category: "Documents/e-sign",
+    requirement: GO_LIVE_CARD_REQUIREMENTS.esign,
+    goLiveCapabilityId: "esign",
+    description:
+      "Connected e-sign adapter for OWNER Send of a locked agreement version. Webhooks bind the signed file to that exact business, agreement, and version. Manual upload remains available.",
+    settingsHref: "/business-protection?area=agreements",
+  },
 ];
 
 /**
@@ -118,10 +128,9 @@ export const UNSUPPORTED_INTEGRATIONS: readonly UnsupportedIntegration[] = [
     reason: "Supplier commerce adapter is disconnected. TBBT does not log into retailer accounts or place orders.",
   },
   {
-    key: "esign",
+    key: "adobe_sign",
     category: "Documents/e-sign",
-    goLiveCapabilityId: "esign",
-    reason: "E-sign resolveEsignProviderStatus is always NOT_CONNECTED. Manual upload remains available in Business Protection.",
+    reason: "Adobe Sign is not a connected adapter. Dropbox Sign is the one e-sign provider TBBT can use.",
   },
   {
     key: "voice_receptionist",

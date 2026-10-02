@@ -21,6 +21,7 @@ import {
   markAgreementOwnerReviewed,
   markAgreementReady,
   markAgreementSent,
+  sendAgreementForEsign,
   releaseUnreferencedVaultAsset,
   saveAgreementAnswers,
   saveAgreementDraftContent,
@@ -311,6 +312,30 @@ export async function markAgreementSentAction(
     return { message: "Sent version locked. Later edits create a new version.", agreementId: readString(formData, "agreementId") };
   } catch (error) {
     return { error: businessProtectionErrorMessage(error, "That sent state could not be recorded.") };
+  }
+}
+
+export async function sendAgreementForEsignAction(
+  _prev: ProtectionActionState,
+  formData: FormData,
+): Promise<ProtectionActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await sendAgreementForEsign(prisma, access, {
+      agreementId: readString(formData, "agreementId"),
+      signerName: readString(formData, "signerName"),
+      signerEmail: readString(formData, "signerEmail"),
+      sendAttemptKey: readString(formData, "sendAttemptKey") || undefined,
+    });
+    revalidateProtection();
+    return {
+      message: result.reused
+        ? "This locked version already has an e-sign request. TBBT did not invent a signature."
+        : "Owner send locked this version and created a provider signature request. The signed file will bind to this exact version after a verified webhook.",
+      agreementId: result.agreement.id,
+    };
+  } catch (error) {
+    return { error: businessProtectionErrorMessage(error, "That e-sign send could not be created.") };
   }
 }
 

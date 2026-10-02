@@ -14,6 +14,9 @@ import {
   requireBusinessRole,
 } from "@/lib/authorization";
 import { isAiAttemptId } from "@/lib/ai/types";
+import { requireEsignProvider } from "@/lib/esign/provider";
+import { EsignProviderError, type VerifiedEsignCompletionEvent } from "@/lib/esign/types";
+import { isUsableEmail } from "@/lib/mail";
 import {
   AGREEMENT_ATTORNEY_RECOMMENDATION_MESSAGE,
   AGREEMENT_NOT_ENFORCEABLE_MESSAGE,
@@ -23,6 +26,7 @@ import {
   OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
   parseOptionalCalendarDate,
   parseOptionalRenewalLeadDays,
+  PROVIDER_SIGNED_DOCUMENT_NOTE,
   READY_WITHOUT_SENT_COMPLETION_NOTE,
   UPLOADED_SIGNED_DOCUMENT_NOTE,
   isVaultCategory,
@@ -55,6 +59,7 @@ import {
 import {
   allowedCompletionModes,
   assertDigitalSignatureAllowed,
+  ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE,
   EsignBoundaryError,
   normalizeCompletionMode,
   resolveEsignProviderStatus,
@@ -85,7 +90,8 @@ export class BusinessProtectionError extends Error {
 export function businessProtectionErrorMessage(error: unknown, fallback: string) {
   if (
     error instanceof BusinessProtectionError ||
-    error instanceof EsignBoundaryError
+    error instanceof EsignBoundaryError ||
+    error instanceof EsignProviderError
   ) {
     return error.message;
   }
@@ -1172,12 +1178,11 @@ export async function completeAgreementExternally(
 
   if (input.mode === "PROVIDER_READY" || input.mode === "digital" || input.mode === "esign") {
     assertDigitalSignatureAllowed(resolveEsignProviderStatus());
+    throw new EsignBoundaryError(ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE);
   }
   const mode = normalizeCompletionMode(input.mode, resolveEsignProviderStatus());
   if (mode === "PROVIDER_READY") {
-    throw new BusinessProtectionError(
-      "No e-sign provider is connected. TBBT will not invent a digital signature.",
-    );
+    throw new EsignBoundaryError(ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE);
   }
   if (!allowedCompletionModes().includes(mode)) {
     throw new BusinessProtectionError(
@@ -1365,6 +1370,418 @@ export async function completeAgreementExternally(
     });
     if (claim?.agreementId === input.agreementId) {
       return loadCompletionWinner(db, access, input.agreementId);
+    }
+    throw new BusinessProtectionError(
+      "This agreement is already complete. Later edits belong on a new agreement.",
+    );
+  }
+}
+
+async function loadCompletionWinnerByIds(
+  db: Db,
+  businessId: string,
+  agreementId: string,
+) {
+  const agreement = await db.businessAgreement.findFirst({
+    where: { id: agreementId, businessId },
+    include: { versions: { orderBy: { versionNumber: "asc" } } },
+  });
+  if (!agreement) {
+    throw new BusinessProtectionError("That agreement is not in this business workspace.");
+  }
+  const signed = agreement.signedVersionId
+    ? agreement.versions.find((row) => row.id === agreement.signedVersionId)
+    : null;
+  const vault = agreement.vaultRecordId
+    ? await db.businessVaultRecord.findFirst({
+        where: { id: agreement.vaultRecordId, businessId },
+      })
+    : null;
+  if (!signed || !vault) {
+    throw new BusinessProtectionError("This agreement is already complete. Later edits belong on a new agreement.");
+  }
+  return { agreement, vault, signedVersion: signed };
+}
+
+async function ingestProviderSignedPdf(
+  deps: StorageServiceDeps,
+  businessId: string,
+  input: { filename: string; body: Buffer },
+) {
+  if (input.body.byteLength <= 0 || input.body.byteLength > VAULT_DOCUMENT_MAX_BYTES) {
+    throw new BusinessProtectionError("The signed document from the provider is too large for the Business Vault.");
+  }
+  const authorized = await authorizeManagedUpload(deps, businessId, {
+    category: "DOCUMENT",
+    purpose: VAULT_DOCUMENT_PURPOSE,
+    originalFilename: input.filename,
+    mimeType: "application/pdf",
+    fileSizeBytes: input.body.byteLength,
+    visibility: "PRIVATE",
+  });
+  const provider = await resolveStorageProvider(deps);
+  try {
+    await provider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body: input.body,
+      contentType: "application/pdf",
+    });
+    return finalizeManagedUpload(deps, businessId, authorized.asset.id);
+  } catch (error) {
+    await abortManagedUpload(deps, businessId, authorized.asset.id);
+    throw error;
+  }
+}
+
+export async function sendAgreementForEsign(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    agreementId: string;
+    signerName: string;
+    signerEmail: string;
+    sendAttemptKey?: string;
+  },
+) {
+  requireOwnerForCompletion(access);
+  assertDigitalSignatureAllowed(resolveEsignProviderStatus());
+  const attemptKey = normalizeCompletionAttemptKey(input.sendAttemptKey);
+  const signerName = input.signerName.trim();
+  const signerEmail = input.signerEmail.trim();
+  if (!signerName) throw new BusinessProtectionError("Enter the signer name.");
+  if (!isUsableEmail(signerEmail)) {
+    throw new BusinessProtectionError("Enter a valid signer email.");
+  }
+
+  const agreement = await requireOwnedAgreement(db, access, input.agreementId);
+  if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus)) {
+    throw new BusinessProtectionError("A completed agreement cannot be sent again as a new agreement.");
+  }
+  const version = currentVersion(agreement);
+  if (version.representationStatus === "SIGNED_FINAL") {
+    throw new BusinessProtectionError("A signed historical version cannot be re-sent.");
+  }
+  const alreadyLockedSent =
+    version.representationStatus === "SENT" ||
+    (agreement.lifecycleStatus === "SENT" &&
+      isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt));
+
+  if (alreadyLockedSent && agreement.signingMode === "PROVIDER_READY" && agreement.completionAttemptKey) {
+    if (agreement.completionAttemptKey === attemptKey) {
+      return { agreement, version, requestId: null as string | null, reused: true as const };
+    }
+    throw new BusinessProtectionError("This locked version already has an e-sign request.");
+  }
+
+  if (!alreadyLockedSent) {
+    assertLifecycleTransition(agreement.lifecycleStatus as AgreementLifecycleStatus, "SENT");
+    assertAgreementReadiness({
+      access,
+      agreement,
+      version,
+      target: "SENT",
+    });
+    if (isLockedVersion(version.representationStatus as AgreementVersionStatus, version.lockedAt)) {
+      throw new BusinessProtectionError("Open the locked sent version before sending it for e-sign.");
+    }
+  } else if (!version.draftContent.trim()) {
+    throw new BusinessProtectionError(AGREEMENT_NOT_READY_FOR_COMPLETION_MESSAGE);
+  }
+
+  const adapter = requireEsignProvider();
+  let created;
+  try {
+    created = await adapter.createSignatureRequest({
+      businessId: access.businessId,
+      agreementId: agreement.id,
+      versionId: version.id,
+      versionNumber: version.versionNumber,
+      title: agreement.title,
+      draftContent: version.draftContent,
+      signerName,
+      signerEmail,
+      attemptKey,
+      actorMembershipId: membershipId(access),
+    });
+  } catch (error) {
+    if (error instanceof EsignProviderError) {
+      throw new BusinessProtectionError(error.message);
+    }
+    throw error;
+  }
+
+  const write = async (tx: Prisma.TransactionClient) => {
+    await lockOwnedAgreement(tx, access, input.agreementId);
+    const fresh = await requireOwnedAgreement(tx, access, input.agreementId);
+    if (isCompletedAgreement(fresh.lifecycleStatus as AgreementLifecycleStatus)) {
+      throw new BusinessProtectionError("A completed agreement cannot be sent again as a new agreement.");
+    }
+    const current = currentVersion(fresh);
+    if (current.id !== version.id) {
+      throw new BusinessProtectionError(
+        "The agreement version changed before e-sign send finished. The provider request was not bound.",
+      );
+    }
+    if (fresh.signingMode === "PROVIDER_READY" && fresh.completionAttemptKey) {
+      if (fresh.completionAttemptKey === attemptKey) {
+        return { agreement: fresh, version: current, requestId: created.requestId, reused: true as const };
+      }
+      throw new BusinessProtectionError("This locked version already has an e-sign request.");
+    }
+    const now = new Date();
+    if (
+      !isLockedVersion(current.representationStatus as AgreementVersionStatus, current.lockedAt) ||
+      current.representationStatus !== "SENT"
+    ) {
+      await tx.businessAgreementVersion.update({
+        where: { id: current.id },
+        data: { representationStatus: "SENT", lockedAt: now },
+      });
+    }
+    const updated = await tx.businessAgreement.update({
+      where: { id: fresh.id },
+      data: {
+        lifecycleStatus: "SENT",
+        signingMode: "PROVIDER_READY",
+        currentDraftVersionId: current.id,
+        completionAttemptKey: attemptKey,
+      },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "esign_request_created",
+      agreementId: fresh.id,
+      newValue: {
+        versionId: current.id,
+        versionNumber: current.versionNumber,
+        requestId: created.requestId,
+        provider: adapter.id,
+        attemptKey,
+        signerEmail,
+      },
+    });
+    return {
+      agreement: updated,
+      version: { ...current, representationStatus: "SENT" as const, lockedAt: current.lockedAt ?? now },
+      requestId: created.requestId,
+      reused: false as const,
+    };
+  };
+
+  try {
+    return await runAgreementTransaction(db, write);
+  } catch (error) {
+    if (error instanceof BusinessProtectionError || error instanceof EsignBoundaryError) {
+      throw error;
+    }
+    throw error;
+  }
+}
+
+export async function completeAgreementFromEsignWebhook(
+  db: Db,
+  input: {
+    event: VerifiedEsignCompletionEvent;
+    signedPdf: Buffer;
+    storage: StorageServiceDeps;
+    now?: Date;
+  },
+) {
+  const { metadata, requestId } = input.event;
+  if (
+    !metadata.businessId ||
+    !metadata.agreementId ||
+    !metadata.versionId ||
+    !metadata.attemptKey ||
+    !metadata.actorMembershipId
+  ) {
+    throw new BusinessProtectionError("E-sign webhook is missing the bound business, agreement, and version.");
+  }
+
+  const actor = await db.membership.findFirst({
+    where: {
+      id: metadata.actorMembershipId,
+      businessId: metadata.businessId,
+      role: "OWNER",
+    },
+    select: { id: true },
+  });
+  if (!actor) {
+    throw new BusinessProtectionError("E-sign webhook actor is not an owner in that business.");
+  }
+
+  const asset = await ingestProviderSignedPdf(input.storage, metadata.businessId, {
+    filename: `signed-${metadata.agreementId}-${metadata.versionId}.pdf`,
+    body: input.signedPdf,
+  });
+
+  const write = async (tx: Prisma.TransactionClient) => {
+    await tx.$executeRaw`
+      SELECT 1 FROM "BusinessAgreement"
+      WHERE id = ${metadata.agreementId} AND "businessId" = ${metadata.businessId}
+      FOR UPDATE
+    `;
+    const agreement = await tx.businessAgreement.findFirst({
+      where: { id: metadata.agreementId, businessId: metadata.businessId },
+      include: { versions: { orderBy: { versionNumber: "asc" } } },
+    });
+    if (!agreement) {
+      throw new BusinessProtectionError("That agreement is not in this business workspace.");
+    }
+    const version = agreement.versions.find((row) => row.id === metadata.versionId);
+    if (
+      !version ||
+      version.businessId !== metadata.businessId ||
+      version.agreementId !== metadata.agreementId
+    ) {
+      throw new BusinessProtectionError(
+        "E-sign webhook is not bound to this exact business, agreement, and version.",
+      );
+    }
+
+    const existingClaim = await tx.businessAgreementCompletionClaim.findUnique({
+      where: { agreementId: agreement.id },
+    });
+    if (isCompletedAgreement(agreement.lifecycleStatus as AgreementLifecycleStatus) || existingClaim) {
+      if (
+        (existingClaim?.attemptKey ?? agreement.completionAttemptKey) === metadata.attemptKey &&
+        agreement.signedVersionId === version.id
+      ) {
+        return loadCompletionWinnerByIds(tx, metadata.businessId, agreement.id);
+      }
+      throw new BusinessProtectionError(
+        "This agreement is already complete. Later edits belong on a new agreement.",
+      );
+    }
+
+    if (agreement.signingMode !== "PROVIDER_READY" || agreement.completionAttemptKey !== metadata.attemptKey) {
+      throw new BusinessProtectionError(
+        "That agreement was not sent through the connected e-sign adapter for this request.",
+      );
+    }
+    if (
+      version.representationStatus !== "SENT" &&
+      version.representationStatus !== "SIGNED_FINAL"
+    ) {
+      throw new BusinessProtectionError("The bound version is not the locked sent copy.");
+    }
+
+    const now = input.now ?? new Date();
+    const originalContent = version.draftContent;
+    const signed = await tx.businessAgreementVersion.update({
+      where: { id: version.id },
+      data: { representationStatus: "SIGNED_FINAL", lockedAt: version.lockedAt ?? now },
+    });
+    if (signed.draftContent !== originalContent) {
+      throw new BusinessProtectionError("The signed version content must not be rewritten.");
+    }
+
+    const clock = await vaultClassificationClock(tx, metadata.businessId, now);
+    const vault = await tx.businessVaultRecord.create({
+      data: {
+        businessId: metadata.businessId,
+        title: `${agreement.title} (provider signed document)`,
+        category: vaultCategoryForAgreement(agreement.agreementType),
+        counterparty: agreement.counterparty,
+        effectiveOn: agreement.effectiveOn,
+        expiresOn: agreement.expiresOn,
+        notes: [
+          PROVIDER_SIGNED_DOCUMENT_NOTE,
+          `providerRequestId=${requestId}`,
+          `boundVersionId=${version.id}`,
+          `uploadedSignedAssetId=${asset.id}`,
+        ].join(" "),
+        storedAssetId: asset.id,
+        recordStatus: "ACTIVE",
+        persistedExpiryState: classifyExpiry({
+          category: vaultCategoryForAgreement(agreement.agreementType),
+          expiresOn: agreement.expiresOn,
+          now: clock.now,
+          timeZone: clock.timeZone,
+        }),
+        createdByMembershipId: actor.id,
+        updatedByMembershipId: actor.id,
+      },
+    });
+
+    const updated = await tx.businessAgreement.update({
+      where: { id: agreement.id },
+      data: {
+        lifecycleStatus: "COMPLETE",
+        signingMode: "PROVIDER_READY",
+        signedVersionId: signed.id,
+        currentDraftVersionId: signed.id,
+        vaultRecordId: vault.id,
+        completedAt: now,
+        completedByMembershipId: actor.id,
+        completionNotes: `providerRequestId=${requestId}`,
+        completionAttemptKey: metadata.attemptKey,
+      },
+    });
+
+    await tx.businessAgreementCompletionClaim.create({
+      data: {
+        businessId: metadata.businessId,
+        agreementId: agreement.id,
+        attemptKey: metadata.attemptKey,
+        signedVersionId: signed.id,
+        vaultRecordId: vault.id,
+      },
+    });
+
+    await writeProtectionAudit(tx, {
+      businessId: metadata.businessId,
+      membershipId: actor.id,
+      action: "esign_webhook_completed",
+      agreementId: agreement.id,
+      vaultRecordId: vault.id,
+      newValue: {
+        mode: "PROVIDER_READY",
+        versionId: signed.id,
+        requestId,
+        eventId: input.event.eventId,
+        storedSignedDocument: true,
+        completionAttemptKey: metadata.attemptKey,
+      },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: metadata.businessId,
+      membershipId: actor.id,
+      action: "agreement_finalized",
+      agreementId: agreement.id,
+      vaultRecordId: vault.id,
+      newValue: {
+        lifecycleStatus: "COMPLETE",
+        storedAssetId: asset.id,
+        signedDocumentFileUploaded: true,
+        boundVersionId: signed.id,
+      },
+    });
+    return { agreement: updated, vault, signedVersion: signed };
+  };
+
+  try {
+    return await runAgreementTransaction(db, write);
+  } catch (error) {
+    if (!uniqueConflict(error)) throw error;
+    const winner = await db.businessAgreement.findFirst({
+      where: { id: metadata.agreementId, businessId: metadata.businessId },
+    });
+    if (
+      winner &&
+      isCompletedAgreement(winner.lifecycleStatus as AgreementLifecycleStatus) &&
+      winner.completionAttemptKey === metadata.attemptKey &&
+      winner.signedVersionId === metadata.versionId
+    ) {
+      return loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId);
+    }
+    const claim = await db.businessAgreementCompletionClaim.findFirst({
+      where: { businessId: metadata.businessId, attemptKey: metadata.attemptKey },
+    });
+    if (claim?.agreementId === metadata.agreementId && claim.signedVersionId === metadata.versionId) {
+      return loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId);
     }
     throw new BusinessProtectionError(
       "This agreement is already complete. Later edits belong on a new agreement.",

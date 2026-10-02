@@ -34,7 +34,7 @@ import {
   type AgreementLifecycleStatus,
 } from "@/lib/business-protection-agreements";
 import {
-  ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,
+  esignProviderMessage,
   resolveEsignProviderStatus,
 } from "@/lib/business-protection-esign";
 
@@ -326,7 +326,7 @@ export async function loadProtectionWorkspace(
     })),
     esign: {
       providerStatus: resolveEsignProviderStatus(),
-      message: ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,
+      message: esignProviderMessage(),
     },
     vaultPrivateMessage: VAULT_PRIVATE_MESSAGE,
   };

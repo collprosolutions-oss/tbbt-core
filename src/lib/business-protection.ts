@@ -161,6 +161,9 @@ export const EXTERNAL_SIGNATURE_NO_FILE_NOTE =
 export const UPLOADED_SIGNED_DOCUMENT_NOTE =
   "This vault record holds the uploaded signed document file. No digital signature was invented.";
 
+export const PROVIDER_SIGNED_DOCUMENT_NOTE =
+  "This vault record holds the signed document from the connected e-sign provider. It is bound to this exact business, agreement, and version. Later edits do not rewrite it. TBBT did not invent the digital signature.";
+
 export const READY_WITHOUT_SENT_COMPLETION_NOTE =
   "READY-but-not-SENT completion is allowed for an externally signed or uploaded signed document. The owner may finalize a ready draft that was signed outside TBBT without first recording SENT.";
 

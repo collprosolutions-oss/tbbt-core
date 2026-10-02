@@ -152,7 +152,7 @@ npm run test:portal-job-callback
 npm run test:job-customer-issue
 ```
 
-Business Protection (`/business-protection`) is a private vault and agreement-organization workspace. It is not a separately advertised purchasable plan feature, not a licensing authority, and not a live e-sign provider.
+Business Protection (`/business-protection`) is a private vault and agreement-organization workspace. It is not a separately advertised purchasable plan feature and not a licensing authority. Dropbox Sign is the one connected e-sign adapter (OWNER Send of a locked version, verified webhooks). Manual upload and external completion stay available. Production never uses the fake adapter, and TBBT never invents a digital signature.
 
 ## Website publishing
 
