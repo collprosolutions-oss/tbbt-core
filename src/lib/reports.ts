@@ -449,18 +449,22 @@ function paymentsOnInvoice(
           { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
         ),
       )
-      .reduce((sum, payment) => sum + payment.amount, 0),
+      .reduce((sum, payment) => sum + asNumber(payment.amount), 0),
   );
 }
 
 function creditsOnInvoice(credits: readonly ReportInvoiceCredit[] | undefined, invoiceId: string) {
   if (!credits?.length) return 0;
   return roundMoney(
-    credits.filter((credit) => credit.invoiceId === invoiceId).reduce((sum, credit) => sum + credit.amount, 0),
+    credits.filter((credit) => credit.invoiceId === invoiceId).reduce((sum, credit) => sum + asNumber(credit.amount), 0),
   );
 }
 
-/** Remaining SENT balance after recorded payments and OWNER credits. */
+/** Remaining SENT balance after recorded payments and OWNER credits.
+ * Latent hardening: coerce Prisma Decimal totals so a raw-Decimal caller
+ * cannot concatenate or drop remaining due. Production loaders already
+ * coerce to number before this function.
+ */
 export function outstandingRemaining(
   invoices: readonly ReportInvoice[],
   payments?: readonly ReportPayment[],
@@ -468,7 +472,11 @@ export function outstandingRemaining(
 ) {
   const sent = outstandingInvoices(invoices);
   if (!payments?.length && !credits?.length) {
-    return { amount: sumTotals(sent), count: sent.length, rows: sent.map((invoice) => ({ invoice, balance: invoice.total })) };
+    return {
+      amount: sumTotals(sent),
+      count: sent.length,
+      rows: sent.map((invoice) => ({ invoice, balance: asNumber(invoice.total) })),
+    };
   }
   const rows = sent
     .map((invoice) => ({
@@ -476,7 +484,7 @@ export function outstandingRemaining(
       balance: roundMoney(
         Math.max(
           0,
-          invoice.total - paymentsOnInvoice(payments, invoice) - creditsOnInvoice(credits, invoice.id),
+          asNumber(invoice.total) - paymentsOnInvoice(payments, invoice) - creditsOnInvoice(credits, invoice.id),
         ),
       ),
     }))
@@ -496,7 +504,7 @@ export function expensesInRange(
 }
 
 export function sumTotals(invoices: readonly { total: number }[]): number {
-  return roundMoney(invoices.reduce((sum, invoice) => sum + invoice.total, 0));
+  return roundMoney(invoices.reduce((sum, invoice) => sum + asNumber(invoice.total), 0));
 }
 
 export function averageInvoiceValue(invoices: readonly { total: number }[]): number | null {
