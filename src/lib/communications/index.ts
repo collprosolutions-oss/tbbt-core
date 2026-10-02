@@ -49,6 +49,21 @@ export {
   setPhoneLogFailureAfter,
 } from "@/lib/communications/missed-call";
 export {
+  MISSED_INBOUND_VOICE_STATUSES,
+  TWILIO_VOICE_PROVIDER,
+  VOICE_WEBHOOK_IGNORED_CONTENT_PARAMS,
+  VOICE_WEBHOOK_PATH,
+  VOICE_WEBHOOK_REJECT_TWIML,
+  applyInboundVoiceMissedCall,
+  handleInboundVoiceWebhookRequest,
+  isMissedInboundVoiceEvent,
+  isTwilioVoiceWebhookConfigured,
+  isVoiceWebhookPath,
+  parseInboundVoiceWebhook,
+  voiceMissedCallIdempotencyKey,
+  voiceWebhookCommunicationsAccess,
+} from "@/lib/communications/voice-webhook";
+export {
   getReceptionistReadiness,
   lookupCaller,
   proposeReceptionistAction,
