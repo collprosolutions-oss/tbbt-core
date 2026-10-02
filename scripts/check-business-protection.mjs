@@ -6,9 +6,10 @@
  */
 import { register } from "node:module";
 import { createRequire } from "node:module";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { copyFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -27,6 +28,7 @@ const {
   NO_FAKE_ESIGN_MESSAGE,
   OWNER_REVIEW_REQUIRES_OWNER_MESSAGE,
   UPLOADED_SIGNED_DOCUMENT_NOTE,
+  VAULT_DOCUMENT_PURPOSE,
   classifyExpiry,
   daysUntilCalendarDate,
   utcCalendarDate,
@@ -44,7 +46,11 @@ const {
 } = await import("@/lib/business-protection-agreements");
 const { PRODUCT_DOWNGRADE_RULES } = await import("@/lib/product-entitlements/downgrade");
 const { MemoryStorageProvider } = await import("@/lib/business-storage/memory-provider");
-const { ensureBusinessStorageAccount } = await import("@/lib/business-storage/service");
+const {
+  deleteStoredAsset,
+  discardReadyManagedUpload,
+  ensureBusinessStorageAccount,
+} = await import("@/lib/business-storage/service");
 const { readPublicStoredAsset } = await import("@/lib/business-storage/service");
 const { servePrivateStoredAsset } = await import("@/lib/business-storage/private-serve");
 const {
@@ -137,6 +143,203 @@ function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
+function deadlockText(error) {
+  return [
+    error?.code,
+    error?.meta?.code,
+    error?.cause?.code,
+    error?.message,
+    error?.cause?.message,
+    String(error ?? ""),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isDeadlockError(error) {
+  return /40P01|deadlock detected|P2034/i.test(deadlockText(error));
+}
+
+function runPsqlOnTestDb(datasourceUrl, sql) {
+  const psqlUrl = new URL(datasourceUrl);
+  psqlUrl.searchParams.delete("schema");
+  return new Promise((resolve) => {
+    const child = spawn("psql", [psqlUrl.toString(), "-v", "ON_ERROR_STOP=1", "-c", sql], {
+      encoding: "utf8",
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      err += chunk;
+    });
+    child.on("close", (code) => {
+      resolve({
+        status: code === 0 ? "fulfilled" : "rejected",
+        reason: new Error(`${err}\n${out}`),
+        code,
+        err,
+        out,
+      });
+    });
+  });
+}
+
+async function holdAccountAndRace({ datasourceUrl, accountId, left, right }) {
+  const hold = runPsqlOnTestDb(
+    datasourceUrl,
+    [
+      "BEGIN;",
+      `SELECT id FROM "BusinessStorageAccount" WHERE id = '${accountId}' FOR UPDATE;`,
+      "SELECT pg_sleep(0.5);",
+      "COMMIT;",
+    ].join("\n"),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const raced = await Promise.allSettled([left(), right()]);
+  const held = await hold;
+  return { raced, held };
+}
+
+async function runHeldAccountVaultReleaseRaces({
+  prisma,
+  provider,
+  PrismaClient,
+  datasourceUrl,
+  rounds = 5,
+}) {
+  const results = [];
+  for (const kind of ["delete", "discard"]) {
+    for (let round = 0; round < rounds; round += 1) {
+      const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+      const business = await prisma.business.create({
+        data: { name: `Vault lock ${suffix}`, slug: `vault-lock-${suffix}`, tradeCode: "HANDYMAN" },
+      });
+      const user = await prisma.user.create({
+        data: {
+          name: `Vault Owner ${suffix}`,
+          email: `vault-lock-${suffix}@example.com`,
+          passwordHash: "x",
+        },
+      });
+      const membership = await prisma.membership.create({
+        data: { userId: user.id, businessId: business.id, role: "OWNER" },
+      });
+      const access = makeAccess(business.id, "OWNER", membership.id, {
+        userId: user.id,
+        businessName: business.name,
+      });
+      const deps = {
+        db: prisma,
+        provider,
+        bucketName: "tbbt-vault-test",
+        defaultLimitBytes: 1_000_000,
+      };
+      const body = Buffer.from(`%PDF-1.4 vault-lock-${suffix}`);
+      const authorized = await authorizeVaultDocumentUpload(deps, access, {
+        originalFilename: `vault-lock-${suffix}.pdf`,
+        mimeType: "application/pdf",
+        fileSizeBytes: body.byteLength,
+      });
+      await provider.putObject({
+        bucket: authorized.account.bucketName,
+        key: authorized.asset.storageKey,
+        body,
+        contentType: "application/pdf",
+      });
+      const ready = await finalizeVaultDocumentUpload(deps, access, authorized.asset.id);
+      const leftClient = new PrismaClient({ datasourceUrl });
+      const rightClient = new PrismaClient({ datasourceUrl });
+      try {
+        const { raced, held } = await holdAccountAndRace({
+          datasourceUrl,
+          accountId: authorized.account.id,
+          left: () =>
+            releaseUnreferencedVaultAsset({ ...deps, db: leftClient }, access, ready.id),
+          right: () =>
+            kind === "delete"
+              ? deleteStoredAsset({ ...deps, db: rightClient }, access, ready.id)
+              : discardReadyManagedUpload({ ...deps, db: rightClient }, business.id, ready.id, {
+                  jobId: ready.jobId,
+                  category: ready.category,
+                  purpose: ready.purpose,
+                  visibility: ready.visibility,
+                }),
+        });
+        const after = await prisma.businessStorageAccount.findUniqueOrThrow({
+          where: { businessId: business.id },
+        });
+        const assets = await prisma.storedAsset.findMany({
+          where: { businessId: business.id, deletedAt: null },
+          select: { id: true, status: true, fileSizeBytes: true },
+        });
+        const racedAsset = await prisma.storedAsset.findUniqueOrThrow({ where: { id: ready.id } });
+        const readyAssets = assets.filter((row) => row.status === "READY");
+        const readyBytes = readyAssets.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0);
+        const used = Number(after.storageUsedBytes);
+        const reserved = Number(after.storageReservedBytes);
+        const fileSize = Number(ready.fileSizeBytes);
+        const deadlockSeen = [held, ...raced].some(
+          (item) =>
+            item.status === "rejected" &&
+            (isDeadlockError(item.reason) ||
+              /40P01|deadlock detected/i.test(`${item.err ?? ""} ${item.out ?? ""} ${item.reason ?? ""}`)),
+        );
+        results.push({
+          kind,
+          deadlockSeen,
+          reserved,
+          used,
+          readyBytes,
+          endedReady: racedAsset.status === "READY",
+          accountingOk:
+            reserved >= 0 &&
+            racedAsset.status !== "READY" &&
+            (used === readyBytes || used === readyBytes - fileSize),
+        });
+      } finally {
+        await leftClient.$disconnect();
+        await rightClient.$disconnect();
+      }
+    }
+  }
+  return {
+    rounds: results.length,
+    deadlockCount: results.filter((row) => row.deadlockSeen).length,
+    accountingOk: results.every((row) => row.accountingOk),
+    deleteDeadlocks: results.filter((row) => row.kind === "delete" && row.deadlockSeen).length,
+    discardDeadlocks: results.filter((row) => row.kind === "discard" && row.deadlockSeen).length,
+    results,
+  };
+}
+
+if (process.env.REQUEST_PROTECTION_VAULT_LOCK_MUTATION === "1") {
+  const provider = new MemoryStorageProvider();
+  try {
+    const result = await runHeldAccountVaultReleaseRaces({
+      prisma,
+      provider,
+      PrismaClient,
+      datasourceUrl: process.env.DATABASE_URL,
+      rounds: 5,
+    });
+    const ok = result.deadlockCount === 0 && result.accountingOk && result.rounds === 10;
+    if (!ok) {
+      console.error(
+        `FAIL - held-account vault-release races deadlockCount=${result.deadlockCount} deleteDeadlocks=${result.deleteDeadlocks} discardDeadlocks=${result.discardDeadlocks} accountingOk=${result.accountingOk}`,
+      );
+    }
+    process.exit(ok ? 0 : 1);
+  } catch (error) {
+    console.error("FAIL - held-account vault lock mutation child threw", error);
+    process.exit(1);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
 try {
   console.log("\nSTATIC — Business Protection domain");
   const now = new Date(Date.UTC(2026, 8, 25));
@@ -213,6 +416,16 @@ try {
   check("E-sign helper always returns NOT_CONNECTED in this PR", esignSrc.includes('return "NOT_CONNECTED"'));
   check("AI cannot authorize or sign", aiSrc.includes(AGREEMENT_AI_CANNOT_AUTHORIZE_MESSAGE) && aiSrc.includes("Do not authorize"));
   check("Workspace loader does not run protection DDL", !workspaceSrc.includes("BusinessVaultRecord"));
+  const vaultReleaseSrc = opsSrc.slice(
+    opsSrc.indexOf("export async function releaseUnreferencedVaultAsset"),
+    opsSrc.indexOf("export async function authorizeVaultDocumentUpload"),
+  );
+  check(
+    "Vault unreferenced release locks the storage account before the asset row",
+    vaultReleaseSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
+      vaultReleaseSrc.indexOf("BusinessStorageAccount") < vaultReleaseSrc.indexOf("storedAsset.update") &&
+      vaultReleaseSrc.includes("FOR UPDATE"),
+  );
 
   console.log("\nDB — Tenant isolation, vault privacy, lifecycle, export");
   const ownerUser = await prisma.user.create({
@@ -853,6 +1066,73 @@ try {
   const kept = await releaseUnreferencedVaultAsset(deps, ownerA, finalized.id);
   const keptAfter = await prisma.storedAsset.findUniqueOrThrow({ where: { id: finalized.id } });
   check("Referenced vault file is not deleted", kept.released === false && keptAfter.status === "READY");
+
+  const heldAccountVaultRaces = await runHeldAccountVaultReleaseRaces({
+    prisma,
+    provider,
+    PrismaClient,
+    datasourceUrl: testUrl,
+    rounds: 5,
+  });
+  check(
+    "Held-account vault-release vs deleteStoredAsset and discardReadyManagedUpload do not deadlock and keep accounting",
+    heldAccountVaultRaces.rounds === 10 &&
+      heldAccountVaultRaces.deadlockCount === 0 &&
+      heldAccountVaultRaces.accountingOk,
+  );
+
+  const vaultOpsPath = fileURLToPath(
+    new URL("../src/lib/business-protection-ops.ts", import.meta.url),
+  );
+  const vaultLockBackupPath = `/tmp/tbbt-vault-release-lock-bak-${randomUUID()}.ts`;
+  const vaultLockOriginal = readFileSync(vaultOpsPath, "utf8");
+  const vaultAccountFirstBlock = `    // LOCK_ACCOUNT_BEFORE_ASSET: vault release must match delete/discard (account, then asset).
+    await tx.$queryRaw\`
+      SELECT id FROM "BusinessStorageAccount" WHERE id = \${asset.storageAccountId} FOR UPDATE
+    \`;
+`;
+  copyFileSync(vaultOpsPath, vaultLockBackupPath);
+  try {
+    check(
+      "Vault lock-order mutation setup finds account-before-asset vault release lock",
+      vaultLockOriginal.includes(vaultAccountFirstBlock),
+    );
+    writeFileSync(vaultOpsPath, vaultLockOriginal.replace(vaultAccountFirstBlock, ""));
+    const vaultLockChild = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", fileURLToPath(import.meta.url)],
+      {
+        env: {
+          ...process.env,
+          REQUEST_PROTECTION_VAULT_LOCK_MUTATION: "1",
+          DATABASE_URL: testUrl,
+        },
+        encoding: "utf8",
+        timeout: 180_000,
+      },
+    );
+    check(
+      "Reverting vault release to asset-first locks deadlocks held-account delete/discard races",
+      vaultLockChild.status !== 0 &&
+        /deadlockCount=[1-9]|40P01|deadlock/i.test(
+          `${vaultLockChild.stdout ?? ""}\n${vaultLockChild.stderr ?? ""}`,
+        ),
+    );
+    if (
+      vaultLockChild.status === 0 ||
+      !/deadlockCount=[1-9]|40P01|deadlock/i.test(
+        `${vaultLockChild.stdout ?? ""}\n${vaultLockChild.stderr ?? ""}`,
+      )
+    ) {
+      console.error((vaultLockChild.stdout || "").slice(-2000));
+      console.error((vaultLockChild.stderr || "").slice(-1000));
+    }
+  } finally {
+    writeFileSync(vaultOpsPath, vaultLockOriginal);
+    const restoredVaultLock = spawnSync("cmp", [vaultOpsPath, vaultLockBackupPath]);
+    check("business-protection-ops.ts restored after vault lock-order mutation", restoredVaultLock.status === 0);
+    unlinkSync(vaultLockBackupPath);
+  }
 
   const ownerReviewAudit = await prisma.businessProtectionAuditLog.findFirst({
     where: { agreementId: agreement.id, action: "owner_review_recorded" },
