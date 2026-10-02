@@ -22,6 +22,9 @@ const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider, FAKE_PAYMENT_READY_ACCOUNTS_ENV } = await import(
   "@/lib/payments/fake"
 );
+const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
+  "@/lib/public-website-paths"
+);
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
 const { dispatchStripeWebhookEvent } = await import("@/lib/stripe-webhook-dispatch");
 const { SAAS_CHECKOUT_PURPOSE } = await import("@/lib/saas-billing");
@@ -695,6 +698,14 @@ try {
     "Fake checkout URL is the local Stripe test page",
     fakeSrc.includes("/payments/test-checkout") &&
       !fakeSrc.includes("https://checkout.stripe.test/pay/"),
+  );
+  check(
+    "Local Stripe test checkout is a public website path so Pay Invoice is not bounced to sign-in",
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1") &&
+      isPublicWebsitePath("/payments/test-checkout/cs_test_1") &&
+      isPublicWebsitePath("/payments/test-checkout/cs_test_1/complete") &&
+      !isPublicWebsitePath("/payments") &&
+      !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra"),
   );
   check(
     "Stripe adapter does not honor the local fake ready-account allowlist",

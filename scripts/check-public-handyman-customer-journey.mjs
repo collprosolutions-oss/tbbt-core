@@ -74,6 +74,9 @@ const { loadInvoiceDocumentForProjectToken } = await import(
 const { createFakePaymentProvider, FAKE_STRIPE_TEST_CHECKOUT_PATH } = await import(
   "@/lib/payments/fake"
 );
+const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
+  "@/lib/public-website-paths"
+);
 const {
   createCustomerInvoiceCheckout,
   applyVerifiedCheckoutPayment,
@@ -182,6 +185,16 @@ check(
     testCheckoutPage.includes("STRIPE_TEST_CHECKOUT_HEADING") &&
     testCheckoutLib.includes("Stripe test checkout") &&
     testCheckoutLib.includes("No real card is charged"),
+);
+check(
+  "Auth proxy leaves the local Stripe test checkout public",
+  isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1/complete") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1/cancel") &&
+    !isPublicWebsitePath("/payments") &&
+    !isPublicWebsitePath("/payments/other") &&
+    !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra"),
 );
 check(
   "Mobile portal and estimate stay single-column, then widen",
@@ -926,6 +939,50 @@ await withDisposableTestDatabase(
           "Return URL is this token's portal with checkout=return",
           completeTo.includes(`/p/${unpaidJob.projectToken}`) &&
             completeTo.includes("checkout=return"),
+        );
+      }
+      const cancelJob = await prisma.job.create({
+        data: {
+          businessId: businessA.id,
+          customerId: customerA.id,
+          propertyId: propertyA.id,
+          projectToken: randomUUID(),
+          status: "COMPLETED",
+        },
+      });
+      await prisma.invoice.create({
+        data: {
+          businessId: businessA.id,
+          customerId: customerA.id,
+          jobId: cancelJob.id,
+          total: new Prisma.Decimal("44.00"),
+          status: "SENT",
+        },
+      });
+      const cancelPay = await fetch(`${APP_URL}/p/${cancelJob.projectToken}/pay`, {
+        method: "POST",
+        redirect: "manual",
+      });
+      const cancelPayTo = cancelPay.headers.get("location") ?? "";
+      check("Cancel-path Pay Invoice also opens the local test checkout", cancelPay.status === 303);
+      if (cancelPayTo) {
+        const cancelSessionId = cancelPayTo.split("/").pop();
+        const cancelCheckout = await fetch(cancelPayTo, { redirect: "manual" });
+        check(
+          "Cancel-path test checkout is not redirected to sign-in",
+          cancelCheckout.status === 200 &&
+            !(cancelCheckout.headers.get("location") ?? "").includes("/sign-in"),
+        );
+        const cancelled = await fetch(
+          `${APP_URL}${FAKE_STRIPE_TEST_CHECKOUT_PATH}/${cancelSessionId}/cancel`,
+          { method: "POST", redirect: "manual" },
+        );
+        const cancelledTo = cancelled.headers.get("location") ?? "";
+        check("Test cancel redirects back to the project portal", cancelled.status === 303);
+        check(
+          "Cancel URL is this token's portal with checkout=cancelled",
+          cancelledTo.includes(`/p/${cancelJob.projectToken}`) &&
+            cancelledTo.includes("checkout=cancelled"),
         );
       }
       const staleCheckout = await fetch(

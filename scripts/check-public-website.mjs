@@ -67,7 +67,9 @@ const {
   summarizeSelectedWorkPricing,
 } = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
-const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
+const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
+  "@/lib/public-website-paths"
+);
 const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import("@/lib/stripe-webhook-path");
 const { shouldServeTbbtMarketingHome } = await import("@/lib/tbbt-marketing-host");
 
@@ -260,6 +262,18 @@ check("Public hire, intake, and stored website photos stay public",
 check("Password reset links stay public like team set-password links",
   isPublicWebsitePath("/reset-password/abc") &&
     isPublicWebsitePath("/set-password/abc"));
+check(
+  "Local Stripe test checkout stays public so Pay Invoice is not bounced to sign-in",
+  isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1") &&
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1/complete") &&
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1/cancel") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1/complete") &&
+    !isFakeStripeTestCheckoutPath("/payments") &&
+    !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra") &&
+    !isPublicWebsitePath("/payments") &&
+    !isPublicWebsitePath("/payments/other"),
+);
 check(
   "TBBT marketing routes are public and do not replace CollPro /hire or /r",
   isPublicWebsitePath("/features") &&
