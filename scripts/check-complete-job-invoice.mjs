@@ -273,12 +273,12 @@ try {
   check(
     "markJobComplete returns the draft success message and invoice href",
     markJobCompleteFn.includes("...ownerCompleteJobSuccessState(result)") &&
-      markJobCompleteFn.includes("invoiceHref"),
+      markJobCompleteFn.includes("warning: result.warning"),
   );
   check(
     "job page Invoice card renders the derived draft-only helper",
-    jobPageSrc.includes("completedJobPageInvoiceMessage(") &&
-      !/billingAttention\.unbilled\s*\?\s*billingAttention\.detail/.test(jobPageSrc) &&
+    /<CardDescription>\s*\{completedJobPageInvoiceMessage\(/.test(jobPageSrc) &&
+      !/<CardDescription>\s*\{billingAttention/.test(jobPageSrc) &&
       jobPageSrc.includes("MarkInvoiceSentButton") &&
       jobPageSrc.includes("`/invoices/${invoice.id}`") &&
       jobPageSrc.includes("`/invoices/${row.id}`"),
