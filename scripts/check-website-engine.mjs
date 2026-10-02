@@ -218,6 +218,8 @@ check(
     panel.includes("Publish website") &&
     panel.includes("WritingAssistBar") &&
     panel.includes("onSuggestion={setHeroHeadline}") &&
+    !read("src/components/ai/writing-assist-bar.tsx").includes("<form ") &&
+    read("src/components/ai/writing-assist-bar.tsx").includes('type="button"') &&
     !settingsPage.includes("runWritingAssist") &&
     !settingsPage.includes("applyWritingAction"),
 );
@@ -375,7 +377,10 @@ check(
     formSrc.includes("Publish attempt is missing an idempotency key") &&
     panel.includes('name="idempotencyKey"') &&
     panel.includes("useFormAttemptKey") &&
-    !read("src/app/actions/website-engine.ts").includes("randomUUID()"),
+    !read("src/app/actions/website-engine.ts").includes("randomUUID()") &&
+    !panel.includes("useState(newAttemptKey)") &&
+    panel.includes('useState("")') &&
+    panel.includes("disabled={publishing || !publishKey}"),
 );
 check(
   "Owner editor lists gallery drafts and switches local-pair copy",

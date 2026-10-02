@@ -164,10 +164,17 @@ try {
     "Interactive AI actions use a stable attempt ID instead of Date.now()",
     !writingActionSrc.includes("Date.now") &&
       writingActionSrc.includes("readAttemptId") &&
-      writingBarSrc.includes('name="attemptId"') &&
+      (writingBarSrc.includes('name="attemptId"') ||
+        writingBarSrc.includes('formData.set("attemptId"')) &&
       coachFormSrc.includes('name="attemptId"') &&
       knowledgeFormSrc.includes('name="attemptId"') &&
       reviewFormSrc.includes('name="attemptId"'),
+  );
+  check(
+    "Writing assist does not seed a random attempt id during SSR",
+    !writingBarSrc.includes("useState(() => crypto.randomUUID())") &&
+      writingBarSrc.includes('useState("")') &&
+      writingBarSrc.includes("disabled={pending || !attemptId}"),
   );
   check(
     "PENDING/in-progress keeps the same attempt ID",

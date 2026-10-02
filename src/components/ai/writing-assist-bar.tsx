@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { startTransition, useActionState, useEffect, useState } from "react";
 import { applyWritingAction, type AiActionState } from "@/app/actions/ai";
 import { WRITING_ACTIONS, WRITING_ACTION_LABELS } from "@/lib/ai/types";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,13 @@ export function WritingAssistBar({
 }) {
   const [state, action, pending] = useActionState(applyWritingAction, initial);
   const [suggestion, setSuggestion] = useState<string | null>(null);
-  const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
+  // Empty on the first server and client paint. This bar sits inside
+  // other Settings forms, so it must not render its own form element.
+  const [attemptId, setAttemptId] = useState("");
+
+  useEffect(() => {
+    setAttemptId((current) => current || crypto.randomUUID());
+  }, []);
 
   useEffect(() => {
     if (state.keptOriginal) {
@@ -33,21 +39,29 @@ export function WritingAssistBar({
     }
   }, [state.keptOriginal, state.text, state.error, original]);
 
+  function runWritingAction(writingAction: string) {
+    if (!attemptId || pending) return;
+    const formData = new FormData();
+    formData.set("original", original);
+    formData.set("attemptId", attemptId);
+    if (context) formData.set("context", context);
+    formData.set("writingAction", writingAction);
+    startTransition(() => {
+      action(formData);
+    });
+  }
+
   return (
     <div className="space-y-2">
-      <form action={action} className="flex flex-wrap gap-1">
-        <input type="hidden" name="original" value={original} />
-        <input type="hidden" name="attemptId" value={attemptId} />
-        {context ? <input type="hidden" name="context" value={context} /> : null}
+      <div className="flex flex-wrap gap-1">
         {WRITING_ACTIONS.filter((item) => item !== "KEEP_MINE").map((item) => (
           <Button
             key={item}
-            type="submit"
-            name="writingAction"
-            value={item}
+            type="button"
             size="xs"
             variant="outline"
-            disabled={pending}
+            disabled={pending || !attemptId}
+            onClick={() => runWritingAction(item)}
           >
             {WRITING_ACTION_LABELS[item]}
           </Button>
@@ -61,7 +75,7 @@ export function WritingAssistBar({
         >
           Keep Mine
         </Button>
-      </form>
+      </div>
       {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
       {suggestion ? (

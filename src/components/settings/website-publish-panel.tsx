@@ -31,8 +31,13 @@ function newAttemptKey() {
 }
 
 function useFormAttemptKey(successToken?: string) {
-  const [key, setKey] = useState(newAttemptKey);
+  // Empty on the first server and client paint so the hidden key cannot
+  // hydrate-mismatch. A random id is assigned after mount.
+  const [key, setKey] = useState("");
   const seen = useRef<string | null>(null);
+  useEffect(() => {
+    setKey((current) => current || newAttemptKey());
+  }, []);
   useEffect(() => {
     if (successToken && successToken !== seen.current) {
       seen.current = successToken;
@@ -132,7 +137,7 @@ export function WebsitePublishPanel({
       {canEdit ? (
         <form action={publishAction}>
           <input type="hidden" name="idempotencyKey" value={publishKey} />
-          <Button type="submit" disabled={publishing}>
+          <Button type="submit" disabled={publishing || !publishKey}>
             {publishing ? "Publishing…" : "Publish website"}
           </Button>
         </form>
