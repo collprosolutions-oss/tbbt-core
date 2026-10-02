@@ -654,12 +654,11 @@ export function suggestBankMatches(
 }
 
 export function summarizeBankWorkspace(
-  rows: Array<
-    Pick<
-      ParsedBankRow,
-      "reviewStatus" | "direction" | "amountCents"
-    >
-  >,
+  rows: Array<{
+    reviewStatus: string;
+    direction: string;
+    amountCents: number;
+  }>,
   matches: Array<{ status: string; candidateKind?: string }> = [],
 ): BankWorkspaceTotals {
   const uniquePosted = rows.filter(

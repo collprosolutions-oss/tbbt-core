@@ -395,14 +395,15 @@ async function persistImport(
   );
 
   try {
-    const created = await db.$transaction(async (tx) => {
+    const created: { id: string; rows: Array<{ id: string; rowNumber: number }> } =
+      await db.$transaction(async (tx) => {
       const importRow = await tx.bankReconciliationImport.create({
         data: {
           businessId,
           sourceKind: "CSV_UPLOAD",
           sourceLabel: input.sourceLabel,
           contentSha256,
-          sourceBytes: input.bytes,
+          sourceBytes: Uint8Array.from(input.bytes),
           capturedAt: new Date(),
           status: "REVIEW",
           ...workspaceCountsWrite(totals),
