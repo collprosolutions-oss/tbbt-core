@@ -20,6 +20,7 @@ import { createR2StorageProvider } from "@/lib/business-storage/r2-provider";
 import {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
   STORAGE_PENDING_TTL_MS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   StorageAccessError,
@@ -42,6 +43,11 @@ export type StorageServiceDeps = {
 
 function toBigInt(value: number | bigint) {
   return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function reservedBytesForPendingAsset(purpose: string | null | undefined, fileSizeBytes: number) {
+  if (purpose === PUBLIC_REQUEST_PHOTO_PURPOSE) return 0;
+  return fileSizeBytes;
 }
 
 export function hasEnoughStorage(input: {
@@ -139,6 +145,7 @@ async function releaseExpiredReservations(
     },
     select: {
       id: true,
+      purpose: true,
       fileSizeBytes: true,
       storageAccountId: true,
       storageKey: true,
@@ -155,7 +162,10 @@ async function releaseExpiredReservations(
       });
       if (updated.count === 1) won.push(row);
     }
-    const reserved = won.reduce((sum, row) => sum + row.fileSizeBytes, 0);
+    const reserved = won.reduce(
+      (sum, row) => sum + reservedBytesForPendingAsset(row.purpose, row.fileSizeBytes),
+      0,
+    );
     if (reserved > 0) {
       await tx.businessStorageAccount.update({
         where: { id: won[0]!.storageAccountId },
@@ -178,6 +188,10 @@ async function releaseExpiredReservations(
 
 export type AuthorizeManagedUploadOptions = {
   beforeCreate?: (tx: Prisma.TransactionClient) => Promise<void>;
+};
+
+export type FinalizeManagedUploadOptions = {
+  beforeClaim?: (tx: Prisma.TransactionClient) => Promise<void>;
 };
 
 export async function authorizeManagedUpload(
@@ -287,10 +301,13 @@ export async function authorizeManagedUpload(
         expiresAt: new Date(now.getTime() + STORAGE_PENDING_TTL_MS),
       },
     });
-    await tx.businessStorageAccount.update({
-      where: { id: account.id },
-      data: { storageReservedBytes: { increment: input.fileSizeBytes } },
-    });
+    const reservedBytes = reservedBytesForPendingAsset(input.purpose, input.fileSizeBytes);
+    if (reservedBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: account.id },
+        data: { storageReservedBytes: { increment: reservedBytes } },
+      });
+    }
     return created;
   });
 
@@ -341,10 +358,13 @@ export async function abortManagedUpload(
       data: { status: "FAILED", deletedAt: now },
     });
     if (updated.count !== 1) return false;
-    await tx.businessStorageAccount.update({
-      where: { id: existing.storageAccountId },
-      data: { storageReservedBytes: { decrement: existing.fileSizeBytes } },
-    });
+    const reservedBytes = reservedBytesForPendingAsset(existing.purpose, existing.fileSizeBytes);
+    if (reservedBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: existing.storageAccountId },
+        data: { storageReservedBytes: { decrement: reservedBytes } },
+      });
+    }
     return true;
   });
   if (claimed) {
@@ -435,6 +455,7 @@ export async function finalizeManagedUpload(
   deps: StorageServiceDeps,
   businessId: string,
   assetId: string,
+  options?: FinalizeManagedUploadOptions,
 ) {
   const asset = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
@@ -462,10 +483,11 @@ export async function finalizeManagedUpload(
   const publicPath =
     asset.visibility === "PUBLIC" ? publicAssetPath(asset.id) : null;
   const now = deps.now?.() ?? new Date();
-  const reserved = asset.fileSizeBytes;
+  const reserved = reservedBytesForPendingAsset(asset.purpose, asset.fileSizeBytes);
   const actual = meta.sizeBytes;
 
   return deps.db.$transaction(async (tx) => {
+    await options?.beforeClaim?.(tx);
     const claimed = await tx.storedAsset.updateMany({
       where: {
         id: asset.id,
@@ -574,11 +596,14 @@ export async function deleteStoredAsset(
         data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
       });
     }
-    if (asset.status === "PENDING" && asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageReservedBytes: { decrement: asset.fileSizeBytes } },
-      });
+    if (asset.status === "PENDING") {
+      const reservedBytes = reservedBytesForPendingAsset(asset.purpose, asset.fileSizeBytes);
+      if (reservedBytes > 0) {
+        await tx.businessStorageAccount.update({
+          where: { id: asset.storageAccountId },
+          data: { storageReservedBytes: { decrement: reservedBytes } },
+        });
+      }
     }
     return updated;
   });

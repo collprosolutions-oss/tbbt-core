@@ -13,6 +13,7 @@ import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
   MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
   PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
   UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
   UNATTACHED_REQUEST_PHOTO_TTL_MS,
   StorageError,
@@ -25,11 +26,10 @@ export {
   MAX_PUBLIC_INTAKE_REQUEST_PHOTOS,
   MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
   PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
   UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO,
   UNATTACHED_REQUEST_PHOTO_TTL_MS,
 } from "@/lib/business-storage/types";
-
-export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
 /** Bound the public form's photoAssetIds list before any StoredAsset lookup. */
 export const MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP = 50;
 /** Keep leftover/overflow claim transactions short; extras release in later batches. */
@@ -106,11 +106,12 @@ async function loadUnattachedPublicRequestUsage(
       serviceRequestPhotos: { none: {} },
       ...(excludeAssetId ? { id: { not: excludeAssetId } } : {}),
     },
-    select: { fileSizeBytes: true },
+    select: { fileSizeBytes: true, status: true },
   });
+  const ready = rows.filter((row) => row.status === "READY");
   return {
     count: rows.length,
-    bytes: rows.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0),
+    bytes: ready.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0),
   };
 }
 
@@ -429,7 +430,7 @@ export async function authorizePublicRequestPhoto(
         await requestPhotoTestHooks.afterUnattachedCapLock?.();
         await assertUnattachedPublicRequestPhotoCapacity(tx, business.id, {
           incomingCount: 1,
-          incomingBytes: inspection.fileSizeBytes,
+          incomingBytes: 0,
           limitBytes,
         });
       },
@@ -476,18 +477,18 @@ export async function finalizePublicRequestPhoto(
   }
 
   const limitBytes = await resolvePublicRequestPhotoLimitBytes(deps, business.id);
-  await deps.db.$transaction(async (tx) => {
-    await lockBusinessStorageAccountForUpdate(tx, business.id);
-    await requestPhotoTestHooks.afterUnattachedCapLock?.();
-    await assertUnattachedPublicRequestPhotoCapacity(tx, business.id, {
-      incomingCount: 1,
-      incomingBytes: candidate.fileSizeBytes,
-      excludeAssetId: candidate.id,
-      limitBytes,
-    });
+  const asset = await finalizeManagedUpload(deps, business.id, assetId, {
+    async beforeClaim(tx) {
+      await lockBusinessStorageAccountForUpdate(tx, business.id);
+      await requestPhotoTestHooks.afterUnattachedCapLock?.();
+      await assertUnattachedPublicRequestPhotoCapacity(tx, business.id, {
+        incomingCount: 1,
+        incomingBytes: candidate.fileSizeBytes,
+        excludeAssetId: candidate.id,
+        limitBytes,
+      });
+    },
   });
-
-  const asset = await finalizeManagedUpload(deps, business.id, assetId);
   await stampUnattachedRequestPhotoExpiry(deps, business.id, asset.id);
   return deps.db.storedAsset.findFirstOrThrow({
     where: { id: asset.id, businessId: business.id },

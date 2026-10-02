@@ -429,6 +429,15 @@ check(
     remainingIntakePhotoSlots(16) === 0 &&
     MAX_INTAKE_PHOTOS === 8,
 );
+const authorizeFnSrc = requestPhotosSrc.slice(
+  requestPhotosSrc.indexOf("export async function authorizePublicRequestPhoto"),
+  requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
+);
+const storageServiceSrc = readRepo("src/lib/business-storage/service.ts");
+const reservedHelperSrc = storageServiceSrc.slice(
+  storageServiceSrc.indexOf("function reservedBytesForPendingAsset"),
+  storageServiceSrc.indexOf("export function hasEnoughStorage"),
+);
 check(
   "Public request finalize loads the candidate before generic finalizeManagedUpload",
   candidateLoadIdx >= 0 &&
@@ -439,6 +448,16 @@ check(
     requestPhotosSrc.includes('visibility === "PRIVATE"') &&
     requestPhotosSrc.indexOf("function isPrivateUnpublishedCustomerPhoto") <
       requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
+);
+check(
+  "Unused public request authorizations do not reserve quota or consume uploaded-byte allowance",
+  authorizeFnSrc.includes("incomingBytes: 0") &&
+    !authorizeFnSrc.includes("incomingBytes: inspection.fileSizeBytes") &&
+    finalizeFnSrc.includes("incomingBytes: candidate.fileSizeBytes") &&
+    finalizeFnSrc.includes("beforeClaim") &&
+    reservedHelperSrc.includes("PUBLIC_REQUEST_PHOTO_PURPOSE") &&
+    reservedHelperSrc.includes("return 0") &&
+    requestPhotosSrc.includes("row.status === \"READY\""),
 );
 check(
   "Public request photo finalize is slug-authorized and ignores browser businessId",
@@ -2236,7 +2255,10 @@ try {
   }
   async function sumUnattachedPublicPhotoBytes(businessId) {
     const rows = await prisma.storedAsset.findMany({
-      where: await unattachedPublicPhotoWhere(businessId),
+      where: {
+        ...(await unattachedPublicPhotoWhere(businessId)),
+        status: "READY",
+      },
       select: { fileSizeBytes: true },
     });
     return rows.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0);
@@ -2353,12 +2375,12 @@ try {
   const byteCapResults = await Promise.all(
     mixedSizes.map(async (fileSizeBytes, index) => {
       try {
-        const authorized = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+        const uploaded = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
           originalFilename: `byte-cap-${index}.png`,
           mimeType: "image/png",
-          fileSizeBytes,
+          body: Buffer.alloc(fileSizeBytes),
         });
-        return { ok: true, bytes: authorized.asset.fileSizeBytes };
+        return { ok: true, bytes: uploaded.fileSizeBytes };
       } catch (error) {
         return { ok: false, bytes: fileSizeBytes, error };
       }
@@ -2371,10 +2393,10 @@ try {
   const smallestLoser = Math.min(...byteLosers.map((row) => row.bytes));
   let otherTenantDuringCap = null;
   try {
-    otherTenantDuringCap = await authorizePublicRequestPhoto(storageDeps, "other-handyman", {
+    otherTenantDuringCap = await putPublicRequestPhotoFromBytes(storageDeps, "other-handyman", {
       originalFilename: "other-tenant-byte-cap.png",
       mimeType: "image/png",
-      fileSizeBytes: 2 * unitBytes,
+      body: Buffer.alloc(2 * unitBytes),
     });
   } catch (error) {
     otherTenantDuringCap = error;
@@ -2389,7 +2411,7 @@ try {
   });
   delete requestPhotoTestHooks.unattachedByteCap;
   check(
-    "Unattached byte cap admits only what fits 5 photos' worth across 30 mixed-size authorizes",
+    "Unattached byte cap admits only what fits 5 photos' worth across 30 mixed-size uploads",
     byteWinners.length >= 1 &&
       byteLosers.length >= 1 &&
       byteLosers.every(
@@ -2404,10 +2426,60 @@ try {
     "Unattached byte cap is tenant-scoped and does not block owner uploads",
     otherTenantDuringCap &&
       !(otherTenantDuringCap instanceof Error) &&
-      otherTenantDuringCap.asset.status === "PENDING" &&
+      otherTenantDuringCap.status === "READY" &&
       (await sumUnattachedPublicPhotoBytes(other.id)) === otherBaselineByteUsed + 2 * unitBytes &&
       ownerDuringByteCap.asset.category === "JOB_PHOTO" &&
       ownerDuringByteCap.asset.status === "PENDING",
+  );
+
+  const unusedDeclaredBytes = 3 * unitBytes;
+  const unusedAuthorizeCount = 12;
+  const unusedReadyBefore = await sumUnattachedPublicPhotoBytes(business.id);
+  const unusedAccountBefore = await accountSnapshot(business.id);
+  requestPhotoTestHooks.unattachedByteCap = unusedReadyBefore + pngBytes.length;
+  const unusedAuthorizeResults = [];
+  for (let index = 0; index < unusedAuthorizeCount; index += 1) {
+    try {
+      unusedAuthorizeResults.push({
+        ok: true,
+        asset: await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+          originalFilename: `unused-authorize-${index}.png`,
+          mimeType: "image/png",
+          fileSizeBytes: unusedDeclaredBytes,
+        }),
+      });
+    } catch (error) {
+      unusedAuthorizeResults.push({ ok: false, error });
+    }
+  }
+  const unusedAccountAfterAuth = await accountSnapshot(business.id);
+  const unusedReadyAfterAuth = await sumUnattachedPublicPhotoBytes(business.id);
+  let unusedDidNotBlockCustomer = null;
+  try {
+    unusedDidNotBlockCustomer = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+      originalFilename: "real-customer-after-unused-authorize.png",
+      mimeType: "image/png",
+      body: pngBytes,
+    });
+  } catch (error) {
+    unusedDidNotBlockCustomer = error;
+  }
+  const unusedAccountAfterPut = await accountSnapshot(business.id);
+  delete requestPhotoTestHooks.unattachedByteCap;
+  check(
+    "Repeated unused authorize calls cannot exhaust allowance or block a real customer photo",
+    unusedAuthorizeResults.length === unusedAuthorizeCount &&
+      unusedAuthorizeResults.every((row) => row.ok && row.asset.asset.status === "PENDING") &&
+      unusedReadyAfterAuth === unusedReadyBefore &&
+      unusedAccountAfterAuth.reserved === unusedAccountBefore.reserved &&
+      unusedAccountAfterAuth.used === unusedAccountBefore.used &&
+      unusedDidNotBlockCustomer &&
+      !(unusedDidNotBlockCustomer instanceof Error) &&
+      unusedDidNotBlockCustomer.status === "READY" &&
+      unusedDidNotBlockCustomer.fileSizeBytes === pngBytes.length &&
+      unusedAccountAfterPut.reserved === unusedAccountBefore.reserved &&
+      unusedAccountAfterPut.used === unusedAccountBefore.used + pngBytes.length &&
+      (await sumUnattachedPublicPhotoBytes(business.id)) === unusedReadyBefore + pngBytes.length,
   );
 
   const releaseOnce = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {

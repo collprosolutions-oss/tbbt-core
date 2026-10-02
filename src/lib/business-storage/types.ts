@@ -52,10 +52,19 @@ export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
  * never reuse STORAGE_PENDING_TTL_MS (the short upload-reservation TTL).
  */
 export const UNATTACHED_REQUEST_PHOTO_TTL_MS = 24 * 60 * 60 * 1000;
-/** Outstanding READY+PENDING public request photos that are not yet attached. */
+/**
+ * Outstanding READY unattached public request photos, plus in-flight
+ * PENDING authorizes. Unused PENDING rows do not consume uploaded-byte
+ * allowance; the count still caps legitimate concurrent uploads.
+ */
 export const MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS = 200;
-/** Unattached public request photos may hold at most this fraction of the business quota. */
+/**
+ * Uploaded (READY) unattached public request photos may hold at most
+ * this fraction of the business quota. Declared PENDING sizes do not.
+ */
 export const UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO = 0.1;
+/** Purpose for public hire-form photos. PENDING rows with this purpose do not reserve quota bytes. */
+export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
 /** One public form attempt; must stay equal to MAX_INTAKE_PHOTOS. */
 export const MAX_PUBLIC_INTAKE_REQUEST_PHOTOS = 8;
 export const PUBLIC_REQUEST_PHOTO_CAP_REACHED =
