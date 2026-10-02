@@ -95,6 +95,21 @@ export type JobActionState = {
   message?: string;
 };
 
+type ScheduleWriteResult =
+  | { kind: "refused"; error: string }
+  | {
+      kind: "warning";
+      warning: string;
+      conflictAck: string;
+      overlaps: OccupiedJob[];
+    }
+  | {
+      kind: "written";
+      proposalId: number;
+      materialChange: boolean;
+      rescheduled: boolean;
+    };
+
 async function ownedScheduleConflictFacts(
   overlaps: OccupiedJob[],
   businessId: string,
@@ -395,35 +410,22 @@ export async function scheduleJob(
 
   await jobWriteTestHooks.afterScheduleJobRead?.(job.id);
 
-  let scheduleRefusal: string | null = null;
-  let lockedWarning: {
-    warning: string;
-    conflictAck: string;
-    overlaps: OccupiedJob[];
-  } | null = null;
-  let persistedProposalId = job.appointmentProposalId;
-  let persistedMaterialChange = false;
-  let persistedRescheduled = false;
-
-  await prisma.$transaction(
-    async (tx) => {
+  const write = await prisma.$transaction(
+    async (tx): Promise<ScheduleWriteResult> => {
       await lockBusinessScheduleReservation(tx, access.businessId);
       const current = await lockTenantOwnedJob(tx, access.businessId, job.id);
       if (!current) {
-        scheduleRefusal = "That job could not be scheduled.";
-        return;
+        return { kind: "refused", error: "That job could not be scheduled." };
       }
       const lockedRefusal = jobScheduleRefusalMessage(current.status);
       if (lockedRefusal) {
-        scheduleRefusal = lockedRefusal;
-        return;
+        return { kind: "refused", error: lockedRefusal };
       }
       const fresh = await tx.job.findFirst({
         where: { id: job.id, businessId: access.businessId },
       });
       if (!fresh) {
-        scheduleRefusal = "That job could not be scheduled.";
-        return;
+        return { kind: "refused", error: "That job could not be scheduled." };
       }
 
       const locked = await evaluateOwnedScheduleProposal(tx, {
@@ -442,14 +444,14 @@ export async function scheduleJob(
           conflicts: locked.warning ? [locked.warning] : [],
         }) === "warn"
       ) {
-        lockedWarning = {
+        return {
+          kind: "warning",
           warning: locked.cascade.length
             ? `${locked.warning} Later jobs were not moved.`
             : locked.warning,
           conflictAck: locked.currentAck,
           overlaps: locked.evaluation.overlaps,
         };
-        return;
       }
 
       const materialChange = isMaterialAppointmentChange(
@@ -460,9 +462,6 @@ export async function scheduleJob(
       const proposalId = materialChange
         ? nextAppointmentProposalId(fresh.appointmentProposalId)
         : fresh.appointmentProposalId;
-      persistedProposalId = proposalId;
-      persistedMaterialChange = materialChange;
-      persistedRescheduled = Boolean(fresh.scheduledAt) && materialChange;
 
       const position = appointmentPositionOnDay({
         start,
@@ -523,29 +522,35 @@ export async function scheduleJob(
           },
         ],
       });
+      return {
+        kind: "written",
+        proposalId,
+        materialChange,
+        rescheduled: Boolean(fresh.scheduledAt) && materialChange,
+      };
     },
     { maxWait: 10_000, timeout: 20_000 },
   );
 
-  if (scheduleRefusal) {
-    return { error: scheduleRefusal };
+  if (write.kind === "refused") {
+    return { error: write.error };
   }
-  if (lockedWarning) {
+  if (write.kind === "warning") {
     const conflicts = await ownedScheduleConflictFacts(
-      lockedWarning.overlaps,
+      write.overlaps,
       access.businessId,
       timeZone,
     );
     return {
-      warning: lockedWarning.warning,
-      conflictAck: lockedWarning.conflictAck,
+      warning: write.warning,
+      conflictAck: write.conflictAck,
       ...(conflicts.length > 0 ? { conflicts } : {}),
     };
   }
 
-  const proposalId = persistedProposalId;
-  const materialChange = persistedMaterialChange;
-  const rescheduled = persistedRescheduled;
+  const proposalId = write.proposalId;
+  const materialChange = write.materialChange;
+  const rescheduled = write.rescheduled;
 
   await emitAndProcessBusinessEvent(prisma, {
     businessId: access.businessId,

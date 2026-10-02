@@ -104,6 +104,12 @@ check(
   lifecycleSrc.includes("JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE") &&
     lifecycleSrc.includes("JOB_CANCELLED_CANNOT_ASSIGN_MESSAGE") &&
     dayRouteOpsSrc.includes("DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE") &&
+    dayRouteOpsSrc.includes("afterDayRouteAppointmentRead") &&
+    dayRouteOpsSrc.includes("jobScheduleRefusalMessage") &&
+    dayRouteOpsSrc.indexOf("afterDayRouteAppointmentRead") <
+      dayRouteOpsSrc.indexOf("lockTenantOwnedJob") &&
+    dayRouteOpsSrc.indexOf("lockTenantOwnedJob") <
+      dayRouteOpsSrc.lastIndexOf("jobScheduleRefusalMessage") &&
     jobPageSrc.includes("Cancelled jobs keep their saved appointment") &&
     jobsWorkspaceSrc.includes("A cancelled job cannot be assigned.") &&
     dayRouteViewSrc.includes('stop.status !== "CANCELLED"'),
@@ -131,6 +137,7 @@ try {
   const {
     changeOwnerDayRouteAppointment,
     dayRouteAppointmentErrorMessage,
+    dayRouteAppointmentTestHooks,
   } = await import("@/lib/owner-day-route-appointment-ops");
   const {
     DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE,
@@ -820,6 +827,54 @@ try {
     cancelRace?.error === JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE &&
       cancelRaceRow.status === "CANCELLED" &&
       cancelRaceRow.scheduledAt == null,
+  );
+
+  const dayRouteRaceJob = await createApprovedJob(
+    ownerNy,
+    businessNy,
+    customerNy,
+    propertyNy,
+  );
+  await scheduleWithAck(dayRouteRaceJob.id, {
+    date: "2027-06-22",
+    time: "09:30",
+    durationPreset: "60",
+  });
+  const dayRouteRaceRow = await prisma.job.findFirstOrThrow({
+    where: { id: dayRouteRaceJob.id, businessId: businessNy.id },
+  });
+  const dayRouteRaceScheduledAt = dayRouteRaceRow.scheduledAt;
+  dayRouteAppointmentTestHooks.afterDayRouteAppointmentRead = async (jobId) => {
+    if (jobId === dayRouteRaceJob.id) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "CANCELLED" },
+      });
+    }
+  };
+  let dayRouteRaceError = null;
+  try {
+    await changeOwnerDayRouteAppointment(prisma, ownerNy, {
+      jobId: dayRouteRaceJob.id,
+      date: "2027-06-22",
+      time: "10:30",
+      snapshot: scheduleSnapshotFromJob(dayRouteRaceRow),
+    });
+  } catch (error) {
+    dayRouteRaceError = error;
+  }
+  dayRouteAppointmentTestHooks.afterDayRouteAppointmentRead = undefined;
+  const dayRouteRaceAfter = await prisma.job.findFirstOrThrow({
+    where: { id: dayRouteRaceJob.id, businessId: businessNy.id },
+    select: { status: true, scheduledAt: true },
+  });
+  check(
+    "Stale day-route change cannot move a job cancelled after the initial read",
+    dayRouteAppointmentErrorMessage(dayRouteRaceError, "") ===
+      DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE &&
+      dayRouteRaceAfter.status === "CANCELLED" &&
+      dayRouteRaceAfter.scheduledAt?.toISOString() ===
+        dayRouteRaceScheduledAt?.toISOString(),
   );
 
   const assignRaceJob = await createApprovedJob(

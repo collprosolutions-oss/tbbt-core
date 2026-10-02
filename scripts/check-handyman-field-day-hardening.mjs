@@ -205,7 +205,7 @@ const scheduleFnSrc = jobActionSrc.slice(
 );
 const scheduleTxSrc = scheduleFnSrc.slice(
   scheduleFnSrc.indexOf("await prisma.$transaction"),
-  scheduleFnSrc.indexOf("if (scheduleRefusal)"),
+  scheduleFnSrc.indexOf('if (write.kind === "refused")'),
 );
 const writeAssignSrc = assignOpsSrc.slice(
   assignOpsSrc.indexOf("export async function writeAssignedMembershipAndLaneWindows"),

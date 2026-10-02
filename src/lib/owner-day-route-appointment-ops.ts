@@ -73,6 +73,10 @@ export class DayRouteAppointmentError extends Error {
   }
 }
 
+export const dayRouteAppointmentTestHooks: {
+  afterDayRouteAppointmentRead?: (jobId: string) => Promise<void> | void;
+} = {};
+
 const APPOINTMENT_SCHEMA_NAMES =
   /appointmentProposalId|appointmentConfirmationStatus|JobAppointmentEvent|appointmentNotifiedAt|appointmentConfirmedAt/i;
 
@@ -280,6 +284,8 @@ export async function changeOwnerDayRouteAppointment(
     if (!start) {
       throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE);
     }
+
+    await dayRouteAppointmentTestHooks.afterDayRouteAppointmentRead?.(job.id);
 
     return await db.$transaction(
       async (tx) => {
