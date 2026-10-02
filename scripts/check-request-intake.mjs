@@ -311,12 +311,16 @@ check(
     requestPhotosSrc.includes("expiresAt: null, updatedAt:"),
 );
 const submissionLockSrc = readRepo("src/lib/public-intake-submission.ts");
-const submissionClaimSlice = publicIntakeSrc.slice(publicIntakeSrc.indexOf("if (submissionId) {"));
+const lockedClaimCallIdx = publicIntakeSrc.indexOf("await claimPublicIntakeSubmission");
+const submissionClaimSlice = publicIntakeSrc.slice(
+  publicIntakeSrc.lastIndexOf("if (submissionId) {", lockedClaimCallIdx),
+);
 const submissionLockIdx = submissionClaimSlice.indexOf("claimPublicIntakeSubmission");
 const submissionFindIdx = submissionClaimSlice.indexOf("serviceRequest.findFirst");
 check(
   "Public intake claims submissionId with a transaction lock before replay lookup",
-  submissionLockIdx > -1 &&
+  lockedClaimCallIdx > -1 &&
+    submissionLockIdx > -1 &&
     submissionFindIdx > submissionLockIdx &&
     submissionLockSrc.includes("pg_advisory_xact_lock") &&
     submissionLockSrc.includes("$executeRaw") &&
@@ -329,7 +333,10 @@ const mutatedIntakeSrc = publicIntakeSrc.replace(
   /await claimPublicIntakeSubmission\(tx, business\.id, submissionId\);\s*/,
   "",
 );
-const mutatedClaimSlice = mutatedIntakeSrc.slice(mutatedIntakeSrc.indexOf("if (submissionId) {"));
+const mutatedLockedClaimIdx = mutatedIntakeSrc.indexOf("if (existing) return { requestId: existing.id");
+const mutatedClaimSlice = mutatedIntakeSrc.slice(
+  mutatedIntakeSrc.lastIndexOf("if (submissionId) {", mutatedLockedClaimIdx),
+);
 check(
   "Mutation: removing the submission lock leaves replay lookup unserialized",
   submissionLockSrc.includes("pg_advisory_xact_lock") &&
