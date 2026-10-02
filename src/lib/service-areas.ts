@@ -62,12 +62,38 @@ const NON_CITY_LABEL_WORD =
 const COMPASS_WORD =
   /^(?:north|south|east|west|northern|southern|eastern|western|southwest|southeast|northwest|northeast|central)$/i;
 
-function isStateOrCompassState(city: string) {
-  if (isUsStateName(city)) return true;
+function isCompassState(city: string) {
   const words = city.split(" ");
   if (words.length < 2) return false;
   if (!COMPASS_WORD.test(words[0] ?? "")) return false;
   return isUsStateName(words.slice(1).join(" "));
+}
+
+function isStateOrCompassState(city: string) {
+  if (isUsStateName(city)) return true;
+  return isCompassState(city);
+}
+
+function usStateCodeForName(name: string) {
+  const match = US_STATES.find(
+    (state) => state.name.toLowerCase() === name.trim().toLowerCase(),
+  );
+  return match?.code ?? null;
+}
+
+/**
+ * Comma form stays display-only for statewide labels: compass regions,
+ * multi-word official state names, a state name paired with its own
+ * code (Nevada, NV / Washington, WA), and Washington, DC. A single-word
+ * state name plus a DIFFERENT state code (Washington, PA / Indiana, PA)
+ * is a city.
+ */
+function isStatewideCommaLabel(city: string, region: string) {
+  if (isCompassState(city)) return true;
+  if (isUsStateName(city) && /\s/.test(city)) return true;
+  const ownCode = usStateCodeForName(city);
+  if (!ownCode) return false;
+  return region === ownCode || region === "DC"; // STATEWIDE_OWN_CODE_OR_DC
 }
 
 function hasTrailingStateToken(city: string) {
@@ -101,6 +127,13 @@ function isUsableCityToken(city: string) {
  * and writes no CITY row. Internal abbreviation periods (St. Louis,
  * Mt. Pleasant) remain allowed because the city token still starts and
  * ends with a letter.
+ *
+ * State-named city decision: a single-word state name parses as a city
+ * only when the region is a DIFFERENT US state (Washington, PA /
+ * Indiana, PA). The named state's own code (Nevada, NV / Washington, WA
+ * / Indiana, IN), Washington, DC, bare state names, multi-word official
+ * state names, and compass regions stay display-only. Broad marketing
+ * prose is never turned into geography.
  */
 export function parseServiceAreaLabelParts(label: string): {
   city: string;
@@ -131,7 +164,7 @@ export function parseServiceAreaLabelParts(label: string): {
       return empty;
     }
     region = regionRaw.toUpperCase();
-    if (isStateOrCompassState(city)) return empty;
+    if (isStatewideCommaLabel(city, region)) return empty; // STATE_NAMED_CITY_DIFFERENT_REGION
   }
   if (!city || NON_CITY_LABEL_WORD.test(city) || !isUsableCityToken(city)) {
     return empty;
