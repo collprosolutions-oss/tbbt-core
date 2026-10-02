@@ -16,9 +16,12 @@ import {
   publicRequestPath,
   resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { resolveBusinessPublicContact } from "@/lib/business-contact";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -26,20 +29,24 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const name = publicDisplayName(site.business);
   const phone = publicPhone(site.business);
+  const origin = await publicOriginForSlug(prisma, site.business.slug, await readRequestHost());
   return publicTenantPageMetadata({
     business: site.business,
     title: `Contact Us | ${name}`,
     description: `Text ${name}${phone ? ` at ${phone}` : ""} or send a project request online.`,
     pathname: publicContactPath(site.business.slug),
+    origin,
   });
 }
 
 export default async function PublicContactPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
   const contact = resolveBusinessPublicContact(site.business);
   const textHref = smsHref(phone);

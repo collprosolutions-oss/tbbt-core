@@ -177,7 +177,7 @@ check(
   areaPage.includes("Lee County") &&
     areaPage.includes("Fort Myers") &&
     areaPage.includes("isCollProRenoSlug") &&
-    areaPage.includes("resolveBusinessServiceArea"),
+    areaPage.includes("publicServiceAreaFromView"),
 );
 check(
   "Live CollPro apex / homepage is unchanged",

@@ -123,16 +123,32 @@ export const GENERIC_SERVICE_AREA_COPY =
   "Service availability is confirmed from the project address you provide.";
 
 export function resolvePublicServiceAreaCopy(
-  businessOrSlug: string | { slug: string; publicServiceAreaLabel?: string | null },
+  businessOrSlug:
+    | string
+    | {
+        slug: string;
+        publicServiceAreaLabel?: string | null;
+        configuredCities?: string[];
+      },
 ) {
   const slug = typeof businessOrSlug === "string" ? businessOrSlug : businessOrSlug.slug;
-  if (isCollProRenoSlug(slug)) return SERVICE_AREA_COPY;
   const stored =
     typeof businessOrSlug === "object"
       ? businessOrSlug.publicServiceAreaLabel?.trim() || ""
       : "";
+  const publishedCities =
+    typeof businessOrSlug === "object" ? businessOrSlug.configuredCities ?? [] : [];
+  // CollPro compatibility keeps the Fort Myers marketing copy until a
+  // published snapshot supplies selected cities. After publish, the
+  // snapshot label/cities win.
+  if (isCollProRenoSlug(slug) && publishedCities.length === 0) {
+    return SERVICE_AREA_COPY;
+  }
   if (stored) {
     return `Serving homeowners in ${stored}. Submit your project address and we'll confirm service availability for your location.`;
+  }
+  if (publishedCities.length > 0) {
+    return `Serving homeowners in ${publishedCities.join(", ")}. Submit your project address and we'll confirm service availability for your location.`;
   }
   return GENERIC_SERVICE_AREA_COPY;
 }
@@ -316,6 +332,9 @@ export type PublicBusiness = {
   publicEmail?: string | null;
   publicWebsite?: string | null;
   publicServiceAreaLabel?: string | null;
+  /** Owner-selected CITY labels for the hire form. Snapshot after publish. */
+  configuredCities?: string[];
+  configuredRegion?: string | null;
   /** Public trade labels only. Never internal config, overrides, or IDs. */
   activeTrades?: PublicTradeProjection[];
 };

@@ -51,6 +51,9 @@ const {
   publishedSitemapPaths,
   snapshotPageMetadata,
   snapshotIntakeSchemasByTrade,
+  snapshotServiceAreaRecords,
+  publicServiceAreaFromView,
+  absolutePublicSitemapUrl,
   publishWebsiteFromForm,
   rollbackWebsiteFromForm,
   publishedLocalBusinessDescription,
@@ -145,6 +148,9 @@ const hireHome = read("src/app/hire/[slug]/page.tsx");
 const collproHome = read("src/app/page.tsx");
 const serviceDetail = read("src/app/hire/[slug]/services/[serviceSlug]/page.tsx");
 const sitemap = read("src/app/sitemap.ts");
+const robotsSrc = read("src/app/robots.ts");
+const serviceAreaPage = read("src/app/hire/[slug]/service-area/page.tsx");
+const contactPage = read("src/app/hire/[slug]/contact/page.tsx");
 const exportSrc = read("src/lib/business-export.ts");
 const workspace = read("src/lib/workspace.ts");
 
@@ -212,7 +218,14 @@ check(
     serviceDetail.includes("application/ld+json") &&
     sitemap.includes("publishedSitemapPaths") &&
     sitemap.includes("publicIndexableSitemapPaths") &&
+    sitemap.includes("absolutePublicSitemapUrl") &&
     sitemap.includes("isLocalPreviewDefaultHost") &&
+    sitemap.includes("force-dynamic") &&
+    sitemap.includes('runtime = "nodejs"') &&
+    robotsSrc.includes("sitemap.xml") &&
+    serviceAreaPage.includes("publicOriginForSlug") &&
+    serviceAreaPage.includes("view.snapshot") &&
+    contactPage.includes("publicOriginForSlug") &&
     exportSrc.includes("website-publishes.json") &&
     exportSrc.includes("website-gallery.csv"),
 );
@@ -239,21 +252,25 @@ check(
   "Snapshot freezes public intake and skips stale managed images",
   snapshot.includes("intakeMeasurementMode") &&
     snapshot.includes("asksWorkAreaIntake") &&
+    snapshot.includes("postalCode") &&
     snapshot.includes("PublishedTradeIntake") &&
     snapshot.includes("tenantIntakeCaptured") &&
     builder.includes("publicIntakeSchemaProjection") &&
     builder.includes("readCurrentPublishedIntake") &&
     builder.includes("tenantIntakeCaptured") &&
     builder.includes("catalogAsksWorkAreaIntake") &&
+    builder.includes("postalCode: row.postalCode") &&
     builder.includes("continue") &&
     publicView.includes("snapshotIntakeSchemasByTrade") &&
     publicView.includes("loadPublicWebsiteIntakeOverlays") &&
     intakeSrc.includes("publishedSnapshot") &&
     intakeSrc.includes("snapshotIntakeSchemaForTrade") &&
     intakeSrc.includes("snapshotTenantIntakeStateForTrade") &&
+    intakeSrc.includes("snapshotServiceAreaRecords") &&
     requestPage.includes("snapshot.seo.request") &&
     requestPage.includes("snapshotIntakeSchemasByTrade") &&
-    requestPage.includes("loadPublicWebsiteIntakeOverlays"),
+    requestPage.includes("loadPublicWebsiteIntakeOverlays") &&
+    requestPage.includes("publicServiceAreaFromView"),
 );
 check(
   "Publish/rollback forms send a stable client attempt id",
@@ -449,6 +466,16 @@ try {
       enabled: true,
     },
   });
+  await prisma.serviceArea.create({
+    data: {
+      businessId: businessA.id,
+      kind: "POSTAL",
+      label: "89501",
+      postalCode: "89501",
+      region: "NV",
+      enabled: true,
+    },
+  });
   const areaInactive = await prisma.serviceArea.create({
     data: {
       businessId: businessA.id,
@@ -605,6 +632,36 @@ try {
   check("Inactive service cannot enter a new snapshot", afterFirst?.snapshot?.services.some((row) => row.id === inactiveService.id) !== true);
   check("Inactive service area cannot enter new local pages", afterFirst?.snapshot?.localPages.some((row) => row.citySlug === "sparks") !== true);
   check("Local pages use the enabled Reno area and published service", afterFirst?.snapshot?.localPages.some((row) => row.citySlug === "reno" && row.serviceId === handyService.id) === true);
+  check(
+    "Published hire form cities come from the selected snapshot cities",
+    afterFirst?.site.business.configuredCities?.includes("Reno") === true &&
+      afterFirst?.site.business.configuredCities?.includes("Sparks") !== true &&
+      publicServiceAreaFromView(afterFirst).cities.includes("Reno") === true &&
+      publicServiceAreaFromView(afterFirst).region === "NV",
+  );
+  check(
+    "Published snapshot freezes postal service areas",
+    afterFirst?.snapshot?.serviceAreas.some((row) => row.kind === "POSTAL" && row.postalCode === "89501") === true &&
+      snapshotServiceAreaRecords(afterFirst.snapshot).some((row) => row.postalCode === "89501") === true,
+  );
+  const homeCanonical = snapshotPageMetadata({
+    snapshot: afterFirst.snapshot,
+    page: afterFirst.snapshot.seo.home,
+    pathname: `/hire/${businessA.slug}`,
+    origin: "https://sites.example.test",
+  });
+  check(
+    "Published metadata uses the authorized canonical origin",
+    homeCanonical.alternates?.canonical === "https://sites.example.test/" &&
+      absolutePublicSitemapUrl(businessA.slug, `/hire/${businessA.slug}/in/reno/tv-mounting`, "https://sites.example.test") ===
+        "https://sites.example.test/hire/" + `${businessA.slug}/in/reno/tv-mounting`,
+  );
+  const firstSitemap = publishedSitemapPaths(afterFirst.snapshot);
+  check(
+    "Published sitemap includes selected local pages only",
+    firstSitemap.some((path) => path.includes("/in/reno/")) === true &&
+      firstSitemap.some((path) => path.includes("/in/sparks/")) !== true,
+  );
   check("Business B service cannot enter A snapshot", afterFirst?.snapshot?.services.some((row) => row.id === serviceB.id) !== true);
   check("Unselected review is not published", afterFirst?.snapshot?.reviews.length === 0);
 
@@ -617,6 +674,69 @@ try {
   const leaked = await loadPublicWebsiteView(businessA.slug, prisma);
   check("Draft edit after Publish does not change public snapshot", leaked?.snapshot?.about.copy === frozenAbout);
   check("Draft hero after Publish does not leak", leaked?.snapshot?.home.headline !== "Draft headline after publish");
+  await prisma.serviceArea.update({
+    where: { id: areaInactive.id },
+    data: { enabled: true },
+  });
+  await prisma.serviceArea.create({
+    data: {
+      businessId: businessA.id,
+      kind: "CITY",
+      label: "Carson City",
+      city: "Carson City",
+      region: "NV",
+      enabled: true,
+    },
+  });
+  const leakedCities = await loadPublicWebsiteView(businessA.slug, prisma);
+  check(
+    "Draft service cities do not leak onto the public site before the next publish",
+    leakedCities?.site.business.configuredCities?.includes("Reno") === true &&
+      leakedCities?.site.business.configuredCities?.includes("Sparks") !== true &&
+      leakedCities?.site.business.configuredCities?.includes("Carson City") !== true &&
+      leakedCities?.snapshot?.localPages.some((row) => row.citySlug === "sparks") !== true &&
+      publishedSitemapPaths(leakedCities.snapshot).some((path) => path.includes("/in/sparks/")) !== true,
+  );
+  const draftCitySubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Draft City Leak",
+    email: `draft-city-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0101",
+    address: "",
+    streetAddress: "11 Snapshot St",
+    city: "Sparks",
+    region: "NV",
+    postalCode: "89431",
+    notes: "Opened against the published Reno form.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    configuredAreas: [
+      {
+        id: areaInactive.id,
+        kind: "CITY",
+        label: "Sparks",
+        city: "Sparks",
+        region: "NV",
+        postalCode: null,
+        enabled: true,
+        travelAdjustment: null,
+        minimumAdjustment: null,
+        notes: "",
+      },
+    ],
+  });
+  const draftCityRequest = draftCitySubmit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: draftCitySubmit.requestId } })
+    : null;
+  check(
+    "Older opened hire forms qualify against the displayed published cities, not live drafts",
+    draftCitySubmit.ok === true &&
+      draftCityRequest?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      draftCityRequest?.matchedServiceAreaId == null,
+  );
   await prisma.serviceCatalogItem.update({
     where: { id: handyService.id },
     data: {

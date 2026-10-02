@@ -24,9 +24,12 @@ import {
   publicServiceAreaPath,
   resolvePublicServiceAreaCopy,
 } from "@/lib/public-site";
-import { requirePublicSite } from "@/lib/require-public-site";
+import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
-import { resolveBusinessServiceArea } from "@/lib/business-service-area";
+import { publicServiceAreaFromView } from "@/lib/website-engine/public";
+import { publicOriginForSlug } from "@/lib/website-engine/hosts";
+import { readRequestHost } from "@/lib/request-host";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +37,19 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
-  const name = publicDisplayName(site.business);
+  const view = await requirePublicWebsiteView(slug);
+  const name = publicDisplayName(view.site.business);
+  const origin = await publicOriginForSlug(
+    prisma,
+    view.site.business.slug,
+    await readRequestHost(),
+  );
   return publicTenantPageMetadata({
-    business: site.business,
+    business: view.site.business,
     title: `Service Area | ${name}`,
-    description: resolvePublicServiceAreaCopy(site.business),
-    pathname: publicServiceAreaPath(site.business.slug),
+    description: resolvePublicServiceAreaCopy(view.site.business),
+    pathname: publicServiceAreaPath(view.site.business.slug),
+    origin,
   });
 }
 
@@ -52,14 +61,15 @@ const POINTS = [
 
 export default async function PublicServiceAreaPage({ params }: PageProps) {
   const { slug } = await params;
-  const site = await requirePublicSite(slug);
+  const view = await requirePublicWebsiteView(slug);
+  const site = view.site;
   const phone = publicPhone(site.business);
   const textHref = smsHref(phone);
   const requestHref = publicRequestPath(site.business.slug);
   const areaCopy = resolvePublicServiceAreaCopy(site.business);
 
-  if (!isCollProRenoSlug(site.business.slug)) {
-    const area = resolveBusinessServiceArea(site.business);
+  if (view.snapshot || !isCollProRenoSlug(site.business.slug)) {
+    const area = publicServiceAreaFromView(view);
     const storedLabel = site.business.publicServiceAreaLabel?.trim() || "";
     return (
       <PublicSiteShell business={site.business} groups={site.groups}>

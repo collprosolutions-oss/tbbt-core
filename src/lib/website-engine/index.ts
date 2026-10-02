@@ -28,6 +28,9 @@ export {
   loadWebsiteSnapshotIntakeOverlays,
   publicServiceFromView,
   publicLocalPageFromView,
+  publicServiceAreaFromSnapshot,
+  publicServiceAreaFromView,
+  snapshotServiceAreaRecords,
   snapshotToImageRows,
   snapshotIntakeSchemasByTrade,
   snapshotIntakeSchemaForTrade,
@@ -40,7 +43,12 @@ export {
   authorizedPublicOrigin,
   publicOriginForSlug,
 } from "@/lib/website-engine/hosts";
-export { publishedSitemapPaths, snapshotPageMetadata, viewHomeMetadata } from "@/lib/website-engine/seo";
+export {
+  absolutePublicSitemapUrl,
+  publishedSitemapPaths,
+  snapshotPageMetadata,
+  viewHomeMetadata,
+} from "@/lib/website-engine/seo";
 export {
   allocateUniqueServiceSlugs,
   allocateUnusedWebsiteSlug,

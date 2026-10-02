@@ -115,6 +115,7 @@ const publicServe = readRepo("src/lib/business-storage/public-serve.ts");
 const requestPhotos = readRepo("src/lib/business-storage/request-photos.ts");
 const publicSiteImages = readRepo("src/lib/public-site-images.ts");
 const robots = readRepo("src/app/robots.ts");
+const sitemapSrc = readRepo("src/app/sitemap.ts");
 
 check(
   "Canonical tenant route remains /hire/[slug], not a second public-site architecture",
@@ -220,7 +221,10 @@ check(
 );
 check(
   "Public hire pages stay crawlable",
-  robots.includes('allow: ["/", "/hire/", "/r/", "/e/", "/p/"]'),
+  robots.includes('allow: ["/", "/hire/", "/r/", "/e/", "/p/"]') &&
+    robots.includes("sitemap.xml") &&
+    sitemapSrc.includes("absolutePublicSitemapUrl") &&
+    sitemapSrc.includes('runtime = "nodejs"'),
 );
 check(
   "Founder trial still starts from website save/skip and stays idempotent",
