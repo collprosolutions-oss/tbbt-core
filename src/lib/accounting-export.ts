@@ -414,7 +414,7 @@ export function buildAccountingPaymentRows(source: AccountingExportSource): Arra
 export function buildAccountingExpenseRows(source: AccountingExportSource): Array<Record<string, string>> {
   const customers = nameById(source.customers);
   return source.expenses
-    .filter((expense) => expense.voidedAt == null)
+    .filter((expense) => expense.voidedAt == null && expense.reviewStatus !== "DRAFT")
     .sort((a, b) => compareByDateThenId(a.occurredOn, a.id, b.occurredOn, b.id))
     .map((expense) => ({
       "Expense ID": expense.id,

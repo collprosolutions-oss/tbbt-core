@@ -63,9 +63,16 @@ const { AI_FAILURE_MESSAGE, shouldRotateAiAttemptId } = await import("@/lib/ai/t
 const { sanitizeAiText } = await import("@/lib/ai/sanitize");
 const { loadReportSource } = await import("@/lib/reports-data");
 const { loadBsosFacts } = await import("@/lib/bsos-data");
-const { financialMaterialCost } = await import("@/lib/materials/expense-link");
+const { financialMaterialCost, linkPurchaseItemToExpense } = await import("@/lib/materials/expense-link");
+const { MaterialsError } = await import("@/lib/materials/errors");
 const { REPORTED_EXPENSE_WHERE } = await import("@/lib/expenses");
 const { EXPENSE_RECEIPT_PURPOSE } = await import("@/lib/business-storage/expense-receipts");
+const { buildBusinessExportZip } = await import("@/lib/business-export");
+const { FinancialIntelligenceError, reviewRecurringExpensePattern } = await import(
+  "@/lib/financial-intelligence-ops"
+);
+const { recurringPatternKey } = await import("@/lib/financial-intelligence/recurring-expenses");
+const { assessCloseoutCoverage } = await import("@/lib/job-profitability-closeout");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function readSrc(relative) {
@@ -103,11 +110,7 @@ const workspaceSrc = readSrc("src/components/expenses/expenses-workspace.tsx");
 const pageSrc = readSrc("src/app/(app)/expenses/page.tsx");
 const reportsSrc = readSrc("src/lib/reports-data.ts");
 const bsosSrc = readSrc("src/lib/bsos-data.ts");
-const expenseLinkSrc = readSrc("src/lib/materials/expense-link.ts");
-const financialOpsSrc = readSrc("src/lib/financial-intelligence-ops.ts");
 const ownerFnSrc = opsSrc.slice(opsSrc.indexOf("export async function requestExpenseReceiptExtraction"));
-const persistFnSrc = opsSrc.slice(opsSrc.indexOf("async function persistDraftExpense"));
-const confirmFnSrc = opsSrc.slice(opsSrc.indexOf("export async function confirmExpenseReceiptDraft"));
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -358,28 +361,9 @@ try {
       !receiptExtractCanPersistDraft(taxOverTotal),
   );
   check(
-    "Draft update and confirm use guarded updateMany",
-    opsSrc.includes("applyDraftExpenseUpdate") &&
-      opsSrc.includes("updateMany") &&
-      persistFnSrc.includes("applyDraftExpenseUpdate") &&
-      confirmFnSrc.includes("updateMany") &&
-      confirmFnSrc.includes("expectedUpdatedAt") &&
-      confirmFnSrc.includes("expectedAmount") &&
-      confirmFnSrc.includes("written.count === 0"),
-  );
-  check(
     "BSOS expense aggregate uses REPORTED_EXPENSE_WHERE",
     bsosSrc.includes("REPORTED_EXPENSE_WHERE") &&
       !bsosSrc.includes("where: { ...scope, voidedAt: null }"),
-  );
-  check(
-    "Materials link rejects DRAFT expenses",
-    expenseLinkSrc.includes('expense.reviewStatus === "DRAFT"') &&
-      expenseLinkSrc.includes("reviewStatus: true"),
-  );
-  check(
-    "Financial intelligence recurring detection uses REPORTED_EXPENSE_WHERE",
-    financialOpsSrc.includes("REPORTED_EXPENSE_WHERE"),
   );
   check(
     "Confirm form submits the draft snapshot the owner saw",
@@ -875,6 +859,126 @@ try {
     bsosFacts.recordedExpenses.amount !== 12495.04,
   );
 
+  console.log("\nTEST — Business export ZIP omits unconfirmed DRAFT expenses");
+  const exportBusiness = await prisma.business.create({
+    data: {
+      name: "Export Extract",
+      slug: `export-extract-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const exportOwnerUser = await prisma.user.create({
+    data: {
+      name: "Export Owner",
+      email: `export-extract-${randomUUID()}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const exportMem = await prisma.membership.create({
+    data: { userId: exportOwnerUser.id, businessId: exportBusiness.id, role: "OWNER" },
+  });
+  const exportOwner = makeAccess(
+    exportBusiness.id,
+    "OWNER",
+    exportMem.id,
+    exportOwnerUser.id,
+    exportBusiness.slug,
+  );
+  await prisma.expense.create({
+    data: {
+      businessId: exportBusiness.id,
+      occurredOn: new Date("2026-09-01T12:00:00.000Z"),
+      description: "Recorded paint",
+      amount: "100.00",
+      category: "MATERIALS",
+      vendor: "Recorded Vendor",
+      reviewStatus: "RECORDED",
+    },
+  });
+  const secretDraft = await prisma.expense.create({
+    data: {
+      businessId: exportBusiness.id,
+      occurredOn: new Date("2026-09-02T12:00:00.000Z"),
+      description: "Unconfirmed secret draft",
+      amount: "555.55",
+      category: "OTHER",
+      vendor: "SECRETDRAFTLEAK",
+      reviewStatus: "DRAFT",
+    },
+  });
+  const draftZip = await buildBusinessExportZip(prisma, exportBusiness.id);
+  const draftZipText = draftZip.bytes.toString("utf8");
+  check(
+    "Unconfirmed DRAFT vendor and amount are absent from the business export ZIP",
+    draftZipText.includes("100.00") &&
+      !draftZipText.includes("SECRETDRAFTLEAK") &&
+      !draftZipText.includes("555.55"),
+  );
+  const exportConfirmed = await confirmExpenseReceiptDraft(prisma, exportOwner, {
+    expenseId: secretDraft.id,
+    expectedUpdatedAt: secretDraft.updatedAt,
+    expectedAmount: secretDraft.amount.toString(),
+  });
+  const confirmedZip = await buildBusinessExportZip(prisma, exportBusiness.id);
+  const confirmedZipText = confirmedZip.bytes.toString("utf8");
+  check(
+    "Confirmed draft vendor and amount appear in the business export ZIP",
+    exportConfirmed.enteredReports === true &&
+      confirmedZipText.includes("SECRETDRAFTLEAK") &&
+      confirmedZipText.includes("555.55"),
+  );
+
+  console.log("\nTEST — Voided drafts stay locked and confirm snapshots must match");
+  const voidReceipt = await createReceiptAsset(businessA.id, "voided.jpg");
+  const voidSeed = await requestExpenseReceiptExtraction(prisma, ownerA, {
+    storedAssetId: voidReceipt.id,
+    receiptText: "KeepMe 20.00",
+    attemptId: randomUUID(),
+    provider: fakeExtractProvider([], {
+      vendor: "KeepMe",
+      date: "2026-09-15",
+      amountCents: 2000,
+      taxCents: 0,
+      confidence: 0.99,
+    }),
+  });
+  await prisma.expense.update({
+    where: { id: voidSeed.expenseId },
+    data: { voidedAt: new Date() },
+  });
+  const voidedBefore = await prisma.expense.findFirst({ where: { id: voidSeed.expenseId } });
+  const voidedExtract = await requestExpenseReceiptExtraction(prisma, ownerA, {
+    storedAssetId: voidReceipt.id,
+    receiptText: "OverwriteVoid 99.99",
+    attemptId: randomUUID(),
+    provider: fakeExtractProvider([], {
+      vendor: "OverwriteVoid",
+      date: "2026-09-21",
+      amountCents: 9999,
+      taxCents: 0,
+      confidence: 0.99,
+    }),
+  });
+  const voidedAfter = await prisma.expense.findFirst({ where: { id: voidSeed.expenseId } });
+  check(
+    "Extract does not overwrite a voided draft",
+    voidedExtract.applied === false &&
+      voidedAfter?.vendor === "KeepMe" &&
+      Number(voidedAfter.amount.toString()) === 20 &&
+      voidedAfter.voidedAt != null &&
+      voidedBefore.vendor === "KeepMe",
+  );
+  await expectError(
+    "Confirm refuses a voided draft",
+    () =>
+      confirmExpenseReceiptDraft(prisma, ownerA, {
+        expenseId: voidSeed.expenseId,
+        expectedUpdatedAt: voidedAfter.updatedAt,
+        expectedAmount: voidedAfter.amount.toString(),
+      }),
+    (error) => error instanceof ExpenseError && error.message === "This expense has been voided.",
+  );
+
   console.log("\nTEST — Confirm snapshot must match the draft the owner saw");
   const draftBeforeConfirm = await prisma.expense.findFirst({ where: { id: draft.id } });
   await expectError(
@@ -888,8 +992,172 @@ try {
     (error) =>
       error instanceof ExpenseError && error.message === EXPENSE_RECEIPT_EXTRACT_STALE_CONFIRM_MESSAGE,
   );
+  await expectError(
+    "Stale updatedAt does not confirm a changed draft",
+    () =>
+      confirmExpenseReceiptDraft(prisma, ownerA, {
+        expenseId: draft.id,
+        expectedUpdatedAt: new Date("2020-01-01T00:00:00.000Z"),
+        expectedAmount: draftBeforeConfirm.amount.toString(),
+      }),
+    (error) =>
+      error instanceof ExpenseError && error.message === EXPENSE_RECEIPT_EXTRACT_STALE_CONFIRM_MESSAGE,
+  );
   const stillDraft = await prisma.expense.findFirst({ where: { id: draft.id } });
   check("Stale confirm leaves the draft unrecorded", stillDraft?.reviewStatus === "DRAFT");
+
+  console.log("\nTEST — Recurring-pattern detection ignores DRAFT expenses");
+  const recurBusiness = await prisma.business.create({
+    data: {
+      name: "Recur Extract",
+      slug: `recur-extract-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const recurOwnerUser = await prisma.user.create({
+    data: {
+      name: "Recur Owner",
+      email: `recur-extract-${randomUUID()}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const recurMem = await prisma.membership.create({
+    data: { userId: recurOwnerUser.id, businessId: recurBusiness.id, role: "OWNER" },
+  });
+  const recurOwner = makeAccess(
+    recurBusiness.id,
+    "OWNER",
+    recurMem.id,
+    recurOwnerUser.id,
+    recurBusiness.slug,
+  );
+  await prisma.businessSaasSubscription.create({
+    data: {
+      businessId: recurBusiness.id,
+      status: "active",
+      planCode: "FOUNDER",
+      legacyExempt: true,
+    },
+  });
+  for (const occurredOn of ["2026-06-01", "2026-07-01", "2026-08-01"]) {
+    await prisma.expense.create({
+      data: {
+        businessId: recurBusiness.id,
+        occurredOn: new Date(`${occurredOn}T12:00:00.000Z`),
+        description: "Draft leak software",
+        amount: "49.00",
+        category: "SOFTWARE_SUBSCRIPTIONS",
+        vendor: "DRAFTRECURRING",
+        recurring: true,
+        reviewStatus: "DRAFT",
+      },
+    });
+  }
+  const draftPatternKey = recurringPatternKey({
+    category: "SOFTWARE_SUBSCRIPTIONS",
+    vendor: "DRAFTRECURRING",
+    description: "Draft leak software",
+  });
+  await expectError(
+    "Draft-only recurring rows are unknown to pattern review",
+    () =>
+      reviewRecurringExpensePattern(prisma, recurOwner, {
+        patternKey: draftPatternKey,
+        ownerStatus: "CONFIRMED",
+      }),
+    (error) =>
+      error instanceof FinancialIntelligenceError &&
+      error.message === "That recurring pattern is unknown or stale.",
+  );
+
+  console.log("\nTEST — Materials link and closeout reject DRAFT cost");
+  const purchaseList = await prisma.materialPurchaseList.create({
+    data: { businessId: businessA.id },
+  });
+  const purchaseItem = await prisma.materialPurchaseListItem.create({
+    data: {
+      businessId: businessA.id,
+      purchaseListId: purchaseList.id,
+      name: "Draft-linked bag",
+      unit: "BAG",
+      quantityNeeded: 1,
+      quantityPurchased: 1,
+      actualUnitCost: 10,
+      actualCost: 10,
+      status: "PURCHASED",
+    },
+  });
+  const draftMaterialExpense = await prisma.expense.create({
+    data: {
+      businessId: businessA.id,
+      occurredOn: new Date("2026-09-10T12:00:00.000Z"),
+      description: "Draft material cost",
+      amount: "10.00",
+      category: "MATERIALS",
+      vendor: "Draft Depot",
+      reviewStatus: "DRAFT",
+    },
+  });
+  await expectError(
+    "Materials link rejects a DRAFT expense",
+    () =>
+      linkPurchaseItemToExpense(prisma, ownerA, {
+        itemId: purchaseItem.id,
+        expenseId: draftMaterialExpense.id,
+      }),
+    (error) =>
+      error instanceof MaterialsError &&
+      error.message === "A draft expense cannot be the actual material cost until the owner confirms it.",
+  );
+  const unlinkedItem = await prisma.materialPurchaseListItem.findFirst({
+    where: { id: purchaseItem.id },
+  });
+  check("Draft expense was not linked to the purchase item", unlinkedItem?.expenseId == null);
+  const closeoutCoverage = assessCloseoutCoverage({
+    approvedEstimate: null,
+    hasAnyEstimate: false,
+    timeEntries: [],
+    expenses: [
+      {
+        id: "recorded-material",
+        businessId: "closeout-b",
+        occurredOn: new Date("2026-09-01T12:00:00.000Z"),
+        description: "Recorded material",
+        amount: 100,
+        category: "MATERIALS",
+        vendor: "Depot",
+        jobId: "closeout-j",
+        recurring: false,
+      },
+    ],
+    materialItems: [
+      {
+        id: "closeout-item",
+        businessId: "closeout-b",
+        jobId: "closeout-j",
+        status: "PURCHASED",
+        actualCost: 555.55,
+        expenseId: "draft-closeout",
+        expense: {
+          id: "draft-closeout",
+          businessId: "closeout-b",
+          jobId: "closeout-j",
+          amount: 555.55,
+          voidedAt: null,
+          reviewStatus: "DRAFT",
+          category: "MATERIALS",
+        },
+      },
+    ],
+    invoices: [],
+    payments: [],
+    invoiceCredits: [],
+    approvedLines: [],
+  });
+  check(
+    "Closeout treats a draft-linked material as incomplete cost",
+    closeoutCoverage.materials === "Partial",
+  );
 
   console.log("\nTEST — Two-connection extract cannot overwrite a confirmed draft");
   const raceReceipt = await createReceiptAsset(businessA.id, "race.jpg");
