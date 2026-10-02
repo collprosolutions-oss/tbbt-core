@@ -2476,10 +2476,12 @@ model JobProblemReport {
 
 /// OWNER-recorded or customer-portal-submitted callback against a
 /// completed same-business Job. Portal submissions resolve the Job from
-/// projectToken only and reuse this review path. Trade-neutral
-/// operational review only — never a warranty coverage or legal
-/// determination, and never an invoice, scheduled Job, or customer
-/// message by itself. Distinct from AdditionalWorkRequest (portal/field
+/// projectToken only and reuse this review path. After OUTCOME_RECORDED,
+/// the project-token portal cannot file another request until 24 hours
+/// after outcomeAt. OWNER record on the same job is not cooled down.
+/// Trade-neutral operational review only — never a warranty coverage or
+/// legal determination, and never an invoice, scheduled Job, or customer
+/// message by itself. Distinct from AdditionalWorkRequest (portal/field)
 /// extra-work review) and JobProblemReport (assigned-member field issues).
 ///
 /// Status: RECORDED -> UNDER_REVIEW -> OUTCOME_RECORDED.
@@ -2666,7 +2668,8 @@ model JobProjectLinkEvent {
   toStatus          String
   /// Retired Job.projectToken that must stop working immediately.
   previousToken     String
-  /// Live token after ROTATED. Null after REVOKED.
+  /// sha256 + last4 of the new live token after ROTATED. Never the raw
+  /// live token. Null after REVOKED.
   nextToken         String?
   actorMembershipId String
   /// Non-sensitive JSON (action only). Never a customer message payload.

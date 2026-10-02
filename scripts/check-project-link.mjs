@@ -48,10 +48,13 @@ const {
   JOB_PROJECT_LINK_UNAVAILABLE_MESSAGE,
   jobProjectLinkWriteAllowed,
   missingJobProjectLinkSchema,
+  projectLinkTokenAuditValue,
 } = await import("@/lib/project-link");
 const {
+  assertLiveLockedProjectToken,
   findLiveJobByProjectToken,
   isLiveProjectToken,
+  liveOutboundProjectToken,
   loadJobProjectLinkReview,
 } = await import("@/lib/project-link-data");
 const {
@@ -64,6 +67,17 @@ const {
   revokeJobProjectLink,
   rotateJobProjectLink,
 } = await import("@/lib/project-link-ops");
+const { loadPortalJobCallbackView } = await import("@/lib/portal-job-callback-data");
+const {
+  portalJobCallbackTestHooks,
+  submitPortalJobCallback,
+} = await import("@/lib/portal-job-callback-ops");
+const { loadPortalCustomerCommunications } = await import(
+  "@/lib/portal-project-home"
+);
+const { JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE } = await import(
+  "@/lib/job-callback"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -155,6 +169,15 @@ const pageSrc = read("src/app/(app)/jobs/[jobId]/page.tsx");
 const portalSrc = read("src/app/p/[token]/page.tsx");
 const schemaSrc = read("prisma/schema.prisma");
 const migrationSrc = read("prisma/migrations/20261002050000_job_project_link/migration.sql");
+const callbackOpsSrc = read("src/lib/portal-job-callback-ops.ts");
+const documentSrc = read("src/lib/business-storage/project-documents.ts");
+const appointmentNotifySrc = read("src/lib/appointment-notify.ts");
+const automationEmailSrc = read("src/lib/automation/email.ts");
+const completeInvoiceSrc = read("src/lib/complete-job-invoice.ts");
+const messagingSrc = read("src/lib/customer-messaging/workflows.ts");
+const dayRouteSrc = read("src/lib/owner-day-route-appointment-notice-ops.ts");
+const appointmentActionSrc = read("src/app/actions/public-appointment.ts");
+const changeOrderActionSrc = read("src/app/actions/public-change-order.ts");
 
 console.log("\nSTATIC — OWNER-only rotate/revoke, no message, additive history");
 check(
@@ -218,7 +241,48 @@ check(
     missingJobProjectLinkSchema({ code: "P2022" }) &&
     !missingJobProjectLinkSchema({ code: "P2002" }) &&
     jobProjectLinkErrorMessage({ code: "P2021" }, "fallback") ===
-      JOB_PROJECT_LINK_UNAVAILABLE_MESSAGE,
+      JOB_PROJECT_LINK_UNAVAILABLE_MESSAGE &&
+    dataSrc.includes('to_regclass(\'"JobProjectLink"\')') &&
+    dataSrc.includes("jobProjectLinkTablesPresent"),
+);
+check(
+  "Customer writes re-validate the supplied token after Job FOR UPDATE",
+  callbackOpsSrc.includes("assertLiveLockedProjectToken") &&
+    callbackOpsSrc.includes("afterJobLock") &&
+    callbackOpsSrc.indexOf("lockTenantOwnedJob") <
+      callbackOpsSrc.indexOf("assertLiveLockedProjectToken") &&
+    callbackOpsSrc.indexOf("assertLiveLockedProjectToken") <
+      callbackOpsSrc.indexOf("isPortalJobCallbackCoolingDown") &&
+    documentSrc.includes("assertLiveLockedProjectToken") &&
+    documentSrc.indexOf("lockJobForProjectDocument") <
+      documentSrc.indexOf("assertLiveLockedProjectToken"),
+);
+check(
+  "Audit nextToken stores a hash/last4, not the live token",
+  opsSrc.includes("projectLinkTokenAuditValue") &&
+    schemaSrc.includes("Never the raw") &&
+    projectLinkTokenAuditValue("live-token-secret").endsWith("cret") &&
+    !projectLinkTokenAuditValue("live-token-secret").includes("live-token-secret"),
+);
+check(
+  "Revoke and rotate-after-revoke require a confirmation step",
+  formSrc.includes("window.confirm") &&
+    formSrc.includes("Revoke this customer project link") &&
+    formSrc.includes("Issue a new customer project link") &&
+    formSrc.includes("confirmAfterRevoke"),
+);
+check(
+  "Outbound customer URLs are gated on live link status",
+  appointmentNotifySrc.includes("liveOutboundProjectToken") &&
+    automationEmailSrc.includes("liveOutboundProjectToken") &&
+    completeInvoiceSrc.includes("liveOutboundProjectToken") &&
+    messagingSrc.includes("liveOutboundProjectToken") &&
+    dayRouteSrc.includes("liveOutboundProjectToken"),
+);
+check(
+  "Appointment and change-order actions use the live-token resolver",
+  appointmentActionSrc.includes("findLiveJobByProjectToken") &&
+    changeOrderActionSrc.includes("findLiveJobByProjectToken"),
 );
 
 let session;
@@ -229,6 +293,9 @@ try {
     setProcessEnv: true,
   });
   const prisma = session.prisma;
+  const { loadInvoiceDocumentForProjectToken } = await import(
+    "@/lib/invoice-document"
+  );
   check(
     "Dedicated local disposable database opened",
     Boolean(session.testDbName?.startsWith("tbbt_project_link_")),
@@ -421,6 +488,24 @@ try {
       newForm.jobId === jobA.id,
   );
 
+  const invoiceOld = await loadInvoiceDocumentForProjectToken(tokenA, prisma);
+  const invoiceNew = await loadInvoiceDocumentForProjectToken(
+    rotated.projectToken,
+    prisma,
+  );
+  const commsOld = await loadPortalCustomerCommunications(prisma, tokenA);
+  const commsNew = await loadPortalCustomerCommunications(
+    prisma,
+    rotated.projectToken,
+  );
+  check(
+    "Invoice and portal-message loaders refuse the old token",
+    invoiceOld === null &&
+      invoiceNew != null &&
+      commsOld.length === 0 &&
+      commsNew.length === 1,
+  );
+
   const review = await loadJobProjectLinkReview(prisma, ownerA, jobA.id);
   check(
     "Owner review shows the live token and a ROTATED audit event",
@@ -435,9 +520,11 @@ try {
     orderBy: { createdAt: "desc" },
   });
   check(
-    "Audit event keeps the retired token and the new token",
+    "Audit event keeps the retired token and a hash/last4 of the new token",
     storedEvent?.previousToken === tokenA &&
-      storedEvent.nextToken === rotated.projectToken &&
+      storedEvent.nextToken === projectLinkTokenAuditValue(rotated.projectToken) &&
+      storedEvent.nextToken !== rotated.projectToken &&
+      !String(storedEvent.nextToken).includes(rotated.projectToken) &&
       storedEvent.businessId === businessA.id &&
       storedEvent.actorMembershipId === memOwnerA.id,
   );
@@ -499,6 +586,14 @@ try {
       (await isLiveProjectToken(prisma, reissued.projectToken)) === true &&
       (await isLiveProjectToken(prisma, tokenA)) === false &&
       (await isLiveProjectToken(prisma, rotated.projectToken)) === false,
+  );
+  check(
+    "Outbound helper omits revoked tokens and returns the live token",
+    (await liveOutboundProjectToken(prisma, tokenA)) === null &&
+      (await liveOutboundProjectToken(prisma, rotated.projectToken)) === null &&
+      (await liveOutboundProjectToken(prisma, burned)) === null &&
+      (await liveOutboundProjectToken(prisma, reissued.projectToken)) ===
+        reissued.projectToken,
   );
 
   console.log("\nPRESERVE — historical records and counts stay");
@@ -573,6 +668,154 @@ try {
     await Promise.all(raceClients.map((client) => client.$disconnect()));
   }
 
+  console.log("\nCUSTOMER PATHS — old tokens are refused beyond additional-work");
+  const callbackJob = await createJob(businessA.id, {
+    status: "COMPLETED",
+    token: `cb-${suffix}`,
+  });
+  const callbackFirst = await submitPortalJobCallback(prisma, {
+    token: callbackJob.projectToken,
+    description: "Please look at the completed repair.",
+    preferredContact: "PHONE",
+  });
+  const callbackRotated = await rotateJobProjectLink(prisma, ownerA, {
+    jobId: callbackJob.id,
+  });
+  const callbackOld = await submitPortalJobCallback(prisma, {
+    token: callbackJob.projectToken,
+    description: "Stale callback after rotate.",
+    preferredContact: "EMAIL",
+  });
+  const callbackNew = await submitPortalJobCallback(prisma, {
+    token: callbackRotated.projectToken,
+    description: "Fresh callback on the new link.",
+    preferredContact: "TEXT",
+  });
+  const callbackOldView = await loadPortalJobCallbackView(
+    prisma,
+    callbackJob.projectToken,
+  );
+  check(
+    "Portal callback refuses the old token and accepts the new one",
+    callbackFirst.ok === true &&
+      callbackFirst.alreadyExists === false &&
+      callbackOld.ok === false &&
+      callbackOld.error === JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE &&
+      callbackNew.ok === true &&
+      callbackNew.alreadyExists === true &&
+      callbackNew.jobId === callbackJob.id &&
+      callbackOldView.status === "hidden",
+  );
+
+  const apptJob = await createJob(businessA.id, { token: `appt-${suffix}` });
+  await prisma.job.update({
+    where: { id: apptJob.id },
+    data: {
+      scheduledAt: new Date("2026-10-03T15:00:00.000Z"),
+      scheduledDurationMinutes: 60,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    },
+  });
+  const apptRotated = await rotateJobProjectLink(prisma, ownerA, {
+    jobId: apptJob.id,
+  });
+  const { confirmAppointment } = await import("@/app/actions/public-appointment");
+  const oldApptForm = new FormData();
+  oldApptForm.set("projectToken", apptJob.projectToken);
+  oldApptForm.set("appointmentProposalId", "1");
+  oldApptForm.set("accessMethod", "CUSTOMER_PRESENT");
+  const oldAppt = await confirmAppointment({}, oldApptForm);
+  const apptAfterOld = await prisma.job.findUnique({
+    where: { id: apptJob.id },
+    select: { appointmentConfirmationStatus: true, projectToken: true },
+  });
+  check(
+    "Appointment confirm refuses the old token and does not write",
+    oldAppt.error === "This appointment is not available." &&
+      apptAfterOld?.appointmentConfirmationStatus === "AWAITING_CUSTOMER" &&
+      apptAfterOld.projectToken === apptRotated.projectToken,
+  );
+
+  const changeJob = await createJob(businessA.id, { token: `co-${suffix}` });
+  const sentChange = await prisma.changeOrder.create({
+    data: {
+      businessId: businessA.id,
+      jobId: changeJob.id,
+      title: "Extra outlet",
+      status: "SENT",
+      total: 40,
+      sentAt: new Date(),
+    },
+  });
+  const changeRotated = await rotateJobProjectLink(prisma, ownerA, {
+    jobId: changeJob.id,
+  });
+  const { approveChangeOrder } = await import("@/app/actions/public-change-order");
+  const oldChangeForm = new FormData();
+  oldChangeForm.set("projectToken", changeJob.projectToken);
+  oldChangeForm.set("changeOrderId", sentChange.id);
+  const oldChange = await approveChangeOrder({}, oldChangeForm);
+  const changeAfterOld = await prisma.changeOrder.findUnique({
+    where: { id: sentChange.id },
+    select: { status: true },
+  });
+  check(
+    "Change-order approve refuses the old token and does not write",
+    oldChange.error === "This change order is not available." &&
+      changeAfterOld?.status === "SENT" &&
+      (await isLiveProjectToken(prisma, changeRotated.projectToken)) === true,
+  );
+
+  console.log("\nBARRIER — in-flight old-token callback cannot land after rotate commits");
+  const barrierJob = await createJob(businessA.id, {
+    status: "COMPLETED",
+    token: `barrier-${suffix}`,
+  });
+  const barrierOldToken = barrierJob.projectToken;
+  const rotateClient = session.createClient();
+  const callbackClient = session.createClient();
+  jobProjectLinkTestHooks.afterJobLock = async ({ kind }) => {
+    if (kind === "rotate") {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  };
+  try {
+    const rotateStarted = Date.now();
+    const rotatePromise = rotateJobProjectLink(rotateClient, ownerA, {
+      jobId: barrierJob.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const callbackPromise = submitPortalJobCallback(callbackClient, {
+      token: barrierOldToken,
+      description: "In-flight callback after rotate has the job lock.",
+      preferredContact: "PHONE",
+    });
+    const [rotatedBarrier, callbackBarrier] = await Promise.all([
+      rotatePromise,
+      callbackPromise,
+    ]);
+    const barrierCount = await prisma.jobCallback.count({
+      where: { jobId: barrierJob.id },
+    });
+    check(
+      "Old-token callback that locked after rotate is refused (afterJobLock proof)",
+      rotatedBarrier.previousToken === barrierOldToken &&
+        callbackBarrier.ok === false &&
+        callbackBarrier.error === JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE &&
+        barrierCount === 0 &&
+        Date.now() - rotateStarted >= 1500 &&
+        (await assertLiveLockedProjectToken(prisma, {
+          jobId: barrierJob.id,
+          businessId: businessA.id,
+          token: barrierOldToken,
+        })) === false,
+    );
+  } finally {
+    jobProjectLinkTestHooks.afterJobLock = undefined;
+    await Promise.all([rotateClient.$disconnect(), callbackClient.$disconnect()]);
+  }
+
   console.log("\nMISSING SCHEMA — writes fail closed; current Job.projectToken still resolves");
   await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobProjectLinkEvent" CASCADE`);
   await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobProjectLink" CASCADE`);
@@ -594,6 +837,29 @@ try {
     (await isLiveProjectToken(prisma, tokenA2)) === true &&
       (await findLiveJobByProjectToken(prisma, tokenA2, { id: true }))?.id === jobA2.id,
   );
+
+  const degradeCompleted = await createJob(businessA.id, {
+    status: "COMPLETED",
+    token: `degrade-cb-${suffix}`,
+  });
+  const degradeCallback = await submitPortalJobCallback(prisma, {
+    token: degradeCompleted.projectToken,
+    description: "Callback after the project-link tables were dropped.",
+    preferredContact: "PHONE",
+  });
+  const degradeTx = await prisma.$transaction(async (tx) => {
+    return findLiveJobByProjectToken(tx, tokenA2, { id: true });
+  });
+  check(
+    "submitPortalJobCallback degrades inside a transaction when tables are missing",
+    degradeCallback.ok === true &&
+      degradeCallback.jobId === degradeCompleted.id &&
+      degradeCallback.alreadyExists === false,
+  );
+  check(
+    "Generic $transaction using findLive degrades when tables are missing",
+    degradeTx?.id === jobA2.id,
+  );
 } catch (error) {
   failed += 1;
   console.error("FAIL - project-link disposable database run");
@@ -601,6 +867,7 @@ try {
 } finally {
   jobProjectLinkTestHooks.beforeJobLock = undefined;
   jobProjectLinkTestHooks.afterJobLock = undefined;
+  portalJobCallbackTestHooks.afterJobLock = undefined;
   if (session) {
     await session.cleanup();
   }

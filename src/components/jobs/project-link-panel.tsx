@@ -41,16 +41,31 @@ function ActionAlerts({ state }: { state: JobProjectLinkActionState }) {
 function RotateForm({
   jobId,
   label,
+  confirmAfterRevoke,
 }: {
   jobId: string;
   label: string;
+  confirmAfterRevoke: boolean;
 }) {
   const [state, action, pending] = useActionState(
     rotateJobProjectLinkAction,
     initialState,
   );
   return (
-    <form action={action} className="space-y-2">
+    <form
+      action={action}
+      className="space-y-2"
+      onSubmit={(event) => {
+        if (
+          confirmAfterRevoke &&
+          !window.confirm(
+            "Issue a new customer project link? Previous revoked URLs stay rejected. No message will be sent.",
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
       <input type="hidden" name="jobId" value={jobId} />
       <ActionAlerts state={state} />
       <p className="text-xs text-muted-foreground">
@@ -70,7 +85,19 @@ function RevokeForm({ jobId }: { jobId: string }) {
     initialState,
   );
   return (
-    <form action={action} className="space-y-2">
+    <form
+      action={action}
+      className="space-y-2"
+      onSubmit={(event) => {
+        if (
+          !window.confirm(
+            "Revoke this customer project link? Every current URL for this job will stop working immediately. No message will be sent.",
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
       <input type="hidden" name="jobId" value={jobId} />
       <ActionAlerts state={state} />
       <p className="text-xs text-muted-foreground">
@@ -126,6 +153,7 @@ export function ProjectLinkPanel({ review }: { review: OwnerJobProjectLinkReview
           <RotateForm
             jobId={review.jobId}
             label={review.link.active ? "Rotate project link" : "Issue new project link"}
+            confirmAfterRevoke={!review.link.active}
           />
           {review.link.active ? <RevokeForm jobId={review.jobId} /> : null}
         </div>

@@ -56,6 +56,7 @@ import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { DEFAULT_SETTINGS_PREFERENCES, isEmailDeliveryConfigured } from "@/lib/settings";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
+import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantProjectUrl } from "@/lib/tenant-app-url";
 
 type NoticeDb = PrismaClient | Prisma.TransactionClient;
@@ -679,9 +680,8 @@ export async function sendOwnerDayRouteAppointmentNotice(
       return { job: fresh, communicationId: claim.communicationId };
     });
 
-    const projectUrl = claimed.job.projectToken
-      ? tenantProjectUrl(business.slug, claimed.job.projectToken)
-      : null;
+    const liveToken = await liveOutboundProjectToken(db, claimed.job.projectToken);
+    const projectUrl = liveToken ? tenantProjectUrl(business.slug, liveToken) : null;
     const body = buildDayRouteAppointmentNoticeBody({
       businessName: access.workspace.business.name || business.name,
       appointmentWindowLabel: preview.appointmentWindowLabel,

@@ -18,6 +18,7 @@ import {
   JOB_PROJECT_LINK_UNAVAILABLE_MESSAGE,
   jobProjectLinkWriteAllowed,
   missingJobProjectLinkSchema,
+  projectLinkTokenAuditValue,
 } from "@/lib/project-link";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
@@ -240,7 +241,7 @@ export async function rotateJobProjectLink(
           fromStatus: link.status,
           toStatus: "ACTIVE",
           previousToken,
-          nextToken,
+          nextToken: projectLinkTokenAuditValue(nextToken),
           actorMembershipId: actorMembershipId(access),
           payload: eventPayload({ action: "ROTATED" }),
         },

@@ -70,6 +70,7 @@ import { loadPortalJobCallbackView } from "@/lib/portal-job-callback-data";
 import {
   JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
+  portalJobCallbackCooldownMessage,
 } from "@/lib/job-callback";
 import { prisma } from "@/lib/prisma";
 import { findLiveJobByProjectToken } from "@/lib/project-link-data";
@@ -670,6 +671,12 @@ export default async function CustomerProjectPortalPage({
               <CardContent>
                 {callbackView.status === "already_requested" ? (
                   <p className="text-sm">{JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE}</p>
+                ) : callbackView.status === "cooldown" ? (
+                  <p className="text-sm">
+                    {portalJobCallbackCooldownMessage(
+                      formatDateTime(callbackView.availableAt, timeZone),
+                    )}
+                  </p>
                 ) : (
                   <RequestJobCallbackForm projectToken={token} />
                 )}

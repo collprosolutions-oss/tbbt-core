@@ -163,6 +163,31 @@ export const JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE =
 export const JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE =
   "Ask the team to review a concern about the completed work. This is not a warranty claim, does not promise coverage, does not schedule a visit, and does not send a message.";
 
+/** Bounded portal re-file wait after an OWNER records an outcome. */
+export const PORTAL_JOB_CALLBACK_COOLDOWN_HOURS = 24;
+export const PORTAL_JOB_CALLBACK_COOLDOWN_MS =
+  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
+
+export const JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE =
+  "The team already recorded an outcome on a recent callback request for this job. You can send another request after 24 hours. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.";
+
+export function portalJobCallbackCooldownAvailableAt(resolvedAt: Date): Date {
+  return new Date(resolvedAt.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+}
+
+export function isPortalJobCallbackCoolingDown(
+  resolvedAt: Date | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!resolvedAt) return false;
+  return now.getTime() - resolvedAt.getTime() < PORTAL_JOB_CALLBACK_COOLDOWN_MS;
+}
+
+export function portalJobCallbackCooldownMessage(availableAtLabel?: string): string {
+  if (!availableAtLabel) return JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE;
+  return `The team already recorded an outcome on a recent callback request for this job. You can send another request after 24 hours. Next available ${availableAtLabel}. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.`;
+}
+
 export function jobCallbackWriteAllowed(role: MembershipRole | string): boolean {
   return role === "OWNER";
 }

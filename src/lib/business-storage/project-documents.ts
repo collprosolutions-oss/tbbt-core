@@ -31,7 +31,10 @@ import {
   missingProjectDocumentReviewSchema,
   recordedProjectDocumentReviewLabel,
 } from "@/lib/project-document-review";
-import { findLiveJobByProjectToken } from "@/lib/project-link-data";
+import {
+  assertLiveLockedProjectToken,
+  findLiveJobByProjectToken,
+} from "@/lib/project-link-data";
 
 export const PROJECT_DOCUMENT_PURPOSE = "project-portal-document";
 export const PROJECT_DOCUMENT_RECEIVED_COPY = "Received. Private to the business.";
@@ -239,6 +242,15 @@ export async function authorizeProjectTokenDocument(
       async beforeCreate(tx) {
         await lockJobForProjectDocument(tx, job);
         await projectDocumentTestHooks.afterJobLock?.();
+        if (
+          !(await assertLiveLockedProjectToken(tx, {
+            jobId: job.id,
+            businessId: job.businessId,
+            token: job.projectToken,
+          }))
+        ) {
+          throw new StorageAccessError(PROJECT_LINK_UNAVAILABLE);
+        }
         const active = await countActiveProjectDocuments(tx, {
           businessId: job.businessId,
           jobId: job.id,

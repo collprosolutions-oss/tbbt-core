@@ -9,6 +9,7 @@
  * These writes never send a customer message.
  */
 import type { MembershipRole } from "@prisma/client";
+import { hashToken } from "@/lib/auth-crypto";
 import { parsePortalProjectToken } from "@/lib/job-callback";
 
 export const JOB_PROJECT_LINK_STATUSES = ["ACTIVE", "REVOKED"] as const;
@@ -78,6 +79,14 @@ export function missingJobProjectLinkSchema(error: unknown): boolean {
 
 export function parseProjectLinkToken(raw: string | null | undefined): string | null {
   return parsePortalProjectToken(raw);
+}
+
+/**
+ * Audit value for a newly issued live token. Stores sha256 + last4 so
+ * JobProjectLinkEvent.nextToken never holds the raw URL secret.
+ */
+export function projectLinkTokenAuditValue(token: string): string {
+  return `${hashToken(token)}:${token.slice(-4)}`;
 }
 
 export type OwnerJobProjectLinkHistoryEvent = {
