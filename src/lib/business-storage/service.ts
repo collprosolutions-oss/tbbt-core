@@ -108,6 +108,12 @@ async function lockAccountThenPendingAsset(
   return account;
 }
 
+/** Proof hooks for the delete-versus-discard READY used-bytes race. */
+export const managedStorageWriteTestHooks: {
+  afterDeleteStatusRead?: () => Promise<void>;
+  afterDiscardStatusRead?: () => Promise<void>;
+} = {};
+
 async function releasePendingReservationInTx(
   tx: Prisma.TransactionClient,
   accountId: string,
@@ -489,6 +495,65 @@ export type DiscardReadyManagedUploadMatch = {
 };
 
 /**
+ * Account then asset. Recheck READY under the lock.
+ * updateMany(status: READY) is the single used-bytes claim.
+ */
+async function claimReadyUsedBytesOnce(
+  tx: Prisma.TransactionClient,
+  input: {
+    businessId: string;
+    assetId: string;
+    accountId: string;
+    now: Date;
+    nextStatus: "DELETED" | "FAILED";
+    match?: DiscardReadyManagedUploadMatch;
+  },
+) {
+  // LOCK_ACCOUNT_BEFORE_ASSET: used-bytes release must match finalize.
+  await lockAccountThenPendingAsset(tx, {
+    accountId: input.accountId,
+    businessId: input.businessId,
+    assetId: input.assetId,
+  });
+  const current = await tx.storedAsset.findFirst({
+    where: { id: input.assetId, businessId: input.businessId },
+  });
+  if (!current || current.status !== "READY") {
+    return { claimed: false as const, current };
+  }
+  const updated = await tx.storedAsset.updateMany({
+    where: {
+      id: input.assetId,
+      businessId: input.businessId,
+      status: "READY",
+      ...(input.match
+        ? {
+            jobId: input.match.jobId,
+            category: input.match.category,
+            purpose: input.match.purpose,
+            visibility: input.match.visibility,
+          }
+        : {}),
+    },
+    data: {
+      status: input.nextStatus,
+      deletedAt: input.now,
+      publicPath: null,
+    },
+  });
+  if (updated.count !== 1) {
+    return { claimed: false as const, current };
+  }
+  if (current.fileSizeBytes > 0) {
+    await tx.businessStorageAccount.update({
+      where: { id: input.accountId },
+      data: { storageUsedBytes: { decrement: current.fileSizeBytes } },
+    });
+  }
+  return { claimed: true as const, current };
+}
+
+/**
  * Releases a READY asset that never became a domain attachment.
  * Abort stays PENDING-only so a successful finalize cannot be undone
  * from the abort route. The claim is limited to the matching private
@@ -505,30 +570,19 @@ export async function discardReadyManagedUpload(
     include: { storageAccount: true },
   });
   if (!existing) throw new StorageAccessError();
+  await managedStorageWriteTestHooks.afterDiscardStatusRead?.();
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
     // LOCK_ACCOUNT_BEFORE_ASSET: discard must match finalize (account, then asset).
-    await lockStorageAccountRow(tx, existing.storageAccountId);
-    const updated = await tx.storedAsset.updateMany({
-      where: {
-        id: existing.id,
-        businessId,
-        status: "READY",
-        jobId: match.jobId,
-        category: match.category,
-        purpose: match.purpose,
-        visibility: match.visibility,
-      },
-      data: { status: "FAILED", deletedAt: now, publicPath: null },
+    const result = await claimReadyUsedBytesOnce(tx, {
+      businessId,
+      assetId: existing.id,
+      accountId: existing.storageAccountId,
+      now,
+      nextStatus: "FAILED",
+      match,
     });
-    if (updated.count !== 1) return false;
-    if (existing.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: existing.storageAccountId },
-        data: { storageUsedBytes: { decrement: existing.fileSizeBytes } },
-      });
-    }
-    return true;
+    return result.claimed;
   });
   if (claimed) {
     await bestEffortCleanupOwnedObject(deps, businessId, {
@@ -727,6 +781,7 @@ export async function deleteStoredAsset(
   });
   if (!asset) throw new StorageAccessError();
   if (asset.status === "DELETED") return asset;
+  await managedStorageWriteTestHooks.afterDeleteStatusRead?.();
   const provider = await resolveStorageProvider(deps);
   await provider.deleteObject({
     bucket: asset.storageAccount.bucketName,
@@ -735,21 +790,40 @@ export async function deleteStoredAsset(
   const now = deps.now?.() ?? new Date();
   return deps.db.$transaction(async (tx) => {
     // LOCK_ACCOUNT_BEFORE_ASSET: delete must match finalize (account, then asset).
-    await lockStorageAccountRow(tx, asset.storageAccountId);
-    const updated = await tx.storedAsset.update({
-      where: { id: asset.id },
-      data: { status: "DELETED", deletedAt: now, publicPath: null },
+    const ready = await claimReadyUsedBytesOnce(tx, {
+      businessId: access.businessId,
+      assetId: asset.id,
+      accountId: asset.storageAccountId,
+      now,
+      nextStatus: "DELETED",
     });
-    if (asset.status === "READY" && asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
+    if (ready.claimed) {
+      return tx.storedAsset.findFirstOrThrow({
+        where: { id: asset.id, businessId: access.businessId },
       });
     }
-    if (asset.status === "PENDING") {
-      await releasePendingReservationInTx(tx, asset.storageAccountId, asset);
+    const current = ready.current;
+    if (!current) throw new StorageAccessError();
+    if (current.status === "DELETED") return current;
+    const updated = await tx.storedAsset.updateMany({
+      where: {
+        id: asset.id,
+        businessId: access.businessId,
+        status: current.status,
+      },
+      data: { status: "DELETED", deletedAt: now, publicPath: null },
+    });
+    if (updated.count !== 1) {
+      return tx.storedAsset.findFirstOrThrow({
+        where: { id: asset.id, businessId: access.businessId },
+      });
     }
-    return updated;
+    if (current.status === "PENDING") {
+      await releasePendingReservationInTx(tx, asset.storageAccountId, current);
+    }
+    return tx.storedAsset.findFirstOrThrow({
+      where: { id: asset.id, businessId: access.businessId },
+    });
   });
 }
 

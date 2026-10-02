@@ -149,7 +149,8 @@ check(
     serviceSrc.includes("jobId: match.jobId") &&
     serviceSrc.includes("category: match.category") &&
     serviceSrc.includes("purpose: match.purpose") &&
-    serviceSrc.includes("storageUsedBytes: { decrement: existing.fileSizeBytes }"),
+    serviceSrc.includes("claimReadyUsedBytesOnce") &&
+    serviceSrc.includes("storageUsedBytes: { decrement: current.fileSizeBytes }"),
 );
 check(
   "Native photo routes never accept a File body or Vercel Blob helper",

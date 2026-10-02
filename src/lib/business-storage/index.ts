@@ -34,6 +34,7 @@ export {
   abortManagedUpload,
   assertOwnedStoredAsset,
   discardReadyManagedUpload,
+  managedStorageWriteTestHooks,
   authorizeBusinessUpload,
   authorizeManagedUpload,
   bestEffortCleanupOwnedObject,
