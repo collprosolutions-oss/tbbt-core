@@ -580,38 +580,27 @@ try {
   }
 
   console.log("\nBEHAVIOR — Membership id sorting");
+  // Deactivate and reassign both take the schedule-reservation lock
+  // first, so they never hold Membership locks at the same time.
+  // End-to-end id sorting cannot be observed as a 40P01. Assert the
+  // helper's lock order directly instead.
   {
     const fixture = await seedClockedInWorker("id-sort");
-    const left = prisma.$transaction(
-      async (tx) => {
-        await lockTenantOwnedMemberships(tx, fixture.business.id, [
-          fixture.owner.id,
-          fixture.worker.id,
-        ]);
-        await new Promise((resolve) => setTimeout(resolve, 400));
-      },
+    const sortedIds = [
+      fixture.owner.id,
+      fixture.worker.id,
+      fixture.replacement.id,
+    ].sort();
+    const reversedIds = [...sortedIds].reverse();
+    const locked = await prisma.$transaction(
+      async (tx) =>
+        lockTenantOwnedMemberships(tx, fixture.business.id, reversedIds),
       { timeout: 20_000, maxWait: 10_000 },
     );
-    const right = locker.$transaction(
-      async (tx) => {
-        await lockTenantOwnedMemberships(tx, fixture.business.id, [
-          fixture.worker.id,
-          fixture.replacement.id,
-          fixture.owner.id,
-        ]);
-        await new Promise((resolve) => setTimeout(resolve, 400));
-      },
-      { timeout: 20_000, maxWait: 10_000 },
-    );
-    const settled = await Promise.allSettled([left, right]);
-    const { deadlock, writeRejected } = writesClean(settled);
     check(
-      "Deactivate [actor, worker] vs reassign [previous, next, actor] does not 40P01",
-      deadlock === false && writeRejected.length === 0,
+      "lockTenantOwnedMemberships locks Memberships in sorted id order",
+      locked.map((row) => row.id).join(",") === sortedIds.join(","),
     );
-    if (writeRejected.length > 0) {
-      console.error("  id-sort reject:", writeRejected[0].reason);
-    }
   }
 } catch (error) {
   failed += 1;
