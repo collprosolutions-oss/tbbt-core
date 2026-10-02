@@ -295,7 +295,7 @@ try {
   blocker("No browser walkthrough of signup → invoice → review was executed here.");
   blocker("Facebook / Instagram / Google publishing adapters are not connected; Marketing and Growth never fakes PUBLISHED.");
   blocker("Banking and accounting providers are Not Connected; cash-flow projected balance stays null.");
-  blocker("External marketing AI is not connected; template drafts only.");
+  blocker("External marketing AI stays unused here; OWNER drafts show Unavailable without a key, and template drafts remain available.");
   blocker("Resend / Twilio / R2 / live Stripe Connect+SaaS require production secrets that this local harness does not set.");
 
   console.log(

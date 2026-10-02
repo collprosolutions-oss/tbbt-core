@@ -1,7 +1,27 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import type { BusinessAccess } from "@/lib/access";
+import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
+import {
+  AI_FAILURE_MESSAGE,
+  AI_NOT_CONNECTED_MESSAGE,
+  isAiAttemptId,
+  type AiProvider,
+} from "@/lib/ai/types";
+import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { draftMarketingContent, type MarketingDraft, type MarketingDraftInput } from "@/lib/marketing-draft";
+import { createMarketingContent, MarketingError } from "@/lib/marketing-ops";
+import {
+  canRequestOwnerMarketingContentDraft,
+  MARKETING_OWNER_DRAFT_COST_BOUNDED_MESSAGE,
+  MARKETING_OWNER_DRAFT_MAX_INPUT_CHARS,
+  MARKETING_OWNER_DRAFT_MAX_OUTPUT_TOKENS,
+  MARKETING_OWNER_DRAFT_MONTHLY_REQUEST_LIMIT,
+  MARKETING_OWNER_DRAFT_MONTHLY_TOKEN_BUDGET,
+  MARKETING_OWNER_DRAFT_REVIEW_MESSAGE,
+  MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
+  OWNER_CONTENT_DRAFT_MESSAGE,
+} from "@/lib/marketing";
 import { runAiTask, type AiServiceActor } from "@/lib/ai/service";
-import { AI_NOT_CONNECTED_MESSAGE } from "@/lib/ai/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -231,5 +251,235 @@ export async function draftMarketingVariationsWithAi(
     message: result.message,
     text: result.status === "PENDING" ? undefined : result.output?.text ?? fallback.map((row) => row.body).join("\n\n"),
     publishable: false as const,
+  };
+}
+
+const OWNER_DRAFT_ALLOWED_FACT_KEYS = ["businessName", "city", "workPerformed", "approvedPhotoCount"] as const;
+
+function monthStartUtc(now: Date) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+function titleFromOwnerDraftText(text: string) {
+  const line = text.split(/\n/)[0]?.trim() || "Owner-requested content draft";
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+export async function marketingOwnerDraftBudgetUsed(
+  db: Db,
+  businessId: string,
+  now = new Date(),
+) {
+  const periodStart = monthStartUtc(now);
+  const usage = await db.aiInteraction.aggregate({
+    where: {
+      businessId,
+      taskType: "MARKETING_DRAFT",
+      createdAt: { gte: periodStart },
+      status: { in: ["COMPLETED", "FAILED", "VALIDATION_FAILED"] },
+    },
+    _count: true,
+    _sum: { promptTokens: true, completionTokens: true },
+  });
+  const tokens = (usage._sum.promptTokens ?? 0) + (usage._sum.completionTokens ?? 0);
+  return {
+    requestCount: usage._count,
+    tokens,
+    exhausted:
+      usage._count >= MARKETING_OWNER_DRAFT_MONTHLY_REQUEST_LIMIT ||
+      tokens >= MARKETING_OWNER_DRAFT_MONTHLY_TOKEN_BUDGET,
+  };
+}
+
+export type OwnerMarketingContentDraftResult = {
+  status: "UNAVAILABLE" | "COMPLETED" | "FAILED" | "VALIDATION_FAILED" | "PENDING";
+  message: string;
+  contentId?: string;
+  text?: string;
+  interactionId?: string;
+  publishable: false;
+  published: false;
+  posted: false;
+  customerMessageSent: false;
+  fabricatedFacts: false;
+};
+
+/**
+ * OWNER-requested Marketing Studio content draft. Uses the canonical
+ * runAiTask / resolveAiProvider path. Does not create a template draft,
+ * publish a website, post socially, or send a customer message.
+ */
+export async function requestOwnerMarketingContentDraft(
+  db: Db,
+  access: BusinessAccess,
+  input: {
+    attemptId: string;
+    jobId?: string | null;
+    ownerNote?: string | null;
+    /** Test-only. Production omits this and uses resolveAiProvider(). */
+    provider?: AiProvider;
+    now?: Date;
+  },
+): Promise<OwnerMarketingContentDraftResult> {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  requireBusinessCapability(access, CAPABILITIES.USE_AI_ASSIST);
+  if (!canRequestOwnerMarketingContentDraft(access.workspace.role)) {
+    throw new MarketingError(OWNER_CONTENT_DRAFT_MESSAGE);
+  }
+  requireBusinessRole(access, "OWNER");
+  if (!isAiAttemptId(input.attemptId)) {
+    throw new MarketingError("Retry that request from the form.");
+  }
+
+  const closed = {
+    publishable: false as const,
+    published: false as const,
+    posted: false as const,
+    customerMessageSent: false as const,
+    fabricatedFacts: false as const,
+  };
+
+  const budget = await marketingOwnerDraftBudgetUsed(db, access.businessId, input.now);
+  if (budget.exhausted) {
+    return {
+      status: "UNAVAILABLE",
+      message: MARKETING_OWNER_DRAFT_COST_BOUNDED_MESSAGE,
+      ...closed,
+    };
+  }
+
+  const business = await db.business.findFirst({
+    where: { id: access.businessId },
+    select: { id: true, name: true, publicServiceAreaLabel: true },
+  });
+  if (!business) {
+    throw new MarketingError("That business is not in this workspace.");
+  }
+
+  const settings = await db.businessSettings.findUnique({
+    where: { businessId: access.businessId },
+    select: { marketingBrandVoice: true },
+  });
+
+  let jobId: string | undefined;
+  let workPerformed = "completed work";
+  let approvedPhotoCount = 0;
+  const requestedJobId = input.jobId?.trim();
+  if (requestedJobId) {
+    const job = access.assertOwned(
+      await db.job.findFirst({
+        where: { id: requestedJobId, ...access.scope, status: "COMPLETED" },
+        select: {
+          id: true,
+          businessId: true,
+          estimate: {
+            select: {
+              lineItems: {
+                select: { serviceCatalogItem: { select: { name: true } } },
+                take: 3,
+              },
+            },
+          },
+          photos: {
+            where: { marketingPermissionStatus: "APPROVED" },
+            select: { id: true },
+          },
+        },
+      }),
+    );
+    jobId = job.id;
+    const catalogName = job.estimate?.lineItems
+      .map((item) => item.serviceCatalogItem?.name?.trim())
+      .find((name) => Boolean(name));
+    workPerformed = catalogName || "completed work";
+    approvedPhotoCount = job.photos.length;
+  }
+
+  const facts = {
+    businessName: sanitizeAiText(business.name, 80),
+    city: sanitizeAiText(business.publicServiceAreaLabel ?? "", 80) || null,
+    workPerformed: sanitizeAiText(workPerformed, 80),
+    approvedPhotoCount,
+    brandVoice: sanitizeAiText(settings?.marketingBrandVoice ?? "", 160) || null,
+    ownerNote: sanitizeAiText(input.ownerNote ?? "", 400) || null,
+  };
+  const user = sanitizeAiText(JSON.stringify(facts), MARKETING_OWNER_DRAFT_MAX_INPUT_CHARS);
+
+  const actor: AiServiceActor = {
+    businessId: access.businessId,
+    membershipId: access.workspace.membership.id,
+    userId: access.workspace.user?.id ?? null,
+  };
+
+  const result = await runAiTask(db, actor, {
+    taskType: "MARKETING_DRAFT",
+    system:
+      "Draft one internal marketing content item from recorded TBBT facts only. Return JSON {text, stance, citedFactKeys, notes}. Never invent reviews, prices, customer names, licenses, results, audience size, or rankings. Never publish, post, or send a customer message. The result remains a DRAFT for owner review.",
+    user,
+    inputSummary: jobId ? `owner content draft job ${jobId}` : "owner content draft",
+    idempotencyKey: `marketing:owner-content-draft:${access.businessId}:${input.attemptId}`,
+    fallback: {
+      text: MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
+      stance: "RECOMMENDATION",
+      citedFactKeys: [],
+      notes: AI_NOT_CONNECTED_MESSAGE,
+    },
+    allowedFactKeys: [...OWNER_DRAFT_ALLOWED_FACT_KEYS],
+    allowRetry: false,
+    maxOutputTokens: MARKETING_OWNER_DRAFT_MAX_OUTPUT_TOKENS,
+    ...(input.provider ? { provider: input.provider } : {}),
+  });
+
+  if (result.status === "PENDING") {
+    return {
+      status: "PENDING",
+      message: result.message,
+      interactionId: result.interactionId,
+      ...closed,
+    };
+  }
+
+  if (result.status !== "COMPLETED" || !result.output?.text) {
+    return {
+      status: result.status === "SKIPPED_NOT_CONNECTED" ? "UNAVAILABLE" : result.status === "VALIDATION_FAILED" ? "VALIDATION_FAILED" : "FAILED",
+      message:
+        result.status === "SKIPPED_NOT_CONNECTED"
+          ? MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE
+          : result.status === "VALIDATION_FAILED"
+            ? result.message
+            : AI_FAILURE_MESSAGE,
+      interactionId: result.interactionId,
+      ...closed,
+    };
+  }
+
+  const text = result.output.text;
+  const title = titleFromOwnerDraftText(text);
+  const existing = await db.marketingContent.findFirst({
+    where: {
+      businessId: access.businessId,
+      createdByMembershipId: access.workspace.membership.id,
+      status: "DRAFT",
+      body: text,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const content =
+    existing ??
+    (await createMarketingContent(db, access, {
+      contentType: jobId ? "COMPLETED_JOB" : "GENERAL_POST",
+      title,
+      body: text,
+      channelIntent: "UNASSIGNED",
+      jobId,
+    }));
+
+  return {
+    status: "COMPLETED",
+    message: MARKETING_OWNER_DRAFT_REVIEW_MESSAGE,
+    contentId: content.id,
+    text,
+    interactionId: result.interactionId,
+    ...closed,
   };
 }

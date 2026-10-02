@@ -22,6 +22,7 @@ export {
   draftMarketingVariationsWithAi,
   weeklyMarketingPlanWithAi,
   campaignIdeasWithAi,
+  requestOwnerMarketingContentDraft,
 } from "@/lib/ai/marketing";
 export { describeReviewSentiment, draftReviewResponseFromRecord } from "@/lib/ai/reviews";
 export { runAgreementAssist, agreementAssistFallback } from "@/lib/ai/agreements";

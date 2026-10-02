@@ -13,6 +13,7 @@ import { isAiAttemptId } from "@/lib/ai/types";
 import {
   campaignIdeasWithAi,
   draftMarketingVariationsWithAi,
+  requestOwnerMarketingContentDraft,
   weeklyMarketingPlanWithAi,
 } from "@/lib/ai/marketing";
 import { loadMarketingSource } from "@/lib/marketing-data";
@@ -30,6 +31,7 @@ import {
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
 import {
+  MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
   STUDIO_APPROVED_INTERNAL_MESSAGE,
   STUDIO_PLANNED_DAY_SAVED_MESSAGE,
@@ -371,5 +373,47 @@ export async function generateMarketingAiAction(
     return { error: "Choose a marketing AI task." };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "That marketing draft could not be generated." };
+  }
+}
+
+export type OwnerContentDraftActionState = {
+  error?: string;
+  message?: string;
+  status?: "UNAVAILABLE" | "COMPLETED" | "FAILED" | "VALIDATION_FAILED" | "PENDING";
+  contentId?: string;
+  text?: string;
+  inProgress?: boolean;
+};
+
+export async function requestOwnerMarketingContentDraftAction(
+  _prev: OwnerContentDraftActionState,
+  formData: FormData,
+): Promise<OwnerContentDraftActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const attemptId = readString(formData, "attemptId");
+    const result = await requestOwnerMarketingContentDraft(prisma, access, {
+      attemptId,
+      jobId: readString(formData, "jobId") || undefined,
+      ownerNote: readString(formData, "ownerNote") || undefined,
+    });
+    if (result.contentId) revalidateMarketing();
+    if (result.status === "PENDING") {
+      return { message: result.message, status: result.status, inProgress: true };
+    }
+    if (result.status === "UNAVAILABLE") {
+      return {
+        message: result.message || MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
+        status: "UNAVAILABLE",
+      };
+    }
+    return {
+      message: result.message,
+      status: result.status,
+      contentId: result.contentId,
+      text: result.text,
+    };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "That owner content draft could not be requested.") };
   }
 }

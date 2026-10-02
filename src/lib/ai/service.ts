@@ -14,6 +14,7 @@ import {
   AI_MAX_RETRIES,
   AI_NOT_CONNECTED_MESSAGE,
   AI_VALIDATION_MESSAGE,
+  type AiProvider,
   type AiRunResult,
   type AiTaskType,
   type StructuredAiOutput,
@@ -222,6 +223,12 @@ export async function runAiTask(
      * stay one worker.
      */
     alreadyClaimed?: boolean;
+    /**
+     * Test-only provider override. Production callers omit this so
+     * runAiTask uses resolveAiProvider() — the single canonical path.
+     */
+    provider?: AiProvider;
+    maxOutputTokens?: number;
   },
 ): Promise<AiRunResult> {
   let pending = await db.aiInteraction.findUnique({
@@ -281,7 +288,7 @@ export async function runAiTask(
     throw new Error("That AI request could not be recorded.");
   }
 
-  const provider = resolveAiProvider();
+  const provider = input.provider ?? resolveAiProvider();
   if (!provider.connected) {
     const result: AiRunResult = {
       status: "SKIPPED_NOT_CONNECTED",
@@ -318,7 +325,7 @@ export async function runAiTask(
       system: input.system,
       user: input.user,
       jsonSchemaName: "tbbt_ai_output",
-      maxOutputTokens: AI_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: input.maxOutputTokens ?? AI_MAX_OUTPUT_TOKENS,
     });
     if (completed.ok) {
       const parsed = parseStructuredAiOutput(completed.text, input.allowedFactKeys);

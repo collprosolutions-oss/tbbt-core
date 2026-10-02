@@ -148,6 +148,26 @@ export const STUDIO_CONTENT_CALENDAR_LIMIT = 50;
 export const OWNER_STUDIO_CALENDAR_MESSAGE =
   "Planning a publication day requires the OWNER role. TBBT will not approve, publish, post, send a message, or claim a provider connection.";
 
+export const OWNER_CONTENT_DRAFT_MESSAGE =
+  "Requesting an AI content draft requires the OWNER role. TBBT will not publish, post, send a customer message, or invent business facts.";
+
+export const MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE = "Unavailable";
+
+export const MARKETING_OWNER_DRAFT_COST_BOUNDED_MESSAGE =
+  "This month's marketing draft budget is used. No draft was created.";
+
+export const MARKETING_OWNER_DRAFT_REVIEW_MESSAGE =
+  "Owner-requested draft saved for review. It was not published, posted, or sent.";
+
+export const MARKETING_OWNER_DRAFT_MAX_INPUT_CHARS = 2_000;
+export const MARKETING_OWNER_DRAFT_MAX_OUTPUT_TOKENS = 400;
+export const MARKETING_OWNER_DRAFT_MONTHLY_REQUEST_LIMIT = 25;
+export const MARKETING_OWNER_DRAFT_MONTHLY_TOKEN_BUDGET = 8_000;
+
+export function canRequestOwnerMarketingContentDraft(role: string) {
+  return role === "OWNER";
+}
+
 export const STUDIO_CONTENT_CALENDAR_MESSAGE =
   "This content calendar lists recorded creator packages and their planned publication day in this business timezone. TBBT will not approve, publish, post, send a message, or claim a provider connection.";
 
