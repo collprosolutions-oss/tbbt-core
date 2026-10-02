@@ -205,6 +205,7 @@
     "test:native-time-cards": "node --experimental-strip-types scripts/check-native-time-cards.mjs",
     "test:native-job-milestones": "node --experimental-strip-types scripts/check-native-job-milestones.mjs",
     "test:native-field-recovery": "node --experimental-strip-types scripts/check-native-field-recovery.mjs",
+    "test:native-push-alerts": "node --experimental-strip-types scripts/check-native-push-alerts.mjs",
     "test:regulatory-intelligence": "node --experimental-strip-types scripts/check-regulatory-intelligence.mjs",
     "test:retention-follow-up-task": "node --experimental-strip-types scripts/check-retention-follow-up-task.mjs",
     "test:retention-follow-up-status": "node --experimental-strip-types scripts/check-retention-follow-up-status.mjs",

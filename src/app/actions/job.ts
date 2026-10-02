@@ -87,6 +87,7 @@ import {
 import { createJobFromApprovedEstimate } from "@/lib/job-from-estimate";
 import { jobWriteTestHooks } from "@/lib/job-write-test-hooks";
 import { writeAssignedMembershipAndLaneWindows } from "@/lib/job-assignment-ops";
+import { notifyHandymanJobRescheduled } from "@/lib/native-push/notify";
 import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 
 export type JobActionState = {
@@ -574,6 +575,14 @@ export async function scheduleJob(
   });
 
   if (materialChange) {
+    await notifyHandymanJobRescheduled(prisma, {
+      businessId: access.businessId,
+      jobId: job.id,
+      membershipId: job.assignedMembershipId,
+      actorMembershipId: access.workspace.membership.id,
+      proposalId,
+    }).catch(() => undefined);
+
     await recordAppointmentEvent(prisma, {
       businessId: access.businessId,
       jobId: job.id,

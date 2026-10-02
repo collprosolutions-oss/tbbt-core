@@ -76,6 +76,7 @@ model User {
   passwordResetTokens  PasswordResetToken[]
   totpBackupCodes      TotpBackupCode[]
   authChallenges       AuthChallenge[]
+  nativePushDevices    NativePushDevice[]
   /// Founder Design Mode cosmetic overrides this user has saved -- see
   /// FounderDesignOverride below. Empty for every non-founder User.
   founderDesignOverrides FounderDesignOverride[]
@@ -414,6 +415,8 @@ model Business {
   membershipAvailabilityExceptions MembershipAvailabilityException[]
   membershipAvailabilityExceptionRequests MembershipAvailabilityExceptionRequest[]
   jobReassignmentRequests  JobReassignmentRequest[]
+  nativePushDevices        NativePushDevice[]
+  nativePushDeliveries     NativePushDelivery[]
   fillInBenchWorkers       FillInBenchWorker[]
   workforceOutreachTasks   WorkforceOutreachTask[]
   suppliers                  Supplier[]
@@ -761,6 +764,8 @@ model Membership {
   decidedBankReconciliationMatches BankReconciliationMatch[] @relation("BankReconciliationMatchDecider")
   scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
   decidedProjectDocumentReviews ProjectDocumentReview[] @relation("ProjectDocumentReviewDecider")
+  nativePushDevices             NativePushDevice[]
+  nativePushDeliveries          NativePushDelivery[]
 
   @@unique([userId, businessId])
   @@index([businessId])
@@ -1741,6 +1746,7 @@ model Job {
   /// value plus this status row.
   projectLink             JobProjectLink?
   projectLinkEvents       JobProjectLinkEvent[]
+  nativePushDeliveries    NativePushDelivery[]
 
   @@index([businessId])
   @@index([assignedMembershipId])
@@ -4587,6 +4593,68 @@ model JobReassignmentRequest {
   @@index([jobId])
   @@index([membershipId])
   @@index([decidedByMembershipId])
+}
+
+/// Device token for native field push, scoped to one Membership.
+/// Register and revoke are membership-scoped: an active membership may
+/// store its own tokens, and deactivation revokes them. Tokens are never
+/// shared across businesses. The GET surface returns tokenLast4 only.
+model NativePushDevice {
+  id           String    @id @default(cuid())
+  businessId   String
+  membershipId String
+  userId       String
+  /// ios | android | expo | test
+  platform     String
+  tokenHash    String
+  tokenLast4   String    @default("")
+  /// Raw device token so a future real adapter can send. Fake/disconnected
+  /// adapters never leave this process. Never copied into a push payload.
+  deviceToken  String
+  /// Opt-in for assignment / material-reschedule alerts on this device.
+  optedIn      Boolean   @default(false)
+  revokedAt    DateTime?
+  lastSeenAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, tokenHash])
+  @@index([businessId, membershipId])
+  @@index([membershipId, revokedAt])
+}
+
+/// Durable worker-alert delivery. Unique per business + idempotency key
+/// so retries cannot duplicate a send. Payload snapshot is informational
+/// only and must never include a customer address or access code.
+model NativePushDelivery {
+  id                String   @id @default(cuid())
+  businessId        String
+  membershipId      String
+  jobId             String
+  /// JOB_ASSIGNED | JOB_RESCHEDULED
+  kind              String
+  idempotencyKey    String
+  /// PENDING | SENT | FAILED | SUPPRESSED
+  status            String
+  attemptCount      Int      @default(0)
+  payloadSnapshot   Json
+  provider          String
+  providerMessageId String?
+  failureReason     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, membershipId])
+  @@index([jobId])
 }
 
 /// One-day availability exception for a membership. YYYY-MM-DD.
