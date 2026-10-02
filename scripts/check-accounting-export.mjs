@@ -185,8 +185,10 @@ check(
 );
 check(
   "Accounting ZIP reuses the same export gate and builders",
-  accountingRouteSrc.includes("canExportBusinessData") &&
-    accountingRouteSrc.includes("buildAccountingExportZip") &&
+  accountingRouteSrc.includes("runAccountingExportDownload") &&
+    accountingSrc.includes("export async function runAccountingExportDownload") &&
+    accountingSrc.includes("canExportBusinessData") &&
+    accountingSrc.includes("buildAccountingExportZip") &&
     !accountingRouteSrc.includes("requireSaasOperatingEntitlement"),
 );
 check(
