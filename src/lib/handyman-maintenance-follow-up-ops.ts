@@ -79,6 +79,25 @@ async function withMaintenanceWriteLock<T>(
   throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_UNKNOWN_MESSAGE);
 }
 
+export async function withMaintenanceFollowUpStatusLock<T>(
+  db: Db,
+  followUpId: string,
+  work: (tx: Db) => Promise<T>,
+): Promise<T> {
+  const lockKey = maintenanceFollowUpStatusLockKey(followUpId);
+  const run = async (tx: Db) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    return work(tx);
+  };
+  if ("$transaction" in db && typeof db.$transaction === "function") {
+    return db.$transaction((tx) => run(tx), {
+      timeout: 30_000,
+      maxWait: 10_000,
+    });
+  }
+  return run(db);
+}
+
 async function loadOwnedJobForMaintenance(
   db: Db,
   access: BusinessAccess,

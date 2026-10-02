@@ -473,6 +473,7 @@ async function recordWorkflowChannelResult(
     });
     if (!followUp || followUp.status === "SENT" || followUp.status === "CANCELLED") return;
     if (isRetentionFollowUpTask(followUp.origin)) return;
+    if (isMaintenanceFollowUp(followUp.origin)) return;
     if (accepted) {
       await db.customerFollowUp.update({
         where: { id: followUp.id },

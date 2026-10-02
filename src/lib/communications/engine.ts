@@ -22,9 +22,11 @@ import {
   type CustomerMessageRelatedType,
   type CustomerMessageStatus,
 } from "@/lib/customer-messaging/types";
+import { isMaintenanceFollowUp } from "@/lib/customer-follow-up-origin";
 import {
   assertMaintenanceFollowUpComposeAllowed,
   markMaintenanceFollowUpSentAfterCompose,
+  withMaintenanceFollowUpStatusLock,
 } from "@/lib/handyman-maintenance-follow-up-ops";
 import {
   getMailConfig,
@@ -82,6 +84,14 @@ export const communicationEmailDispatchTestHooks: {
   beforeProviderSend?: (ctx?: { db: Db }) => Promise<void> | void;
 } = {};
 
+/**
+ * Test-only pause after the MAINTENANCE compose gate, still under the
+ * status lock. Production never assigns this.
+ */
+export const maintenanceComposeTestHooks: {
+  afterGate?: () => Promise<void> | void;
+} = {};
+
 export function setCommunicationEmailSender(sender: EmailSender | null) {
   emailSender = sender ?? sendTransactionalEmail;
 }
@@ -130,6 +140,26 @@ export async function composeCustomerCommunication(
     browserBusinessId?: string | null;
     resumeCommunicationId?: string | null;
   },
+): Promise<CommunicationSendResult> {
+  return composeCustomerCommunicationLocked(db, access, input, false);
+}
+
+async function composeCustomerCommunicationLocked(
+  db: Db,
+  access: CommunicationAccess,
+  input: {
+    customerId: string;
+    channel: string;
+    purpose: string;
+    subject?: string | null;
+    body: string;
+    idempotencyKey: string;
+    relatedType?: CommunicationRelatedType | null;
+    relatedId?: string | null;
+    browserBusinessId?: string | null;
+    resumeCommunicationId?: string | null;
+  },
+  statusLocked: boolean,
 ): Promise<CommunicationSendResult> {
   requireCommunicationsCapability(access);
 
@@ -198,6 +228,17 @@ export async function composeCustomerCommunication(
   }
   const relatedType = related.record?.relatedType ?? null;
   const relatedId = related.record?.relatedId ?? null;
+  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId && !statusLocked) {
+    const followUp = await db.customerFollowUp.findFirst({
+      where: { id: relatedId, businessId: access.businessId },
+      select: { origin: true },
+    });
+    if (followUp && isMaintenanceFollowUp(followUp.origin)) {
+      return withMaintenanceFollowUpStatusLock(db, relatedId, (tx) =>
+        composeCustomerCommunicationLocked(tx, access, input, true),
+      );
+    }
+  }
   if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId) {
     const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
       followUpId: relatedId,
@@ -207,6 +248,7 @@ export async function composeCustomerCommunication(
     if (!gate.ok) {
       return blocked(gate.reason, input.channel as CommunicationChannel);
     }
+    await maintenanceComposeTestHooks.afterGate?.();
   }
 
   const finishCompose = async (result: CommunicationSendResult) => {

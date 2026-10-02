@@ -29,6 +29,9 @@ export const HANDYMAN_MAINTENANCE_OWNER_ONLY_MESSAGE =
 export const HANDYMAN_MAINTENANCE_OWNER_SEND_MESSAGE =
   "Only the business owner can send this maintenance reminder after reviewing it in Communications.";
 
+export const HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE =
+  "Handyman maintenance follow-ups are not sent, marked sent, or cancelled from Reviews. The owner reviews and sends them in Communications compose.";
+
 export const HANDYMAN_MAINTENANCE_COMPLETED_JOB_MESSAGE =
   "A Handyman maintenance follow-up can only be set on a completed job.";
 

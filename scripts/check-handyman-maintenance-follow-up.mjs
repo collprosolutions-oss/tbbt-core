@@ -36,7 +36,9 @@ const read = (rel) => readFileSync(join(root, rel), "utf8");
 
 const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
 const { ForbiddenError } = await import("@/lib/authorization");
-const { startOfZonedDay, parseCivilDateInTimeZone } = await import("@/lib/business-timezone");
+const { formatISODateInTimeZone, startOfZonedDay, parseCivilDateInTimeZone } = await import(
+  "@/lib/business-timezone"
+);
 const { CUSTOMER_FOLLOW_UP_ORIGINS, customerFollowUpDueScanWhere } = await import(
   "@/lib/customer-follow-up-origin"
 );
@@ -46,10 +48,12 @@ const {
   HANDYMAN_MAINTENANCE_COMPLETED_JOB_MESSAGE,
   HANDYMAN_MAINTENANCE_CREATED_MESSAGE,
   HANDYMAN_MAINTENANCE_HANDYMAN_ONLY_MESSAGE,
+  HANDYMAN_MAINTENANCE_JOB_REQUIRED_MESSAGE,
   HANDYMAN_MAINTENANCE_OWNER_ONLY_MESSAGE,
   HANDYMAN_MAINTENANCE_OWNER_SEND_MESSAGE,
   HANDYMAN_MAINTENANCE_PAST_DUE_DATE_MESSAGE,
   HANDYMAN_MAINTENANCE_QUEUE_TITLE,
+  HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE,
   handymanMaintenanceDueState,
   handymanMaintenanceWriteAllowed,
   parseHandymanMaintenanceDueOn,
@@ -74,6 +78,7 @@ const { loadOwnerDailyMaintenanceFollowUpAttention } = await import(
 );
 const {
   composeCustomerCommunication,
+  maintenanceComposeTestHooks,
   resetCommunicationEmailSender,
   setCommunicationEmailSender,
 } = await import("@/lib/communications");
@@ -84,6 +89,19 @@ const {
 } = await import("@/lib/customer-messaging");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog/codes");
 const { scanScheduledBusinessEvents } = await import("@/lib/automation/scan");
+const {
+  emitBusinessEvent,
+  ensureDefaultAutomationRules,
+  processPendingAutomationRuns,
+  queueAutomationRunsForEvent,
+} = await import("@/lib/automation");
+const {
+  cancelCustomerFollowUp,
+  markCustomerFollowUpSentManually,
+  ReferralError,
+  sendCustomerFollowUp,
+} = await import("@/lib/referral-ops");
+const { loadReviewsSource } = await import("@/lib/reviews-data");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -121,6 +139,52 @@ async function expectThrow(label, fn, predicate) {
   }
 }
 
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function addCivilDays(isoDate, days) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, day + days));
+  return `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth() + 1)}-${pad2(utc.getUTCDate())}`;
+}
+
+function civilDateOffset(timeZone, dayOffset, now = new Date()) {
+  return addCivilDays(formatISODateInTimeZone(now, timeZone), dayOffset);
+}
+
+function parseIsoCivil(isoDate, timeZone) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return parseCivilDateInTimeZone(year, month, day, timeZone);
+}
+
+function createWriteBarrier(expected, timeoutMs) {
+  let arrived = 0;
+  let released = false;
+  let release;
+  let fail;
+  const held = new Promise((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  const timer = setTimeout(() => {
+    if (!released) {
+      fail(new Error(`Race barrier timed out after ${timeoutMs}ms`));
+    }
+  }, timeoutMs);
+  return {
+    async arriveAndWait() {
+      arrived += 1;
+      if (arrived >= expected) {
+        released = true;
+        clearTimeout(timer);
+        release();
+      }
+      await held;
+    },
+  };
+}
+
 function makeAccess(businessId, role, membershipId) {
   return {
     businessId,
@@ -152,6 +216,9 @@ const dashboardSrc = read("src/app/(app)/dashboard/page.tsx");
 const todaySrc = read("src/app/(app)/today/page.tsx");
 const attentionSrc = read("src/lib/owner-daily-attention.ts");
 const schemaSrc = read("prisma/schema.prisma");
+const referralOpsSrc = read("src/lib/referral-ops.ts");
+const reviewsDataSrc = read("src/lib/reviews-data.ts");
+const reviewsWorkspaceSrc = read("src/components/reviews/reviews-workspace.tsx");
 
 console.log("\nSTATIC — OWNER-set MAINTENANCE follow-up, no auto-send or booking");
 check(
@@ -209,9 +276,22 @@ check(
   "Compose is the only customer reminder path",
   engineSrc.includes("assertMaintenanceFollowUpComposeAllowed") &&
     engineSrc.includes("markMaintenanceFollowUpSentAfterCompose") &&
+    engineSrc.includes("withMaintenanceFollowUpStatusLock") &&
+    opsSrc.includes("pg_advisory_xact_lock") &&
+    opsSrc.includes("maintenanceFollowUpStatusLockKey") &&
+    opsSrc.includes("withMaintenanceFollowUpStatusLock") &&
     panelSrc.includes("maintenanceFollowUpComposeHref") &&
     panelSrc.includes("Review reminder") &&
     !panelSrc.includes("sendCustomerFollowUp"),
+);
+check(
+  "Reviews send/mark-sent/cancel refuse MAINTENANCE and hide those buttons",
+  referralOpsSrc.includes("followUpSkipsAutomaticSend") &&
+    referralOpsSrc.includes("refuseSkippedFollowUpOrigin") &&
+    HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE.includes("Communications compose") &&
+    reviewsDataSrc.includes("origin: { not: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE }") &&
+    reviewsWorkspaceSrc.includes("isMaintenanceFollowUp") &&
+    reviewsWorkspaceSrc.includes("!isMaintenanceFollowUp(row.origin)"),
 );
 
 const ny = "America/New_York";
@@ -369,6 +449,12 @@ try {
   const handy = await createCompletedJob(businessA.id);
   const scheduled = await createCompletedJob(businessA.id, { status: "SCHEDULED" });
   const cleaning = await createCompletedJob(businessB.id, { tradeCode: "CLEANING" });
+  const futureDue = civilDateOffset(ny, 21);
+  const pastDue = civilDateOffset(ny, -2);
+  const dayBeforeDue = addCivilDays(futureDue, -1);
+  const futureDueAt = parseIsoCivil(futureDue, ny);
+  const beforeDueStart = startOfZonedDay(parseIsoCivil(dayBeforeDue, ny), ny);
+  const onDueStart = startOfZonedDay(futureDueAt, ny);
 
   const jobsBefore = await countBusinessJobs(prisma, businessA.id);
   const commsBefore = await countBusinessCommunications(prisma, businessA.id);
@@ -380,7 +466,7 @@ try {
       createHandymanMaintenanceFollowUp(prisma, memberA, {
         jobId: handy.job.id,
         task: "Recaulk the tub",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
       }),
     (error) =>
       error instanceof ForbiddenError ||
@@ -392,7 +478,7 @@ try {
       createHandymanMaintenanceFollowUp(prisma, adminA, {
         jobId: handy.job.id,
         task: "Recaulk the tub",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
       }),
     (error) =>
       error instanceof ForbiddenError ||
@@ -404,7 +490,7 @@ try {
       createHandymanMaintenanceFollowUp(prisma, ownerA, {
         jobId: scheduled.job.id,
         task: "Recaulk the tub",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
       }),
     (error) => error?.message === HANDYMAN_MAINTENANCE_COMPLETED_JOB_MESSAGE,
   );
@@ -414,7 +500,7 @@ try {
       createHandymanMaintenanceFollowUp(prisma, ownerB, {
         jobId: cleaning.job.id,
         task: "Weekly clean",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
       }),
     (error) => error?.message === HANDYMAN_MAINTENANCE_HANDYMAN_ONLY_MESSAGE,
   );
@@ -424,7 +510,7 @@ try {
       createHandymanMaintenanceFollowUp(prisma, ownerA, {
         jobId: handy.job.id,
         task: "Recaulk the tub",
-        dueOn: "2026-03-07",
+        dueOn: pastDue,
       }),
     (error) => error?.message === HANDYMAN_MAINTENANCE_PAST_DUE_DATE_MESSAGE,
   );
@@ -432,7 +518,7 @@ try {
   const created = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
     jobId: handy.job.id,
     task: "Recaulk the shower in six months",
-    dueOn: "2026-11-01",
+    dueOn: futureDue,
   });
   check(
     "OWNER create writes one OPEN MAINTENANCE CustomerFollowUp",
@@ -440,7 +526,7 @@ try {
       created.status === "OPEN" &&
       created.kind === "JOB_COMPLETE" &&
       created.notes === "Recaulk the shower in six months" &&
-      created.dueOn?.toISOString() === "2026-11-01T04:00:00.000Z" &&
+      created.dueOn?.toISOString() === futureDueAt.toISOString() &&
       created.jobId === handy.job.id &&
       created.customerId === handy.customer.id,
   );
@@ -450,9 +536,72 @@ try {
       createHandymanMaintenanceFollowUp(prisma, ownerA, {
         jobId: handy.job.id,
         task: "Another task",
-        dueOn: "2026-11-02",
+        dueOn: addCivilDays(futureDue, 1),
       }),
     (error) => /already has an open maintenance follow-up/.test(error?.message ?? ""),
+  );
+
+  const foreignHandy = await createCompletedJob(businessB.id);
+  const followUpsBeforeForeign = await prisma.customerFollowUp.count({
+    where: { origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE },
+  });
+  await expectThrow(
+    "OWNER cannot set a maintenance follow-up on another business job",
+    () =>
+      createHandymanMaintenanceFollowUp(prisma, ownerA, {
+        jobId: foreignHandy.job.id,
+        task: "Cross-business should fail",
+        dueOn: futureDue,
+      }),
+    (error) => error?.message === HANDYMAN_MAINTENANCE_JOB_REQUIRED_MESSAGE,
+  );
+  const followUpsAfterForeign = await prisma.customerFollowUp.count({
+    where: { origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE },
+  });
+  check(
+    "Cross-business job create writes no MAINTENANCE row",
+    followUpsAfterForeign === followUpsBeforeForeign,
+  );
+
+  const raceCreateJob = await createCompletedJob(businessA.id);
+  const createClientA = session.createClient();
+  const createClientB = session.createClient();
+  const createBarrier = createWriteBarrier(2, 5000);
+  const createRace = await Promise.allSettled([
+    (async () => {
+      await createBarrier.arriveAndWait();
+      return createHandymanMaintenanceFollowUp(createClientA, ownerA, {
+        jobId: raceCreateJob.job.id,
+        task: "Concurrent create A",
+        dueOn: futureDue,
+      });
+    })(),
+    (async () => {
+      await createBarrier.arriveAndWait();
+      return createHandymanMaintenanceFollowUp(createClientB, ownerA, {
+        jobId: raceCreateJob.job.id,
+        task: "Concurrent create B",
+        dueOn: futureDue,
+      });
+    })(),
+  ]);
+  const createOk = createRace.filter((row) => row.status === "fulfilled");
+  const createDenied = createRace.filter(
+    (row) =>
+      row.status === "rejected" &&
+      /already has an open maintenance follow-up/.test(row.reason?.message ?? ""),
+  );
+  const raceCreateCount = await prisma.customerFollowUp.count({
+    where: {
+      businessId: businessA.id,
+      jobId: raceCreateJob.job.id,
+      origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE,
+      status: "OPEN",
+    },
+  });
+  check(
+    "Concurrent creates on the same job produce one OPEN MAINTENANCE row",
+    raceCreateCount === 1 && createOk.length === 1 && createDenied.length === 1,
   );
 
   const eventsAfterCreate = await prisma.businessEvent.findMany({
@@ -477,16 +626,14 @@ try {
   );
 
   console.log("\nDB — Owner queue is due/overdue only and tenant-scoped");
-  const beforeFall = new Date("2026-11-01T03:00:00.000Z");
-  const duringFall = new Date("2026-11-01T08:00:00.000Z");
   const beforeDue = await loadOwnerDailyMaintenanceFollowUpAttention(prisma, businessA.id, {
-    todayStart: startOfZonedDay(beforeFall, ny),
+    todayStart: beforeDueStart,
   });
   const onDue = await loadOwnerDailyMaintenanceFollowUpAttention(prisma, businessA.id, {
-    todayStart: startOfZonedDay(duringFall, ny),
+    todayStart: onDueStart,
   });
   const foreignQueue = await loadOwnerDailyMaintenanceFollowUpAttention(prisma, businessB.id, {
-    todayStart: startOfZonedDay(duringFall, ny),
+    todayStart: onDueStart,
   });
   check(
     "Upcoming DST due date stays out of the owner queue",
@@ -509,7 +656,7 @@ try {
         customer: { name: "Leak" },
       },
     ],
-    { businessId: businessB.id, todayStart: startOfZonedDay(duringFall, ny) },
+    { businessId: businessB.id, todayStart: onDueStart },
   );
   check("Builder fails closed on a foreign businessId", builtForeign.length === 0);
 
@@ -519,7 +666,7 @@ try {
     review?.openFollowUp?.id === created.id &&
       review?.eligible === true &&
       review?.canWrite === true &&
-      review?.openFollowUp?.dueOnLabel === "2026-11-01",
+      review?.openFollowUp?.dueOnLabel === futureDue,
   );
   const foreignReview = await loadHandymanMaintenanceFollowUpReview(
     prisma,
@@ -527,6 +674,102 @@ try {
     handy.job.id,
   );
   check("Foreign owner cannot load the job review", foreignReview == null);
+
+  console.log("\nDB — Reviews page cannot send, mark sent, or cancel MAINTENANCE");
+  const reviewsSource = await loadReviewsSource(prisma, businessA.id);
+  check(
+    "Reviews source excludes MAINTENANCE follow-ups",
+    reviewsSource.followUps.every((row) => row.id !== created.id) &&
+      reviewsSource.followUps.every((row) => row.origin !== CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE),
+  );
+  const commsBeforeReviews = await countBusinessCommunications(prisma, businessA.id);
+  await expectThrow(
+    "ADMIN sendCustomerFollowUp refuses MAINTENANCE and does not use notes as the body",
+    () => sendCustomerFollowUp(prisma, adminA, { followUpId: created.id }),
+    (error) =>
+      error instanceof ReferralError &&
+      error.message === HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE,
+  );
+  await expectThrow(
+    "ADMIN markCustomerFollowUpSentManually refuses MAINTENANCE",
+    () => markCustomerFollowUpSentManually(prisma, adminA, { followUpId: created.id }),
+    (error) =>
+      error instanceof ReferralError &&
+      error.message === HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE,
+  );
+  await expectThrow(
+    "ADMIN cancelCustomerFollowUp refuses MAINTENANCE",
+    () => cancelCustomerFollowUp(prisma, adminA, { followUpId: created.id }),
+    (error) =>
+      error instanceof ReferralError &&
+      error.message === HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE,
+  );
+  const afterReviews = await prisma.customerFollowUp.findFirst({ where: { id: created.id } });
+  const commsAfterReviews = await countBusinessCommunications(prisma, businessA.id);
+  check(
+    "Reviews bypass leaves the MAINTENANCE row OPEN and sends nothing",
+    afterReviews?.status === "OPEN" && commsAfterReviews === commsBeforeReviews,
+  );
+
+  console.log("\nDB — Automation processor skips MAINTENANCE even when a due event is forced");
+  const autoJob = await createCompletedJob(businessA.id, {
+    phone: "2395550166",
+    email: `auto-${suffix}@example.com`,
+  });
+  const autoFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
+    jobId: autoJob.job.id,
+    task: "SECRET internal caulk task",
+    dueOn: futureDue,
+  });
+  await ensureDefaultAutomationRules(prisma, businessA.id);
+  const jobFollowRule = await prisma.automationRule.findFirst({
+    where: {
+      businessId: businessA.id,
+      eventType: "CUSTOMER_FOLLOW_UP_DUE",
+      purpose: "JOB_FOLLOW_UP",
+    },
+  });
+  await prisma.automationRule.update({
+    where: { id: jobFollowRule.id },
+    data: { enabled: true, channel: "SMS", delayMinutes: 0 },
+  });
+  const forcedDue = await emitBusinessEvent(prisma, {
+    businessId: businessA.id,
+    type: "CUSTOMER_FOLLOW_UP_DUE",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: autoFollowUp.id,
+    payload: {
+      customerId: autoJob.customer.id,
+      jobId: autoJob.job.id,
+      followUpId: autoFollowUp.id,
+      businessName: "Alpha Handy",
+    },
+    idempotencyKey: `CUSTOMER_FOLLOW_UP_DUE:${autoFollowUp.id}`,
+  });
+  await queueAutomationRunsForEvent(prisma, businessA.id, forcedDue.event);
+  const autoCommsBefore = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: autoFollowUp.id,
+    },
+  });
+  await processPendingAutomationRuns(prisma, businessA.id);
+  const autoAfter = await prisma.customerFollowUp.findFirst({ where: { id: autoFollowUp.id } });
+  const autoCommsAfter = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: autoFollowUp.id,
+    },
+  });
+  check(
+    "Forced CUSTOMER_FOLLOW_UP_DUE does not send or close a MAINTENANCE follow-up",
+    autoAfter?.status === "OPEN" &&
+      autoAfter?.sentAt == null &&
+      autoCommsBefore === 0 &&
+      autoCommsAfter === 0,
+  );
 
   console.log("\nDB — Compose path: STOP, changed number, duplicates, cancel");
   const fakeSms = createFakeCustomerMessagingProvider();
@@ -544,7 +787,7 @@ try {
   const stopFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
     jobId: stopCustomerJob.job.id,
     task: "Check exterior caulk",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
   });
   const inboundStop = await applyInboundConsentEvent(prisma, {
     provider: "twilio",
@@ -587,7 +830,7 @@ try {
   const changedFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
     jobId: changed.job.id,
     task: "Inspect the new faucet",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
   });
   await prisma.customer.update({
     where: { id: changed.customer.id },
@@ -622,7 +865,7 @@ try {
   const dupeFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
     jobId: dupeJob.job.id,
     task: "Touch up paint",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
   });
   const firstSend = await composeCustomerCommunication(prisma, ownerA, {
     customerId: dupeJob.customer.id,
@@ -661,6 +904,61 @@ try {
       fakeSms.sent.filter((row) => /Paint touch-up/.test(row.body)).length === 1,
   );
 
+  const raceSendJob = await createCompletedJob(businessA.id, {
+    phone: "2395550177",
+    email: `race-send-${suffix}@example.com`,
+  });
+  const raceSendFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
+    jobId: raceSendJob.job.id,
+    task: "Race the reminder",
+    dueOn: futureDue,
+  });
+  const raceSendA = session.createClient();
+  const raceSendB = session.createClient();
+  maintenanceComposeTestHooks.afterGate = () =>
+    new Promise((resolve) => setTimeout(resolve, 80));
+  const sentBeforeRace = fakeSms.sent.length;
+  let raceResults;
+  try {
+    raceResults = await Promise.all([
+      composeCustomerCommunication(raceSendA, ownerA, {
+        customerId: raceSendJob.customer.id,
+        channel: "SMS",
+        purpose: "GENERAL",
+        body: "Race key one.",
+        relatedType: "CUSTOMER_FOLLOW_UP",
+        relatedId: raceSendFollowUp.id,
+        idempotencyKey: `sms-race-a-${randomUUID()}`,
+      }),
+      composeCustomerCommunication(raceSendB, ownerA, {
+        customerId: raceSendJob.customer.id,
+        channel: "SMS",
+        purpose: "GENERAL",
+        body: "Race key two.",
+        relatedType: "CUSTOMER_FOLLOW_UP",
+        relatedId: raceSendFollowUp.id,
+        idempotencyKey: `sms-race-b-${randomUUID()}`,
+      }),
+    ]);
+  } finally {
+    maintenanceComposeTestHooks.afterGate = undefined;
+  }
+  const raceAccepted = raceResults.filter((row) => row.ok === true);
+  const raceBlocked = raceResults.filter(
+    (row) =>
+      row.ok === false && row.failureReason === HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE,
+  );
+  const raceSendRow = await prisma.customerFollowUp.findFirst({
+    where: { id: raceSendFollowUp.id },
+  });
+  check(
+    "Two-connection compose with distinct keys sends once",
+    raceAccepted.length === 1 &&
+      raceBlocked.length === 1 &&
+      raceSendRow?.status === "SENT" &&
+      fakeSms.sent.length === sentBeforeRace + 1,
+  );
+
   const cancelJob = await createCompletedJob(businessA.id, {
     phone: "2395550155",
     email: `cancel-${suffix}@example.com`,
@@ -668,7 +966,7 @@ try {
   const cancelFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
     jobId: cancelJob.job.id,
     task: "Check weatherstripping",
-        dueOn: "2026-11-01",
+        dueOn: futureDue,
   });
   const cancelled = await cancelHandymanMaintenanceFollowUp(prisma, ownerA, {
     followUpId: cancelFollowUp.id,
@@ -676,7 +974,7 @@ try {
   const queueAfterCancel = await loadOwnerDailyMaintenanceFollowUpAttention(
     prisma,
     businessA.id,
-    { todayStart: startOfZonedDay(duringFall, ny) },
+    { todayStart: onDueStart },
   );
   const cancelSend = await composeCustomerCommunication(prisma, ownerA, {
     customerId: cancelJob.customer.id,
@@ -754,7 +1052,7 @@ try {
   const queueAfterEmail = await loadOwnerDailyMaintenanceFollowUpAttention(
     prisma,
     businessA.id,
-    { todayStart: startOfZonedDay(duringFall, ny) },
+    { todayStart: onDueStart },
   );
   check(
     "OWNER-reviewed email send marks SENT and removes the item from the queue",
