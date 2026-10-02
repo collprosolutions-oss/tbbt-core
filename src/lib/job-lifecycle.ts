@@ -15,6 +15,35 @@ export type JobLifecycleResult =
   | { ok: true; nextStatus: "IN_PROGRESS" | "COMPLETED" | null }
   | { ok: false; error: string };
 
+export const JOB_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"] as const;
+
+export const JOB_COMPLETED_CANNOT_RESCHEDULE_MESSAGE =
+  "A completed job cannot be rescheduled.";
+export const JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE =
+  "A cancelled job cannot be rescheduled.";
+export const JOB_COMPLETED_CANNOT_ASSIGN_MESSAGE =
+  "A completed job cannot be assigned.";
+export const JOB_CANCELLED_CANNOT_ASSIGN_MESSAGE =
+  "A cancelled job cannot be assigned.";
+export const JOB_COMPLETED_CANNOT_START_MESSAGE = "A completed job cannot be started.";
+export const JOB_CANCELLED_CANNOT_START_MESSAGE = "A cancelled job cannot be started.";
+
+export function isTerminalJobStatus(status: string) {
+  return (JOB_TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
+export function jobScheduleRefusalMessage(status: string): string | null {
+  if (status === "COMPLETED") return JOB_COMPLETED_CANNOT_RESCHEDULE_MESSAGE;
+  if (status === "CANCELLED") return JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE;
+  return null;
+}
+
+export function jobAssignmentRefusalMessage(status: string): string | null {
+  if (status === "COMPLETED") return JOB_COMPLETED_CANNOT_ASSIGN_MESSAGE;
+  if (status === "CANCELLED") return JOB_CANCELLED_CANNOT_ASSIGN_MESSAGE;
+  return null;
+}
+
 /**
  * A completed Job can never be (re)started. Already-IN_PROGRESS is a
  * successful no-op (nextStatus: null) rather than an error, matching the
@@ -25,7 +54,10 @@ export type JobLifecycleResult =
  */
 export function evaluateStartJob(status: string): JobLifecycleResult {
   if (status === "COMPLETED") {
-    return { ok: false, error: "A completed job cannot be started." };
+    return { ok: false, error: JOB_COMPLETED_CANNOT_START_MESSAGE };
+  }
+  if (status === "CANCELLED") {
+    return { ok: false, error: JOB_CANCELLED_CANNOT_START_MESSAGE };
   }
   if (status === "IN_PROGRESS") {
     return { ok: true, nextStatus: null };

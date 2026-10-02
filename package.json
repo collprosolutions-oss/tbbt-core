@@ -40,6 +40,7 @@
     "test:job-schedule-duration": "node --experimental-strip-types scripts/check-job-schedule-duration.mjs",
     "test:handyman-schedule-field-day": "node --experimental-strip-types scripts/check-handyman-schedule-field-day.mjs",
     "test:handyman-field-day-hardening": "node --experimental-strip-types scripts/check-handyman-field-day-hardening.mjs",
+    "test:web-scheduling": "node --experimental-strip-types scripts/check-web-scheduling.mjs",
     "test:estimate-document": "node --experimental-strip-types scripts/check-estimate-document.mjs",
     "test:estimate-terms": "node --experimental-strip-types scripts/check-estimate-terms.mjs",
     "test:employee-field-workflow": "node --experimental-strip-types scripts/check-employee-field-workflow.mjs",

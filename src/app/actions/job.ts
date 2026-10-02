@@ -22,7 +22,11 @@ import { notifyCustomerAppointmentProposed } from "@/lib/appointment-notify";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { completeJobAndSendInvoice } from "@/lib/complete-job-invoice";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
-import { evaluateStartJob } from "@/lib/job-lifecycle";
+import {
+  evaluateStartJob,
+  jobAssignmentRefusalMessage,
+  jobScheduleRefusalMessage,
+} from "@/lib/job-lifecycle";
 import {
   parseDurationMinutes,
   parseScheduleStart,
@@ -46,6 +50,7 @@ import {
   recurrenceForecastActive,
 } from "@/lib/recurrence";
 import { formatISODateInTimeZone } from "@/lib/business-timezone";
+import { OWNER_DAY_ROUTE_PATH } from "@/lib/owner-day-route/constants";
 import { lockBusinessScheduleReservation } from "@/lib/schedule-reservation";
 import {
   appointmentModeForPosition,
@@ -156,8 +161,105 @@ function readString(formData: FormData, key: string) {
 function revalidateJobSurfaces(job: { id: string; projectToken: string }) {
   revalidatePath("/jobs");
   revalidatePath("/dashboard");
+  revalidatePath("/today");
+  revalidatePath(OWNER_DAY_ROUTE_PATH);
+  revalidatePath("/field");
   revalidatePath(`/jobs/${job.id}`);
+  revalidatePath(`/field/jobs/${job.id}`);
   revalidatePath(`/p/${job.projectToken}`);
+}
+
+type ScheduleProposalJob = {
+  id: string;
+  assignedMembershipId: string | null;
+  scheduledAt: Date | null;
+};
+
+async function evaluateOwnedScheduleProposal(
+  db: Parameters<typeof loadOccupiedJobs>[0],
+  input: {
+    businessId: string;
+    job: ScheduleProposalJob;
+    start: Date;
+    durationMinutes: number | null;
+    pickupDurationMinutes: number;
+    timeZone: string;
+  },
+) {
+  const [settings, others, policy, members, capacityJobs] = await Promise.all([
+    loadAvailabilitySettings(db, input.businessId),
+    loadOccupiedJobs(db, input.businessId, input.job.id),
+    loadSchedulingPolicy(db, input.businessId),
+    loadWorkforceMembers(db, input.businessId),
+    loadCapacityJobs(db, input.businessId),
+  ]);
+  const evaluation = evaluateProposedSchedule({
+    start: input.start,
+    durationMinutes: input.durationMinutes,
+    pickupMinutes: pickupMinutesForJob(input.pickupDurationMinutes, policy).minutes,
+    settings,
+    existing: others.map((row) => ({
+      ...row,
+      pickupDurationMinutes: pickupMinutesForJob(row.pickupDurationMinutes, policy)
+        .minutes,
+    })),
+    timeZone: input.timeZone,
+  });
+  const conflicts = detectScheduleConflicts({
+    jobs: capacityJobs,
+    settings,
+    policy,
+    members,
+    timeZone: input.timeZone,
+    proposed: {
+      jobId: input.job.id,
+      start: input.start,
+      durationMinutes: input.durationMinutes,
+      pickupMinutes: input.pickupDurationMinutes,
+      assignedMembershipId: input.job.assignedMembershipId,
+      originalScheduledAt: input.job.scheduledAt,
+    },
+    now: new Date(),
+  });
+  const cascade = laterJobsHurtByMove({
+    start: input.start,
+    durationMinutes: input.durationMinutes,
+    pickupMinutes: input.pickupDurationMinutes,
+    settings,
+    policy,
+    existing: capacityJobs.filter((row) => row.id !== input.job.id),
+    membershipId: input.job.assignedMembershipId,
+  });
+  const warning =
+    (hasScheduleWarning(evaluation)
+      ? describeScheduleWarning(
+          evaluation,
+          input.start,
+          (value) => formatDateTime(value, input.timeZone),
+          settings,
+          input.timeZone,
+        )
+      : null) ?? describeConflicts(conflicts);
+  const currentAck = conflictAcknowledgement({
+    jobId: input.job.id,
+    start: input.start,
+    durationMinutes: input.durationMinutes,
+    pickupMinutes: input.pickupDurationMinutes,
+    assignedMembershipId: input.job.assignedMembershipId,
+    conflicts: warning
+      ? conflicts.length > 0
+        ? conflicts
+        : [{ kind: "AVAILABILITY", jobId: input.job.id, severity: "WARNING" }]
+      : [],
+  });
+  return {
+    evaluation,
+    warning,
+    currentAck,
+    cascade,
+    policy,
+    capacityJobs,
+  };
 }
 
 export async function createJobFromEstimate(
@@ -240,8 +342,9 @@ export async function scheduleJob(
     }),
   );
 
-  if (job.status === "COMPLETED") {
-    return { error: "A completed job cannot be rescheduled." };
+  const prelockRefusal = jobScheduleRefusalMessage(job.status);
+  if (prelockRefusal) {
+    return { error: prelockRefusal };
   }
 
   const timeZone = await loadWorkforceTimeZone(prisma, access.businessId);
@@ -255,130 +358,124 @@ export async function scheduleJob(
     return { error: duration.error };
   }
 
-  const [settings, others, policy, members, capacityJobs] = await Promise.all([
-    loadAvailabilitySettings(prisma, access.businessId),
-    loadOccupiedJobs(prisma, access.businessId, job.id),
-    loadSchedulingPolicy(prisma, access.businessId),
-    loadWorkforceMembers(prisma, access.businessId),
-    loadCapacityJobs(prisma, access.businessId),
-  ]);
-  const evaluation = evaluateProposedSchedule({
+  const preview = await evaluateOwnedScheduleProposal(prisma, {
+    businessId: access.businessId,
+    job,
     start,
     durationMinutes: duration.minutes,
-    pickupMinutes: pickupMinutesForJob(pickupDurationMinutes, policy).minutes,
-    settings,
-    existing: others.map((row) => ({
-      ...row,
-      pickupDurationMinutes: pickupMinutesForJob(row.pickupDurationMinutes, policy)
-        .minutes,
-    })),
+    pickupDurationMinutes,
     timeZone,
-  });
-  const conflicts = detectScheduleConflicts({
-    jobs: capacityJobs,
-    settings,
-    policy,
-    members,
-    timeZone,
-    proposed: {
-      jobId: job.id,
-      start,
-      durationMinutes: duration.minutes,
-      pickupMinutes: pickupDurationMinutes,
-      assignedMembershipId: job.assignedMembershipId,
-      originalScheduledAt: job.scheduledAt,
-    },
-    now: new Date(),
-  });
-  const cascade = laterJobsHurtByMove({
-    start,
-    durationMinutes: duration.minutes,
-    pickupMinutes: pickupDurationMinutes,
-    settings,
-    policy,
-    existing: capacityJobs.filter((row) => row.id !== job.id),
-    membershipId: job.assignedMembershipId,
-  });
-  const warning =
-    (hasScheduleWarning(evaluation)
-      ? describeScheduleWarning(
-          evaluation,
-          start,
-          (value) => formatDateTime(value, timeZone),
-          settings,
-          timeZone,
-        )
-      : null) ?? describeConflicts(conflicts);
-  const currentAck = conflictAcknowledgement({
-    jobId: job.id,
-    start,
-    durationMinutes: duration.minutes,
-    pickupMinutes: pickupDurationMinutes,
-    assignedMembershipId: job.assignedMembershipId,
-    conflicts: warning
-      ? conflicts.length > 0
-        ? conflicts
-        : [{ kind: "AVAILABILITY", jobId: job.id, severity: "WARNING" }]
-      : [],
   });
   if (
-    warning &&
+    preview.warning &&
     shouldAcceptConflictAcknowledgement({
       submittedAck,
-      currentAck,
-      conflicts: warning ? [warning] : [],
+      currentAck: preview.currentAck,
+      conflicts: preview.warning ? [preview.warning] : [],
     }) === "warn"
   ) {
     const conflicts = await ownedScheduleConflictFacts(
-      evaluation.overlaps,
+      preview.evaluation.overlaps,
       access.businessId,
       timeZone,
     );
     return {
-      warning: cascade.length ? `${warning} Later jobs were not moved.` : warning,
-      conflictAck: currentAck,
+      warning: preview.cascade.length
+        ? `${preview.warning} Later jobs were not moved.`
+        : preview.warning,
+      conflictAck: preview.currentAck,
       ...(conflicts.length > 0 ? { conflicts } : {}),
     };
   }
 
-  const materialChange = isMaterialAppointmentChange(
-    job,
-    start,
-    duration.minutes,
-  );
-  const proposalId = materialChange
-    ? nextAppointmentProposalId(job.appointmentProposalId)
-    : job.appointmentProposalId;
-  const rescheduled = Boolean(job.scheduledAt) && materialChange;
-
-  const position = appointmentPositionOnDay({
-    start,
-    jobId: job.id,
-    assignedMembershipId: job.assignedMembershipId,
-    jobs: capacityJobs,
-    dateKey: (date) => formatISODateInTimeZone(date, timeZone),
-  });
-  const mode = appointmentModeForPosition(position, policy);
-  const nextOccurrenceAt = recurrenceForecastActive(job)
-    ? computeNextOccurrenceAt(
-        start,
-        parseRecurrenceCadence(job.recurrenceCadence),
-        job.nextOccurrenceAt,
-        timeZone,
-      )
-    : job.nextOccurrenceAt;
-
   await jobWriteTestHooks.afterScheduleJobRead?.(job.id);
 
-  let completedDuringWrite = false;
+  let scheduleRefusal: string | null = null;
+  let lockedWarning: {
+    warning: string;
+    conflictAck: string;
+    overlaps: OccupiedJob[];
+  } | null = null;
+  let persistedProposalId = job.appointmentProposalId;
+  let persistedMaterialChange = false;
+  let persistedRescheduled = false;
+
   await prisma.$transaction(
     async (tx) => {
       await lockBusinessScheduleReservation(tx, access.businessId);
       const current = await lockTenantOwnedJob(tx, access.businessId, job.id);
-      if (!current || current.status === "COMPLETED") {
-        completedDuringWrite = true;
+      if (!current) {
+        scheduleRefusal = "That job could not be scheduled.";
         return;
       }
+      const fresh = await tx.job.findFirst({
+        where: { id: job.id, businessId: access.businessId },
+      });
+      if (!fresh) {
+        scheduleRefusal = "That job could not be scheduled.";
+        return;
+      }
+      const lockedRefusal = jobScheduleRefusalMessage(fresh.status);
+      if (lockedRefusal) {
+        scheduleRefusal = lockedRefusal;
+        return;
+      }
+
+      const locked = await evaluateOwnedScheduleProposal(tx, {
+        businessId: access.businessId,
+        job: fresh,
+        start,
+        durationMinutes: duration.minutes,
+        pickupDurationMinutes,
+        timeZone,
+      });
+      if (
+        locked.warning &&
+        shouldAcceptConflictAcknowledgement({
+          submittedAck,
+          currentAck: locked.currentAck,
+          conflicts: locked.warning ? [locked.warning] : [],
+        }) === "warn"
+      ) {
+        lockedWarning = {
+          warning: locked.cascade.length
+            ? `${locked.warning} Later jobs were not moved.`
+            : locked.warning,
+          conflictAck: locked.currentAck,
+          overlaps: locked.evaluation.overlaps,
+        };
+        return;
+      }
+
+      const materialChange = isMaterialAppointmentChange(
+        fresh,
+        start,
+        duration.minutes,
+      );
+      const proposalId = materialChange
+        ? nextAppointmentProposalId(fresh.appointmentProposalId)
+        : fresh.appointmentProposalId;
+      persistedProposalId = proposalId;
+      persistedMaterialChange = materialChange;
+      persistedRescheduled = Boolean(fresh.scheduledAt) && materialChange;
+
+      const position = appointmentPositionOnDay({
+        start,
+        jobId: fresh.id,
+        assignedMembershipId: fresh.assignedMembershipId,
+        jobs: locked.capacityJobs,
+        dateKey: (date) => formatISODateInTimeZone(date, timeZone),
+      });
+      const mode = appointmentModeForPosition(position, locked.policy);
+      const nextOccurrenceAt = recurrenceForecastActive(fresh)
+        ? computeNextOccurrenceAt(
+            start,
+            parseRecurrenceCadence(fresh.recurrenceCadence),
+            fresh.nextOccurrenceAt,
+            timeZone,
+          )
+        : fresh.nextOccurrenceAt;
+
       await tx.job.update({
         where: { id: job.id },
         data: {
@@ -387,9 +484,9 @@ export async function scheduleJob(
           pickupDurationMinutes: pickupDurationMinutes || null,
           requiredSkills,
           requiredProgression,
-          arrivalWindowMinutes: arrivalWindowMinutesForMode(mode, policy),
+          arrivalWindowMinutes: arrivalWindowMinutesForMode(mode, locked.policy),
           nextOccurrenceAt,
-          ...(job.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
+          ...(fresh.status === "UNSCHEDULED" ? { status: "SCHEDULED" } : {}),
           ...(materialChange
             ? {
                 appointmentProposalId: proposalId,
@@ -412,12 +509,12 @@ export async function scheduleJob(
       await persistLaneArrivalWindows(tx, {
         businessId: access.businessId,
         timeZone,
-        policy,
+        policy: locked.policy,
         touchedJobIds: [job.id],
         previousLanes: [
           {
-            assignedMembershipId: job.assignedMembershipId,
-            scheduledAt: job.scheduledAt,
+            assignedMembershipId: fresh.assignedMembershipId,
+            scheduledAt: fresh.scheduledAt,
           },
         ],
       });
@@ -425,9 +522,25 @@ export async function scheduleJob(
     { maxWait: 10_000, timeout: 20_000 },
   );
 
-  if (completedDuringWrite) {
-    return { error: "A completed job cannot be rescheduled." };
+  if (scheduleRefusal) {
+    return { error: scheduleRefusal };
   }
+  if (lockedWarning) {
+    const conflicts = await ownedScheduleConflictFacts(
+      lockedWarning.overlaps,
+      access.businessId,
+      timeZone,
+    );
+    return {
+      warning: lockedWarning.warning,
+      conflictAck: lockedWarning.conflictAck,
+      ...(conflicts.length > 0 ? { conflicts } : {}),
+    };
+  }
+
+  const proposalId = persistedProposalId;
+  const materialChange = persistedMaterialChange;
+  const rescheduled = persistedRescheduled;
 
   await emitAndProcessBusinessEvent(prisma, {
     businessId: access.businessId,
@@ -831,6 +944,11 @@ export async function assignJobMember(
     }),
   );
 
+  const assignmentRefusal = jobAssignmentRefusalMessage(job.status);
+  if (assignmentRefusal) {
+    return { error: assignmentRefusal };
+  }
+
   if (!membershipId) {
     const unassigned = await writeAssignedMembershipAndLaneWindows(prisma, {
       businessId: access.businessId,
@@ -841,9 +959,7 @@ export async function assignJobMember(
     if (unassigned?.error) {
       return unassigned;
     }
-    revalidatePath(`/jobs/${job.id}`);
-    revalidatePath("/jobs");
-    revalidatePath("/field");
+    revalidateJobSurfaces(job);
     return {};
   }
 
@@ -877,10 +993,7 @@ export async function assignJobMember(
     return assigned;
   }
 
-  revalidatePath(`/jobs/${job.id}`);
-  revalidatePath("/jobs");
-  revalidatePath("/field");
-  revalidatePath(`/field/jobs/${job.id}`);
+  revalidateJobSurfaces(job);
   return {};
 }
 

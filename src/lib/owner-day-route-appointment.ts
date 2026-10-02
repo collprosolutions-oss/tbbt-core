@@ -14,6 +14,10 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { parseOwnerDayRouteScheduleSnapshot } from "@/lib/owner-day-route/snapshot";
 import type { OwnerDayRouteScheduleSnapshot } from "@/lib/owner-day-route/types";
+import {
+  JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE,
+  JOB_COMPLETED_CANNOT_RESCHEDULE_MESSAGE,
+} from "@/lib/job-lifecycle";
 import { describeConflicts, type ScheduleConflict } from "@/lib/workforce-conflicts";
 
 export const DAY_ROUTE_APPOINTMENT_OWNER_ONLY_MESSAGE =
@@ -26,7 +30,10 @@ export const DAY_ROUTE_APPOINTMENT_CONFLICT_MESSAGE =
   "That appointment window conflicts with another recorded job, working hours, buffer, or material pickup.";
 
 export const DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE =
-  "A completed job cannot be rescheduled.";
+  JOB_COMPLETED_CANNOT_RESCHEDULE_MESSAGE;
+
+export const DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE =
+  JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE;
 
 export const DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE =
   "Choose a valid date and start time.";

@@ -20,6 +20,7 @@ import {
 } from "@/lib/availability";
 import { loadAvailabilitySettings, loadOccupiedJobs } from "@/lib/availability-data";
 import { formatISODateInTimeZone } from "@/lib/business-timezone";
+import { jobScheduleRefusalMessage } from "@/lib/job-lifecycle";
 import { parseScheduleStart } from "@/lib/job-schedule";
 import { sameBusinessJob } from "@/lib/owner-day-route/address";
 import {
@@ -30,6 +31,7 @@ import {
 import type { OwnerDayRouteScheduleSnapshot } from "@/lib/owner-day-route/types";
 import {
   blockingDayRouteConflicts,
+  DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE,
   DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE,
   DAY_ROUTE_APPOINTMENT_CONFLICT_MESSAGE,
   DAY_ROUTE_APPOINTMENT_INVALID_MESSAGE,
@@ -51,6 +53,7 @@ import { lockTenantOwnedJob } from "@/lib/time-card-ops";
 import {
   appointmentModeForPosition,
   appointmentPositionOnDay,
+  pickupMinutesForJob,
 } from "@/lib/workforce";
 import { detectScheduleConflicts } from "@/lib/workforce-conflicts";
 import {
@@ -195,8 +198,13 @@ async function rejectIfScheduleBlocked(input: {
   const evaluation = evaluateProposedSchedule({
     start: input.start,
     durationMinutes,
+    pickupMinutes: pickupMinutesForJob(pickupDurationMinutes, policy).minutes,
     settings,
-    existing: others,
+    existing: others.map((row) => ({
+      ...row,
+      pickupDurationMinutes: pickupMinutesForJob(row.pickupDurationMinutes, policy)
+        .minutes,
+    })),
     timeZone: input.timeZone,
   });
   const projected = capacityJobs.map((row) =>
@@ -259,6 +267,9 @@ export async function changeOwnerDayRouteAppointment(
     if (job.status === "COMPLETED") {
       throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_COMPLETED_MESSAGE);
     }
+    if (job.status === "CANCELLED") {
+      throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE);
+    }
     if (!job.scheduledAt) {
       throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_UNSCHEDULED_MESSAGE);
     }
@@ -286,6 +297,10 @@ export async function changeOwnerDayRouteAppointment(
         });
         if (!fresh || !fresh.scheduledAt) {
           throw new DayRouteAppointmentError(DAY_ROUTE_APPOINTMENT_STALE_MESSAGE);
+        }
+        const lockedRefusal = jobScheduleRefusalMessage(fresh.status);
+        if (lockedRefusal) {
+          throw new DayRouteAppointmentError(lockedRefusal);
         }
         assertCurrentSnapshot(fresh, snapshot);
 

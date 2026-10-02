@@ -364,6 +364,8 @@ function JobDetailsPanel({
   const mailto = job.customer?.email ? `mailto:${job.customer.email}` : null;
   const customerName = job.customer?.name ?? "Customer";
   const isCompleted = job.status === "COMPLETED";
+  const isCancelled = job.status === "CANCELLED";
+  const isTerminal = isCompleted || isCancelled;
   const isInProgress = job.status === "IN_PROGRESS";
   const isScheduled = Boolean(job.scheduledAtLabel);
 
@@ -401,14 +403,16 @@ function JobDetailsPanel({
 
         <div className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3">
           <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            {isCompleted || isScheduled ? "Appointment" : "Schedule Job"}
+            {isTerminal || isScheduled ? "Appointment" : "Schedule Job"}
           </p>
           {job.appointmentConfirmationLabel ? (
             <p className="text-sm font-medium">{job.appointmentConfirmationLabel}</p>
           ) : null}
-          {isCompleted ? (
+          {isTerminal ? (
             <p className="text-sm text-muted-foreground">
-              Completed jobs keep their saved appointment and cannot be rescheduled.
+              {isCancelled
+                ? "Cancelled jobs keep their saved appointment and cannot be rescheduled."
+                : "Completed jobs keep their saved appointment and cannot be rescheduled."}
             </p>
           ) : (
             <ScheduleJobForm
@@ -430,7 +434,13 @@ function JobDetailsPanel({
             <UserCog className="size-3.5" />
             Assigned Employee
           </p>
-          {eligibleMembers.length === 0 ? (
+          {isTerminal ? (
+            <p className="text-sm text-muted-foreground">
+              {isCancelled
+                ? "A cancelled job cannot be assigned."
+                : "A completed job cannot be assigned."}
+            </p>
+          ) : eligibleMembers.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No team members yet. Invite a MEMBER to assign jobs.
             </p>
