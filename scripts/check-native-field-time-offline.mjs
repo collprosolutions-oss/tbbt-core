@@ -209,7 +209,7 @@ check(
     timeSyncFnSrc.indexOf("lockTenantOwnedJob") <
       timeSyncFnSrc.indexOf("exactActiveMembershipHeld") &&
     timeSyncFnSrc.indexOf("exactActiveMembershipHeld") <
-      timeSyncFnSrc.indexOf("startJobWithRunningTimeSafetyInTransaction") &&
+      timeSyncFnSrc.indexOf("applyIntent") &&
     timeCardOpsSrc.includes("startJobWithRunningTimeSafetyInTransaction"),
 );
 check(
@@ -802,12 +802,6 @@ try {
     status: "IN_PROGRESS",
   });
   const stopStartedAt = new Date("2026-10-02T14:00:00.000Z");
-  await createRunningEntry({
-    businessId: businessA.id,
-    membershipId: memberMem.id,
-    jobId: stopJob.id,
-    startedAt: stopStartedAt,
-  });
   const retryJob = await createTimeJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -828,13 +822,9 @@ try {
     assignedMembershipId: memberMem.id,
     customerName: "Overlap Canary",
   });
-  await createReadyEntry({
-    businessId: businessA.id,
-    membershipId: memberMem.id,
-    jobId: overlapJob.id,
-    startedAt: new Date("2026-10-02T15:00:00.000Z"),
-    endedAt: new Date("2026-10-02T17:00:00.000Z"),
-  });
+  const overlapStartedAt = "2026-10-02T12:00:00.000Z";
+  const overlapEndedAt = "2026-10-02T13:00:00.000Z";
+  const overlapIntentAt = "2026-10-02T12:30:00.000Z";
   const raceJob = await createTimeJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -999,6 +989,43 @@ try {
   );
 
   console.log("\nLIVE — Sync, retry, two-device conflict, overlap, timezone");
+  // Overlap runs first with its own closed interval so later start/stop
+  // fixtures do not share the same worker clock window.
+  await createReadyEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: overlapJob.id,
+    startedAt: new Date(overlapStartedAt),
+    endedAt: new Date(overlapEndedAt),
+  });
+  const overlap = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    overlapJob.id,
+    syncPayload(
+      overlapJob,
+      memberMem.id,
+      [{ action: "START_JOB", intendedAt: overlapIntentAt }],
+      {
+        runningTime: {
+          running: false,
+          startedAt: overlapStartedAt,
+          endedAt: overlapEndedAt,
+        },
+      },
+    ),
+  );
+  const overlapRows = await prisma.timeEntry.findMany({
+    where: { jobId: overlapJob.id, businessId: businessA.id, status: "RUNNING" },
+  });
+  check(
+    "An overlapping offline start is refused visibly and writes no running time",
+    overlap.ok === false &&
+      overlap.status === 409 &&
+      String(overlap.error).includes("overlaps") &&
+      overlapRows.length === 0,
+  );
+
   const memberStart = await syncNativeAssignedTimeCardDraft(
     prisma,
     memberAccess.access,
@@ -1053,6 +1080,12 @@ try {
   );
 
   const stopAt = "2026-10-02T15:30:00.000Z";
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: stopJob.id,
+    startedAt: stopStartedAt,
+  });
   const memberStop = await syncNativeAssignedTimeCardDraft(
     prisma,
     memberAccess.access,
@@ -1228,25 +1261,6 @@ try {
   check(
     "Two concurrent device syncs on the same base leave exactly one winner and one stale 409",
     winners.length === 1 && staleLosers.length === 1 && concurrentRows.length === 1,
-  );
-
-  const overlap = await syncNativeAssignedTimeCardDraft(
-    prisma,
-    memberAccess.access,
-    overlapJob.id,
-    syncPayload(overlapJob, memberMem.id, [
-      { action: "START_JOB", intendedAt: "2026-10-02T16:00:00.000Z" },
-    ]),
-  );
-  const overlapRows = await prisma.timeEntry.findMany({
-    where: { jobId: overlapJob.id, businessId: businessA.id, status: "RUNNING" },
-  });
-  check(
-    "An overlapping offline start is refused visibly and writes no running time",
-    overlap.ok === false &&
-      overlap.status === 409 &&
-      String(overlap.error).includes("overlaps") &&
-      overlapRows.length === 0,
   );
 
   const unconfirmed = await syncNativeAssignedTimeCardDraft(
