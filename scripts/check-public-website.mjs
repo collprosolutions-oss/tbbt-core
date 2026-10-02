@@ -5,6 +5,13 @@
  *
  * Static + pure-function checks always run. Prisma checks use a disposable
  * sibling Postgres database. HTTP checks run when APP_URL is reachable.
+ * Those HTTP hits use the APP_URL process database (DATABASE_URL), not the
+ * sibling test DB, so the suite upserts a local `collpro-reno` Business on
+ * that database before fetching /hire and /r, plus one active Handyman
+ * catalog item if the services list is empty. It never publishes, never
+ * changes production routing, and never overwrites an existing row.
+ * The APP_URL fixture calls assertLocalDatabaseUrl first and refuses a
+ * non-local DATABASE_URL so Preview/production DBs are not written.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-public-website.mjs
@@ -14,6 +21,10 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { register } from "node:module";
+import {
+  RemoteDatabaseRefusedError,
+  assertLocalDatabaseUrl,
+} from "./lib/local-database-guard.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -67,12 +78,19 @@ const {
   summarizeSelectedWorkPricing,
 } = await import("@/lib/selected-work");
 const { groupServiceCatalogItemsByCategory } = await import("@/lib/service-catalog-category");
-const { isPublicWebsitePath } = await import("@/lib/public-website-paths");
+const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
+  "@/lib/public-website-paths"
+);
 const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import("@/lib/stripe-webhook-path");
 const { shouldServeTbbtMarketingHome } = await import("@/lib/tbbt-marketing-host");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
+const APP_URL_FIXTURE_ACTION = "APP_URL CollPro HTTP fixture";
+
+function assertAppUrlFixtureDatabase(url) {
+  return assertLocalDatabaseUrl(url, APP_URL_FIXTURE_ACTION);
+}
 
 let passed = 0;
 let failed = 0;
@@ -260,6 +278,18 @@ check("Public hire, intake, and stored website photos stay public",
 check("Password reset links stay public like team set-password links",
   isPublicWebsitePath("/reset-password/abc") &&
     isPublicWebsitePath("/set-password/abc"));
+check(
+  "Local Stripe test checkout stays public so Pay Invoice is not bounced to sign-in",
+  isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1") &&
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1/complete") &&
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1/cancel") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1") &&
+    isPublicWebsitePath("/payments/test-checkout/cs_test_1/complete") &&
+    !isFakeStripeTestCheckoutPath("/payments") &&
+    !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra") &&
+    !isPublicWebsitePath("/payments") &&
+    !isPublicWebsitePath("/payments/other"),
+);
 check(
   "TBBT marketing routes are public and do not replace CollPro /hire or /r",
   isPublicWebsitePath("/features") &&
@@ -653,6 +683,36 @@ check(
 );
 check("Pricing disclaimer is truthful starting-price language",
   PUBLIC_PRICING_DISCLAIMER.includes("starting labor prices"));
+
+const websiteCheckSrc = readRepo("scripts/check-public-website.mjs");
+const fixtureFnAt = websiteCheckSrc.indexOf("async function ensureAppUrlCollProFixture");
+const fixtureGuardAt = websiteCheckSrc.indexOf("assertAppUrlFixtureDatabase(baseUrl)", fixtureFnAt);
+const fixturePrismaAt = websiteCheckSrc.indexOf(
+  "new PrismaClient({ datasourceUrl: baseUrl })",
+  fixtureFnAt,
+);
+check(
+  "APP_URL CollPro fixture asserts a local DATABASE_URL before writing",
+  fixtureFnAt >= 0 &&
+    fixtureGuardAt >= 0 &&
+    fixturePrismaAt >= 0 &&
+    fixtureGuardAt < fixturePrismaAt &&
+    websiteCheckSrc.includes("assertLocalDatabaseUrl"),
+);
+let fixtureWrites = 0;
+try {
+  assertAppUrlFixtureDatabase("postgresql://u:p@db.example.com:5432/prod");
+  fixtureWrites += 1;
+  check("non-local APP_URL fixture DATABASE_URL is refused and writes nothing", false);
+} catch (error) {
+  check(
+    "non-local APP_URL fixture DATABASE_URL is refused and writes nothing",
+    error instanceof RemoteDatabaseRefusedError &&
+      fixtureWrites === 0 &&
+      error.message.includes(APP_URL_FIXTURE_ACTION) &&
+      String(error.host).includes("db.example.com"),
+  );
+}
 
 if (!baseUrl) {
   console.error("\nDATABASE_URL must be set to run intake persistence checks.");
@@ -1048,10 +1108,60 @@ try {
     }
   }
 
+  async function ensureAppUrlCollProFixture() {
+    assertAppUrlFixtureDatabase(baseUrl);
+    const appDb = new PrismaClient({ datasourceUrl: baseUrl });
+    try {
+      const existing = await appDb.business.findUnique({
+        where: { slug: "collpro-reno" },
+        select: { id: true, slug: true, name: true },
+      });
+      const business =
+        existing ??
+        (await appDb.business.create({
+          data: {
+            name: "CollPro Reno Handyman Services",
+            slug: "collpro-reno",
+            tradeCode: "HANDYMAN",
+          },
+        }));
+      if (existing) {
+        console.log("  HTTP fixture — APP_URL database already has slug collpro-reno");
+      } else {
+        console.log(
+          "  HTTP fixture — created slug collpro-reno on the APP_URL database (compatibility public path; no publish)",
+        );
+      }
+      const offered = await appDb.serviceCatalogItem.count({
+        where: { businessId: business.id, active: true },
+      });
+      if (offered === 0) {
+        await appDb.serviceCatalogItem.create({
+          data: {
+            businessId: business.id,
+            name: "Door Adjustment",
+            category: "Doors & Locks",
+            pricingMode: "STARTING_AT",
+            price: new Prisma.Decimal(75),
+            active: true,
+            tradeCode: "HANDYMAN",
+          },
+        });
+        console.log(
+          "  HTTP fixture — added one active Handyman catalog item so /services renders Selected Work",
+        );
+      }
+      return business;
+    } finally {
+      await appDb.$disconnect();
+    }
+  }
+
   const reachable = await fetchMaybe("/sign-in");
   if (!reachable) {
     console.log("\nHTTP — skipped (APP_URL is not reachable)");
   } else {
+    await ensureAppUrlCollProFixture();
     console.log("\nHTTP — Public pages");
     const home = await fetchMaybe("/");
     check("Public homepage loads", Boolean(home && home.status === 200 && home.body.includes(COLLPRO_RENO_DISPLAY_NAME)));

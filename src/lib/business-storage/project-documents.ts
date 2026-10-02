@@ -87,6 +87,22 @@ export function isProjectDocumentUploadOpen(status: string) {
   return !isClosedOrCancelledJobStatus(status);
 }
 
+/**
+ * Completed / closed jobs still show already-received private document
+ * receipts. Upload stays closed. Missing storage still lists receipts.
+ */
+export function shouldShowProjectDocumentsCard(
+  status: string,
+  documentCount: number,
+  storageConfigured = true,
+) {
+  const recorded = Number.isFinite(documentCount)
+    ? Math.max(0, Math.floor(documentCount))
+    : 0;
+  if (recorded > 0) return true;
+  return storageConfigured && isProjectDocumentUploadOpen(status);
+}
+
 function isPrivateUnpublishedProjectDocument(asset: {
   category: string;
   purpose: string | null;
@@ -472,8 +488,19 @@ async function loadProjectDocumentReviewsByAssetId(
       { status: string; reason: string | null; decidedAt: Date }
     >();
   }
+  // Stale Prisma clients (next-dev started before generate) have no
+  // projectDocumentReview delegate. Receipts still list; review status
+  // is omitted instead of 500ing the completed-job portal.
+  const reviewDelegate = (db as { projectDocumentReview?: typeof db.projectDocumentReview })
+    .projectDocumentReview;
+  if (!reviewDelegate) {
+    return new Map<
+      string,
+      { status: string; reason: string | null; decidedAt: Date }
+    >();
+  }
   try {
-    const rows = await db.projectDocumentReview.findMany({
+    const rows = await reviewDelegate.findMany({
       where: {
         businessId: input.businessId,
         jobId: input.jobId,

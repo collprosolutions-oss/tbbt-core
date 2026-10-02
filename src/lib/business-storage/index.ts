@@ -140,6 +140,7 @@ export {
   inspectProjectDocumentUpload,
   isProjectDocumentMimeType,
   isProjectDocumentUploadOpen,
+  shouldShowProjectDocumentsCard,
   listProjectDocumentsForOwnerReview,
   listProjectDocumentsForPortal,
   projectDocumentBytesMatchMime,

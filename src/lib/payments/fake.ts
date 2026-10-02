@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parseCheckoutPaymentEvent } from "@/lib/payments/events";
 import type {
   CheckoutSessionResult,
@@ -10,6 +11,48 @@ import type {
 } from "@/lib/payments/types";
 import { PAYMENT_PROVIDER_STRIPE } from "@/lib/payments/types";
 
+/** Local-only Stripe test checkout page. Never a live Stripe hostname. */
+export const FAKE_STRIPE_TEST_CHECKOUT_PATH = "/payments/test-checkout";
+
+export function isFakeCheckoutSessionId(value: string) {
+  return /^cs_test_[A-Za-z0-9_-]{1,80}$/.test(value);
+}
+
+export function fakeStripeTestCheckoutUrl(sessionId: string, successUrl: string) {
+  if (!isFakeCheckoutSessionId(sessionId)) {
+    throw new Error("Invalid test checkout session.");
+  }
+  const origin = new URL(successUrl).origin;
+  return `${origin}${FAKE_STRIPE_TEST_CHECKOUT_PATH}/${sessionId}`;
+}
+
+export function applyCheckoutSessionId(url: string, sessionId: string) {
+  return url.replaceAll("{CHECKOUT_SESSION_ID}", sessionId);
+}
+
+export function isFakePaymentProvider(
+  provider: PaymentProvider,
+): provider is FakePaymentProvider {
+  return (
+    typeof (provider as FakePaymentProvider).completeCheckout === "function" &&
+    typeof (provider as FakePaymentProvider).findCheckout === "function" &&
+    Array.isArray((provider as FakePaymentProvider).checkouts)
+  );
+}
+
+type GlobalFakePayments = typeof globalThis & {
+  tbbtFakePaymentProvider?: FakePaymentProvider;
+};
+
+/** Process-wide fake adapter so Pay Invoice and test-checkout share sessions. */
+export function getSharedFakePaymentProvider(): FakePaymentProvider {
+  const globalForFake = globalThis as GlobalFakePayments;
+  if (!globalForFake.tbbtFakePaymentProvider) {
+    globalForFake.tbbtFakePaymentProvider = createFakePaymentProvider();
+  }
+  return globalForFake.tbbtFakePaymentProvider;
+}
+
 export type FakeAccountState = {
   accountId: string;
   chargesEnabled: boolean;
@@ -21,6 +64,8 @@ export type FakeCheckoutSession = CheckoutSessionResult & {
   purpose: "invoice_balance" | "material_deposit";
   businessId: string;
   paid: boolean;
+  successUrl: string;
+  cancelUrl: string;
 };
 
 export type FakePaymentProvider = PaymentProvider & {
@@ -28,6 +73,7 @@ export type FakePaymentProvider = PaymentProvider & {
   checkouts: FakeCheckoutSession[];
   setChargesEnabled(accountId: string, chargesEnabled: boolean): void;
   completeCheckout(sessionId: string): void;
+  findCheckout(sessionId: string): FakeCheckoutSession | null;
 };
 
 /**
@@ -64,14 +110,17 @@ export function createFakePaymentProvider(): FakePaymentProvider {
     purpose: "invoice_balance" | "material_deposit";
     invoiceId: string | null;
     estimateId: string | null;
+    successUrl: string;
+    cancelUrl: string;
   }): FakeCheckoutSession {
     if (chargesEnabledFor(input.connectedAccountId) !== true) {
       throw new Error("Connected account is not payment-ready.");
     }
     sessionSeq += 1;
+    const id = `cs_test_${sessionSeq}_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     const result: FakeCheckoutSession = {
-      id: `cs_test_${sessionSeq}`,
-      url: `https://checkout.stripe.test/pay/${sessionSeq}`,
+      id,
+      url: fakeStripeTestCheckoutUrl(id, input.successUrl),
       connectedAccountId: input.connectedAccountId,
       amountCents: input.amountCents,
       currency: input.currency,
@@ -80,6 +129,8 @@ export function createFakePaymentProvider(): FakePaymentProvider {
       purpose: input.purpose,
       businessId: input.businessId,
       paid: false,
+      successUrl: input.successUrl,
+      cancelUrl: input.cancelUrl,
     };
     checkouts.push(result);
     return result;
@@ -124,6 +175,9 @@ export function createFakePaymentProvider(): FakePaymentProvider {
       if (session) {
         session.paid = true;
       }
+    },
+    findCheckout(sessionId) {
+      return checkouts.find((checkout) => checkout.id === sessionId) ?? null;
     },
     async createConnectedAccount(input: CreateConnectedAccountInput) {
       accountSeq += 1;

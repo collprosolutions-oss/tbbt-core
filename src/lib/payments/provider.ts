@@ -3,7 +3,7 @@ import {
   isStripePlatformConfigured,
 } from "@/lib/payments/config";
 import {
-  createFakePaymentProvider,
+  getSharedFakePaymentProvider,
   type FakePaymentProvider,
 } from "@/lib/payments/fake";
 import { createStripePaymentProvider } from "@/lib/payments/stripe-adapter";
@@ -14,7 +14,7 @@ let cached: PaymentProvider | null = null;
 export function getPaymentProvider(): PaymentProvider {
   if (!cached) {
     cached = isFakePaymentsAdapterEnabled()
-      ? createFakePaymentProvider()
+      ? getSharedFakePaymentProvider()
       : createStripePaymentProvider();
   }
   return cached;

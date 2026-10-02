@@ -22,6 +22,11 @@ const { invoiceAmountDue } = await import("@/lib/invoice-document");
 const { createFakePaymentProvider, FAKE_PAYMENT_READY_ACCOUNTS_ENV } = await import(
   "@/lib/payments/fake"
 );
+const { isFakePaymentsAdapterEnabled } = await import("@/lib/payments/config");
+const { getFakePaymentProvider } = await import("@/lib/payments/provider");
+const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
+  "@/lib/public-website-paths"
+);
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
 const { dispatchStripeWebhookEvent } = await import("@/lib/stripe-webhook-dispatch");
 const { SAAS_CHECKOUT_PURPOSE } = await import("@/lib/saas-billing");
@@ -32,6 +37,7 @@ const {
   stripeConnectActionLabel,
 } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents, payDepositButtonLabel, payInvoiceButtonLabel } = await import("@/lib/payments/money");
+const { guardPayFormSubmit, onPayFormPageShow } = await import("@/lib/payments/pay-form-pending");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
@@ -555,6 +561,58 @@ try {
       !payButtonSrc.includes("bg-neutral-950") &&
       !payButtonSrc.includes("bg-neutral-900"),
   );
+  const payDepositButtonSrc = readFileSync(
+    new URL("../src/components/estimates/pay-deposit-button.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Pay Invoice and Pay Deposit forms reset pending only on persisted pageshow",
+    payButtonSrc.includes("onPayFormPageShow") &&
+      payButtonSrc.includes("guardPayFormSubmit") &&
+      payButtonSrc.includes("useState(false)") &&
+      payDepositButtonSrc.includes("onPayFormPageShow") &&
+      payDepositButtonSrc.includes("guardPayFormSubmit") &&
+      payDepositButtonSrc.includes("useState(false)"),
+  );
+
+  console.log("\nBEHAVIOR — Pay form pending after bfcache pageshow");
+  function createPayFormBehavior() {
+    let pending = false;
+    const setPending = (next) => {
+      pending = next;
+    };
+    const window = new EventTarget();
+    function onPageShow(event) {
+      onPayFormPageShow(event, setPending);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return {
+      submit() {
+        const event = {
+          defaultPrevented: false,
+          preventDefault() {
+            this.defaultPrevented = true;
+          },
+        };
+        guardPayFormSubmit(pending, setPending, event);
+        return !event.defaultPrevented;
+      },
+      pageshow(persisted) {
+        const event = new Event("pageshow");
+        Object.defineProperty(event, "persisted", { value: persisted });
+        window.dispatchEvent(event);
+      },
+    };
+  }
+  for (const label of ["Pay Invoice", "Pay Deposit"]) {
+    const form = createPayFormBehavior();
+    check(`${label} first tap submits`, form.submit() === true);
+    check(`${label} second tap is ignored`, form.submit() === false);
+    form.pageshow(false);
+    check(`${label} persisted=false does not reset`, form.submit() === false);
+    form.pageshow(true);
+    check(`${label} tap after persisted pageshow submits`, form.submit() === true);
+  }
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));
   check("portal Pay Invoice label uses remaining amount due", portalSrc.includes("invoiceBreakdown?.amountDue"));
@@ -641,7 +699,13 @@ try {
       .every((line) => !line.includes("businessId") || line.includes("job.business.id")),
   );
   check("pay route does not read amount from the request", !/searchParams|formData|json\(\)|amount/.test(payRouteSrc.replace(/createCustomerInvoiceCheckout[\s\S]+/, "")));
-  check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
+  check(
+    "pay route creates checkout from the token only",
+    payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token") &&
+      payRouteSrc.includes("fakeTestCheckoutAppUrl") &&
+      !payRouteSrc.includes("invoiceId") &&
+      !payRouteSrc.includes("businessId"),
+  );
   check("webhook verifies the Stripe signature", webhookStack.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
   const paymentEventsSrc = readFileSync(
@@ -690,6 +754,36 @@ try {
   check(
     "Fake provider does not treat unknown accounts as ready",
     !fakeSrc.includes("TBBT_PAYMENTS_FAKE_READY"),
+  );
+  check(
+    "Fake checkout URL is the local Stripe test page",
+    fakeSrc.includes("/payments/test-checkout") &&
+      fakeSrc.includes("randomUUID()") &&
+      !fakeSrc.includes("https://checkout.stripe.test/pay/"),
+  );
+  check(
+    "Local Stripe test checkout is a public website path so Pay Invoice is not bounced to sign-in",
+    isFakeStripeTestCheckoutPath("/payments/test-checkout/cs_test_1") &&
+      isPublicWebsitePath("/payments/test-checkout/cs_test_1") &&
+      isPublicWebsitePath("/payments/test-checkout/cs_test_1/complete") &&
+      !isPublicWebsitePath("/payments") &&
+      !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra"),
+  );
+  const providerSrc = readFileSync(new URL("../src/lib/payments/provider.ts", import.meta.url), "utf8");
+  const testCheckoutSrc = readFileSync(
+    new URL("../src/lib/payments/test-checkout.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Fake checkout sessions survive a Next.js module split",
+    fakeSrc.includes("getSharedFakePaymentProvider") &&
+      providerSrc.includes("getSharedFakePaymentProvider") &&
+      providerSrc.includes("getFakePaymentProvider") &&
+      testCheckoutSrc.includes("findInvoiceCheckoutSession") &&
+      testCheckoutSrc.includes("applyVerifiedCheckoutPayment") &&
+      testCheckoutSrc.includes(
+        "if (!isFakePaymentsAdapterEnabled() || !isFakeCheckoutSessionId(sessionId))",
+      ),
   );
   check(
     "Stripe adapter does not honor the local fake ready-account allowlist",
@@ -774,6 +868,18 @@ try {
       listedCheckout.connectedAccountId === "acct_test_portal_ready" &&
         listedCheckout.amountCents === 30000,
     );
+    const listedCheckout2 = await allowProvider.createInvoiceCheckoutSession({
+      ...checkoutInput,
+      connectedAccountId: "acct_test_portal_ready",
+      invoiceId: "inv_listed_2",
+    });
+    check(
+      "fake checkout session ids are unique so a leftover cs_test_1 cannot skip apply",
+      listedCheckout.id !== listedCheckout2.id &&
+        listedCheckout.id.startsWith("cs_test_") &&
+        listedCheckout.id !== "cs_test_1" &&
+        listedCheckout2.id !== "cs_test_1",
+    );
     const created = await allowProvider.createConnectedAccount({
       businessId: "biz_disabled",
       displayName: "Disabled until Stripe says so",
@@ -798,6 +904,10 @@ try {
     check(
       "VERCEL_ENV=production ignores the fake ready-account allowlist",
       productionThrew,
+    );
+    check(
+      "VERCEL_ENV=production disables the fake adapter so test-checkout cannot mark paid",
+      isFakePaymentsAdapterEnabled() === false && getFakePaymentProvider() === null,
     );
   } finally {
     if (savedFakeReady === undefined) delete process.env.TBBT_PAYMENTS_FAKE_READY;
@@ -1323,8 +1433,14 @@ try {
   });
   check("checkout amount comes from the invoice total", sessionA.amountCents === 37500);
   check("Business A session uses Business A connected account", sessionA.connectedAccountId === accountA.stripeAccountId);
-  check("checkout URL is Stripe-hosted", sessionA.url.startsWith("https://checkout.stripe.test/pay/"));
-  check("success URL returns to the existing portal", provider.checkouts.at(-1).url.startsWith("https://checkout.stripe.test/pay/"));
+  check(
+    "checkout URL is the local Stripe test checkout page",
+    sessionA.url.startsWith("http://payments.test/payments/test-checkout/cs_test_"),
+  );
+  check(
+    "recorded fake session keeps the local test-checkout URL",
+    provider.checkouts.at(-1).url.startsWith("http://payments.test/payments/test-checkout/cs_test_"),
+  );
 
   const onboardB = await startStripeConnectOnboarding(
     prisma,

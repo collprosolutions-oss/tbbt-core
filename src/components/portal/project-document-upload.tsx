@@ -31,9 +31,11 @@ type ProjectDocumentReceiptItem = {
 export function ProjectDocumentUpload({
   projectToken,
   documents,
+  uploadOpen = true,
 }: {
   projectToken: string;
   documents: ProjectDocumentReceiptItem[];
+  uploadOpen?: boolean;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +139,7 @@ export function ProjectDocumentUpload({
         </p>
       )}
 
-      {remaining > 0 ? (
+      {uploadOpen && remaining > 0 ? (
         <form onSubmit={onSubmit} className="space-y-3">
           {error ? (
             <Alert variant="destructive">
@@ -167,9 +169,13 @@ export function ProjectDocumentUpload({
             {pending ? "Uploading…" : "Upload document"}
           </Button>
         </form>
-      ) : (
+      ) : uploadOpen ? (
         <p className="text-sm text-muted-foreground">
           This project already has {PROJECT_DOCUMENT_MAX_COUNT} documents.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          This project is not accepting more documents.
         </p>
       )}
     </div>

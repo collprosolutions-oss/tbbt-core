@@ -20,6 +20,7 @@ import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import {
   isProjectDocumentUploadOpen,
   listProjectDocumentsForPortal,
+  shouldShowProjectDocumentsCard,
 } from "@/lib/business-storage/project-documents";
 import { loadCleaningRepeatVisitPublicView } from "@/lib/cleaning-repeat-visit-data";
 import { getBusinessLogoSrc } from "@/lib/business-branding";
@@ -270,6 +271,15 @@ export default async function CustomerProjectPortalPage({
   const publishedAftercare = await loadPublishedAftercareForProjectToken(
     prisma,
     token,
+  );
+  const storageConfigured = isBusinessStorageConfigured();
+  const portalDocuments = await listProjectDocumentsForPortal(prisma, token);
+  const documentUploadOpen =
+    storageConfigured && isProjectDocumentUploadOpen(job.status);
+  const showProjectDocuments = shouldShowProjectDocumentsCard(
+    job.status,
+    portalDocuments.length,
+    storageConfigured,
   );
 
   if (query.checkout === "return") {
@@ -684,23 +694,21 @@ export default async function CustomerProjectPortalPage({
             </Card>
           ) : null}
 
-          {isBusinessStorageConfigured() &&
-          isProjectDocumentUploadOpen(job.status) ? (
+          {showProjectDocuments ? (
           <Card id="project-documents">
             <CardHeader>
               <CardTitle>Project Documents</CardTitle>
               <CardDescription>
-                Upload a private document for this project. Files stay private
-                to the business. You can see the recorded review status here.
-                If a file needs replacement, upload another through these same
-                rules. Uploading does not approve work, publish anything, send
-                a message, create an invoice, or change the job.
+                {documentUploadOpen
+                  ? "Upload a private document for this project. Files stay private to the business. You can see the recorded review status here. If a file needs replacement, upload another through these same rules. Uploading does not approve work, publish anything, send a message, create an invoice, or change the job."
+                  : "Private documents already received for this project. Upload is closed. Files stay private to the business. You can see the recorded review status here."}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <ProjectDocumentUpload
                 projectToken={token}
-                documents={await listProjectDocumentsForPortal(prisma, token)}
+                documents={portalDocuments}
+                uploadOpen={documentUploadOpen}
               />
             </CardContent>
           </Card>
