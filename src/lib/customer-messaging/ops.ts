@@ -8,7 +8,10 @@ import {
   evaluateSmsEligibility,
   smsBlockFailureReason,
 } from "@/lib/customer-messaging/eligibility";
-import { rememberCustomerMessagingWebhookEvent } from "@/lib/customer-messaging/inbound";
+import {
+  claimCustomerMessagingWebhookEvent,
+  completeCustomerMessagingWebhookEvent,
+} from "@/lib/customer-messaging/inbound";
 import { getCustomerMessagingProvider } from "@/lib/customer-messaging/provider";
 import { ensureCustomerMessagingSchema } from "@/lib/customer-messaging/schema";
 import {
@@ -74,8 +77,17 @@ async function loadRelatedRecord(
       select: RELATED_CUSTOMER_SELECT,
     });
   }
-  if (input.relatedType === "PHONE_INTERACTION" || input.relatedType === "PROPERTY") {
-    return { id: input.relatedId, businessId: input.businessId, customerId: null };
+  if (input.relatedType === "PHONE_INTERACTION") {
+    return db.phoneInteraction.findFirst({
+      where: { id: input.relatedId, businessId: input.businessId },
+      select: RELATED_CUSTOMER_SELECT,
+    });
+  }
+  if (input.relatedType === "PROPERTY") {
+    return db.property.findFirst({
+      where: { id: input.relatedId, businessId: input.businessId },
+      select: RELATED_CUSTOMER_SELECT,
+    });
   }
   return db.referralRequest.findFirst({
     where: { id: input.relatedId, businessId: input.businessId },
@@ -124,6 +136,62 @@ function nextDeliveryStatus(
   const incomingRank = rank[incoming] ?? 0;
   if (incomingRank < currentRank) return current;
   return incoming;
+}
+
+export const SMS_DISPATCH_CLAIM_LEASE_MS = 2 * 60 * 1000;
+export const SMS_DISPATCH_CLAIM_STATUS = "READY";
+export const STALE_RECIPIENT_FAILURE =
+  "The customer destination changed after this send was claimed.";
+
+/**
+ * Test-only pause/fault points. Production never assigns these.
+ * Used to prove claim-before-send and send-time consent/recipient checks.
+ */
+export const customerSmsDispatchTestHooks: {
+  afterClaim?: () => Promise<void> | void;
+  beforeProviderSend?: (ctx?: { db: Db }) => Promise<void> | void;
+} = {};
+
+/**
+ * Test-only pause/fault points. Production never assigns these.
+ * Used to prove leftover delivery webhook claims stay retryable.
+ */
+export const customerMessageDeliveryTestHooks: {
+  afterClaim?: () => Promise<void> | void;
+  beforeStatusWrite?: () => Promise<void> | void;
+} = {};
+
+function smsDispatchLockKey(businessId: string, idempotencyKey: string) {
+  return `tbbt-sms:${businessId}:${idempotencyKey}`;
+}
+
+function smsDispatchClaimInProgress(
+  row: { status: string; attemptedAt: Date | null } | null | undefined,
+  now = new Date(),
+) {
+  if (!row || row.status !== SMS_DISPATCH_CLAIM_STATUS || !row.attemptedAt) return false;
+  return now.getTime() - row.attemptedAt.getTime() < SMS_DISPATCH_CLAIM_LEASE_MS;
+}
+
+async function withSmsDispatchLock<T>(
+  db: Db,
+  businessId: string,
+  idempotencyKey: string,
+  work: (tx: Db) => Promise<T>,
+): Promise<T> {
+  const lockKey = smsDispatchLockKey(businessId, idempotencyKey);
+  const run = async (tx: Db) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    return work(tx);
+  };
+  const client = db as PrismaClient;
+  if (typeof client.$transaction === "function") {
+    return client.$transaction((tx) => run(tx), {
+      timeout: 20_000,
+      maxWait: 20_000,
+    });
+  }
+  return run(db);
 }
 
 export async function getCustomerCommunication(
@@ -232,17 +300,39 @@ export async function attemptCustomerSms(
     }
   }
 
-  const existing = await db.customerCommunication.findFirst({
-    where: {
-      businessId: input.businessId,
-      idempotencyKey: input.idempotencyKey,
-    },
+  const thread = await getOrCreateCustomerThread(db, {
+    businessId: input.businessId,
+    customerId: customer.id,
+    title: customer.name,
   });
-  if (existing && isAcceptedCustomerMessageStatus(existing.status)) {
-    return toAttemptResult(existing, true);
+
+  const decision = await withSmsDispatchLock(
+    db,
+    input.businessId,
+    input.idempotencyKey,
+    async (tx) => decideSmsDispatch(tx, input, { threadId: thread?.id ?? null }),
+  );
+  if (decision.kind !== "send") {
+    return decision.result;
   }
 
-  const settings = await db.businessSettings.findFirst({
+  if (customerSmsDispatchTestHooks.afterClaim) {
+    await customerSmsDispatchTestHooks.afterClaim();
+  }
+  if (customerSmsDispatchTestHooks.beforeProviderSend) {
+    await customerSmsDispatchTestHooks.beforeProviderSend({ db });
+  }
+
+  const liveCustomer = await db.customer.findFirst({
+    where: { id: input.customerId, businessId: input.businessId },
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      smsConsentStatus: true,
+    },
+  });
+  const liveSettings = await db.businessSettings.findFirst({
     where: { businessId: input.businessId },
     select: {
       estimateCommunicationEnabled: true,
@@ -252,76 +342,40 @@ export async function attemptCustomerSms(
       marketingCommunicationEnabled: true,
     },
   });
-  const eligibility = evaluateSmsEligibility({
+  const liveEligibility = evaluateSmsEligibility({
     businessId: input.businessId,
-    phone: customer.phone,
-    smsConsentStatus: customer.smsConsentStatus,
+    phone: liveCustomer?.phone,
+    smsConsentStatus: liveCustomer?.smsConsentStatus,
     purpose: input.purpose,
-    preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
+    preferences: liveSettings ?? DEFAULT_SETTINGS_PREFERENCES,
   });
-
-  const sendingIdentity = await db.business.findFirst({
-    where: { id: input.businessId },
-    select: { operationalSmsNumber: true },
-  });
-  const fromDigits = normalizePhone(sendingIdentity?.operationalSmsNumber);
-
-  const provider = getCustomerMessagingProvider();
-  const now = new Date();
-  const thread = await getOrCreateCustomerThread(db, {
-    businessId: input.businessId,
-    customerId: customer.id,
-    title: customer.name,
-  });
-  const baseData = {
-    businessId: input.businessId,
-    customerId: customer.id,
-    threadId: thread?.id ?? null,
-    direction: "OUTBOUND",
-    channel: "SMS",
-    purpose: input.purpose,
-    relatedType: input.relatedType ?? null,
-    relatedId: input.relatedId ?? null,
-    idempotencyKey: input.idempotencyKey,
-    destinationLast4: eligibility.last4,
-    destinationFingerprint: eligibility.fingerprint,
-    consentContext: consentContextSnapshot({
-      smsConsentStatus: customer.smsConsentStatus,
-      emailAvailable: isUsableEmail(customer.email),
-      channel: "SMS",
-      extra: eligibility.ok ? null : eligibility.reason,
-    }),
-    bodySnapshot: input.body,
-    provider: provider.id,
-    initiatedByMembershipId: input.initiatedByMembershipId ?? null,
-    attemptedAt: now,
-  };
 
   let status: CustomerMessageStatus = "READY";
   let failureReason: string | null = null;
   let providerMessageId: string | null = null;
   let providerMetadata: Prisma.InputJsonValue | typeof Prisma.JsonNull = Prisma.JsonNull;
+  const provider = decision.provider;
 
-  if (!eligibility.ok) {
+  if (!liveCustomer) {
     status = "BLOCKED";
-    failureReason = smsBlockFailureReason(eligibility.reason);
-  } else if (!provider.connected) {
-    status = "NOT_SENT";
-    failureReason = "SMS delivery is not connected.";
+    failureReason = "Customer is not in the authorized business.";
+  } else if (!liveEligibility.ok) {
+    status = "BLOCKED";
+    failureReason = smsBlockFailureReason(liveEligibility.reason);
   } else if (
-    provider.id === TWILIO_CUSTOMER_MESSAGING_PROVIDER &&
-    !isUsableNormalizedPhone(fromDigits)
+    decision.claimedFingerprint &&
+    liveEligibility.fingerprint !== decision.claimedFingerprint
   ) {
-    status = "NOT_SENT";
-    failureReason = "This business has no assigned SMS number.";
+    status = "BLOCKED";
+    failureReason = STALE_RECIPIENT_FAILURE;
   } else {
     try {
       const sent = await provider.send({
         businessId: input.businessId,
-        communicationId: existing?.id ?? "pending",
+        communicationId: decision.communicationId,
         channel: "SMS",
-        to: eligibility.normalizedPhone,
-        from: fromDigits || null,
+        to: liveEligibility.normalizedPhone,
+        from: decision.fromDigits || null,
         body: input.body,
         purpose: input.purpose,
       });
@@ -341,53 +395,272 @@ export async function attemptCustomerSms(
     }
   }
 
-  if (existing) {
-    const updated = await db.customerCommunication.update({
-      where: { id: existing.id },
-      data: {
-        ...baseData,
-        status,
-        failureReason,
-        providerMessageId,
-        providerMetadata,
-      },
-    });
-    return toAttemptResult(updated, true);
+  const sendConsent = liveCustomer?.smsConsentStatus ?? decision.consentStatus;
+  const sendLast4 = liveEligibility.last4 ?? decision.last4;
+  const sendFingerprint = liveEligibility.fingerprint ?? decision.claimedFingerprint;
+  const updated = await db.customerCommunication.update({
+    where: { id: decision.communicationId },
+    data: {
+      status,
+      failureReason,
+      providerMessageId,
+      providerMetadata,
+      destinationLast4: sendLast4,
+      destinationFingerprint: sendFingerprint,
+      consentContext: consentContextSnapshot({
+        smsConsentStatus: sendConsent,
+        emailAvailable: isUsableEmail(liveCustomer?.email ?? decision.email),
+        channel: "SMS",
+        extra: liveEligibility.ok ? null : liveEligibility.reason,
+      }),
+      attemptedAt: new Date(),
+    },
+  });
+  return toAttemptResult(updated, decision.reused);
+}
+
+type SmsDispatchDecision =
+  | { kind: "done"; result: CustomerCommunicationAttemptResult }
+  | {
+      kind: "send";
+      communicationId: string;
+      reused: boolean;
+      provider: ReturnType<typeof getCustomerMessagingProvider>;
+      fromDigits: string;
+      claimedFingerprint: string | null;
+      last4: string | null;
+      consentStatus: string | null;
+      email: string | null;
+    };
+
+async function decideSmsDispatch(
+  tx: Db,
+  input: AttemptCustomerSmsInput,
+  extras: { threadId: string | null },
+): Promise<SmsDispatchDecision> {
+  const existing = await tx.customerCommunication.findFirst({
+    where: {
+      businessId: input.businessId,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  if (existing && isAcceptedCustomerMessageStatus(existing.status)) {
+    return { kind: "done", result: toAttemptResult(existing, true) };
   }
 
-  try {
-    const created = await db.customerCommunication.create({
-      data: {
-        ...baseData,
-        status,
-        failureReason,
-        providerMessageId,
-        providerMetadata,
+  const resume =
+    Boolean(input.resumeCommunicationId) &&
+    Boolean(existing) &&
+    existing!.id === input.resumeCommunicationId;
+  if (existing && !resume && smsDispatchClaimInProgress(existing)) {
+    return { kind: "done", result: toAttemptResult(existing, true) };
+  }
+
+  const customer = await tx.customer.findFirst({
+    where: { id: input.customerId, businessId: input.businessId },
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      smsConsentStatus: true,
+    },
+  });
+  if (!customer) {
+    return {
+      kind: "done",
+      result: {
+        ok: false,
+        communicationId: existing?.id ?? null,
+        status: "BLOCKED",
+        provider: DISCONNECTED_CUSTOMER_MESSAGING_PROVIDER,
+        providerMessageId: null,
+        failureReason: "Customer is not in the authorized business.",
+        reused: Boolean(existing),
       },
+    };
+  }
+
+  const settings = await tx.businessSettings.findFirst({
+    where: { businessId: input.businessId },
+    select: {
+      estimateCommunicationEnabled: true,
+      scheduleNotificationEnabled: true,
+      invoiceCommunicationEnabled: true,
+      reviewRequestPreferenceEnabled: true,
+      marketingCommunicationEnabled: true,
+    },
+  });
+  const eligibility = evaluateSmsEligibility({
+    businessId: input.businessId,
+    phone: customer.phone,
+    smsConsentStatus: customer.smsConsentStatus,
+    purpose: input.purpose,
+    preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
+  });
+
+  if (
+    resume &&
+    existing?.destinationFingerprint &&
+    eligibility.fingerprint &&
+    existing.destinationFingerprint !== eligibility.fingerprint
+  ) {
+    const blocked = await upsertCustomerCommunication(tx, existing, {
+      businessId: input.businessId,
+      customerId: customer.id,
+      threadId: extras.threadId,
+      purpose: input.purpose,
+      relatedType: input.relatedType ?? null,
+      relatedId: input.relatedId ?? null,
+      idempotencyKey: input.idempotencyKey,
+      destinationLast4: existing.destinationLast4,
+      destinationFingerprint: existing.destinationFingerprint,
+      consentContext: consentContextSnapshot({
+        smsConsentStatus: customer.smsConsentStatus,
+        emailAvailable: isUsableEmail(customer.email),
+        channel: "SMS",
+        extra: "stale_recipient",
+      }),
+      bodySnapshot: input.body,
+      provider: getCustomerMessagingProvider().id,
+      initiatedByMembershipId: input.initiatedByMembershipId ?? null,
+      status: "BLOCKED",
+      failureReason: STALE_RECIPIENT_FAILURE,
     });
-    return toAttemptResult(created, false);
+    return { kind: "done", result: toAttemptResult(blocked, true) };
+  }
+
+  const sendingIdentity = await tx.business.findFirst({
+    where: { id: input.businessId },
+    select: { operationalSmsNumber: true },
+  });
+  const fromDigits = normalizePhone(sendingIdentity?.operationalSmsNumber);
+  const provider = getCustomerMessagingProvider();
+
+  const baseData = {
+    businessId: input.businessId,
+    customerId: customer.id,
+    threadId: extras.threadId,
+    purpose: input.purpose,
+    relatedType: input.relatedType ?? null,
+    relatedId: input.relatedId ?? null,
+    idempotencyKey: input.idempotencyKey,
+    destinationLast4: eligibility.last4,
+    destinationFingerprint: eligibility.fingerprint,
+    consentContext: consentContextSnapshot({
+      smsConsentStatus: customer.smsConsentStatus,
+      emailAvailable: isUsableEmail(customer.email),
+      channel: "SMS",
+      extra: eligibility.ok ? null : eligibility.reason,
+    }),
+    bodySnapshot: input.body,
+    provider: provider.id,
+    initiatedByMembershipId: input.initiatedByMembershipId ?? null,
+  };
+
+  if (!eligibility.ok) {
+    const row = await upsertCustomerCommunication(tx, existing, {
+      ...baseData,
+      status: "BLOCKED",
+      failureReason: smsBlockFailureReason(eligibility.reason),
+    });
+    return { kind: "done", result: toAttemptResult(row, Boolean(existing)) };
+  }
+  if (!provider.connected) {
+    const row = await upsertCustomerCommunication(tx, existing, {
+      ...baseData,
+      status: "NOT_SENT",
+      failureReason: "SMS delivery is not connected.",
+    });
+    return { kind: "done", result: toAttemptResult(row, Boolean(existing)) };
+  }
+  if (provider.id === TWILIO_CUSTOMER_MESSAGING_PROVIDER && !isUsableNormalizedPhone(fromDigits)) {
+    const row = await upsertCustomerCommunication(tx, existing, {
+      ...baseData,
+      status: "NOT_SENT",
+      failureReason: "This business has no assigned SMS number.",
+    });
+    return { kind: "done", result: toAttemptResult(row, Boolean(existing)) };
+  }
+
+  const claimed = await upsertCustomerCommunication(tx, existing, {
+    ...baseData,
+    status: SMS_DISPATCH_CLAIM_STATUS,
+    failureReason: null,
+  });
+  return {
+    kind: "send",
+    communicationId: claimed.id,
+    reused: Boolean(existing),
+    provider,
+    fromDigits,
+    claimedFingerprint: eligibility.fingerprint,
+    last4: eligibility.last4,
+    consentStatus: customer.smsConsentStatus,
+    email: customer.email,
+  };
+}
+
+async function upsertCustomerCommunication(
+  db: Db,
+  existing: { id: string } | null,
+  data: {
+    businessId: string;
+    customerId: string;
+    threadId: string | null;
+    purpose: string;
+    relatedType: string | null;
+    relatedId: string | null;
+    idempotencyKey: string;
+    destinationLast4: string | null;
+    destinationFingerprint: string | null;
+    consentContext: string;
+    bodySnapshot: string;
+    provider: string;
+    initiatedByMembershipId: string | null;
+    status: CustomerMessageStatus;
+    failureReason: string | null;
+  },
+) {
+  const now = new Date();
+  const rowData = {
+    businessId: data.businessId,
+    customerId: data.customerId,
+    threadId: data.threadId,
+    direction: "OUTBOUND",
+    channel: "SMS",
+    purpose: data.purpose,
+    relatedType: data.relatedType,
+    relatedId: data.relatedId,
+    idempotencyKey: data.idempotencyKey,
+    destinationLast4: data.destinationLast4,
+    destinationFingerprint: data.destinationFingerprint,
+    consentContext: data.consentContext,
+    bodySnapshot: data.bodySnapshot,
+    provider: data.provider,
+    initiatedByMembershipId: data.initiatedByMembershipId,
+    attemptedAt: now,
+    status: data.status,
+    failureReason: data.failureReason,
+  };
+  if (existing) {
+    return db.customerCommunication.update({
+      where: { id: existing.id },
+      data: rowData,
+    });
+  }
+  try {
+    return await db.customerCommunication.create({ data: rowData });
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const raced = await db.customerCommunication.findFirst({
         where: {
-          businessId: input.businessId,
-          idempotencyKey: input.idempotencyKey,
+          businessId: data.businessId,
+          idempotencyKey: data.idempotencyKey,
         },
       });
-      if (raced) return toAttemptResult(raced, true);
+      if (raced) return raced;
     }
-    return {
-      ok: false,
-      communicationId: null,
-      status: "FAILED",
-      provider: provider.id,
-      providerMessageId: null,
-      failureReason: "The communication record could not be saved.",
-      reused: false,
-    };
+    throw error;
   }
 }
 
@@ -438,27 +711,45 @@ export async function applyCustomerMessageDeliveryUpdate(
   }
 
   const eventId = update.providerEventId ?? `${update.providerMessageId}:${update.status}`;
-  const duplicate = await rememberCustomerMessagingWebhookEvent(db, {
+  const claim = await claimCustomerMessagingWebhookEvent(db, {
     provider: update.provider,
     providerEventId: eventId,
     eventKind: "delivery",
     businessId: row.businessId,
   });
-
-  const nextStatus = nextDeliveryStatus(row.status, update.status);
-  const nextFailure =
-    nextStatus === "FAILED" ? update.failureReason ?? row.failureReason : row.failureReason;
-
-  if (
-    duplicate === "duplicate" ||
-    (nextStatus === row.status && nextFailure === row.failureReason)
-  ) {
+  if (claim === "completed") {
     return {
       applied: true,
       reason: "idempotent",
       communicationId: row.id,
       businessId: row.businessId,
     };
+  }
+
+  if (customerMessageDeliveryTestHooks.afterClaim) {
+    await customerMessageDeliveryTestHooks.afterClaim();
+  }
+
+  const nextStatus = nextDeliveryStatus(row.status, update.status);
+  const nextFailure =
+    nextStatus === "FAILED" ? update.failureReason ?? row.failureReason : row.failureReason;
+
+  if (nextStatus === row.status && nextFailure === row.failureReason) {
+    await completeCustomerMessagingWebhookEvent(db, {
+      provider: update.provider,
+      providerEventId: eventId,
+      eventKind: "delivery",
+    });
+    return {
+      applied: true,
+      reason: "idempotent",
+      communicationId: row.id,
+      businessId: row.businessId,
+    };
+  }
+
+  if (customerMessageDeliveryTestHooks.beforeStatusWrite) {
+    await customerMessageDeliveryTestHooks.beforeStatusWrite();
   }
 
   const updated = await db.customerCommunication.updateMany({
@@ -476,6 +767,11 @@ export async function applyCustomerMessageDeliveryUpdate(
   if (updated.count !== 1) {
     return { applied: false, reason: "not_updated" };
   }
+  await completeCustomerMessagingWebhookEvent(db, {
+    provider: update.provider,
+    providerEventId: eventId,
+    eventKind: "delivery",
+  });
   return {
     applied: true,
     reason: "updated",

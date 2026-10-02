@@ -701,6 +701,7 @@ export async function sendOwnerDayRouteAppointmentNotice(
         relatedType: "JOB",
         relatedId: claimed.job.id,
         idempotencyKey: dayRouteAppointmentNoticeIdempotencyKey(claimed.job.id, proposalId),
+        resumeCommunicationId: claimed.communicationId,
       });
     } catch (error) {
       await markNoticeCommunicationFailed(db, {

@@ -24,6 +24,8 @@ export {
   evaluateEmailEligibility,
 } from "@/lib/communications/consent";
 export {
+  EMAIL_DISPATCH_CLAIM_LEASE_MS,
+  communicationEmailDispatchTestHooks,
   composeCustomerCommunication,
   resetCommunicationEmailSender,
   setCommunicationEmailSender,

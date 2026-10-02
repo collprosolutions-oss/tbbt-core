@@ -3,6 +3,7 @@ import { CAPABILITIES, ForbiddenError, roleHasCapability } from "@/lib/authoriza
 import {
   evaluateComposeChannelEligibility,
   consentContextSnapshot,
+  emailDestinationFingerprint,
 } from "@/lib/communications/consent";
 import { productCapabilityForPurpose } from "@/lib/communications/entitlements";
 import { assertRelatedRecordForCustomer } from "@/lib/communications/related";
@@ -66,6 +67,17 @@ type EmailSender = (input: {
 
 let emailSender: EmailSender = sendTransactionalEmail;
 
+export const EMAIL_DISPATCH_CLAIM_LEASE_MS = 2 * 60 * 1000;
+
+/**
+ * Test-only pause/fault points. Production never assigns these.
+ * Used to prove email claim-before-send and send-time recipient binding.
+ */
+export const communicationEmailDispatchTestHooks: {
+  afterClaim?: () => Promise<void> | void;
+  beforeProviderSend?: (ctx?: { db: Db }) => Promise<void> | void;
+} = {};
+
 export function setCommunicationEmailSender(sender: EmailSender | null) {
   emailSender = sender ?? sendTransactionalEmail;
 }
@@ -112,6 +124,7 @@ export async function composeCustomerCommunication(
     relatedType?: CommunicationRelatedType | null;
     relatedId?: string | null;
     browserBusinessId?: string | null;
+    resumeCommunicationId?: string | null;
   },
 ): Promise<CommunicationSendResult> {
   requireCommunicationsCapability(access);
@@ -245,6 +258,7 @@ export async function composeCustomerCommunication(
       idempotencyKey: input.idempotencyKey,
       body: input.body,
       initiatedByMembershipId: membershipIdOf(access),
+      resumeCommunicationId: input.resumeCommunicationId,
     });
     if (result.communicationId && thread) {
       await db.customerCommunication.updateMany({
@@ -253,11 +267,6 @@ export async function composeCustomerCommunication(
           threadId: thread.id,
           direction: "OUTBOUND",
           subject: input.subject ?? null,
-          consentContext: consentContextSnapshot({
-            smsConsentStatus: customer.smsConsentStatus,
-            emailAvailable: isUsableEmail(customer.email),
-            channel: "SMS",
-          }),
         },
       });
       await touchCommunicationThread(db, {
@@ -289,6 +298,7 @@ export async function composeCustomerCommunication(
       relatedType,
       relatedId,
       eligibility,
+      resumeCommunicationId: input.resumeCommunicationId,
     });
   }
 
@@ -372,29 +382,54 @@ async function recordNonProviderAttempt(
     };
   }
 
-  const created = await db.customerCommunication.create({
-    data: {
-      businessId: input.access.businessId,
-      customerId: input.customerId,
-      threadId: input.threadId,
-      direction: "OUTBOUND",
-      channel: input.channel,
-      purpose: input.purpose,
-      subject: input.subject,
-      relatedType: input.relatedType ?? null,
-      relatedId: input.relatedId ?? null,
-      idempotencyKey: input.idempotencyKey,
-      destinationLast4: input.last4,
-      destinationFingerprint: input.fingerprint,
-      consentContext: input.consentContext,
-      bodySnapshot: input.body,
-      status: input.status,
-      provider: input.provider,
-      failureReason: input.failureReason,
-      initiatedByMembershipId: membershipIdOf(input.access),
-      attemptedAt: new Date(),
-    },
-  });
+  let created;
+  try {
+    created = await db.customerCommunication.create({
+      data: {
+        businessId: input.access.businessId,
+        customerId: input.customerId,
+        threadId: input.threadId,
+        direction: "OUTBOUND",
+        channel: input.channel,
+        purpose: input.purpose,
+        subject: input.subject,
+        relatedType: input.relatedType ?? null,
+        relatedId: input.relatedId ?? null,
+        idempotencyKey: input.idempotencyKey,
+        destinationLast4: input.last4,
+        destinationFingerprint: input.fingerprint,
+        consentContext: input.consentContext,
+        bodySnapshot: input.body,
+        status: input.status,
+        provider: input.provider,
+        failureReason: input.failureReason,
+        initiatedByMembershipId: membershipIdOf(input.access),
+        attemptedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const raced = await db.customerCommunication.findFirst({
+        where: {
+          businessId: input.access.businessId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      });
+      if (raced) {
+        return {
+          ok: isAcceptedCustomerMessageStatus(raced.status) || raced.status === "SENT",
+          communicationId: raced.id,
+          threadId: raced.threadId,
+          status: raced.status as CustomerMessageStatus,
+          channel: input.channel,
+          provider: raced.provider,
+          reused: true,
+          failureReason: raced.failureReason,
+        };
+      }
+    }
+    return blocked("The communication record could not be saved.", input.channel);
+  }
   if (input.threadId) {
     await touchCommunicationThread(db, {
       businessId: input.access.businessId,
@@ -426,9 +461,180 @@ async function sendRecordedEmail(
     relatedType?: CommunicationRelatedType | null;
     relatedId?: string | null;
     eligibility: ReturnType<typeof evaluateComposeChannelEligibility>;
+    resumeCommunicationId?: string | null;
   },
 ): Promise<CommunicationSendResult> {
-  const existing = await db.customerCommunication.findFirst({
+  const decision = await withEmailDispatchLock(
+    db,
+    input.access.businessId,
+    input.idempotencyKey,
+    async (tx) => decideEmailDispatch(tx, input),
+  );
+  if (decision.kind !== "send") {
+    return decision.result;
+  }
+
+  if (communicationEmailDispatchTestHooks.afterClaim) {
+    await communicationEmailDispatchTestHooks.afterClaim();
+  }
+  if (communicationEmailDispatchTestHooks.beforeProviderSend) {
+    await communicationEmailDispatchTestHooks.beforeProviderSend({ db });
+  }
+
+  const liveCustomer = await db.customer.findFirst({
+    where: { id: input.customer.id, businessId: input.access.businessId },
+    select: { id: true, email: true, smsConsentStatus: true },
+  });
+  const liveEmail = liveCustomer?.email?.trim() ?? "";
+  const liveFingerprint = isUsableEmail(liveEmail)
+    ? emailDestinationFingerprint(input.access.businessId, liveEmail)
+    : null;
+
+  let status: CustomerMessageStatus = "READY";
+  let failureReason: string | null = null;
+  let provider = "resend";
+  let providerMessageId: string | null = null;
+
+  if (!liveCustomer || !isUsableEmail(liveEmail)) {
+    status = "BLOCKED";
+    failureReason = "Customer has no usable email address.";
+    provider = "disconnected";
+  } else if (
+    decision.claimedFingerprint &&
+    liveFingerprint &&
+    liveFingerprint !== decision.claimedFingerprint
+  ) {
+    status = "BLOCKED";
+    failureReason = "The customer destination changed after this send was claimed.";
+    provider = "disconnected";
+  } else {
+    const config = getMailConfig();
+    if ("error" in config) {
+      status = "NOT_SENT";
+      failureReason = config.error;
+      provider = "disconnected";
+    } else {
+      try {
+        const sent = await emailSender({
+          apiKey: config.apiKey,
+          from: senderFrom("TBBT", config.fromAddress),
+          to: liveEmail,
+          subject: input.subject,
+          text: input.body,
+          html: `<p>${escapeHtml(input.body).replaceAll("\n", "<br />")}</p>`,
+          idempotencyKey: input.idempotencyKey,
+          kind: "customer",
+        });
+        if (sent.error) {
+          status = "FAILED";
+          failureReason = sent.error;
+        } else {
+          status = "SENT";
+          providerMessageId = sent.id ?? input.idempotencyKey;
+        }
+      } catch {
+        status = "FAILED";
+        failureReason = "The email provider failed.";
+      }
+    }
+  }
+
+  const updated = await db.customerCommunication.update({
+    where: { id: decision.communicationId },
+    data: {
+      status,
+      failureReason,
+      provider,
+      providerMessageId,
+      destinationLast4: decision.last4,
+      destinationFingerprint: liveFingerprint ?? decision.claimedFingerprint,
+      consentContext: consentContextSnapshot({
+        smsConsentStatus: liveCustomer?.smsConsentStatus ?? input.customer.smsConsentStatus,
+        emailAvailable: isUsableEmail(liveEmail),
+        channel: "EMAIL",
+        extra: status === "BLOCKED" || status === "NOT_SENT" ? failureReason : null,
+      }),
+      attemptedAt: new Date(),
+    },
+  });
+  if (input.threadId) {
+    await touchCommunicationThread(db, {
+      businessId: input.access.businessId,
+      threadId: input.threadId,
+    });
+  }
+  return {
+    ok: isAcceptedCustomerMessageStatus(updated.status),
+    communicationId: updated.id,
+    threadId: input.threadId,
+    status: updated.status as CustomerMessageStatus,
+    channel: "EMAIL",
+    provider: updated.provider,
+    reused: decision.reused,
+    failureReason: updated.failureReason,
+  };
+}
+
+function emailDispatchLockKey(businessId: string, idempotencyKey: string) {
+  return `tbbt-email:${businessId}:${idempotencyKey}`;
+}
+
+function emailDispatchClaimInProgress(
+  row: { status: string; attemptedAt: Date | null } | null | undefined,
+  now = new Date(),
+) {
+  if (!row || row.status !== "READY" || !row.attemptedAt) return false;
+  return now.getTime() - row.attemptedAt.getTime() < EMAIL_DISPATCH_CLAIM_LEASE_MS;
+}
+
+async function withEmailDispatchLock<T>(
+  db: Db,
+  businessId: string,
+  idempotencyKey: string,
+  work: (tx: Db) => Promise<T>,
+): Promise<T> {
+  const lockKey = emailDispatchLockKey(businessId, idempotencyKey);
+  const run = async (tx: Db) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    return work(tx);
+  };
+  const client = db as PrismaClient;
+  if (typeof client.$transaction === "function") {
+    return client.$transaction((tx) => run(tx), {
+      timeout: 20_000,
+      maxWait: 20_000,
+    });
+  }
+  return run(db);
+}
+
+type EmailDispatchDecision =
+  | { kind: "done"; result: CommunicationSendResult }
+  | {
+      kind: "send";
+      communicationId: string;
+      reused: boolean;
+      claimedFingerprint: string | null;
+      last4: string | null;
+    };
+
+async function decideEmailDispatch(
+  tx: Db,
+  input: {
+    access: CommunicationAccess;
+    customer: { id: string; name: string; email: string | null; smsConsentStatus: string | null };
+    threadId: string | null;
+    purpose: CustomerMessagePurpose;
+    subject: string;
+    body: string;
+    idempotencyKey: string;
+    relatedType?: CommunicationRelatedType | null;
+    relatedId?: string | null;
+    eligibility: ReturnType<typeof evaluateComposeChannelEligibility>;
+    resumeCommunicationId?: string | null;
+  },
+): Promise<EmailDispatchDecision> {
+  const existing = await tx.customerCommunication.findFirst({
     where: {
       businessId: input.access.businessId,
       idempotencyKey: input.idempotencyKey,
@@ -436,14 +642,37 @@ async function sendRecordedEmail(
   });
   if (existing && isAcceptedCustomerMessageStatus(existing.status)) {
     return {
-      ok: true,
-      communicationId: existing.id,
-      threadId: existing.threadId,
-      status: existing.status as CustomerMessageStatus,
-      channel: "EMAIL",
-      provider: existing.provider,
-      reused: true,
-      failureReason: existing.failureReason,
+      kind: "done",
+      result: {
+        ok: true,
+        communicationId: existing.id,
+        threadId: existing.threadId,
+        status: existing.status as CustomerMessageStatus,
+        channel: "EMAIL",
+        provider: existing.provider,
+        reused: true,
+        failureReason: existing.failureReason,
+      },
+    };
+  }
+
+  const resume =
+    Boolean(input.resumeCommunicationId) &&
+    Boolean(existing) &&
+    existing!.id === input.resumeCommunicationId;
+  if (existing && !resume && emailDispatchClaimInProgress(existing)) {
+    return {
+      kind: "done",
+      result: {
+        ok: isAcceptedCustomerMessageStatus(existing.status),
+        communicationId: existing.id,
+        threadId: existing.threadId,
+        status: existing.status as CustomerMessageStatus,
+        channel: "EMAIL",
+        provider: existing.provider,
+        reused: true,
+        failureReason: existing.failureReason,
+      },
     };
   }
 
@@ -472,123 +701,99 @@ async function sendRecordedEmail(
     attemptedAt: new Date(),
   };
 
-  let status: CustomerMessageStatus = "READY";
-  let failureReason: string | null = null;
-  let provider = "resend";
-  let providerMessageId: string | null = null;
-
   if (!input.eligibility.permitted || !input.eligibility.available) {
-    status = input.eligibility.reason === "email_not_configured" ? "NOT_SENT" : "BLOCKED";
-    failureReason = input.eligibility.ownerReason;
-    provider = "disconnected";
-  } else {
-    const config = getMailConfig();
-    if ("error" in config) {
-      status = "NOT_SENT";
-      failureReason = config.error;
-      provider = "disconnected";
-    } else {
-      try {
-        const sent = await emailSender({
-          apiKey: config.apiKey,
-          from: senderFrom("TBBT", config.fromAddress),
-          to: input.customer.email!.trim(),
-          subject: input.subject,
-          text: input.body,
-          html: `<p>${escapeHtml(input.body).replaceAll("\n", "<br />")}</p>`,
-          idempotencyKey: input.idempotencyKey,
-          kind: "customer",
+    const status = input.eligibility.reason === "email_not_configured" ? "NOT_SENT" : "BLOCKED";
+    const row = existing
+      ? await tx.customerCommunication.update({
+          where: { id: existing.id },
+          data: {
+            ...baseData,
+            status,
+            failureReason: input.eligibility.ownerReason,
+            provider: "disconnected",
+          },
+        })
+      : await tx.customerCommunication.create({
+          data: {
+            ...baseData,
+            status,
+            failureReason: input.eligibility.ownerReason,
+            provider: "disconnected",
+          },
         });
-        if (sent.error) {
-          status = "FAILED";
-          failureReason = sent.error;
-        } else {
-          status = "SENT";
-          providerMessageId = sent.id ?? input.idempotencyKey;
-        }
-      } catch {
-        status = "FAILED";
-        failureReason = "The email provider failed.";
-      }
-    }
-  }
-
-  if (existing) {
-    const updated = await db.customerCommunication.update({
-      where: { id: existing.id },
-      data: {
-        ...baseData,
-        status,
-        failureReason,
-        provider,
-        providerMessageId,
-      },
-    });
-    if (input.threadId) {
-      await touchCommunicationThread(db, {
-        businessId: input.access.businessId,
-        threadId: input.threadId,
-      });
-    }
     return {
-      ok: isAcceptedCustomerMessageStatus(updated.status),
-      communicationId: updated.id,
-      threadId: input.threadId,
-      status: updated.status as CustomerMessageStatus,
-      channel: "EMAIL",
-      provider: updated.provider,
-      reused: true,
-      failureReason: updated.failureReason,
+      kind: "done",
+      result: {
+        ok: false,
+        communicationId: row.id,
+        threadId: input.threadId,
+        status: row.status as CustomerMessageStatus,
+        channel: "EMAIL",
+        provider: row.provider,
+        reused: Boolean(existing),
+        failureReason: row.failureReason,
+      },
     };
   }
 
-  try {
-    const created = await db.customerCommunication.create({
-      data: {
-        ...baseData,
-        status,
-        failureReason,
-        provider,
-        providerMessageId,
-      },
-    });
-    if (input.threadId) {
-      await touchCommunicationThread(db, {
-        businessId: input.access.businessId,
-        threadId: input.threadId,
-      });
-    }
+  const config = getMailConfig();
+  if ("error" in config) {
+    const row = existing
+      ? await tx.customerCommunication.update({
+          where: { id: existing.id },
+          data: {
+            ...baseData,
+            status: "NOT_SENT",
+            failureReason: config.error,
+            provider: "disconnected",
+          },
+        })
+      : await tx.customerCommunication.create({
+          data: {
+            ...baseData,
+            status: "NOT_SENT",
+            failureReason: config.error,
+            provider: "disconnected",
+          },
+        });
     return {
-      ok: isAcceptedCustomerMessageStatus(created.status),
-      communicationId: created.id,
-      threadId: input.threadId,
-      status: created.status as CustomerMessageStatus,
-      channel: "EMAIL",
-      provider: created.provider,
-      reused: false,
-      failureReason: created.failureReason,
+      kind: "done",
+      result: {
+        ok: false,
+        communicationId: row.id,
+        threadId: input.threadId,
+        status: row.status as CustomerMessageStatus,
+        channel: "EMAIL",
+        provider: row.provider,
+        reused: Boolean(existing),
+        failureReason: row.failureReason,
+      },
     };
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const raced = await db.customerCommunication.findFirst({
-        where: {
-          businessId: input.access.businessId,
-          idempotencyKey: input.idempotencyKey,
+  }
+
+  const claimed = existing
+    ? await tx.customerCommunication.update({
+        where: { id: existing.id },
+        data: {
+          ...baseData,
+          status: "READY",
+          failureReason: null,
+          provider: "resend",
+        },
+      })
+    : await tx.customerCommunication.create({
+        data: {
+          ...baseData,
+          status: "READY",
+          failureReason: null,
+          provider: "resend",
         },
       });
-      if (raced) {
-        return {
-          ok: isAcceptedCustomerMessageStatus(raced.status),
-          communicationId: raced.id,
-          threadId: raced.threadId,
-          status: raced.status as CustomerMessageStatus,
-          channel: "EMAIL",
-          provider: raced.provider,
-          reused: true,
-          failureReason: raced.failureReason,
-        };
-      }
-    }
-    return blocked("The communication record could not be saved.", "EMAIL");
-  }
+  return {
+    kind: "send",
+    communicationId: claimed.id,
+    reused: Boolean(existing),
+    claimedFingerprint: input.eligibility.fingerprint,
+    last4: input.eligibility.last4,
+  };
 }

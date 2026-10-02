@@ -146,6 +146,12 @@ export type AttemptCustomerSmsInput = {
   idempotencyKey: string;
   body: string;
   initiatedByMembershipId?: string | null;
+  /**
+   * Day-route (and similar) pre-claims a READY row, then this caller
+   * resumes that claim. Without this id, an in-lease READY row is
+   * treated as someone else's in-flight send.
+   */
+  resumeCommunicationId?: string | null;
 };
 
 export type CustomerCommunicationAttemptResult = {

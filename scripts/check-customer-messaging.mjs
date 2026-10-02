@@ -87,9 +87,12 @@ const {
   applyCustomerMessageDeliveryUpdate,
   applyInboundConsentEvent,
   claimedAtFromCuid,
+  customerMessageDeliveryTestHooks,
+  customerSmsDispatchTestHooks,
   inboundConsentTestHooks,
   attemptAppointmentReminderSms,
   attemptCustomerSms,
+  attemptInvoiceReadySms,
   attemptPaymentReminderSms,
   communicationPreferenceEnabled,
   createDisconnectedCustomerMessagingProvider,
@@ -119,6 +122,8 @@ const {
   twilioStatusToCustomerMessageStatus,
   withTransactionalOptOutFooter,
 } = await import("@/lib/customer-messaging");
+
+clearCustomerMessagingEnv();
 
 let failures = 0;
 function check(label, condition) {
@@ -273,6 +278,28 @@ const inboundSrc = readFileSync(
   new URL("../src/lib/customer-messaging/inbound.ts", import.meta.url),
   "utf8",
 );
+const mailSrc = readFileSync(new URL("../src/lib/mail.ts", import.meta.url), "utf8");
+const mailFakeSrc = readFileSync(new URL("../src/lib/mail-fake.ts", import.meta.url), "utf8");
+const commsPageSrc = readFileSync(
+  new URL("../src/app/(app)/communications/page.tsx", import.meta.url),
+  "utf8",
+);
+const commsDataSrc = readFileSync(
+  new URL("../src/lib/communications/data.ts", import.meta.url),
+  "utf8",
+);
+const marketingPageSrc = readFileSync(
+  new URL("../src/app/(app)/marketing/page.tsx", import.meta.url),
+  "utf8",
+);
+const dayRoutePageSrc = readFileSync(
+  new URL("../src/app/(app)/today/day-route/page.tsx", import.meta.url),
+  "utf8",
+);
+const dayRouteOpsSrc = readFileSync(
+  new URL("../src/lib/owner-day-route-appointment-notice-ops.ts", import.meta.url),
+  "utf8",
+);
 const requestFlowSrc = readFileSync(
   new URL("../src/components/public/request-flow.tsx", import.meta.url),
   "utf8",
@@ -363,6 +390,57 @@ try {
     webhookHandlerSrc.includes("status: 500") &&
       webhookHandlerSrc.includes("Unable to process.") &&
       webhookHandlerSrc.includes("GENERIC_UNAVAILABLE"),
+  );
+  check(
+    "SMS dispatch claims the idempotency row before the provider send",
+    opsSrc.includes("decideSmsDispatch") &&
+      opsSrc.includes("SMS_DISPATCH_CLAIM_STATUS") &&
+      opsSrc.includes("customerSmsDispatchTestHooks") &&
+      opsSrc.includes("tbbt-sms:") &&
+      opsSrc.includes('if (decision.kind !== "send")') &&
+      opsSrc.includes("withSmsDispatchLock"),
+  );
+  check(
+    "Delivery leftover pending claims stay retryable",
+    opsSrc.includes("claimCustomerMessagingWebhookEvent") &&
+      opsSrc.includes("completeCustomerMessagingWebhookEvent") &&
+      opsSrc.includes("customerMessageDeliveryTestHooks") &&
+      inboundSrc.includes('return "pending"') &&
+      inboundSrc.includes("leftover"),
+  );
+  check(
+    "PROPERTY and PHONE_INTERACTION related records stay tenant-scoped",
+    opsSrc.includes('input.relatedType === "PHONE_INTERACTION"') &&
+      opsSrc.includes('input.relatedType === "PROPERTY"') &&
+      opsSrc.includes("db.phoneInteraction.findFirst") &&
+      opsSrc.includes("db.property.findFirst") &&
+      !opsSrc.includes("businessId: input.businessId, customerId: null"),
+  );
+  check(
+    "Page loads do not send customer or OWNER messages",
+    !commsPageSrc.includes("composeCustomerCommunication") &&
+      !commsPageSrc.includes("attemptCustomerSms") &&
+      !commsPageSrc.includes("sendTransactionalEmail") &&
+      commsDataSrc.includes("loadCommunicationsWorkspace") &&
+      !commsDataSrc.includes("attemptCustomerSms") &&
+      !commsDataSrc.includes("sendTransactionalEmail") &&
+      !commsDataSrc.includes("composeCustomerCommunication") &&
+      !marketingPageSrc.includes("dispatchStudioWeeklyReviewReminder") &&
+      !marketingPageSrc.includes("sendOwnerSms") &&
+      !dayRoutePageSrc.includes("sendOwnerDayRouteAppointmentNotice") &&
+      !dayRoutePageSrc.includes("composeCustomerCommunication"),
+  );
+  check(
+    "Day-route send resumes the claimed communication id",
+    dayRouteOpsSrc.includes("resumeCommunicationId: claimed.communicationId"),
+  );
+  check(
+    "Fake email adapter cannot enable in production",
+    mailFakeSrc.includes('process.env.VERCEL_ENV === "production"') &&
+      mailFakeSrc.includes('TBBT_EMAIL_ADAPTER === "fake"') &&
+      mailSrc.includes("isFakeEmailAdapterEnabled") &&
+      mailSrc.includes("injectedEmailSender") &&
+      mailSrc.includes("defaultFakeEmailSender.send"),
   );
   check(
     "Inbound STOP claim is not treated as consent completion",
@@ -2072,6 +2150,256 @@ try {
   check("Existing #79 unknown-consent blocking remains intact", stillBlocked.status === "BLOCKED");
   check("Existing email invoice path is still independent of SMS", invoiceSend.customerNotified === false);
 
+  console.log("\nTEST — Related PROPERTY/PHONE_INTERACTION stay on the tenant");
+  const foreignProperty = await prisma.property.create({
+    data: {
+      businessId: beta.business.id,
+      customerId: customerB.id,
+      addressLine1: "9 Secret Ln",
+    },
+  });
+  const foreignPropertySms = await attemptCustomerSms(prisma, smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    relatedType: "PROPERTY",
+    relatedId: foreignProperty.id,
+    idempotencyKey: `sms:foreign-property:${randomUUID()}`,
+  }));
+  check(
+    "Foreign PROPERTY related id is blocked",
+    foreignPropertySms.status === "BLOCKED" &&
+      foreignPropertySms.communicationId === null &&
+      /related record is not in the authorized business/i.test(foreignPropertySms.failureReason ?? ""),
+  );
+
+  console.log("\nTEST — Concurrent duplicate dispatch claims once");
+  const raceFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(raceFake);
+  const raceKey = `sms:race:${randomUUID()}`;
+  const raceInput = smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    relatedType: "INVOICE",
+    relatedId: invoiceA.id,
+    purpose: "INVOICE_READY",
+    idempotencyKey: raceKey,
+    body: "Your invoice is ready.",
+  });
+  const [raceLeft, raceRight] = await Promise.all([
+    attemptCustomerSms(prisma, raceInput),
+    attemptCustomerSms(prisma, raceInput),
+  ]);
+  const raceRows = await prisma.customerCommunication.findMany({
+    where: { businessId: alpha.business.id, idempotencyKey: raceKey },
+  });
+  const raceAccepted = [raceLeft, raceRight].filter((row) => row.ok && row.status === "ACCEPTED");
+  check("Concurrent invoice SMS calls the provider once", raceFake.sent.length === 1);
+  check("Concurrent invoice SMS writes one communication row", raceRows.length === 1);
+  check(
+    "Concurrent invoice SMS has one accepted winner",
+    raceAccepted.length >= 1 &&
+      raceLeft.communicationId === raceRight.communicationId &&
+      raceLeft.communicationId === raceRows[0].id,
+  );
+  check(
+    "Concurrent invoice SMS binds the tenant customer phone",
+    raceFake.sent[0]?.to === "2395550100" &&
+      raceFake.sent[0]?.businessId === alpha.business.id &&
+      raceRows[0].destinationLast4 === "0100",
+  );
+
+  const reminderFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(reminderFake);
+  const reminderKey = "first-visit";
+  const [reminderLeft, reminderRight] = await Promise.all([
+    attemptAppointmentReminderSms(prisma, {
+      businessId: alpha.business.id,
+      jobId: jobA.id,
+      customerId: customerA.id,
+      businessName: "Alpha Messaging",
+      reminderKey,
+    }),
+    attemptAppointmentReminderSms(prisma, {
+      businessId: alpha.business.id,
+      jobId: jobA.id,
+      customerId: customerA.id,
+      businessName: "Alpha Messaging",
+      reminderKey,
+    }),
+  ]);
+  check("Concurrent appointment reminders call the provider once", reminderFake.sent.length === 1);
+  check(
+    "Concurrent appointment reminders share one communication",
+    reminderLeft?.communicationId &&
+      reminderLeft.communicationId === reminderRight?.communicationId,
+  );
+
+  const invoiceRaceFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(invoiceRaceFake);
+  const extraInvoice = await prisma.invoice.create({
+    data: {
+      businessId: alpha.business.id,
+      customerId: customerA.id,
+      jobId: jobA.id,
+      status: "SENT",
+      total: 175,
+    },
+  });
+  const [invoiceLeft, invoiceRight] = await Promise.all([
+    attemptInvoiceReadySms(prisma, {
+      businessId: alpha.business.id,
+      invoiceId: extraInvoice.id,
+      customerId: customerA.id,
+      businessName: "Alpha Messaging",
+    }),
+    attemptInvoiceReadySms(prisma, {
+      businessId: alpha.business.id,
+      invoiceId: extraInvoice.id,
+      customerId: customerA.id,
+      businessName: "Alpha Messaging",
+    }),
+  ]);
+  check("Concurrent invoice-ready workflow calls the provider once", invoiceRaceFake.sent.length === 1);
+  check(
+    "Concurrent invoice-ready workflow shares one communication",
+    invoiceLeft?.communicationId &&
+      invoiceLeft.communicationId === invoiceRight?.communicationId,
+  );
+
+  console.log("\nTEST — Consent and recipient are re-checked at send time");
+  const consentFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(consentFake);
+  const consentKey = `sms:stop-at-send:${randomUUID()}`;
+  customerSmsDispatchTestHooks.beforeProviderSend = async () => {
+    await prisma.customer.update({
+      where: { id: customerA.id },
+      data: { smsConsentStatus: "REVOKED", smsConsentUpdatedAt: new Date() },
+    });
+  };
+  const stoppedAtSend = await attemptCustomerSms(prisma, smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    purpose: "PAYMENT_REMINDER",
+    relatedType: "INVOICE",
+    relatedId: invoiceA.id,
+    idempotencyKey: consentKey,
+    body: "Payment reminder.",
+  }));
+  customerSmsDispatchTestHooks.beforeProviderSend = undefined;
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: { smsConsentStatus: "GRANTED", smsConsentUpdatedAt: new Date() },
+  });
+  const stoppedRow = await prisma.customerCommunication.findFirst({
+    where: { businessId: alpha.business.id, idempotencyKey: consentKey },
+  });
+  check("STOP that lands after claim blocks the send", stoppedAtSend.status === "BLOCKED");
+  check("STOP at send time never calls the provider", consentFake.sent.length === 0);
+  check(
+    "STOP at send time records revoked consent on the history row",
+    stoppedRow?.status === "BLOCKED" &&
+      /revoked/i.test(stoppedRow.failureReason ?? "") &&
+      (stoppedRow.consentContext ?? "").includes("sms:REVOKED"),
+  );
+
+  const staleFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(staleFake);
+  const staleKey = `sms:stale-recipient:${randomUUID()}`;
+  const staleRecipientClaim = await prisma.customerCommunication.create({
+    data: {
+      businessId: alpha.business.id,
+      customerId: customerA.id,
+      channel: "SMS",
+      purpose: "SCHEDULE_CHANGE",
+      relatedType: "JOB",
+      relatedId: jobA.id,
+      idempotencyKey: staleKey,
+      destinationLast4: "0100",
+      destinationFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      bodySnapshot: "",
+      status: "READY",
+      provider: "none",
+      attemptedAt: new Date(),
+    },
+  });
+  const staleSend = await attemptCustomerSms(prisma, smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    purpose: "SCHEDULE_CHANGE",
+    relatedType: "JOB",
+    relatedId: jobA.id,
+    idempotencyKey: staleKey,
+    body: "On my way.",
+    resumeCommunicationId: staleRecipientClaim.id,
+  }));
+  check(
+    "Resumed claim with a changed destination is blocked",
+    staleSend.status === "BLOCKED" && /destination changed/i.test(staleSend.failureReason ?? ""),
+  );
+  check("Stale recipient never calls the provider", staleFake.sent.length === 0);
+
+  console.log("\nTEST — Leftover failed-delivery claim stays retryable");
+  const deliveryFake = createFakeCustomerMessagingProvider("whsec_msg_test");
+  setCustomerMessagingProvider(deliveryFake);
+  const deliverySend = await attemptCustomerSms(prisma, smsInput({
+    businessId: alpha.business.id,
+    customerId: customerA.id,
+    purpose: "ESTIMATE_FOLLOW_UP",
+    relatedType: "ESTIMATE",
+    relatedId: estimateA.id,
+    idempotencyKey: `sms:delivery-leftover:${randomUUID()}`,
+    body: "Following up on your estimate.",
+  }));
+  const leftoverDeliveryWriteError = new Error("forced leftover delivery write failure");
+  customerMessageDeliveryTestHooks.beforeStatusWrite = () => {
+    throw leftoverDeliveryWriteError;
+  };
+  const leftoverDeliveryFirst = await Promise.allSettled([
+    applyCustomerMessageDeliveryUpdate(prisma, {
+      provider: "fake",
+      providerMessageId: deliverySend.providerMessageId,
+      status: "FAILED",
+      failureReason: "21610",
+    }),
+  ]);
+  customerMessageDeliveryTestHooks.beforeStatusWrite = undefined;
+  check(
+    "First failed-delivery write throws after the pending claim",
+    leftoverDeliveryFirst[0].status === "rejected" && leftoverDeliveryFirst[0].reason === leftoverDeliveryWriteError,
+  );
+  const stillAccepted = await getCustomerCommunication(prisma, {
+    businessId: alpha.business.id,
+    communicationId: deliverySend.communicationId,
+  });
+  check("Leftover failed-delivery claim did not mark the SMS failed", stillAccepted.status === "ACCEPTED");
+  const leftoverDeliveryRetry = await applyCustomerMessageDeliveryUpdate(prisma, {
+    provider: "fake",
+    providerMessageId: deliverySend.providerMessageId,
+    status: "FAILED",
+    failureReason: "21610",
+  });
+  const afterLeftoverDelivery = await getCustomerCommunication(prisma, {
+    businessId: alpha.business.id,
+    communicationId: deliverySend.communicationId,
+  });
+  check(
+    "Retry of the leftover FAILED delivery applies once",
+    leftoverDeliveryRetry.applied === true &&
+      leftoverDeliveryRetry.reason === "updated" &&
+      afterLeftoverDelivery.status === "FAILED" &&
+      afterLeftoverDelivery.failureReason === "21610",
+  );
+  const leftoverDeliveryThird = await applyCustomerMessageDeliveryUpdate(prisma, {
+    provider: "fake",
+    providerMessageId: deliverySend.providerMessageId,
+    status: "FAILED",
+    failureReason: "21610",
+  });
+  check(
+    "A third leftover FAILED delivery is idempotent",
+    leftoverDeliveryThird.applied === true && leftoverDeliveryThird.reason === "idempotent",
+  );
+
   const destinationLeak = await prisma.customerCommunication.findMany({
     where: { businessId: alpha.business.id },
   });
@@ -2088,6 +2416,10 @@ try {
   inboundConsentTestHooks.afterCustomerLock = undefined;
   inboundConsentTestHooks.beforeConsentWrite = undefined;
   inboundConsentTestHooks.beforeCleanup = undefined;
+  customerSmsDispatchTestHooks.afterClaim = undefined;
+  customerSmsDispatchTestHooks.beforeProviderSend = undefined;
+  customerMessageDeliveryTestHooks.afterClaim = undefined;
+  customerMessageDeliveryTestHooks.beforeStatusWrite = undefined;
   resetCustomerMessagingProvider();
   await prisma.$disconnect();
 }
