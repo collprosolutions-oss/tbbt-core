@@ -235,9 +235,12 @@ check(
     const recordSrc = engineSrc.slice(
       engineSrc.indexOf("async function recordNonProviderAttempt"),
     );
-    const smsBlockedSrc = engineSrc.slice(
-      engineSrc.indexOf('if (input.channel === "SMS")'),
-      engineSrc.indexOf("attemptCustomerSms"),
+    const composeSrc = engineSrc.slice(
+      engineSrc.indexOf("export async function composeCustomerCommunication"),
+    );
+    const smsBlockedSrc = composeSrc.slice(
+      composeSrc.indexOf('if (input.channel === "SMS")'),
+      composeSrc.indexOf("attemptCustomerSms"),
     );
     return (
       smsBlockedSrc.includes("recordNonProviderAttempt") &&
@@ -831,7 +834,7 @@ try {
     },
     {
       name: "no-phone",
-      options: { name: "No Phone Sms", phone: null },
+      options: { name: "No Phone Sms", phone: "" },
       reason: smsBlockFailureReason("missing_phone"),
     },
   ];
