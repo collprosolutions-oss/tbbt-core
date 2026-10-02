@@ -1968,6 +1968,40 @@ check(
     ),
 );
 
+const scheduleCalendarSubscriptionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261001194722_schedule_calendar_feed_subscription/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const scheduleCalendarSubscriptionOps = readFileSync(
+  new URL("../src/lib/schedule-calendar-subscription/ops.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Schedule calendar subscription migration is additive, uniquely named, and after aftercare",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(scheduleCalendarSubscriptionMigration) &&
+    scheduleCalendarSubscriptionMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "ScheduleCalendarSubscription"',
+    ) &&
+    scheduleCalendarSubscriptionMigration.includes("IF NOT EXISTS") &&
+    !scheduleCalendarSubscriptionMigration.includes('ALTER TABLE "Job"') &&
+    scheduleCalendarSubscriptionMigration.includes("20261001194722") &&
+    localNames.includes("20261001194722_schedule_calendar_feed_subscription") &&
+    !localNames.includes("20261001180000_schedule_calendar_feed_subscription") &&
+    !localNames.includes("20261001190000_schedule_calendar_feed_subscription") &&
+    localNames.includes("20261001180000_job_aftercare_instruction") &&
+    localNames.indexOf("20261001180000_job_aftercare_instruction") <
+      localNames.indexOf("20261001194722_schedule_calendar_feed_subscription"),
+);
+check(
+  "Schedule calendar subscription ops do not run request-time DDL",
+  !scheduleCalendarSubscriptionOps.includes("$executeRawUnsafe") &&
+    !scheduleCalendarSubscriptionOps.includes("CREATE TABLE") &&
+    !scheduleCalendarSubscriptionOps.includes("ALTER TABLE"),
+);
+
 const jobMilestonesMigration = readFileSync(
   new URL("../prisma/migrations/20260929010600_job_milestones/migration.sql", import.meta.url),
   "utf8",

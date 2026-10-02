@@ -131,8 +131,9 @@ check(
   jobActionSrc.includes("scheduledAt") &&
     jobActionSrc.includes("assignedMembershipId") &&
     schemaSrc.includes("scheduledDurationMinutes") &&
-    !schemaSrc.includes("CalendarSubscription") &&
-    !schemaSrc.includes("ScheduleCalendarExport"),
+    !schemaSrc.includes("ScheduleCalendarExport") &&
+    !buildSrc.includes("ScheduleCalendarSubscription") &&
+    !httpSrc.includes("/calendar/feed"),
 );
 check(
   "OWNER may download the business calendar; ADMIN and MEMBER cannot",

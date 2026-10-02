@@ -7,6 +7,7 @@ import { collproRenoLegacyHireRedirectPath } from "@/lib/public-site";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isNativeFieldApiPath } from "@/lib/native-field-api-path";
 import { isStudioWeeklyReminderCronPath } from "@/lib/studio-weekly-reminder-cron-path";
+import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -65,7 +66,11 @@ export function proxy(request: NextRequest) {
 
   // Native field API uses Authorization: Bearer, not the web session cookie.
   // The route still returns 401 without a valid hashed Session token.
-  if (isNativeFieldApiPath(pathname) || isStudioWeeklyReminderCronPath(pathname)) {
+  if (
+    isNativeFieldApiPath(pathname) ||
+    isStudioWeeklyReminderCronPath(pathname) ||
+    isScheduleCalendarFeedPath(pathname)
+  ) {
     return NextResponse.next();
   }
 

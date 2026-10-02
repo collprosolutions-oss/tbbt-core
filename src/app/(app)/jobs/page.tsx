@@ -30,6 +30,8 @@ import { WeekView } from "@/components/schedule/week-view";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
 import { canDownloadBusinessScheduleCalendar } from "@/lib/schedule-calendar-export";
+import { ScheduleCalendarSubscriptionPanel } from "@/components/schedule/schedule-calendar-subscription-panel";
+import { loadScheduleCalendarSubscriptionStatus } from "@/lib/schedule-calendar-subscription";
 import { loadBusinessLocationDirectory } from "@/lib/business-location-ops";
 import { resolveBusinessTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import {
@@ -587,6 +589,9 @@ export default async function JobsPage({
     };
   });
 
+  const calendarSubscription = canDownloadBusinessScheduleCalendar(access.workspace.role)
+    ? await loadScheduleCalendarSubscriptionStatus(prisma, access, "business")
+    : null;
   const todayIso = formatISODate(today, timeZone);
   const headerDescription = (
     <span>
@@ -953,6 +958,13 @@ export default async function JobsPage({
         }
       />
       <PageHeader title="Schedule / Jobs" description={headerDescription} />
+      {calendarSubscription ? (
+        <ScheduleCalendarSubscriptionPanel
+          status={calendarSubscription}
+          title="Business calendar subscription"
+          description="Optional private feed of upcoming job IDs, statuses, and recorded windows. Rotate or revoke if the URL leaks. Calendar apps poll this URL; TBBT rechecks your OWNER membership on every request."
+        />
+      ) : null}
 
       <FounderDesignRoot
         pageKey="jobs"

@@ -41,6 +41,9 @@ const {
   JOB_REASSIGNMENT_REQUEST_UNAVAILABLE_MESSAGE,
   missingJobReassignmentRequestSchema,
 } = await import("@/lib/job-reassignment-request");
+const { loadScheduleCalendarSubscriptionStatus } = await import(
+  "@/lib/schedule-calendar-subscription"
+);
 const { requireWorkspace } = await import("@/lib/workspace-request");
 const {
   ensureBusinessPublicContactSchema,
@@ -243,6 +246,27 @@ check(
     !aftercareActionSrc.includes("$executeRaw") &&
     !aftercareActionSrc.includes("CREATE TABLE") &&
     aftercareOpsSrc.includes("JOB_AFTERCARE_UNAVAILABLE_MESSAGE"),
+);
+const calendarSubscriptionOpsSrc = readRepo(
+  "src/lib/schedule-calendar-subscription/ops.ts",
+);
+const calendarSubscriptionFeedSrc = readRepo(
+  "src/lib/schedule-calendar-subscription/feed.ts",
+);
+const calendarSubscriptionActionSrc = readRepo(
+  "src/app/actions/schedule-calendar-subscription.ts",
+);
+check(
+  "Calendar subscription request paths do not ensure or CREATE ScheduleCalendarSubscription",
+  calendarSubscriptionOpsSrc.includes("missingScheduleCalendarSubscriptionSchema") &&
+    calendarSubscriptionFeedSrc.includes("missingScheduleCalendarSubscriptionSchema") &&
+    !calendarSubscriptionOpsSrc.includes("$executeRaw") &&
+    !calendarSubscriptionOpsSrc.includes("CREATE TABLE") &&
+    !calendarSubscriptionFeedSrc.includes("$executeRaw") &&
+    !calendarSubscriptionFeedSrc.includes("CREATE TABLE") &&
+    !calendarSubscriptionActionSrc.includes("$executeRaw") &&
+    !calendarSubscriptionActionSrc.includes("CREATE TABLE") &&
+    calendarSubscriptionOpsSrc.includes("SCHEDULE_CALENDAR_SUBSCRIPTION_UNAVAILABLE_MESSAGE"),
 );
 check(
   "Job reassignment-request loaders degrade on a missing table and never CREATE it",
@@ -844,6 +868,60 @@ try {
   check(
     "Dropped JobAftercare tables stay absent after the request-path load",
     aftercareTables.length === 0,
+  );
+
+  console.log("\nDYNAMIC — missing ScheduleCalendarSubscription degrades without DDL");
+  const calendarAccess = {
+    businessId: business.id,
+    workspace: {
+      role: "OWNER",
+      membership: { id: membership.id, active: true },
+      user: { id: owner.id, email: owner.email, name: owner.name },
+      business: { id: business.id, name: business.name },
+    },
+    scope: businessScope(business.id),
+    assertOwned(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+    assertAttachable(record) {
+      return assertBusinessRecord(record, business.id);
+    },
+  };
+  await prisma.$executeRawUnsafe(
+    `DROP TABLE IF EXISTS "ScheduleCalendarSubscription" CASCADE`,
+  );
+  const calendarProbe = instrumentPrisma(prisma);
+  let calendarStatus = "threw";
+  let calendarLoadError = null;
+  try {
+    calendarStatus = await loadScheduleCalendarSubscriptionStatus(
+      calendarProbe.client,
+      calendarAccess,
+      "business",
+    );
+  } catch (error) {
+    calendarLoadError = error;
+  }
+  const calendarWrites = recordedWrites(calendarProbe.statements);
+  const calendarTables = await prisma.$queryRaw`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename IN ('ScheduleCalendarSubscription')
+  `;
+  check(
+    "Preview loader degrades for missing ScheduleCalendarSubscription",
+    calendarStatus !== "threw" &&
+      calendarStatus.available === false &&
+      calendarStatus.active === false &&
+      calendarLoadError === null,
+  );
+  check(
+    "Missing ScheduleCalendarSubscription does not run schema DDL or backfill DML",
+    calendarWrites.length === 0,
+  );
+  check(
+    "Dropped ScheduleCalendarSubscription stays absent after the request-path load",
+    calendarTables.length === 0,
   );
 } finally {
   await session.cleanup();

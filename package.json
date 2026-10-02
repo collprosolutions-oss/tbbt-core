@@ -35,6 +35,7 @@
     "test:change-orders": "node --experimental-strip-types scripts/check-change-orders.mjs",
     "test:schedule-calendar": "node --experimental-strip-types scripts/check-schedule-calendar.mjs",
     "test:schedule-calendar-export": "node --experimental-strip-types scripts/check-schedule-calendar-export.mjs",
+    "test:schedule-calendar-subscription": "node --experimental-strip-types scripts/check-schedule-calendar-subscription.mjs",
     "test:scheduling-availability": "node --experimental-strip-types scripts/check-scheduling-availability.mjs",
     "test:job-schedule-duration": "node --experimental-strip-types scripts/check-job-schedule-duration.mjs",
     "test:handyman-schedule-field-day": "node --experimental-strip-types scripts/check-handyman-schedule-field-day.mjs",

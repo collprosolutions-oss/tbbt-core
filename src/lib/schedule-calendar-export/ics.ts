@@ -71,12 +71,17 @@ function eventDescription(event: ScheduleCalendarExportEvent): string {
   ].join("\n");
 }
 
+export function isCancelledCalendarStatus(status: string): boolean {
+  return status === "CANCELLED" || status === "CANCELED";
+}
+
 export function serializeScheduleCalendarIcs(input: {
   timeZone: string;
   scope: ScheduleCalendarExportScope;
   generatedAt: Date;
   truncated: boolean;
   events: readonly ScheduleCalendarExportEvent[];
+  liveFeed?: boolean;
 }): string {
   const lines = [
     "BEGIN:VCALENDAR",
@@ -93,10 +98,12 @@ export function serializeScheduleCalendarIcs(input: {
     icsLine("X-TBBT-TIMEZONE", input.timeZone),
     icsLine("X-TBBT-TRUNCATED", input.truncated ? "TRUE" : "FALSE"),
     icsLine("X-TBBT-PUBLIC-SUBSCRIPTION", "FALSE"),
+    icsLine("X-TBBT-LIVE-FEED", input.liveFeed ? "TRUE" : "FALSE"),
   ];
 
   for (const event of input.events) {
     const tzid = event.timeZone;
+    const cancelled = isCancelledCalendarStatus(event.status);
     lines.push(
       "BEGIN:VEVENT",
       icsLine("UID", eventUid(event.jobId)),
@@ -105,7 +112,7 @@ export function serializeScheduleCalendarIcs(input: {
       icsLine("DTEND", formatIcsUtcStamp(event.end)),
       icsLine("SUMMARY", escapeIcsText(`Job ${event.jobId}`)),
       icsLine("DESCRIPTION", escapeIcsText(eventDescription(event))),
-      icsLine("STATUS", "CONFIRMED"),
+      icsLine("STATUS", cancelled ? "CANCELLED" : "CONFIRMED"),
       icsLine("X-TBBT-JOB-ID", event.jobId),
       icsLine("X-TBBT-JOB-STATUS", event.status),
       icsLine("X-TBBT-ASSIGNED", event.assigned ? "TRUE" : "FALSE"),
@@ -124,6 +131,7 @@ export type ParsedScheduleCalendarEvent = {
   uid: string;
   jobId: string;
   status: string;
+  icsStatus: string | null;
   assigned: boolean;
   tzid: string | null;
   dtstartUtc: string | null;
@@ -139,6 +147,7 @@ export type ParsedScheduleCalendarIcs = {
   scope: string | null;
   truncated: boolean;
   publicSubscription: boolean;
+  liveFeed: boolean;
   events: ParsedScheduleCalendarEvent[];
 };
 
@@ -169,6 +178,7 @@ export function parseScheduleCalendarIcs(ics: string): ParsedScheduleCalendarIcs
     scope: null,
     truncated: false,
     publicSubscription: false,
+    liveFeed: false,
     events: [],
   };
   let current: ParsedScheduleCalendarEvent | null = null;
@@ -183,6 +193,7 @@ export function parseScheduleCalendarIcs(ics: string): ParsedScheduleCalendarIcs
         uid: "",
         jobId: "",
         status: "",
+        icsStatus: null,
         assigned: false,
         tzid: null,
         dtstartUtc: null,
@@ -215,11 +226,16 @@ export function parseScheduleCalendarIcs(ics: string): ParsedScheduleCalendarIcs
       parsed.publicSubscription = value === "TRUE";
       continue;
     }
+    if (name === "X-TBBT-LIVE-FEED") {
+      parsed.liveFeed = value === "TRUE";
+      continue;
+    }
     if (!current) continue;
     if (name === "UID") current.uid = value;
     if (name === "SUMMARY") current.summary = unescapeIcsText(value);
     if (name === "DESCRIPTION") current.description = unescapeIcsText(value);
     if (name === "X-TBBT-JOB-ID") current.jobId = value;
+    if (name === "STATUS") current.icsStatus = value;
     if (name === "X-TBBT-JOB-STATUS") current.status = value;
     if (name === "X-TBBT-ASSIGNED") current.assigned = value === "TRUE";
     if (name === "X-TBBT-TZID") current.tzid = value;
