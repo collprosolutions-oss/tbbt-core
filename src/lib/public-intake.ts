@@ -5,6 +5,7 @@ import { privateAssetPath } from "@/lib/business-storage/keys";
 import {
   MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
   PUBLIC_REQUEST_PHOTO_PURPOSE,
+  lockBusinessStorageAccountForUpdate,
   lockStoredAssetRowForUpdate,
   rememberAttachedPublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,
@@ -1177,6 +1178,10 @@ async function createPublicServiceRequestInner(
       );
       if (typeof tx.$queryRaw === "function") {
         const rawTx = tx as Pick<Prisma.TransactionClient, "$queryRaw">;
+        if (attachedAssetIds.length > 0) {
+          // LOCK_ACCOUNT_BEFORE_ASSET: submit attach must match finalize (account, then sorted assets).
+          await lockBusinessStorageAccountForUpdate(rawTx, business.id);
+        }
         for (const assetId of attachedAssetIds) {
           const locked = await lockStoredAssetRowForUpdate(rawTx, business.id, assetId);
           if (!locked || locked.status !== "READY") {

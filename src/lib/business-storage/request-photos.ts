@@ -131,8 +131,8 @@ async function assertUnattachedPublicRequestPhotoCapacity(
   }
 }
 
-async function lockBusinessStorageAccountForUpdate(
-  tx: Prisma.TransactionClient,
+export async function lockBusinessStorageAccountForUpdate(
+  tx: AssetLockClient,
   businessId: string,
 ) {
   await tx.$queryRaw`
@@ -283,6 +283,8 @@ export async function releaseUnattachedPublicRequestPhotos(
   ) {
     const batch = ids.slice(offset, offset + MAX_UNATTACHED_REQUEST_PHOTO_RELEASE_BATCH);
     const claimed = await deps.db.$transaction(async (tx) => {
+      // LOCK_ACCOUNT_BEFORE_ASSET: release must match finalize (account, then sorted assets).
+      await lockBusinessStorageAccountForUpdate(tx, businessId);
       const won: Array<{ bucket: string; storageKey: string }> = [];
       for (const id of batch) {
         const object = await claimUnattachedRequestPhotoInTx(tx, businessId, id, now);

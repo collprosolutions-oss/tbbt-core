@@ -507,6 +507,8 @@ export async function discardReadyManagedUpload(
   if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: discard must match finalize (account, then asset).
+    await lockStorageAccountRow(tx, existing.storageAccountId);
     const updated = await tx.storedAsset.updateMany({
       where: {
         id: existing.id,
@@ -732,6 +734,8 @@ export async function deleteStoredAsset(
   }).catch(() => undefined);
   const now = deps.now?.() ?? new Date();
   return deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: delete must match finalize (account, then asset).
+    await lockStorageAccountRow(tx, asset.storageAccountId);
     const updated = await tx.storedAsset.update({
       where: { id: asset.id },
       data: { status: "DELETED", deletedAt: now, publicPath: null },

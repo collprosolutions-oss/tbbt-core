@@ -120,6 +120,7 @@ export {
   abortPublicRequestPhoto,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  lockBusinessStorageAccountForUpdate,
   lockStoredAssetRowForUpdate,
   putPublicRequestPhotoFromBytes,
   releaseExpiredUnattachedPublicRequestPhotos,
