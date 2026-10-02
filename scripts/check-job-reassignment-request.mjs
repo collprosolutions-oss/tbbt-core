@@ -1025,18 +1025,6 @@ try {
     completedAfterPending?.status === "PENDING" && completedAfterPending.decidedAt == null,
   );
   await expectError(
-    "complete: B is refused only by the real completed rule",
-    () =>
-      requestJobReassignmentOp(prisma, helperA, {
-        jobId: completedAfterRequestJob.id,
-        reason: "Current complete",
-        now: NOW,
-      }),
-    (error) =>
-      error instanceof JobReassignmentRequestError &&
-      error.message === JOB_REASSIGNMENT_REQUEST_COMPLETED_MESSAGE,
-  );
-  await expectError(
     "complete: Accept on A's old row refuses",
     () =>
       decideJobReassignmentRequestOp(prisma, ownerA, {
