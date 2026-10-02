@@ -46,14 +46,55 @@ export function zipNameGeneralPurposeFlag(name: string | Buffer): number {
   return bytes.some((byte) => byte > 0x7f) ? ZIP_UTF8_NAME_FLAG : 0;
 }
 
-export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
+export const ZIP32_MAX_ENTRIES = 0xffff;
+export const ZIP32_MAX_SIZE = 0xffffffff;
+export const ZIP_EOCD_LENGTH = 22;
 
-  for (const file of files) {
+export class ZipStoreLimitError extends Error {
+  readonly code = "ZIP_STORE_LIMIT";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ZipStoreLimitError";
+  }
+}
+
+export type ZipStoreWriterLimits = {
+  maxBytes?: number;
+  maxEntries?: number;
+};
+
+export class ZipStoreWriter {
+  private readonly locals: Buffer[] = [];
+  private readonly centrals: Buffer[] = [];
+  private readonly maxBytes: number;
+  private readonly maxEntries: number;
+  private offset = 0;
+  private centralLength = 0;
+  private count = 0;
+
+  constructor(limits?: ZipStoreWriterLimits) {
+    this.maxBytes = limits?.maxBytes ?? Number.POSITIVE_INFINITY;
+    this.maxEntries = Math.min(limits?.maxEntries ?? ZIP32_MAX_ENTRIES, ZIP32_MAX_ENTRIES);
+  }
+
+  get fileCount(): number {
+    return this.count;
+  }
+
+  add(file: ZipStoreFile): void {
+    if (this.count >= this.maxEntries) {
+      throw new ZipStoreLimitError(
+        `ZIP cannot add another entry after ${this.maxEntries} files without omitting records.`,
+      );
+    }
     const name = Buffer.from(file.name, "utf8");
     const data = typeof file.data === "string" ? Buffer.from(file.data, "utf8") : file.data;
+    if (data.length > ZIP32_MAX_SIZE || name.length > 0xffff) {
+      throw new ZipStoreLimitError(
+        `ZIP entry ${file.name} exceeds the uncompressed ZIP32 size that this writer can store safely.`,
+      );
+    }
     const crc = crc32(data);
     const flags = zipNameGeneralPurposeFlag(name);
     const local = Buffer.concat([
@@ -71,7 +112,6 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
       name,
       data,
     ]);
-    locals.push(local);
     const central = Buffer.concat([
       Buffer.from("PK\u0001\u0002", "binary"),
       u16(20),
@@ -89,26 +129,49 @@ export function buildZipStore(files: readonly ZipStoreFile[]): Buffer {
       u16(0),
       u16(0),
       u32(0),
-      u32(offset),
+      u32(this.offset),
       name,
     ]);
-    centrals.push(central);
-    offset += local.length;
+    const projected =
+      this.offset + local.length + this.centralLength + central.length + ZIP_EOCD_LENGTH;
+    if (projected > this.maxBytes || projected > ZIP32_MAX_SIZE) {
+      throw new ZipStoreLimitError(
+        `ZIP would exceed the safe archive size while adding ${file.name}. No partial ZIP was written.`,
+      );
+    }
+    this.locals.push(local);
+    this.centrals.push(central);
+    this.offset += local.length;
+    this.centralLength += central.length;
+    this.count += 1;
   }
 
-  const localBytes = Buffer.concat(locals);
-  const centralBytes = Buffer.concat(centrals);
-  const eocd = Buffer.concat([
-    Buffer.from("PK\u0005\u0006", "binary"),
-    u16(0),
-    u16(0),
-    u16(files.length),
-    u16(files.length),
-    u32(centralBytes.length),
-    u32(localBytes.length),
-    u16(0),
-  ]);
-  return Buffer.concat([localBytes, centralBytes, eocd]);
+  finalize(): Buffer {
+    const localBytes = Buffer.concat(this.locals);
+    const centralBytes = Buffer.concat(this.centrals);
+    const eocd = Buffer.concat([
+      Buffer.from("PK\u0005\u0006", "binary"),
+      u16(0),
+      u16(0),
+      u16(this.count),
+      u16(this.count),
+      u32(centralBytes.length),
+      u32(localBytes.length),
+      u16(0),
+    ]);
+    return Buffer.concat([localBytes, centralBytes, eocd]);
+  }
+}
+
+export function buildZipStore(
+  files: readonly ZipStoreFile[],
+  limits?: ZipStoreWriterLimits,
+): Buffer {
+  const writer = new ZipStoreWriter(limits);
+  for (const file of files) {
+    writer.add(file);
+  }
+  return writer.finalize();
 }
 
 export function readZipStoreFiles(bytes: Buffer): Array<{ name: string; data: Buffer }> {
@@ -147,10 +210,21 @@ export function toCsvCell(value: unknown): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function toCsv(headers: readonly string[], rows: Array<Record<string, unknown>>): string {
-  const lines = [
-    headers.map(toCsvCell).join(","),
-    ...rows.map((row) => headers.map((header) => toCsvCell(row[header])).join(",")),
-  ];
-  return `${lines.join("\n")}\n`;
+export function csvHeaderLine(headers: readonly string[]): string {
+  return `${headers.map(toCsvCell).join(",")}\n`;
+}
+
+export function csvBody(headers: readonly string[], rows: ReadonlyArray<object>): string {
+  if (rows.length === 0) return "";
+  return `${rows
+    .map((row) =>
+      headers
+        .map((header) => toCsvCell((row as Record<string, unknown>)[header]))
+        .join(","),
+    )
+    .join("\n")}\n`;
+}
+
+export function toCsv(headers: readonly string[], rows: ReadonlyArray<object>): string {
+  return `${csvHeaderLine(headers)}${csvBody(headers, rows)}`;
 }
