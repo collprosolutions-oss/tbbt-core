@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { isApiError, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
@@ -25,29 +25,43 @@ export default function App() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [timeCardsOpen, setTimeCardsOpen] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  async function restoreSession() {
+    setRestoring(true);
+    setRestoreError(null);
+    const token = await readSessionToken();
+    if (!token) {
+      setSession(null);
+      setReady(true);
+      setRestoring(false);
+      return;
+    }
+    const restored = await loadNativeSession(token);
+    if (isApiError(restored)) {
+      if (restored.status === 401 || restored.status === 403) {
+        await clearSessionToken();
+        setSession(null);
+      } else {
+        setRestoreError(restored.error);
+      }
+    } else {
+      await applyChecklistDraftAccount(secureChecklistDraftStorage, {
+        businessId: restored.workspace.businessId,
+        membershipId: restored.workspace.membershipId,
+      });
+      setSession({ token, viewer: restored.viewer, workspace: restored.workspace });
+    }
+    setReady(true);
+    setRestoring(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const token = await readSessionToken();
-      if (!token) {
-        if (!cancelled) setReady(true);
-        return;
-      }
-      const restored = await loadNativeSession(token);
+      await restoreSession();
       if (cancelled) return;
-      if (isApiError(restored)) {
-        if (restored.status === 401 || restored.status === 403) {
-          await clearSessionToken();
-        }
-      } else {
-        await applyChecklistDraftAccount(secureChecklistDraftStorage, {
-          businessId: restored.workspace.businessId,
-          membershipId: restored.workspace.membershipId,
-        });
-        setSession({ token, viewer: restored.viewer, workspace: restored.workspace });
-      }
-      setReady(true);
     })();
     return () => {
       cancelled = true;
@@ -65,10 +79,27 @@ export default function App() {
     setSession(null);
   }
 
-  if (!ready) {
+  if (!ready || restoring) {
     return (
       <View style={styles.boot}>
         <ActivityIndicator color="#86efac" />
+        <StatusBar style="light" />
+      </View>
+    );
+  }
+
+  if (restoreError) {
+    return (
+      <View style={styles.boot}>
+        <Text style={styles.restoreError}>{restoreError}</Text>
+        <Pressable
+          onPress={() => {
+            void restoreSession();
+          }}
+          style={styles.retry}
+        >
+          <Text style={styles.retryLabel}>Retry</Text>
+        </Pressable>
         <StatusBar style="light" />
       </View>
     );
@@ -133,5 +164,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#111827",
+    padding: 24,
+    gap: 16,
+  },
+  restoreError: {
+    color: "#fca5a5",
+    textAlign: "center",
+  },
+  retry: {
+    backgroundColor: "#166534",
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  retryLabel: {
+    color: "#f9fafb",
+    fontWeight: "700",
   },
 });

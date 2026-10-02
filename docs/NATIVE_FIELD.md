@@ -45,6 +45,8 @@ Assigned-worker writes:
 
 After Start job, Complete job, Stop job time, Start/Stop travel, Start/Stop material pickup, a pickup-item record, a visit outcome, a problem report, or an explicit checklist sync, the app reloads the assigned job and shows the resulting status, running or recorded JOB / travel / pickup time, recorded pickup items, recorded outcome, recorded field reports, and checklist progress. After a time-correction request, the app reloads time cards and shows the recorded request status. Local checklist drafts stay on the device until the worker syncs or discards them. The app does not background-write checklist changes.
 
+If the network drops, write helpers return an error instead of leaving the Job screen stuck on Starting… / Completing…. Today, Time cards, and the Job screen keep an explicit **Retry** / **Reload** (and pull-to-refresh on Job). A 401/403/404 while that screen is open — reassignment or membership deactivation — clears the stale assigned job and hides Start / clock / Complete actions until a successful reload.
+
 ## What this slice does not do
 
 - A standalone time clock, owner/admin checklist editor, a second Job-detail maps URL, owner accept/decline of time corrections, or worker milestone completion
@@ -69,6 +71,7 @@ npm run test:native-field-problem
 npm run test:native-assigned-stops
 npm run test:native-time-cards
 npm run test:native-job-milestones
+npm run test:native-field-recovery
 npx tsc --noEmit
 npm run build
 cd apps/native && npx tsc --noEmit && npm run build

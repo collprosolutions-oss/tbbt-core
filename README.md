@@ -113,6 +113,7 @@ npm run test:native-field-checklist-offline
 npm run test:native-field-activity
 npm run test:native-field-pickup
 npm run test:native-field-problem
+npm run test:native-field-recovery
 npm run test:collections-worklist
 npm run test:job-money-reconciliation
 npx tsc --noEmit

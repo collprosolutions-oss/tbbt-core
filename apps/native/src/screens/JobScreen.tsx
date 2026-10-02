@@ -1,22 +1,26 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import {
+  NATIVE_NETWORK_ERROR,
   completeNativeJob,
   isApiError,
+  isLostAssignment,
   loadNativeJob,
   recordNativeJobVisit,
   startNativeActivityTime,
   startNativeJob,
   stopNativeActivityTime,
   stopNativeJobRunningTime,
+  type NativeApiError,
 } from "../api";
 import type {
   NativeFieldActivityType,
@@ -52,16 +56,27 @@ export function JobScreen({
     null,
   );
   const [unsyncedChecklist, setUnsyncedChecklist] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  function applyLostAssignment(result: NativeApiError) {
+    setJob(null);
+    setError(result.error);
+    setActionError(result.error);
+  }
 
   useEffect(() => {
     let cancelled = false;
     void loadNativeJob(token, jobId).then((result) => {
       if (cancelled) return;
       if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          setJob(null);
+        }
         setError(result.error);
         return;
       }
       setJob(result.job);
+      setError(null);
     });
     return () => {
       cancelled = true;
@@ -71,6 +86,10 @@ export function JobScreen({
   async function reloadAssignedJob(fallback: NativeJobDetail | null) {
     const reloaded = await loadNativeJob(token, jobId);
     if (isApiError(reloaded)) {
+      if (isLostAssignment(reloaded)) {
+        applyLostAssignment(reloaded);
+        return;
+      }
       if (fallback) {
         setJob(fallback);
         return;
@@ -79,23 +98,47 @@ export function JobScreen({
       return;
     }
     setJob(reloaded.job);
+    setError(null);
   }
+
+  const retryAssignedJob = useCallback(async () => {
+    setRefreshing(true);
+    setError(null);
+    setActionError(null);
+    const reloaded = await loadNativeJob(token, jobId);
+    if (isApiError(reloaded)) {
+      if (isLostAssignment(reloaded)) {
+        setJob(null);
+      }
+      setError(reloaded.error);
+    } else {
+      setJob(reloaded.job);
+    }
+    setRefreshing(false);
+  }, [jobId, token]);
 
   async function startAssignedJob() {
     if (pending) return;
     setPending(true);
     setPendingAction("start");
     setActionError(null);
-    const result = await startNativeJob(token, jobId);
-    if (isApiError(result)) {
+    try {
+      const result = await startNativeJob(token, jobId);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingAction(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingAction(null);
   }
 
   async function stopAssignedJobTime() {
@@ -103,16 +146,23 @@ export function JobScreen({
     setPending(true);
     setPendingAction("stop");
     setActionError(null);
-    const result = await stopNativeJobRunningTime(token, jobId);
-    if (isApiError(result)) {
+    try {
+      const result = await stopNativeJobRunningTime(token, jobId);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingAction(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingAction(null);
   }
 
   async function startAssignedActivity(activityType: NativeFieldActivityType) {
@@ -120,16 +170,23 @@ export function JobScreen({
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "start-travel" : "start-pickup");
     setActionError(null);
-    const result = await startNativeActivityTime(token, jobId, activityType);
-    if (isApiError(result)) {
+    try {
+      const result = await startNativeActivityTime(token, jobId, activityType);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingAction(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingAction(null);
   }
 
   async function stopAssignedActivity(activityType: NativeFieldActivityType) {
@@ -137,16 +194,23 @@ export function JobScreen({
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "stop-travel" : "stop-pickup");
     setActionError(null);
-    const result = await stopNativeActivityTime(token, jobId, activityType);
-    if (isApiError(result)) {
+    try {
+      const result = await stopNativeActivityTime(token, jobId, activityType);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingAction(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingAction(null);
   }
 
   async function completeAssignedJob() {
@@ -158,16 +222,23 @@ export function JobScreen({
     setPending(true);
     setPendingAction("complete");
     setActionError(null);
-    const result = await completeNativeJob(token, jobId);
-    if (isApiError(result)) {
+    try {
+      const result = await completeNativeJob(token, jobId);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingAction(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingAction(null);
   }
 
   async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
@@ -181,24 +252,47 @@ export function JobScreen({
     setPending(true);
     setPendingOutcome(outcomeStatus);
     setActionError(null);
-    const result = await recordNativeJobVisit(token, jobId, outcomeStatus);
-    if (isApiError(result)) {
+    try {
+      const result = await recordNativeJobVisit(token, jobId, outcomeStatus);
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          applyLostAssignment(result);
+          return;
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadAssignedJob(result.job);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPending(false);
       setPendingOutcome(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadAssignedJob(result.job);
-    setPending(false);
-    setPendingOutcome(null);
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl onRefresh={retryAssignedJob} refreshing={refreshing} />}
+      style={styles.screen}
+    >
       <Pressable onPress={onBack}>
         <Text style={styles.back}>Today</Text>
       </Pressable>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <>
+          <Text style={styles.error}>{error}</Text>
+          <Pressable
+            onPress={() => {
+              void retryAssignedJob();
+            }}
+            style={styles.secondaryAction}
+          >
+            <Text style={styles.primaryActionLabel}>Retry</Text>
+          </Pressable>
+        </>
+      ) : null}
       {!job && !error ? <ActivityIndicator color="#86efac" /> : null}
       {job ? (
         <View style={styles.stack}>
@@ -206,6 +300,15 @@ export function JobScreen({
           <Text style={styles.meta}>{job.whenLabel ?? "Unscheduled"}</Text>
           <Text style={styles.meta}>{job.confirmationLabel}</Text>
           <Text style={styles.status}>{job.status.replaceAll("_", " ")}</Text>
+          <Pressable
+            disabled={refreshing || pending}
+            onPress={() => {
+              void retryAssignedJob();
+            }}
+            style={styles.reload}
+          >
+            <Text style={styles.reloadLabel}>{refreshing ? "Reloading…" : "Reload"}</Text>
+          </Pressable>
           <Text style={styles.body}>
             {job.runningTime.running
               ? `Time running · ${job.runningTime.activityLabel ?? "Job"} · Since ${
@@ -523,6 +626,15 @@ const styles = StyleSheet.create({
     color: "#f9fafb",
     fontWeight: "700",
     fontSize: 16,
+  },
+  reload: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingVertical: 6,
+  },
+  reloadLabel: {
+    color: "#86efac",
+    fontWeight: "700",
   },
   notice: {
     color: "#fbbf24",

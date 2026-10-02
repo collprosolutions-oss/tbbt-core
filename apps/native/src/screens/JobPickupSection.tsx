@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { isApiError, recordNativeJobPickupItem } from "../api";
+import { NATIVE_NETWORK_ERROR, isApiError, recordNativeJobPickupItem } from "../api";
 import type {
   NativeJobDetail,
   NativeJobPickupItem,
@@ -63,19 +63,23 @@ export function JobPickupSection({
     const draft = drafts[item.id] ?? emptyDraft(item);
     setPendingItemId(item.id);
     setError(null);
-    const result = await recordNativeJobPickupItem(token, jobId, {
-      itemId: item.id,
-      quantityPickedUp: draft.quantity.trim() || null,
-      pickupException: draft.exception,
-      pickupExceptionNote: draft.note.trim() || null,
-    });
-    if (isApiError(result)) {
+    try {
+      const result = await recordNativeJobPickupItem(token, jobId, {
+        itemId: item.id,
+        quantityPickedUp: draft.quantity.trim() || null,
+        pickupException: draft.exception,
+        pickupExceptionNote: draft.note.trim() || null,
+      });
+      if (isApiError(result)) {
+        setError(result.error);
+        return;
+      }
+      onJobUpdated(result.job);
+    } catch {
+      setError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPendingItemId(null);
-      setError(result.error);
-      return;
     }
-    onJobUpdated(result.job);
-    setPendingItemId(null);
   }
 
   if (items.length === 0) return null;

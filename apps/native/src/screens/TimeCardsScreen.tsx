@@ -9,7 +9,13 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { isApiError, loadNativeTimeCards, requestNativeTimeCorrection } from "../api";
+import {
+  NATIVE_NETWORK_ERROR,
+  isApiError,
+  isLostAssignment,
+  loadNativeTimeCards,
+  requestNativeTimeCorrection,
+} from "../api";
 import type { NativeTimeCardEntry, NativeTimeCardsPayload, NativeWorkspace } from "../types";
 
 type CorrectionDraft = {
@@ -53,6 +59,9 @@ export function TimeCardsScreen({
       const result = await loadNativeTimeCards(token);
       if (isApiError(result)) {
         setError(result.error);
+        if (isLostAssignment(result)) {
+          setPayload(null);
+        }
         return;
       }
       setPayload(result);
@@ -101,22 +110,30 @@ export function TimeCardsScreen({
     setPendingEntryId(entry.id);
     setActionError(null);
     setMessage(null);
-    const result = await requestNativeTimeCorrection(token, {
-      timeEntryId: entry.id,
-      reason: draft.reason.trim(),
-      proposedStartDate: draft.proposedStartDate.trim(),
-      proposedStartTime: draft.proposedStartTime.trim(),
-      proposedEndDate: draft.proposedEndDate.trim(),
-      proposedEndTime: draft.proposedEndTime.trim(),
-    });
-    if (isApiError(result)) {
+    try {
+      const result = await requestNativeTimeCorrection(token, {
+        timeEntryId: entry.id,
+        reason: draft.reason.trim(),
+        proposedStartDate: draft.proposedStartDate.trim(),
+        proposedStartTime: draft.proposedStartTime.trim(),
+        proposedEndDate: draft.proposedEndDate.trim(),
+        proposedEndTime: draft.proposedEndTime.trim(),
+      });
+      if (isApiError(result)) {
+        if (isLostAssignment(result)) {
+          setPayload(null);
+          setError(result.error);
+        }
+        setActionError(result.error);
+        return;
+      }
+      await reloadTimeCards(result.timeCards);
+      setMessage(result.message);
+    } catch {
+      setActionError(NATIVE_NETWORK_ERROR);
+    } finally {
       setPendingEntryId(null);
-      setActionError(result.error);
-      return;
     }
-    await reloadTimeCards(result.timeCards);
-    setMessage(result.message);
-    setPendingEntryId(null);
   }
 
   return (
@@ -134,7 +151,19 @@ export function TimeCardsScreen({
         Propose new start and end times for your own recorded time. The original clock stays until
         an owner accepts or declines. Approved time and payroll stay on the owner surface.
       </Text>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <>
+          <Text style={styles.error}>{error}</Text>
+          <Pressable
+            onPress={() => {
+              void refresh();
+            }}
+            style={styles.action}
+          >
+            <Text style={styles.actionLabel}>Retry</Text>
+          </Pressable>
+        </>
+      ) : null}
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload && payload.entries.length === 0 ? (
         <Text style={styles.empty}>No recorded time to correct yet. Stop the clock first.</Text>

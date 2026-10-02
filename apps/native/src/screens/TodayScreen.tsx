@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { isApiError, loadNativeToday } from "../api";
+import { isApiError, isLostAssignment, loadNativeToday } from "../api";
 import type {
   NativeAssignedStopsMaps,
   NativeJobSummary,
@@ -118,6 +118,9 @@ export function TodayScreen({
       const result = await loadNativeToday(token);
       if (isApiError(result)) {
         setError(result.error);
+        if (isLostAssignment(result)) {
+          setPayload(null);
+        }
         return;
       }
       setPayload(result);
@@ -150,7 +153,19 @@ export function TodayScreen({
       <Pressable onPress={onOpenTimeCards} style={styles.timeCards}>
         <Text style={styles.timeCardsLabel}>Time cards</Text>
       </Pressable>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <>
+          <Text style={styles.error}>{error}</Text>
+          <Pressable
+            onPress={() => {
+              void refresh();
+            }}
+            style={styles.timeCards}
+          >
+            <Text style={styles.timeCardsLabel}>Retry</Text>
+          </Pressable>
+        </>
+      ) : null}
       {!payload && !error ? <ActivityIndicator color="#86efac" /> : null}
       {payload ? (
         <>
