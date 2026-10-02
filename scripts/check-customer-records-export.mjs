@@ -25,6 +25,7 @@ const {
   CUSTOMER_RECORDS_EXPORT_FILE_LIMIT,
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
   CUSTOMER_RECORDS_EXPORT_PAGE_SIZE,
+  CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE,
   CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
   CUSTOMER_RECORDS_EXPORT_VERSION,
   PRIVATE_FILE_OMISSION,
@@ -36,11 +37,20 @@ const {
   customerRecordsExportFilename,
   customerRecordsExportPageTruncationMessage,
   customerRecordsExportPropertyTruncationMessage,
+  customerRecordsExportTimeCardTruncationMessage,
   listExportableCustomerRecords,
   parseCustomerRecordsExport,
   recordCustomerRecordsExportAudit,
+  runCustomerRecordsExportDownload,
   serializeCustomerRecordsExport,
 } = await import("@/lib/customer-records-export");
+const {
+  BUSINESS_EXPORT_AUDIT_AREA,
+  BUSINESS_EXPORT_AUDIT_KEY,
+  buildBusinessExportZip,
+  runBusinessExportDownload,
+} = await import("@/lib/business-export");
+const { PROJECT_DOCUMENT_PURPOSE } = await import("@/lib/business-storage/project-documents");
 const { isSecretSettingKey } = await import("@/lib/settings");
 const { CustomerRecordsExportError } = await import("@/lib/customer-records-export/access");
 
@@ -103,8 +113,10 @@ const buildSrc = readRepo("src/lib/customer-records-export/build.ts");
 const parseSrc = readRepo("src/lib/customer-records-export/parse.ts");
 const accessSrc = readRepo("src/lib/customer-records-export/access.ts");
 const auditSrc = readRepo("src/lib/customer-records-export/audit.ts");
+const httpSrc = readRepo("src/lib/customer-records-export/http.ts");
 const pageSrc = readRepo("src/app/(app)/customers/records-export/page.tsx");
 const downloadSrc = readRepo("src/app/(app)/customers/records-export/download/route.ts");
+const businessExportRouteSrc = readRepo("src/app/(app)/settings/export/route.ts");
 const panelSrc = readRepo("src/components/customers/customer-records-export-panel.tsx");
 const customersPageSrc = readRepo("src/app/(app)/customers/page.tsx");
 const customerProfileSrc = readRepo("src/app/(app)/customers/[customerId]/page.tsx");
@@ -183,7 +195,8 @@ check(
 );
 check(
   "Download records who exported and when on existing SettingsAuditLog",
-  downloadSrc.includes("recordCustomerRecordsExportAudit") &&
+  downloadSrc.includes("runCustomerRecordsExportDownload") &&
+    httpSrc.includes("recordCustomerRecordsExportAudit") &&
     auditSrc.includes("writeSettingsAuditLog") &&
     auditSrc.includes("CUSTOMER_RECORDS_EXPORT_AUDIT_AREA") &&
     CUSTOMER_RECORDS_EXPORT_AUDIT_AREA === "data-export" &&
@@ -196,9 +209,33 @@ check(
   "Dedicated page and download route stay OWNER-gated",
   pageSrc.includes("canExportCustomerRecords") &&
     pageSrc.includes("buildCustomerRecordsExport") &&
-    downloadSrc.includes("buildCustomerRecordsExport") &&
+    downloadSrc.includes("runCustomerRecordsExportDownload") &&
+    httpSrc.includes("canExportCustomerRecords") &&
     downloadSrc.includes("Cache-Control") &&
     downloadSrc.includes("no-store"),
+);
+check(
+  "Business ZIP download is route-level gated and audited without a new capability",
+  businessExportRouteSrc.includes("runBusinessExportDownload") &&
+    businessExportSrc.includes("canExportBusinessData") &&
+    businessExportSrc.includes("recordBusinessExportAudit") &&
+    BUSINESS_EXPORT_AUDIT_AREA === "data-export" &&
+    BUSINESS_EXPORT_AUDIT_KEY === "businessExport" &&
+    !isSecretSettingKey(BUSINESS_EXPORT_AUDIT_KEY) &&
+    businessExportSrc.includes("propertyId: true") &&
+    businessExportSrc.includes("activityType: true") &&
+    businessExportSrc.includes("exportEstimateTotal"),
+);
+check(
+  "Customer-records contract includes time cards and permitted project-document references",
+  contractSrc.includes("timeCards") &&
+    contractSrc.includes("PROJECT_DOCUMENT") &&
+    CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE === PROJECT_DOCUMENT_PURPOSE &&
+    buildSrc.includes("prisma.timeEntry.findMany") &&
+    buildSrc.includes("kind: \"PROJECT_DOCUMENT\"") &&
+    !buildSrc.includes("storageKey: true") &&
+    parseSrc.includes("FORBIDDEN_TIME_CARD_KEYS") &&
+    parseSrc.includes("approvedHourlyWage"),
 );
 check(
   "Settings and customer surfaces expose the OWNER export without a new global nav item",
@@ -242,13 +279,18 @@ check(
     buildSrc.includes("boundExportRead"),
 );
 check(
-  "UI shows pagination, property, and file-reference honesty",
+  "UI shows pagination, property, time-card, and file-reference honesty",
   panelSrc.includes("customerRecordsExportPageTruncationMessage") &&
     panelSrc.includes("customerRecordsExportFileTruncationMessage") &&
     panelSrc.includes("customerRecordsExportPropertyTruncationMessage") &&
+    panelSrc.includes("customerRecordsExportTimeCardTruncationMessage") &&
     panelSrc.includes("document.provenance.page.truncated") &&
     panelSrc.includes("packet.properties.count") &&
+    panelSrc.includes("packet.timeCards.count") &&
     customerRecordsExportPropertyTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
+      String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
+    ) &&
+    customerRecordsExportTimeCardTruncationMessage(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT).includes(
       String(CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT),
     ),
 );
@@ -376,6 +418,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       status: "OPEN",
       summary: "Fix door",
       description: "Front door sticks",
@@ -420,6 +463,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       serviceRequestId: requestA1.id,
       status: "SENT",
       total: "125.50",
@@ -441,6 +485,7 @@ try {
     data: {
       businessId: businessA.id,
       customerId: customerA.id,
+      propertyId: propertyA.id,
       estimateId: estimateA.id,
       status: "COMPLETED",
       serviceIntent: "ONE_TIME",
@@ -530,6 +575,158 @@ try {
       url: "https://secret-storage.example/beta-only.jpg",
     },
   });
+
+  const timeCardA = await prisma.timeEntry.create({
+    data: {
+      businessId: businessA.id,
+      membershipId: ownerMemA.id,
+      jobId: jobA.id,
+      activityType: "JOB",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Installed lockset",
+      startedAt: new Date("2026-03-01T14:00:00.000Z"),
+      endedAt: new Date("2026-03-01T16:00:00.000Z"),
+    },
+  });
+  const timeCardB = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: ownerMemB.id,
+      jobId: jobB.id,
+      activityType: "JOB",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Beta only time",
+      startedAt: new Date("2026-03-02T14:00:00.000Z"),
+      endedAt: new Date("2026-03-02T15:00:00.000Z"),
+    },
+  });
+  const timeCardCross = await prisma.timeEntry.create({
+    data: {
+      businessId: businessB.id,
+      membershipId: ownerMemB.id,
+      jobId: jobA.id,
+      activityType: "TRAVEL",
+      status: "STOPPED",
+      source: "CLOCK",
+      note: "Cross-tenant planted time",
+      startedAt: new Date("2026-03-03T14:00:00.000Z"),
+      endedAt: new Date("2026-03-03T14:30:00.000Z"),
+    },
+  });
+
+  const storageA = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: businessA.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-test",
+      namespacePrefix: `businesses/${businessA.id}`,
+      storageLimitBytes: BigInt(1024 * 1024),
+    },
+  });
+  const storageB = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: businessB.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-test",
+      namespacePrefix: `businesses/${businessB.id}`,
+      storageLimitBytes: BigInt(1024 * 1024),
+    },
+  });
+  const projectDocKey = `secret-project-doc-${randomUUID()}`;
+  const projectDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      customerId: customerA.id,
+      propertyId: propertyA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "permit.pdf",
+      storageKey: projectDocKey,
+      mimeType: "application/pdf",
+      fileSizeBytes: 24,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  const vaultDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: "BUSINESS_VAULT",
+      originalFilename: "insurance.pdf",
+      storageKey: `vault-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 12,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  const pendingDocA = await prisma.storedAsset.create({
+    data: {
+      businessId: businessA.id,
+      storageAccountId: storageA.id,
+      jobId: jobA.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "pending.pdf",
+      storageKey: `pending-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 8,
+      visibility: "PRIVATE",
+      status: "PENDING",
+    },
+  });
+  const projectDocB = await prisma.storedAsset.create({
+    data: {
+      businessId: businessB.id,
+      storageAccountId: storageB.id,
+      customerId: customerB.id,
+      jobId: jobB.id,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      originalFilename: "beta-only.pdf",
+      storageKey: `beta-doc-${randomUUID()}`,
+      mimeType: "application/pdf",
+      fileSizeBytes: 10,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+
+  const overflowJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: overflowCustomer.id,
+      status: "SCHEDULED",
+      serviceIntent: "ONE_TIME",
+      projectToken: `overflow-job-${randomUUID()}`,
+    },
+  });
+  const overflowTimeCards = await Promise.all(
+    Array.from({ length: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1 }, (_, index) =>
+      prisma.timeEntry.create({
+        data: {
+          businessId: businessA.id,
+          membershipId: ownerMemA.id,
+          jobId: overflowJob.id,
+          activityType: "JOB",
+          status: "STOPPED",
+          source: "CLOCK",
+          note: `Overflow time ${index + 1}`,
+          startedAt: new Date(Date.UTC(2024, 2, 1 + index, 13, 0, 0)),
+          endedAt: new Date(Date.UTC(2024, 2, 1 + index, 14, 0, 0)),
+        },
+      }),
+    ),
+  );
 
   const overflowRequests = await Promise.all(
     Array.from({ length: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1 }, (_, index) =>
@@ -650,13 +847,22 @@ try {
       packetA.estimates.count === 1 &&
       packetA.estimates.items[0].id === estimateA.id &&
       packetA.estimates.items[0].total === "125.50" &&
+      packetA.estimates.items[0].propertyId === propertyA.id &&
       packetA.jobs.count === 1 &&
       packetA.jobs.items[0].id === jobA.id &&
+      packetA.jobs.items[0].propertyId === propertyA.id &&
+      packetA.jobs.items[0].estimateId === estimateA.id &&
       packetA.invoices.count === 1 &&
       packetA.invoices.items[0].id === invoiceA.id &&
       packetA.payments.count === 1 &&
       packetA.payments.items[0].id === paymentA.id &&
-      packetA.payments.items[0].amount === "40.00",
+      packetA.payments.items[0].amount === "40.00" &&
+      packetA.timeCards.count === 1 &&
+      packetA.timeCards.truncated === false &&
+      packetA.timeCards.items[0].id === timeCardA.id &&
+      packetA.timeCards.items[0].jobId === jobA.id &&
+      packetA.timeCards.items[0].activityType === "JOB" &&
+      packetA.timeCards.items[0].note === "Installed lockset",
   );
   check(
     "Related overflow is truncated at the related-record cap",
@@ -674,6 +880,12 @@ try {
       overflowPacket.properties.items[0].id === overflowProperties[0].id &&
       !overflowPacket.properties.items.some(
         (row) => row.id === overflowProperties[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
+      ) &&
+      overflowPacket.timeCards.truncated === true &&
+      overflowPacket.timeCards.count === CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT &&
+      overflowPacket.timeCards.items[0].id === overflowTimeCards[0].id &&
+      !overflowPacket.timeCards.items.some(
+        (row) => row.id === overflowTimeCards[CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT].id,
       ),
   );
   check(
@@ -687,6 +899,14 @@ try {
       !pageOneJson.includes(jobB.id) &&
       !pageOneJson.includes(invoiceB.id) &&
       !pageOneJson.includes(paymentB.id) &&
+      !pageOneJson.includes(timeCardB.id) &&
+      !pageOneJson.includes(timeCardCross.id) &&
+      !pageOneJson.includes("Beta only time") &&
+      !pageOneJson.includes("Cross-tenant planted time") &&
+      !pageOneJson.includes(projectDocB.id) &&
+      !pageOneJson.includes("beta-only.pdf") &&
+      !pageOneJson.includes(vaultDocA.id) &&
+      !pageOneJson.includes(pendingDocA.id) &&
       !pageOneJson.includes("Beta only request") &&
       !pageOneJson.includes("Cross-tenant planted request") &&
       !pageOneJson.includes("Wrong-customer planted request") &&
@@ -706,6 +926,7 @@ try {
       !pageOneJson.includes("Key under mat") &&
       !pageOneJson.includes("4321") &&
       !pageOneJson.includes(photoUrl) &&
+      !pageOneJson.includes(projectDocKey) &&
       !pageOneJson.includes("hashed-owner-secret") &&
       !pageOneJson.includes("publicToken") &&
       !pageOneJson.includes("projectToken") &&
@@ -722,8 +943,8 @@ try {
       ),
   );
   check(
-    "Private files are same-business references with a labeled omission",
-    packetA.files.count >= 2 &&
+    "Private files are same-business permitted references with a labeled omission",
+    packetA.files.count >= 3 &&
       packetA.files.items.some(
         (file) =>
           file.id === photoA.id &&
@@ -732,7 +953,23 @@ try {
           file.status === "REFERENCE" &&
           file.omission === PRIVATE_FILE_OMISSION,
       ) &&
-      packetA.files.items.every((file) => !("url" in file) && !("storageKey" in file)) &&
+      packetA.files.items.some(
+        (file) =>
+          file.id === projectDocA.id &&
+          file.kind === "PROJECT_DOCUMENT" &&
+          file.relatedJobId === jobA.id &&
+          file.originalFilename === "permit.pdf" &&
+          file.status === "REFERENCE" &&
+          file.omission === PRIVATE_FILE_OMISSION,
+      ) &&
+      packetA.files.items.every(
+        (file) =>
+          !("url" in file) &&
+          !("storageKey" in file) &&
+          file.id !== vaultDocA.id &&
+          file.id !== pendingDocA.id &&
+          file.id !== projectDocB.id,
+      ) &&
       CUSTOMER_RECORDS_EXPORT_OMISSIONS.some((item) => item.includes("Private file bytes")),
   );
 
@@ -785,7 +1022,9 @@ try {
       !otherJson.includes(estimateA.id) &&
       !otherJson.includes(jobA.id) &&
       !otherJson.includes(invoiceA.id) &&
-      !otherJson.includes(paymentA.id),
+      !otherJson.includes(paymentA.id) &&
+      !otherJson.includes(timeCardA.id) &&
+      !otherJson.includes(projectDocA.id),
   );
 
   const roundTrip = parseCustomerRecordsExport(JSON.parse(serializeCustomerRecordsExport(single)));
@@ -808,6 +1047,7 @@ try {
       listed.customers[0].propertyCount === 2 &&
       listed.customers[0].requestCount === 2 &&
       listed.customers[0].paymentCount === 1 &&
+      listed.customers[0].timeCardCount === 1 &&
       listed.truncated === false,
   );
 
@@ -907,6 +1147,105 @@ try {
       !ownerBAudit.some((row) => row.id === recorded.id),
   );
 
+  const adminCustomerDownload = await runCustomerRecordsExportDownload(prisma, adminAccessA);
+  const memberCustomerDownload = await runCustomerRecordsExportDownload(prisma, memberAccessA);
+  const ownerCustomerDownload = await runCustomerRecordsExportDownload(prisma, ownerAccessA, {
+    customerId: customerA.id,
+  });
+  const ownerCustomerBody = ownerCustomerDownload.ok ? JSON.parse(ownerCustomerDownload.body) : null;
+  check(
+    "Route-level customer-records download is OWNER-only",
+    adminCustomerDownload.ok === false &&
+      adminCustomerDownload.status === 403 &&
+      memberCustomerDownload.ok === false &&
+      memberCustomerDownload.status === 403 &&
+      ownerCustomerDownload.ok === true &&
+      ownerCustomerDownload.status === 200 &&
+      ownerCustomerBody?.customers[0]?.customer.id === customerA.id &&
+      ownerCustomerBody?.customers[0]?.jobs.items[0]?.propertyId === propertyA.id &&
+      ownerCustomerBody?.customers[0]?.estimates.items[0]?.total === "125.50" &&
+      ownerCustomerBody?.customers[0]?.timeCards.items[0]?.id === timeCardA.id &&
+      ownerCustomerBody?.customers[0]?.files.truncated === true &&
+      !ownerCustomerDownload.body.includes(customerB.name) &&
+      !ownerCustomerDownload.body.includes(projectDocKey),
+  );
+  const afterAdminMemberCustomerAudit = await prisma.settingsAuditLog.count({
+    where: {
+      businessId: businessA.id,
+      settingKey: CUSTOMER_RECORDS_EXPORT_AUDIT_KEY,
+      changedByMembershipId: { in: [adminMemA.id, memberMemA.id] },
+    },
+  });
+  check(
+    "ADMIN and MEMBER customer-records route denials do not write an export audit",
+    afterAdminMemberCustomerAudit === 0,
+  );
+
+  const memberBusinessDownload = await runBusinessExportDownload(prisma, memberAccessA);
+  const adminBusinessDownload = await runBusinessExportDownload(prisma, adminAccessA);
+  const ownerBusinessDownload = await runBusinessExportDownload(prisma, ownerAccessA);
+  const ownerZipText = ownerBusinessDownload.ok ? ownerBusinessDownload.body.toString("utf8") : "";
+  const adminZipText = adminBusinessDownload.ok ? adminBusinessDownload.body.toString("utf8") : "";
+  check(
+    "Route-level business ZIP lets OWNER and ADMIN retrieve tenant records; MEMBER is forbidden",
+    memberBusinessDownload.ok === false &&
+      memberBusinessDownload.status === 403 &&
+      adminBusinessDownload.ok === true &&
+      ownerBusinessDownload.ok === true &&
+      ownerZipText.includes(customerA.name) &&
+      ownerZipText.includes(propertyA.id) &&
+      ownerZipText.includes(jobA.id) &&
+      ownerZipText.includes("125.50") &&
+      ownerZipText.includes("JOB") &&
+      ownerZipText.includes("Installed lockset") &&
+      ownerZipText.includes(timeCardA.id) &&
+      !ownerZipText.includes(customerB.name) &&
+      !ownerZipText.includes(timeCardB.id) &&
+      !ownerZipText.includes(projectDocKey) &&
+      adminZipText.includes(customerA.name) &&
+      !adminZipText.includes(customerB.name),
+  );
+  const builtZip = await buildBusinessExportZip(prisma, businessA.id);
+  const builtZipText = builtZip.bytes.toString("utf8");
+  check(
+    "Business ZIP completeness keeps property links, estimate totals, and time-card activity",
+    builtZipText.includes("propertyId") &&
+      builtZipText.includes("activityType") &&
+      builtZipText.includes(propertyA.id) &&
+      builtZipText.includes(estimateA.id) &&
+      builtZipText.includes("125.50") &&
+      builtZipText.includes(timeCardA.id) &&
+      builtZipText.includes("CLOCK") &&
+      !builtZipText.includes(estimateToken) &&
+      !builtZipText.includes(projectToken) &&
+      !builtZipText.includes(stripeSession) &&
+      !builtZipText.includes("Key under mat"),
+  );
+
+  const businessAuditsA = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessA.id, settingKey: BUSINESS_EXPORT_AUDIT_KEY },
+  });
+  const businessAuditsB = await prisma.settingsAuditLog.findMany({
+    where: { businessId: businessB.id, settingKey: BUSINESS_EXPORT_AUDIT_KEY },
+  });
+  check(
+    "Business ZIP route writes tenant-scoped audit for permitted downloaders only",
+    businessAuditsA.length === 2 &&
+      businessAuditsA.some((row) => row.changedByMembershipId === ownerMemA.id) &&
+      businessAuditsA.some((row) => row.changedByMembershipId === adminMemA.id) &&
+      !businessAuditsA.some((row) => row.changedByMembershipId === memberMemA.id) &&
+      businessAuditsB.length === 0 &&
+      businessAuditsA.every((row) => {
+        const payload = JSON.parse(row.newValue);
+        return (
+          row.settingArea === BUSINESS_EXPORT_AUDIT_AREA &&
+          payload.filename?.startsWith("tbbt-export-") &&
+          !row.newValue.includes(projectDocKey) &&
+          !row.newValue.includes(estimateToken)
+        );
+      }),
+  );
+
   try {
     const forgedProperty = structuredClone(single);
     forgedProperty.customers[0].properties.items[0].accessCode = "4321";
@@ -964,6 +1303,17 @@ try {
     check(
       "Parser rejects private file URLs on references",
       error instanceof CustomerRecordsExportError && /must not include url/.test(error.message),
+    );
+  }
+  try {
+    const forgedTime = structuredClone(single);
+    forgedTime.customers[0].timeCards.items[0].approvedHourlyWage = "25.00";
+    parseCustomerRecordsExport(forgedTime);
+    check("Parser rejects time-card wage fields", false);
+  } catch (error) {
+    check(
+      "Parser rejects time-card wage fields",
+      error instanceof CustomerRecordsExportError && /must not include approvedHourlyWage/.test(error.message),
     );
   }
 } catch (error) {

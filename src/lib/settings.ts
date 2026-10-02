@@ -228,13 +228,13 @@ export const ACCOUNT_DELETION_UNAVAILABLE_MESSAGE =
   "Account deletion is not available and is never silent. Request cancellation below if you want software access to end. Historical business records remain preserved.";
 
 export const FULL_EXPORT_PLANNED_MESSAGE =
-  "Download a tenant-scoped ZIP of customers, properties, requests, estimates, jobs, invoices, payments, expenses, time entries, reviews, campaigns, and settings. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. Estimate/job/invoice PDF packs and original photo binaries remain a later add-on.";
+  "Download a tenant-scoped ZIP of customers, properties, requests, estimates (with totals), jobs (with property links), invoices, payments, expenses, time cards (activity type, note, and source), reviews, campaigns, and settings. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. Estimate/job/invoice PDF packs and original photo binaries remain a later add-on.";
 
 export const ACCOUNTING_EXPORT_MESSAGE =
   "Invoices, payments, and expenses recorded in this workspace, as CSV. Payment rows are actual Payment records — a PAID invoice status never invents a Payment row. Invoice Amount Paid uses recorded payments, or the legacy PAID-status fallback when that invoice has no Payment rows. Voided expenses are omitted. This is not a general ledger and not a QuickBooks or Xero connection.";
 
 export const CUSTOMER_RECORDS_EXPORT_MESSAGE =
-  "OWNER-only portable JSON of this workspace’s customers and their same-business properties, structured addresses, requests, estimates, jobs, invoices, and payments. Large exports are paginated. Private files stay references or a labeled omission. Secrets and another business’s records are never included.";
+  "OWNER-only portable JSON of this workspace’s customers and their same-business properties, structured addresses, requests, estimates, jobs, invoices, payments, and time cards. Large exports are paginated. Private files stay permitted references or a labeled omission. Secrets and another business’s records are never included.";
 
 export type IntegrationConnectionStatus = "connected" | "not_connected" | "needs_attention";
 

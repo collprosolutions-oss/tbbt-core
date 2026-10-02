@@ -157,11 +157,21 @@ check(
     roleHasCapability("ADMIN", CAPABILITIES.MANAGE_SETTINGS) &&
     !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_SETTINGS),
 );
+const businessExportSrc = readFileSync(new URL("../src/lib/business-export.ts", import.meta.url), "utf8");
 check(
-  "Existing ZIP route uses the shared export gate",
-  exportRouteSrc.includes("canExportBusinessData") &&
-    exportRouteSrc.includes("buildBusinessExportZip") &&
-    !exportRouteSrc.includes("requireSaasOperatingEntitlement"),
+  "Existing ZIP route uses the shared export download helper",
+  exportRouteSrc.includes("runBusinessExportDownload") &&
+    !exportRouteSrc.includes("requireSaasOperatingEntitlement") &&
+    businessExportSrc.includes("canExportBusinessData") &&
+    businessExportSrc.includes("buildBusinessExportZip") &&
+    businessExportSrc.includes("recordBusinessExportAudit"),
+);
+check(
+  "Business ZIP jobs, estimates, and time cards keep property, total, and activity fields",
+  businessExportSrc.includes("propertyId: true") &&
+    businessExportSrc.includes("total: true") &&
+    businessExportSrc.includes("activityType: true") &&
+    businessExportSrc.includes("exportEstimateTotal"),
 );
 check(
   "Accounting ZIP reuses the same export gate and builders",

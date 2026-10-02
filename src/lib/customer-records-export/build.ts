@@ -18,6 +18,7 @@ import {
   CUSTOMER_RECORDS_EXPORT_OMISSIONS,
   CUSTOMER_RECORDS_EXPORT_PAGE_SIZE,
   CUSTOMER_RECORDS_EXPORT_PRODUCT,
+  CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE,
   CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
   CUSTOMER_RECORDS_EXPORT_SYSTEM,
   CUSTOMER_RECORDS_EXPORT_VERSION,
@@ -43,6 +44,7 @@ export type ExportableCustomerRecord = {
   jobCount: number;
   invoiceCount: number;
   paymentCount: number;
+  timeCardCount: number;
   updatedAt: Date;
 };
 
@@ -100,6 +102,7 @@ export async function listExportableCustomerRecords(
       jobCount: packet.jobs.count,
       invoiceCount: packet.invoices.count,
       paymentCount: packet.payments.count,
+      timeCardCount: packet.timeCards.count,
       updatedAt: new Date(packet.customer.updatedAt),
     })),
     truncated: document.provenance.page.truncated,
@@ -245,7 +248,7 @@ async function buildCustomerPacket(
   },
 ): Promise<CustomerRecordsExportCustomerPacket> {
   const businessId = access.businessId;
-  const [properties, requests, estimates, jobs, invoices, payments] = await Promise.all([
+  const [properties, requests, estimates, jobs, invoices, payments, timeCards] = await Promise.all([
     prisma.property.findMany({
       where: { businessId, customerId: customer.id },
       select: {
@@ -353,6 +356,28 @@ async function buildCustomerPacket(
       orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
       take: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1,
     }),
+    prisma.timeEntry.findMany({
+      where: {
+        businessId,
+        job: { is: { businessId, customerId: customer.id } },
+      },
+      select: {
+        id: true,
+        businessId: true,
+        jobId: true,
+        membershipId: true,
+        activityType: true,
+        status: true,
+        startedAt: true,
+        endedAt: true,
+        note: true,
+        source: true,
+        createdAt: true,
+        job: { select: { businessId: true, customerId: true } },
+      },
+      orderBy: [{ startedAt: "asc" }, { id: "asc" }],
+      take: CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT + 1,
+    }),
   ]);
 
   const ownedProperties = properties.filter(
@@ -373,6 +398,12 @@ async function buildCustomerPacket(
   const ownedPayments = payments.filter(
     (row) => row.businessId === businessId && row.customerId === customer.id,
   );
+  const ownedTimeCards = timeCards.filter(
+    (row) =>
+      row.businessId === businessId &&
+      row.job?.businessId === businessId &&
+      row.job.customerId === customer.id,
+  );
 
   for (const row of [
     ...ownedProperties,
@@ -381,6 +412,7 @@ async function buildCustomerPacket(
     ...ownedJobs,
     ...ownedInvoices,
     ...ownedPayments,
+    ...ownedTimeCards,
   ]) {
     access.assertOwned(row);
   }
@@ -476,6 +508,21 @@ async function buildCustomerPacket(
     })),
     CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
   );
+  const timeCardCollection = collection(
+    ownedTimeCards.map((row) => ({
+      id: row.id,
+      jobId: row.jobId,
+      membershipId: row.membershipId,
+      activityType: row.activityType,
+      status: row.status,
+      startedAt: row.startedAt.toISOString(),
+      endedAt: row.endedAt?.toISOString() ?? null,
+      note: row.note,
+      source: row.source,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    CUSTOMER_RECORDS_EXPORT_RELATED_LIMIT,
+  );
 
   const includedRequestIds = requestCollection.items.map((row) => row.id);
   const includedJobIds = jobCollection.items.map((row) => row.id);
@@ -501,6 +548,7 @@ async function buildCustomerPacket(
     jobs: jobCollection,
     invoices: invoiceCollection,
     payments: paymentCollection,
+    timeCards: timeCardCollection,
     files: collection(fileRefs, CUSTOMER_RECORDS_EXPORT_FILE_LIMIT),
   };
 }
@@ -511,7 +559,7 @@ async function loadFileReferences(
   input: { requestIds: string[]; jobIds: string[] },
 ): Promise<CustomerRecordsExportFileRef[]> {
   const businessId = access.businessId;
-  const [requestPhotos, jobPhotos] = await Promise.all([
+  const [requestPhotos, jobPhotos, projectDocuments] = await Promise.all([
     input.requestIds.length > 0
       ? prisma.serviceRequestPhoto.findMany({
           where: { businessId, serviceRequestId: { in: input.requestIds } },
@@ -556,6 +604,33 @@ async function loadFileReferences(
           take: CUSTOMER_RECORDS_EXPORT_FILE_LIMIT + 1,
         })
       : Promise.resolve([]),
+    input.jobIds.length > 0
+      ? prisma.storedAsset.findMany({
+          where: {
+            businessId,
+            jobId: { in: input.jobIds },
+            category: "DOCUMENT",
+            purpose: CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE,
+            visibility: "PRIVATE",
+            status: "READY",
+            deletedAt: null,
+            publicPath: null,
+          },
+          select: {
+            id: true,
+            businessId: true,
+            jobId: true,
+            originalFilename: true,
+            mimeType: true,
+            visibility: true,
+            status: true,
+            purpose: true,
+            category: true,
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: CUSTOMER_RECORDS_EXPORT_FILE_LIMIT + 1,
+        })
+      : Promise.resolve([]),
   ]);
 
   const refs: CustomerRecordsExportFileRef[] = [];
@@ -595,6 +670,31 @@ async function loadFileReferences(
       originalFilename: photo.storedAsset?.originalFilename ?? null,
       mimeType: photo.storedAsset?.mimeType ?? null,
       visibility: photo.storedAsset?.visibility ?? "PRIVATE",
+      status: "REFERENCE",
+      omission: PRIVATE_FILE_OMISSION,
+    });
+  }
+  for (const asset of projectDocuments) {
+    if (
+      asset.businessId !== businessId ||
+      !asset.jobId ||
+      !input.jobIds.includes(asset.jobId) ||
+      asset.purpose !== CUSTOMER_RECORDS_EXPORT_PROJECT_DOCUMENT_PURPOSE ||
+      asset.category !== "DOCUMENT" ||
+      asset.visibility !== "PRIVATE" ||
+      asset.status !== "READY"
+    ) {
+      continue;
+    }
+    access.assertOwned(asset);
+    refs.push({
+      id: asset.id,
+      kind: "PROJECT_DOCUMENT",
+      relatedRequestId: null,
+      relatedJobId: asset.jobId,
+      originalFilename: asset.originalFilename,
+      mimeType: asset.mimeType,
+      visibility: asset.visibility,
       status: "REFERENCE",
       omission: PRIVATE_FILE_OMISSION,
     });

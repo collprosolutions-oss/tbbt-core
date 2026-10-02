@@ -1033,9 +1033,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
           <div>
             <p className="font-medium">Business data ZIP</p>
             <p className="text-sm text-muted-foreground">
-              Customers, properties, requests, estimates, jobs, invoices, payments, expenses, time
-              entries, reviews, campaigns, and settings for this workspace only. Secrets omitted.
-              Invoice, payment, and expense CSVs are accountant-ready recorded TBBT truth.
+              Customers, properties, requests, estimates (with totals), jobs (with property links),
+              invoices, payments, expenses, time cards, reviews, campaigns, and settings for this
+              workspace only. Secrets omitted. Invoice, payment, and expense CSVs are
+              accountant-ready recorded TBBT truth.
             </p>
           </div>
           <Button asChild size="sm">

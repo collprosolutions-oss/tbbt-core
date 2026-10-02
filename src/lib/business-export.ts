@@ -4,17 +4,24 @@
  * Password hashes, session tokens, TOTP secrets, and setup/reset tokens
  * are never included.
  */
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import type { BusinessAccess } from "@/lib/access";
 import {
   accountingExpensesCsv,
   accountingInvoicesCsv,
   accountingPaymentsCsv,
+  canExportBusinessData,
   type AccountingExportSource,
 } from "@/lib/accounting-export";
+import { ForbiddenError } from "@/lib/authorization";
 import { VAULT_DOCUMENT_PURPOSE } from "@/lib/business-protection";
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
+import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import { buildZipStore, toCsv } from "@/lib/zip-store";
+
+export const BUSINESS_EXPORT_AUDIT_AREA = "data-export" as const;
+export const BUSINESS_EXPORT_AUDIT_KEY = "businessExport" as const;
 
 const SECRET_KEY_PATTERN =
   /(password|tokenhash|totpsecret|totppending|secret|apikey|credential)/i;
@@ -205,6 +212,7 @@ export async function buildBusinessExportZip(
         propertyId: true,
         serviceRequestId: true,
         status: true,
+        total: true,
         campaignId: true,
         createdAt: true,
         updatedAt: true,
@@ -216,6 +224,7 @@ export async function buildBusinessExportZip(
       select: {
         id: true,
         customerId: true,
+        propertyId: true,
         estimateId: true,
         status: true,
         scheduledAt: true,
@@ -285,6 +294,9 @@ export async function buildBusinessExportZip(
         id: true,
         membershipId: true,
         jobId: true,
+        activityType: true,
+        note: true,
+        source: true,
         startedAt: true,
         endedAt: true,
         status: true,
@@ -693,6 +705,10 @@ export async function buildBusinessExportZip(
     customers: customers.map((customer) => ({ id: customer.id, name: customer.name })),
     jobs: jobs.map((job) => ({ id: job.id })),
   };
+  const estimateRows = estimates.map((row) => ({
+    ...row,
+    total: exportEstimateTotal(row.total),
+  }));
 
   const files = [
     {
@@ -732,7 +748,13 @@ export async function buildBusinessExportZip(
     { name: "customers.csv", data: toCsv(headersOf(customers), customers) },
     { name: "properties.csv", data: toCsv(headersOf(properties), properties) },
     { name: "requests.csv", data: toCsv(headersOf(requests), requests) },
-    { name: "estimates.csv", data: toCsv(headersOf(estimates), estimates) },
+    {
+      name: "estimates.csv",
+      data: toCsv(
+        headersOf(estimateRows),
+        estimateRows,
+      ),
+    },
     { name: "jobs.csv", data: toCsv(headersOf(jobs), jobs) },
     { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },
     { name: "payments.csv", data: accountingPaymentsCsv(accountingSource) },
@@ -896,6 +918,76 @@ export async function buildBusinessExportZip(
 
 function headersOf(rows: Array<Record<string, unknown>>): string[] {
   return rows[0] ? Object.keys(rows[0]) : ["id"];
+}
+
+function exportEstimateTotal(value: Prisma.Decimal | number | string): string {
+  const amount = value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+  return amount.toFixed(2);
+}
+
+export function businessExportAuditPayload(input: {
+  filename: string;
+  documentExport: BusinessExportResult["documentExport"];
+  exportedDocumentCount: number;
+  missingDocumentCount: number;
+}) {
+  return {
+    filename: input.filename,
+    documentExport: input.documentExport,
+    exportedDocumentCount: input.exportedDocumentCount,
+    missingDocumentCount: input.missingDocumentCount,
+  };
+}
+
+export async function recordBusinessExportAudit(
+  prisma: PrismaClient,
+  access: BusinessAccess,
+  exported: BusinessExportResult,
+) {
+  if (!canExportBusinessData(access.workspace.role)) {
+    throw new ForbiddenError();
+  }
+  return writeSettingsAuditLog(prisma, {
+    businessId: access.businessId,
+    changedByMembershipId: access.workspace.membership.id,
+    settingArea: BUSINESS_EXPORT_AUDIT_AREA,
+    settingKey: BUSINESS_EXPORT_AUDIT_KEY,
+    previousValue: null,
+    newValue: businessExportAuditPayload(exported),
+  });
+}
+
+export type BusinessExportDownloadResult =
+  | {
+      ok: true;
+      status: 200;
+      filename: string;
+      contentType: "application/zip";
+      body: Buffer;
+    }
+  | {
+      ok: false;
+      status: 403;
+      error: "Forbidden";
+    };
+
+export async function runBusinessExportDownload(
+  prisma: PrismaClient,
+  access: BusinessAccess,
+  options?: BusinessExportOptions,
+): Promise<BusinessExportDownloadResult> {
+  if (!canExportBusinessData(access.workspace.role)) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  const exported = await buildBusinessExportZip(prisma, access.businessId, options);
+  await recordBusinessExportAudit(prisma, access, exported);
+  return {
+    ok: true,
+    status: 200,
+    filename: exported.filename,
+    contentType: "application/zip",
+    body: exported.bytes,
+  };
 }
 
 function safeJson(value: string | null) {
