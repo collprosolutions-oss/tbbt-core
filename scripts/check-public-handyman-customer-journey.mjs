@@ -196,6 +196,14 @@ check(
     !isPublicWebsitePath("/payments/other") &&
     !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra"),
 );
+const providerSrc = read("src/lib/payments/provider.ts");
+check(
+  "Fake checkout provider is process-wide so Pay Invoice and the test page share sessions",
+  providerSrc.includes("tbbtFakePaymentProvider") &&
+    providerSrc.includes("globalThis") &&
+    testCheckoutLib.includes("findInvoiceCheckoutSession") &&
+    testCheckoutLib.includes("applyVerifiedCheckoutPayment"),
+);
 check(
   "Mobile portal and estimate stay single-column, then widen",
   portalPage.includes("grid-cols-1") &&
@@ -939,6 +947,12 @@ await withDisposableTestDatabase(
           "Return URL is this token's portal with checkout=return",
           completeTo.includes(`/p/${unpaidJob.projectToken}`) &&
             completeTo.includes("checkout=return"),
+        );
+        const afterPay = await fetch(completeTo, { redirect: "manual" });
+        const afterPayBody = await afterPay.text();
+        check(
+          "Returned portal no longer offers Pay Invoice for the paid test checkout",
+          afterPay.status === 200 && !afterPayBody.includes("Pay Invoice"),
         );
       }
       const cancelJob = await prisma.job.create({

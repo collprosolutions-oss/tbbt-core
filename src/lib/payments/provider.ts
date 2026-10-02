@@ -9,13 +9,22 @@ import {
 import { createStripePaymentProvider } from "@/lib/payments/stripe-adapter";
 import type { PaymentProvider } from "@/lib/payments/types";
 
+type GlobalFakePayments = typeof globalThis & {
+  tbbtFakePaymentProvider?: FakePaymentProvider;
+};
+
 let cached: PaymentProvider | null = null;
 
 export function getPaymentProvider(): PaymentProvider {
+  if (isFakePaymentsAdapterEnabled()) {
+    const globalForFake = globalThis as GlobalFakePayments;
+    if (!globalForFake.tbbtFakePaymentProvider) {
+      globalForFake.tbbtFakePaymentProvider = createFakePaymentProvider();
+    }
+    return globalForFake.tbbtFakePaymentProvider;
+  }
   if (!cached) {
-    cached = isFakePaymentsAdapterEnabled()
-      ? createFakePaymentProvider()
-      : createStripePaymentProvider();
+    cached = createStripePaymentProvider();
   }
   return cached;
 }

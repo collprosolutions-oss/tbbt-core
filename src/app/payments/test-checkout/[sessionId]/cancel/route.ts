@@ -6,6 +6,6 @@ export async function POST(
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params;
-  const session = requireFakeTestCheckoutSession(sessionId);
+  const session = await requireFakeTestCheckoutSession(sessionId);
   return NextResponse.redirect(session.cancelUrl, 303);
 }

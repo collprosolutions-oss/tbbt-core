@@ -9,6 +9,6 @@ export async function POST(
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params;
-  const session = completeFakeTestCheckout(sessionId);
+  const session = await completeFakeTestCheckout(sessionId);
   return NextResponse.redirect(fakeTestCheckoutSuccessHref(session), 303);
 }

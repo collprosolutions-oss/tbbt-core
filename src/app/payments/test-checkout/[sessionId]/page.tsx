@@ -27,7 +27,7 @@ export default async function StripeTestCheckoutPage({
   params: Promise<{ sessionId: string }>;
 }) {
   const { sessionId } = await params;
-  const session = requireFakeTestCheckoutSession(sessionId);
+  const session = await requireFakeTestCheckoutSession(sessionId);
   const amountLabel = fakeTestCheckoutAmountLabel(session);
   const purposeLabel = fakeTestCheckoutPurposeLabel(session.purpose);
 

@@ -707,6 +707,17 @@ try {
       !isPublicWebsitePath("/payments") &&
       !isFakeStripeTestCheckoutPath("/payments/test-checkout-extra"),
   );
+  const providerSrc = readFileSync(new URL("../src/lib/payments/provider.ts", import.meta.url), "utf8");
+  const testCheckoutSrc = readFileSync(
+    new URL("../src/lib/payments/test-checkout.ts", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Fake checkout sessions survive a Next.js module split",
+    providerSrc.includes("tbbtFakePaymentProvider") &&
+      testCheckoutSrc.includes("findInvoiceCheckoutSession") &&
+      testCheckoutSrc.includes("applyVerifiedCheckoutPayment"),
+  );
   check(
     "Stripe adapter does not honor the local fake ready-account allowlist",
     !adapterSrc.includes(FAKE_PAYMENT_READY_ACCOUNTS_ENV) &&
