@@ -337,7 +337,7 @@ export async function sendProjectConversationOwnerReply(
     };
   }
 
-  return composeCustomerCommunication(db, access, {
+  const sent = await composeCustomerCommunication(db, access, {
     customerId,
     channel: input.channel,
     purpose: PROJECT_CONVERSATION_PURPOSE,
@@ -349,6 +349,10 @@ export async function sendProjectConversationOwnerReply(
     browserBusinessId: input.browserBusinessId,
     resumeCommunicationId: reserved.resume ? reserved.communicationId : null,
   });
+  if (reserved.resume && sent.communicationId === reserved.communicationId) {
+    return { ...sent, reused: false };
+  }
+  return sent;
 }
 
 const OWNER_REPLY_CLAIM_STATUS = "READY" as const;

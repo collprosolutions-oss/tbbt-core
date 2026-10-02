@@ -230,20 +230,26 @@ check(
 check(
   "OWNER reply serializes the bound check under the job lock",
   (() => {
-    const ownerReplySrc = opsSrc.slice(
+    const sendSrc = opsSrc.slice(
       opsSrc.indexOf("export async function sendProjectConversationOwnerReply"),
+      opsSrc.indexOf("async function reserveProjectConversationOwnerReply"),
     );
-    const lockIdx = ownerReplySrc.indexOf("lockTenantOwnedJob");
-    const countIdx = ownerReplySrc.indexOf("countProjectConversationMessages");
-    const claimIdx = ownerReplySrc.indexOf('status: OWNER_REPLY_CLAIM_STATUS');
-    const composeIdx = ownerReplySrc.indexOf("composeCustomerCommunication(db,");
+    const reserveSrc = opsSrc.slice(
+      opsSrc.indexOf("async function reserveProjectConversationOwnerReply"),
+    );
+    const lockIdx = reserveSrc.indexOf("lockTenantOwnedJob");
+    const countIdx = reserveSrc.indexOf("countProjectConversationMessages");
+    const claimIdx = reserveSrc.indexOf("status: OWNER_REPLY_CLAIM_STATUS");
     return (
+      sendSrc.includes("reserveProjectConversationOwnerReply") &&
+      sendSrc.includes("composeCustomerCommunication(db,") &&
+      sendSrc.includes("resumeCommunicationId") &&
+      !sendSrc.includes("$transaction") &&
+      !sendSrc.includes("composeCustomerCommunication(tx,") &&
+      !reserveSrc.includes("composeCustomerCommunication") &&
       lockIdx >= 0 &&
       countIdx > lockIdx &&
-      claimIdx > countIdx &&
-      composeIdx > claimIdx &&
-      ownerReplySrc.includes("resumeCommunicationId") &&
-      !ownerReplySrc.includes("composeCustomerCommunication(tx,")
+      claimIdx > countIdx
     );
   })(),
 );
