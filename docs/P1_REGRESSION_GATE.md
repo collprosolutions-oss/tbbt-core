@@ -40,9 +40,20 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
 - `TZ=America/New_York` is forced on every child. Native sign-in
   throttle, Saturday same-week approval, and Field start proofs in
   `scripts/check-native-field-api.mjs` and `scripts/check-time-cards.mjs`
-  were re-verified against that zone on current `origin/main` and pass.
-  The older line-number list in this paragraph is stale and must not be
-  treated as a current failure catalog.
+  pass on current `origin/main` only when Node `TZ=America/New_York`
+  AND the local test Postgres session timezone is UTC (the Postgres
+  default; production). With Postgres set to `America/New_York`,
+  `check-time-cards` "Approval of the Saturday week is refused while
+  the crossing entry remains" and two `check-native-field-api`
+  throttle assertions fail on main and on this branch even with Node
+  `TZ=America/New_York`. The older line-number list in this paragraph
+  is stale and must not be treated as a current failure catalog.
+  `scripts/check-appointment-confirmation.mjs` "Field start has no
+  owner override" (lines 92-95) is a separate stale static assertion
+  that already fails on main: it expects
+  `CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT` in
+  `src/app/actions/field-job.ts`, which is no longer there. This PR
+  does not touch that check.
 - `scripts/check-work-order-portal.mjs`,
   `scripts/check-client-portal-excellence.mjs`, and
   `scripts/check-change-orders.mjs` start `next start`. They need a
