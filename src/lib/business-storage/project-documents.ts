@@ -87,6 +87,22 @@ export function isProjectDocumentUploadOpen(status: string) {
   return !isClosedOrCancelledJobStatus(status);
 }
 
+/**
+ * Completed / closed jobs still show already-received private document
+ * receipts. Upload stays closed. Missing storage still lists receipts.
+ */
+export function shouldShowProjectDocumentsCard(
+  status: string,
+  documentCount: number,
+  storageConfigured = true,
+) {
+  const recorded = Number.isFinite(documentCount)
+    ? Math.max(0, Math.floor(documentCount))
+    : 0;
+  if (recorded > 0) return true;
+  return storageConfigured && isProjectDocumentUploadOpen(status);
+}
+
 function isPrivateUnpublishedProjectDocument(asset: {
   category: string;
   purpose: string | null;

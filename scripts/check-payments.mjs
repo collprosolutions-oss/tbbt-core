@@ -692,6 +692,11 @@ try {
     !fakeSrc.includes("TBBT_PAYMENTS_FAKE_READY"),
   );
   check(
+    "Fake checkout URL is the local Stripe test page",
+    fakeSrc.includes("/payments/test-checkout") &&
+      !fakeSrc.includes("https://checkout.stripe.test/pay/"),
+  );
+  check(
     "Stripe adapter does not honor the local fake ready-account allowlist",
     !adapterSrc.includes(FAKE_PAYMENT_READY_ACCOUNTS_ENV) &&
       !adapterSrc.includes("TBBT_FAKE_PAYMENT_READY_ACCOUNTS"),
@@ -1323,8 +1328,14 @@ try {
   });
   check("checkout amount comes from the invoice total", sessionA.amountCents === 37500);
   check("Business A session uses Business A connected account", sessionA.connectedAccountId === accountA.stripeAccountId);
-  check("checkout URL is Stripe-hosted", sessionA.url.startsWith("https://checkout.stripe.test/pay/"));
-  check("success URL returns to the existing portal", provider.checkouts.at(-1).url.startsWith("https://checkout.stripe.test/pay/"));
+  check(
+    "checkout URL is the local Stripe test checkout page",
+    sessionA.url.startsWith("http://payments.test/payments/test-checkout/cs_test_"),
+  );
+  check(
+    "recorded fake session keeps the local test-checkout URL",
+    provider.checkouts.at(-1).url.startsWith("http://payments.test/payments/test-checkout/cs_test_"),
+  );
 
   const onboardB = await startStripeConnectOnboarding(
     prisma,

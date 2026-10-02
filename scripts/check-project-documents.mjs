@@ -50,6 +50,7 @@ const {
   inspectProjectDocumentUpload,
   listProjectDocumentsForOwnerReview,
   listProjectDocumentsForPortal,
+  shouldShowProjectDocumentsCard,
   privateAssetPath,
   projectDocumentBytesMatchMime,
   projectDocumentTestHooks,
@@ -216,6 +217,13 @@ check(
     remainingProjectDocumentSlots(0) === 5 &&
     remainingProjectDocumentSlots(5) === 0 &&
     remainingProjectDocumentSlots(16) === 0,
+);
+check(
+  "Completed jobs still show permitted receipts when upload is closed",
+  shouldShowProjectDocumentsCard("COMPLETED", 1, false) === true &&
+    shouldShowProjectDocumentsCard("COMPLETED", 0, false) === false &&
+    shouldShowProjectDocumentsCard("SCHEDULED", 0, true) === true &&
+    shouldShowProjectDocumentsCard("CANCELLED", 0, true) === false,
 );
 const pdfBytes = Buffer.from("%PDF-1.4 customer-doc\n%%EOF\n");
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9, 1, 2, 3, 4]);

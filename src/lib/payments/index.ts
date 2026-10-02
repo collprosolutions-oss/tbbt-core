@@ -6,6 +6,13 @@ export {
   STRIPE_CURRENCY,
 } from "@/lib/payments/config";
 export {
+  FAKE_STRIPE_TEST_CHECKOUT_PATH,
+  applyCheckoutSessionId,
+  fakeStripeTestCheckoutUrl,
+  isFakeCheckoutSessionId,
+  isFakePaymentProvider,
+} from "@/lib/payments/fake";
+export {
   isUnknownConnectedAccountError,
   redactStripeText,
   stripeConnectOnboardingFailureMessage,
