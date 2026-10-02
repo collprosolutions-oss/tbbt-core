@@ -270,14 +270,16 @@ check(
     schemaSrc.includes("model JobCallbackEvent") &&
     schemaSrc.includes("model JobCallbackAttachment") &&
     /category\s+String\?/.test(jobCallbackModel) &&
-    /ownerNotes\s+String\s+@default\(""\)/.test(jobCallbackModel) &&
+    /ownerNotes\s+String\?/.test(jobCallbackModel) &&
+    !/ownerNotes\s+String\s+@default\(""\)/.test(jobCallbackModel) &&
     !schemaSrc.includes("model JobCustomerIssue") &&
     !schemaSrc.includes("model JobCustomerIssueEvent") &&
     !schemaSrc.includes("model JobCustomerIssueAttachment") &&
     schemaSrc.includes("Application code must never update or delete an existing row") &&
     migrationSrc.includes('ALTER TABLE "JobCallback"') &&
     migrationSrc.includes('ADD COLUMN IF NOT EXISTS "category"') &&
-    migrationSrc.includes('ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT NOT NULL DEFAULT') &&
+    migrationSrc.includes('ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT') &&
+    !migrationSrc.includes('ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT NOT NULL') &&
     migrationSrc.includes('CREATE TABLE IF NOT EXISTS "JobCallbackAttachment"') &&
     migrationSrc.includes("20261002180000") &&
     !migrationSrc.includes('CREATE TABLE IF NOT EXISTS "JobCustomerIssue"') &&

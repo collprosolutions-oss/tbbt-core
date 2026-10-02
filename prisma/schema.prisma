@@ -2512,7 +2512,10 @@ model JobCallback {
   outcome                  String?
   outcomeNotes             String?
   /// Private owner notes. Hidden from the project token. Never published.
-  ownerNotes               String    @default("")
+  /// Nullable so a create that does not supply notes never names this
+  /// column. `@default("")` would INSERT ownerNotes on every write and
+  /// break Vercel previews that share production and skip migrate.
+  ownerNotes               String?
   recordedByMembershipId   String
   reviewedByMembershipId   String?
   outcomeByMembershipId    String?

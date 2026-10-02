@@ -11,7 +11,7 @@ ALTER TABLE "JobCallback"
   ADD COLUMN IF NOT EXISTS "category" TEXT;
 
 ALTER TABLE "JobCallback"
-  ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS "ownerNotes" TEXT;
 
 CREATE TABLE IF NOT EXISTS "JobCallbackAttachment" (
     "id" TEXT NOT NULL,
