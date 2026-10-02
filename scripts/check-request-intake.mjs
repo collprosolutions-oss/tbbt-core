@@ -501,6 +501,11 @@ async function runHeldAccountReleaseFinalizeRaces({
     await finalizePublicRequestPhoto(deps, slug, readyId);
     const leftClient = new PrismaClient({ datasourceUrl });
     const rightClient = new PrismaClient({ datasourceUrl });
+    requestPhotoTestHooks.afterStoredAssetLock = async ({ assetId }) => {
+      if (assetId === pendingId) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+    };
     try {
       const { raced, held } = await holdAccountAndRace({
         datasourceUrl,
@@ -535,6 +540,7 @@ async function runHeldAccountReleaseFinalizeRaces({
         accountingOk: reserved >= 0 && used === readyBytes,
       });
     } finally {
+      delete requestPhotoTestHooks.afterStoredAssetLock;
       await leftClient.$disconnect();
       await rightClient.$disconnect();
     }
