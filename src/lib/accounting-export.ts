@@ -581,3 +581,38 @@ export async function buildAccountingExportZip(
     bytes: buildZipStore(buildAccountingExportFiles(source)),
   };
 }
+
+export type AccountingExportDownloadResult =
+  | {
+      ok: true;
+      status: 200;
+      filename: string;
+      bytes: Buffer;
+      headers: {
+        "Content-Type": string;
+        "Content-Disposition": string;
+        "Cache-Control": string;
+      };
+    }
+  | { ok: false; status: 403; error: "Forbidden" };
+
+export async function runAccountingExportDownload(
+  prisma: PrismaClient,
+  access: { businessId: string; workspace: { role: MembershipRole } },
+): Promise<AccountingExportDownloadResult> {
+  if (!canExportBusinessData(access.workspace.role)) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  const exported = await buildAccountingExportZip(prisma, access.businessId);
+  return {
+    ok: true,
+    status: 200,
+    filename: exported.filename,
+    bytes: exported.bytes,
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${exported.filename}"`,
+      "Cache-Control": "no-store",
+    },
+  };
+}
