@@ -137,7 +137,8 @@ export async function completeAssignedJob(
   // Deliberately ONLY flips Job.status (after closing RUNNING JOB time).
   // Does not create/send an Invoice, approve any Change Order, or touch
   // payment -- owner financial control stays on Work Order Complete Job
-  // (markJobComplete → completeJobAndSendInvoice).
+  // (markJobComplete → completeJobAndSendInvoice leaves a draft; send is
+  // an explicit owner action).
   const result = await completeJobWithRunningTimeSafety(prisma, {
     businessId: job.businessId,
     jobId: job.id,

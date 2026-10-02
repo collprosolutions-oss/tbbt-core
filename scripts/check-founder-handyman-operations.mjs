@@ -992,7 +992,19 @@ try {
     businessName: businessA.name,
     actorMembershipId: ownerMem.id,
   });
-  demand("OWNER complete created and sent the original invoice", completed.ok === true && completed.invoiceCreated === true);
+  demand(
+    "OWNER complete created a draft original invoice",
+    completed.ok === true &&
+      completed.invoiceCreated === true &&
+      completed.invoiceStatus === "DRAFT" &&
+      completed.newlySent === false,
+  );
+  const sentOriginal = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: completed.invoiceId,
+    businessName: businessA.name,
+  });
+  demand("OWNER explicitly sent the original invoice", sentOriginal.ok === true && sentOriginal.newlySent === true);
   const originalInvoice = await prisma.invoice.findUnique({ where: { id: completed.invoiceId } });
   const fieldChangeOrder = await prisma.changeOrder.findUnique({ where: { id: fieldChangeOrderId } });
   const approvedEstimate = await prisma.estimate.findUnique({ where: { id: estimateCreate.id } });

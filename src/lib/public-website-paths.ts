@@ -16,6 +16,7 @@ export function isPublicWebsitePath(pathname: string) {
     pathname.startsWith("/e/") ||
     pathname.startsWith("/hire/") ||
     pathname.startsWith("/p/") ||
+    pathname.startsWith("/dev/fake-checkout") ||
     pathname.startsWith("/set-password/") ||
     pathname.startsWith("/reset-password/") ||
     pathname.startsWith("/api/storage/public/")

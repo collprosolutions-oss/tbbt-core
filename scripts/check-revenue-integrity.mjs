@@ -511,7 +511,13 @@ try {
     businessName: businessA.name,
   });
   check("complete succeeds", completed.ok === true);
-  check("invoice is SENT", completed.ok && completed.invoiceStatus === "SENT");
+  check("invoice stays DRAFT until send", completed.ok && completed.invoiceStatus === "DRAFT");
+  const sentAfterComplete = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: completed.invoiceId,
+    businessName: businessA.name,
+  });
+  check("explicit send after complete is SENT", sentAfterComplete.ok && sentAfterComplete.status === "SENT");
   const original = await prisma.invoice.findUniqueOrThrow({
     where: { id: completed.invoiceId },
     include: { lineItems: { orderBy: { createdAt: "asc" } } },

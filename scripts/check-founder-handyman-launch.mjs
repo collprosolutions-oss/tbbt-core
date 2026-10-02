@@ -186,7 +186,9 @@ try {
     await import("@/lib/appointment-confirmation");
   const { evaluateStartJob } = await import("@/lib/job-lifecycle");
   const { clockInTime, approveTimesheetWeek, TimeCardError } = await import("@/lib/time-card-ops");
-  const { completeJobAndSendInvoice } = await import("@/lib/complete-job-invoice");
+  const { completeJobAndSendInvoice, sendDraftInvoiceIfNeeded } = await import(
+    "@/lib/complete-job-invoice"
+  );
   const {
     isCustomerVisibleInvoiceStatus,
     loadInvoiceDocumentForProjectToken,
@@ -761,8 +763,14 @@ try {
     throw new Error(`completeJobAndSendInvoice failed: ${completed.error}`);
   }
   check("Complete created an invoice", completed.invoiceCreated === true);
-  check("Invoice was newly sent", completed.newlySent === true);
-  noteAutomated("Complete Job + invoice send via completeJobAndSendInvoice");
+  check("Complete left the invoice as a draft", completed.newlySent === false && completed.invoiceStatus === "DRAFT");
+  const sentInvoice = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: completed.invoiceId,
+    businessName: businessA.name,
+  });
+  check("Explicit send flipped DRAFT to SENT", sentInvoice.ok === true && sentInvoice.newlySent === true);
+  noteAutomated("Complete Job left a draft; explicit sendDraftInvoiceIfNeeded sent it");
   notePhysical("Real invoice email/SMS to the customer");
 
   const completedReplay = await completeJobAndSendInvoice(prisma, {

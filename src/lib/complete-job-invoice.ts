@@ -1,10 +1,11 @@
 /**
- * Owner Complete Job → create/reuse invoice → send to customer.
+ * Owner Complete Job → create/reuse a draft invoice.
  *
- * Existing invoice "send" is the DRAFT → SENT status change
- * (src/app/actions/invoice.ts). SENT makes the invoice visible on the
- * Customer Project Portal. Email is attempted once on that first
- * transition when mail is configured; it is never required for SENT.
+ * Complete Job does not send. Existing invoice "send" is the explicit
+ * DRAFT → SENT change (src/app/actions/invoice.ts / markInvoiceSent).
+ * SENT makes the invoice visible on the Customer Project Portal. Email
+ * is attempted once on that first transition when mail is configured;
+ * it is never required for SENT.
  *
  * Field completeAssignedJob() does not call this — owner financial
  * control stays on the Work Order Complete Job action.
@@ -280,20 +281,10 @@ export async function completeJobAndSendInvoice(
     };
   }
 
-  const sent = await sendDraftInvoiceIfNeeded(db, {
-    businessId: input.businessId,
-    invoiceId: persist.invoiceId,
-    businessName: input.businessName,
+  const invoice = await db.invoice.findFirst({
+    where: { id: persist.invoiceId, businessId: input.businessId },
+    select: { status: true },
   });
-
-  if (!sent.ok) {
-    return {
-      ok: false,
-      error: sent.error,
-      jobCompleted: true,
-      invoiceId: persist.invoiceId,
-    };
-  }
 
   await emitAndProcessBusinessEvent(db, {
     businessId: input.businessId,
@@ -319,16 +310,6 @@ export async function completeJobAndSendInvoice(
     payload: { customerId: safety.customerId, businessName: input.businessName },
     idempotencyKey: `REFERRAL_OPPORTUNITY_CREATED:${input.jobId}`,
   });
-  if (sent.newlySent) {
-    await emitAndProcessBusinessEvent(db, {
-      businessId: input.businessId,
-      type: "INVOICE_SENT",
-      subjectType: "INVOICE",
-      subjectId: persist.invoiceId,
-      payload: { customerId: safety.customerId, businessName: input.businessName },
-      idempotencyKey: `INVOICE_SENT:${persist.invoiceId}`,
-    });
-  }
 
   return {
     ok: true,
@@ -336,9 +317,8 @@ export async function completeJobAndSendInvoice(
     invoiceId: persist.invoiceId,
     invoiceCreated: persist.reused === false,
     invoiceReused: persist.reused === true,
-    invoiceStatus: sent.status,
-    newlySent: sent.newlySent,
-    customerNotified: sent.customerNotified,
-    warning: sent.newlySent ? sent.warning : undefined,
+    invoiceStatus: invoice?.status ?? "DRAFT",
+    newlySent: false,
+    customerNotified: false,
   };
 }

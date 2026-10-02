@@ -1,5 +1,6 @@
 /**
- * Complete Job → create/reuse invoice → send (DRAFT → SENT).
+ * Complete Job → create/reuse a draft invoice. Send is a separate
+ * sendDraftInvoiceIfNeeded / markInvoiceSent step (DRAFT → SENT).
  *
  * Imports the real completeJobAndSendInvoice / persist helpers.
  * Server actions that depend on next/headers are not invoked.
@@ -344,7 +345,7 @@ try {
     },
   });
 
-  console.log("\nTEST A — Completing an approved job creates and sends one invoice");
+  console.log("\nTEST A — Completing an approved job creates one draft invoice");
   const completed = await completeJobAndSendInvoice(prisma, {
     businessId: businessA.id,
     jobId: work.job.id,
@@ -354,8 +355,8 @@ try {
   check("complete succeeds", completed.ok === true);
   check("job is marked completed", (await prisma.job.findUniqueOrThrow({ where: { id: work.job.id } })).status === "COMPLETED");
   check("invoice was created", completed.ok && completed.invoiceCreated === true);
-  check("invoice is SENT", completed.ok && completed.invoiceStatus === "SENT" && completed.newlySent === true);
-  check("portal-visible status", isCustomerVisibleInvoiceStatus(completed.ok ? completed.invoiceStatus : "") === true);
+  check("invoice stays DRAFT until an explicit send", completed.ok && completed.invoiceStatus === "DRAFT" && completed.newlySent === false);
+  check("draft is not portal-visible", isCustomerVisibleInvoiceStatus(completed.ok ? completed.invoiceStatus : "") === false);
 
   const invoiceCount = await prisma.invoice.count({ where: { jobId: work.job.id } });
   check("exactly one invoice", invoiceCount === 1);
@@ -387,6 +388,25 @@ try {
         ),
     ),
   );
+
+  const draftPortalDoc = await loadInvoiceDocumentForProjectToken(
+    work.job.projectToken,
+    prisma,
+  );
+  check("customer portal cannot load the draft invoice", draftPortalDoc == null);
+
+  const sent = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: invoice.id,
+    businessName: businessA.name,
+  });
+  check("explicit send flips DRAFT to SENT", sent.ok === true && sent.newlySent === true && sent.status === "SENT");
+  const sentAgain = await sendDraftInvoiceIfNeeded(prisma, {
+    businessId: businessA.id,
+    invoiceId: invoice.id,
+    businessName: businessA.name,
+  });
+  check("duplicate send is idempotent", sentAgain.ok === true && sentAgain.newlySent === false);
 
   const portalDoc = await loadInvoiceDocumentForProjectToken(
     work.job.projectToken,
@@ -603,8 +623,8 @@ try {
     "invoice behavior is preserved",
     completedTimed.ok &&
       completedTimed.invoiceCreated === true &&
-      completedTimed.invoiceStatus === "SENT" &&
-      completedTimed.newlySent === true,
+      completedTimed.invoiceStatus === "DRAFT" &&
+      completedTimed.newlySent === false,
   );
   check(
     "RUNNING JOB entry is READY with endedAt and preserved startedAt/note",
