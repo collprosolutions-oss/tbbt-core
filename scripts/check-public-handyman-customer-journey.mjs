@@ -182,8 +182,8 @@ check(
 const liveTokenSrc = read("src/lib/project-link-data.ts");
 check(
   "Portal, estimate, and invoice stay token-only",
-  portalPage.includes("findLiveJobByProjectToken(prisma, token") &&
-    invoicePage.includes("findLiveJobByProjectToken(prisma, token") &&
+  /findLiveJobByProjectToken\(prisma, token\b/.test(portalPage) &&
+    /findLiveJobByProjectToken\(prisma, token\b/.test(invoicePage) &&
     estimatePage.includes("loadEstimateDocumentByToken") &&
     invoicePage.includes("loadInvoiceDocumentForProjectToken") &&
     liveTokenSrc.includes("export async function findLiveJobByProjectToken") &&

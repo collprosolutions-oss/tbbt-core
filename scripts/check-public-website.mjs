@@ -10,6 +10,8 @@
  * that database before fetching /hire and /r, plus one active Handyman
  * catalog item if the services list is empty. It never publishes, never
  * changes production routing, and never overwrites an existing row.
+ * The APP_URL fixture calls assertLocalDatabaseUrl first and refuses a
+ * non-local DATABASE_URL so Preview/production DBs are not written.
  *
  * Run with:
  *   node --experimental-strip-types scripts/check-public-website.mjs
@@ -19,6 +21,10 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { register } from "node:module";
+import {
+  RemoteDatabaseRefusedError,
+  assertLocalDatabaseUrl,
+} from "./lib/local-database-guard.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -80,6 +86,11 @@ const { shouldServeTbbtMarketingHome } = await import("@/lib/tbbt-marketing-host
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
 const baseUrl = process.env.DATABASE_URL;
+const APP_URL_FIXTURE_ACTION = "APP_URL CollPro HTTP fixture";
+
+function assertAppUrlFixtureDatabase(url) {
+  return assertLocalDatabaseUrl(url, APP_URL_FIXTURE_ACTION);
+}
 
 let passed = 0;
 let failed = 0;
@@ -673,6 +684,36 @@ check(
 check("Pricing disclaimer is truthful starting-price language",
   PUBLIC_PRICING_DISCLAIMER.includes("starting labor prices"));
 
+const websiteCheckSrc = readRepo("scripts/check-public-website.mjs");
+const fixtureFnAt = websiteCheckSrc.indexOf("async function ensureAppUrlCollProFixture");
+const fixtureGuardAt = websiteCheckSrc.indexOf("assertAppUrlFixtureDatabase(baseUrl)", fixtureFnAt);
+const fixturePrismaAt = websiteCheckSrc.indexOf(
+  "new PrismaClient({ datasourceUrl: baseUrl })",
+  fixtureFnAt,
+);
+check(
+  "APP_URL CollPro fixture asserts a local DATABASE_URL before writing",
+  fixtureFnAt >= 0 &&
+    fixtureGuardAt >= 0 &&
+    fixturePrismaAt >= 0 &&
+    fixtureGuardAt < fixturePrismaAt &&
+    websiteCheckSrc.includes("assertLocalDatabaseUrl"),
+);
+let fixtureWrites = 0;
+try {
+  assertAppUrlFixtureDatabase("postgresql://u:p@db.example.com:5432/prod");
+  fixtureWrites += 1;
+  check("non-local APP_URL fixture DATABASE_URL is refused and writes nothing", false);
+} catch (error) {
+  check(
+    "non-local APP_URL fixture DATABASE_URL is refused and writes nothing",
+    error instanceof RemoteDatabaseRefusedError &&
+      fixtureWrites === 0 &&
+      error.message.includes(APP_URL_FIXTURE_ACTION) &&
+      String(error.host).includes("db.example.com"),
+  );
+}
+
 if (!baseUrl) {
   console.error("\nDATABASE_URL must be set to run intake persistence checks.");
   console.log(`\n${passed} passed, ${failed} failed.`);
@@ -1068,6 +1109,7 @@ try {
   }
 
   async function ensureAppUrlCollProFixture() {
+    assertAppUrlFixtureDatabase(baseUrl);
     const appDb = new PrismaClient({ datasourceUrl: baseUrl });
     try {
       const existing = await appDb.business.findUnique({
