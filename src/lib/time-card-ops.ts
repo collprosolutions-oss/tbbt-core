@@ -114,6 +114,8 @@ export const TIME_CORRECTION_DURATION_TOO_LONG_ERROR =
   "Proposed correction cannot be longer than 24 hours.";
 export const TIME_CORRECTION_START_TOO_OLD_ERROR =
   "Proposed start time is too far in the past.";
+export const START_EARLIER_THAN_RUNNING_ERROR =
+  "That start is earlier than time that is already running";
 const DUPLICATE_CORRECTION_DECISION_ERROR =
   "That correction request already has an owner decision.";
 const MISSING_CORRECTION_REQUEST_ERROR = "That correction request could not be found.";
@@ -2122,6 +2124,15 @@ async function ensureRunningAssignedActivityTimeInTransaction(
   );
 
   for (const current of running) {
+    if (input.startedAt.getTime() <= current.startedAt.getTime()) {
+      throw new TimeCardError(START_EARLIER_THAN_RUNNING_ERROR);
+    }
+    if (
+      input.startedAt.getTime() - current.startedAt.getTime() >
+      TIME_CORRECTION_MAX_DURATION_MS
+    ) {
+      throw new TimeCardError(TIME_CORRECTION_DURATION_TOO_LONG_ERROR);
+    }
     const previous = toAuditSnapshot(current);
     const closed = await db.timeEntry.update({
       where: { id: current.id },

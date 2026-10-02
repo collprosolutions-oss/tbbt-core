@@ -41,7 +41,7 @@ import {
   stopAssignedActivityTimeInTransaction,
   stopRunningAssignedJobTimeInTransaction,
   TIME_CORRECTION_FUTURE_SLACK_MS,
-  TIME_CORRECTION_START_LOOKBACK_MS,
+  TIME_CORRECTION_MAX_DURATION_MS,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
 
@@ -52,6 +52,13 @@ export const NATIVE_TIME_CARD_STALE_MESSAGE =
   "This time changed after your draft. Sync was not applied.";
 export const NATIVE_TIME_CARD_DUPLICATE_MESSAGE =
   "That start or stop was already recorded.";
+export const NATIVE_TIME_CARD_LOOKBACK_MS = TIME_CORRECTION_MAX_DURATION_MS;
+export const NATIVE_TIME_CARD_OUT_OF_ORDER =
+  "Sync start and stop times must be in order.";
+export const NATIVE_TIME_CARD_START_TOO_OLD =
+  "That start is too old to sync. Request a time correction instead.";
+export const NATIVE_TIME_CARD_DURATION_TOO_LONG =
+  "That time is longer than 24 hours. Request a time correction instead.";
 export const NATIVE_TIME_CARD_FINGERPRINT_PATTERN = /^[0-9a-f]{8}$/;
 export const NATIVE_TIME_CARD_ACTION_MAX_CHARS = 32;
 export const NATIVE_TIME_CARD_INTENDED_AT_MAX_CHARS = 40;
@@ -240,8 +247,8 @@ function parseIntendedAt(
   if (parsed > now.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS) {
     return { ok: false, status: 400, error: NATIVE_TIME_CARD_CHOOSE_INTENT };
   }
-  if (parsed < now.getTime() - TIME_CORRECTION_START_LOOKBACK_MS) {
-    return { ok: false, status: 400, error: NATIVE_TIME_CARD_CHOOSE_INTENT };
+  if (parsed < now.getTime() - NATIVE_TIME_CARD_LOOKBACK_MS) {
+    return { ok: false, status: 400, error: NATIVE_TIME_CARD_START_TOO_OLD };
   }
   return { ok: true, intendedAt: new Date(parsed).toISOString() };
 }
@@ -274,6 +281,10 @@ function parseIntents(
     }
     const intended = parseIntendedAt(payload.intendedAt, now);
     if (!intended.ok) return intended;
+    const previous = intents[intents.length - 1];
+    if (previous && Date.parse(intended.intendedAt) <= Date.parse(previous.intendedAt)) {
+      return { ok: false, status: 400, error: NATIVE_TIME_CARD_OUT_OF_ORDER };
+    }
     seen.add(rawAction);
     intents.push({ action: rawAction, intendedAt: intended.intendedAt });
   }
@@ -384,13 +395,57 @@ async function loadClockSnapshot(
   };
 }
 
+function assertSyncIntendedAt(intendedAt: Date, now: Date) {
+  if (intendedAt.getTime() > now.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS) {
+    throw new TimeCardSyncError(NATIVE_TIME_CARD_CHOOSE_INTENT, 400);
+  }
+  if (intendedAt.getTime() < now.getTime() - NATIVE_TIME_CARD_LOOKBACK_MS) {
+    throw new TimeCardSyncError(NATIVE_TIME_CARD_START_TOO_OLD, 400);
+  }
+}
+
+function assertStrictlyIncreasingIntents(intents: NativeTimeCardDraftIntent[]) {
+  for (let index = 1; index < intents.length; index += 1) {
+    if (Date.parse(intents[index].intendedAt) <= Date.parse(intents[index - 1].intendedAt)) {
+      throw new TimeCardSyncError(NATIVE_TIME_CARD_OUT_OF_ORDER, 400);
+    }
+  }
+}
+
+async function assertStopDurationAllowed(
+  tx: Db,
+  access: NativeFieldAccess,
+  jobId: string,
+  activityType: "JOB" | "TRAVEL" | "MATERIAL_PICKUP",
+  endedAt: Date,
+) {
+  const running = await tx.timeEntry.findFirst({
+    where: {
+      businessId: access.businessId,
+      membershipId: access.membershipId,
+      jobId,
+      activityType,
+      status: "RUNNING",
+      endedAt: null,
+    },
+    select: { startedAt: true },
+    orderBy: { startedAt: "desc" },
+  });
+  if (!running) return;
+  if (endedAt.getTime() - running.startedAt.getTime() > TIME_CORRECTION_MAX_DURATION_MS) {
+    throw new TimeCardSyncError(NATIVE_TIME_CARD_DURATION_TOO_LONG);
+  }
+}
+
 async function applyIntent(
   tx: Db,
   access: NativeFieldAccess,
   jobId: string,
   intent: NativeTimeCardDraftIntent,
+  now: Date,
 ): Promise<{ startedJob: boolean }> {
   const intendedAt = new Date(intent.intendedAt);
+  assertSyncIntendedAt(intendedAt, now);
   if (intent.action === "START_JOB") {
     const current = await tx.job.findFirst({
       where: { id: jobId, businessId: access.businessId },
@@ -421,6 +476,7 @@ async function applyIntent(
     return { startedJob: !result.alreadyStarted };
   }
   if (intent.action === "STOP_JOB_TIME") {
+    await assertStopDurationAllowed(tx, access, jobId, "JOB", intendedAt);
     const result = await stopRunningAssignedJobTimeInTransaction(tx, {
       businessId: access.businessId,
       jobId,
@@ -455,6 +511,7 @@ async function applyIntent(
     }
     return { startedJob: false };
   }
+  await assertStopDurationAllowed(tx, access, jobId, activityType, intendedAt);
   const result = await stopAssignedActivityTimeInTransaction(tx, {
     businessId: access.businessId,
     jobId,
@@ -497,8 +554,19 @@ export async function syncNativeAssignedTimeCardDraft(
   options?: {
     /** Proof hook: runs after the authorize read and before the Job lock. */
     afterInitialRead?: () => Promise<void>;
+    now?: Date;
   },
 ): Promise<NativeSyncAssignedTimeCardResult> {
+  const now = options?.now ?? new Date();
+  try {
+    assertStrictlyIncreasingIntents(input.intents);
+    for (const intent of input.intents) {
+      assertSyncIntendedAt(new Date(intent.intendedAt), now);
+    }
+  } catch (error) {
+    return syncFailure(error);
+  }
+
   const assigned = await db.job.findFirst({
     where: nativeAssignedJobWhere(jobId, access),
     select: { id: true, customerId: true },
@@ -553,7 +621,7 @@ export async function syncNativeAssignedTimeCardDraft(
 
       let didStartJob = false;
       for (const intent of input.intents) {
-        const applied = await applyIntent(tx, access, locked.id, intent);
+        const applied = await applyIntent(tx, access, locked.id, intent, now);
         if (applied.startedJob) didStartJob = true;
       }
       return { alreadySynced: false, startedJob: didStartJob };

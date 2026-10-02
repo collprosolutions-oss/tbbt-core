@@ -300,6 +300,10 @@ export function recordLocalTimeCardIntent(input: {
     throw new TimeCardDraftStorageError(TIME_CARD_DRAFT_DUPLICATE_TAP_MESSAGE);
   }
   const intendedAt = (input.now ?? new Date()).toISOString();
+  const previous = input.draft?.intents[input.draft.intents.length - 1];
+  if (previous && Date.parse(intendedAt) <= Date.parse(previous.intendedAt)) {
+    throw new TimeCardDraftStorageError(TIME_CARD_DRAFT_SYNC_BEFORE_MORE_CHANGES);
+  }
   const intents = [...(input.draft?.intents ?? []), { action: input.action, intendedAt }];
   if (intents.length > TIME_CARD_DRAFT_MAX_INTENTS) {
     throw new TimeCardDraftStorageError(TIME_CARD_DRAFT_SYNC_BEFORE_MORE_CHANGES);

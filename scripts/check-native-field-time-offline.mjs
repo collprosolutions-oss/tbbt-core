@@ -22,9 +22,13 @@ const { NATIVE_JOB_NOT_AVAILABLE } = await import("@/lib/native-field-ops");
 const { loadNativeAssignedJob } = await import("@/lib/native-field");
 const {
   NATIVE_TIME_CARD_CHOOSE_INTENT,
+  NATIVE_TIME_CARD_DURATION_TOO_LONG,
   NATIVE_TIME_CARD_DUPLICATE_MESSAGE,
+  NATIVE_TIME_CARD_LOOKBACK_MS,
   NATIVE_TIME_CARD_MAX_INTENTS,
+  NATIVE_TIME_CARD_OUT_OF_ORDER,
   NATIVE_TIME_CARD_STALE_MESSAGE,
+  NATIVE_TIME_CARD_START_TOO_OLD,
   NATIVE_TIME_CARD_SYNC_JSON_MAX_BYTES,
   parseNativeTimeCardSyncJson,
   syncNativeAssignedTimeCardDraft,
@@ -40,8 +44,16 @@ const { SAAS_SUBSCRIPTION_REQUIRED_TEAM_MESSAGE } = await import(
 const { CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT } = await import(
   "@/lib/appointment-confirmation"
 );
-const { parseBusinessDateTimeInput, weekRange } = await import("@/lib/time-cards");
-const { approveTimesheetWeek } = await import("@/lib/time-card-ops");
+const { formatDateInput, formatTimeInput, parseBusinessDateTimeInput, weekRange } = await import(
+  "@/lib/time-cards"
+);
+const {
+  approveTimesheetWeek,
+  START_EARLIER_THAN_RUNNING_ERROR,
+  TIME_CORRECTION_FUTURE_SLACK_MS,
+  TIME_CORRECTION_MAX_DURATION_MS,
+} = await import("@/lib/time-card-ops");
+const { requestNativeTimeCorrection } = await import("@/lib/native-time-cards");
 const {
   SECURE_STORE_KEY_PATTERN,
   SECURE_STORE_VALUE_MAX_BYTES,
@@ -286,6 +298,68 @@ check(
     validSync.intents[0].action === "START_JOB" &&
     validSync.expectedFingerprint === timeCardStateFingerprint(idle) &&
     nativeDraftFingerprint(idle) === timeCardStateFingerprint(idle),
+);
+
+const boundNow = new Date("2026-10-02T17:00:00.000Z");
+function parseBoundIntent(intendedAt) {
+  return parseNativeTimeCardSyncJson(
+    JSON.stringify({
+      expectedFingerprint: timeCardStateFingerprint(idle),
+      intents: [{ action: "START_JOB", intendedAt }],
+    }),
+    boundNow,
+  );
+}
+const futureInside = parseBoundIntent(
+  new Date(boundNow.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS).toISOString(),
+);
+const futureOutside = parseBoundIntent(
+  new Date(boundNow.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS + 1000).toISOString(),
+);
+const pastInside = parseBoundIntent(
+  new Date(boundNow.getTime() - NATIVE_TIME_CARD_LOOKBACK_MS).toISOString(),
+);
+const pastOutside = parseBoundIntent(
+  new Date(boundNow.getTime() - NATIVE_TIME_CARD_LOOKBACK_MS - 1000).toISOString(),
+);
+check(
+  "parseNativeTimeCardSyncJson accepts a start just inside the 5-minute future slack",
+  futureInside.ok === true &&
+    NATIVE_TIME_CARD_LOOKBACK_MS === TIME_CORRECTION_MAX_DURATION_MS &&
+    TIME_CORRECTION_FUTURE_SLACK_MS === 5 * 60 * 1000,
+);
+check(
+  "parseNativeTimeCardSyncJson refuses a start just outside the 5-minute future slack",
+  futureOutside.ok === false &&
+    futureOutside.status === 400 &&
+    futureOutside.error === NATIVE_TIME_CARD_CHOOSE_INTENT,
+);
+check(
+  "parseNativeTimeCardSyncJson accepts a start just inside the 24-hour offline window",
+  pastInside.ok === true,
+);
+check(
+  "parseNativeTimeCardSyncJson refuses a start just outside the 24-hour offline window",
+  pastOutside.ok === false &&
+    pastOutside.status === 400 &&
+    pastOutside.error === NATIVE_TIME_CARD_START_TOO_OLD,
+);
+
+const outOfOrderParse = parseNativeTimeCardSyncJson(
+  JSON.stringify({
+    expectedFingerprint: timeCardStateFingerprint(idle),
+    intents: [
+      { action: "START_TRAVEL", intendedAt: "2026-10-02T16:50:00.000Z" },
+      { action: "START_JOB", intendedAt: "2026-10-02T16:40:00.000Z" },
+    ],
+  }),
+  boundNow,
+);
+check(
+  "parseNativeTimeCardSyncJson refuses a later tap that is earlier than the previous intendedAt",
+  outOfOrderParse.ok === false &&
+    outOfOrderParse.status === 400 &&
+    outOfOrderParse.error === NATIVE_TIME_CARD_OUT_OF_ORDER,
 );
 
 const oversizedBody = await readCappedRequestText(
@@ -675,6 +749,13 @@ try {
       passwordHash,
     },
   });
+  const deactivateUser = await prisma.user.create({
+    data: {
+      name: "Dee Deactivate",
+      email: `dee-${randomUUID()}@native-time-offline.example`,
+      passwordHash,
+    },
+  });
 
   const ownerMem = await prisma.membership.create({
     data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
@@ -696,6 +777,9 @@ try {
   });
   const laMem = await prisma.membership.create({
     data: { userId: laUser.id, businessId: laBusiness.id, role: "MEMBER" },
+  });
+  const deactivateMem = await prisma.membership.create({
+    data: { userId: deactivateUser.id, businessId: businessA.id, role: "MEMBER" },
   });
 
   await prisma.businessSaasSubscription.create({
@@ -825,6 +909,44 @@ try {
   const overlapStartedAt = "2026-10-02T12:00:00.000Z";
   const overlapEndedAt = "2026-10-02T13:00:00.000Z";
   const overlapIntentAt = "2026-10-02T12:30:00.000Z";
+  const earlierRunningJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Earlier Running Canary",
+    status: "IN_PROGRESS",
+  });
+  const earlierStartJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Earlier Start Canary",
+  });
+  const outOfOrderJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Out Of Order Canary",
+  });
+  const oldStartJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Old Start Canary",
+  });
+  const longStopJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Long Stop Canary",
+    status: "IN_PROGRESS",
+  });
+  const correctionJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Correction Path Canary",
+    status: "IN_PROGRESS",
+  });
+  const deactivateJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: deactivateMem.id,
+    customerName: "Deactivate Canary",
+  });
   const raceJob = await createTimeJob({
     businessId: businessA.id,
     assignedMembershipId: memberMem.id,
@@ -891,12 +1013,17 @@ try {
     email: laUser.email,
     password,
   });
+  const deactivateSignIn = await signInNativeField(prisma, {
+    email: deactivateUser.email,
+    password,
+  });
   if (
     !memberSignIn.ok ||
     !otherSignIn.ok ||
     !betaSignIn.ok ||
     !blockedSignIn.ok ||
-    !laSignIn.ok
+    !laSignIn.ok ||
+    !deactivateSignIn.ok
   ) {
     throw new Error("Time-card offline fixture sign-in failed.");
   }
@@ -905,12 +1032,16 @@ try {
   const betaAccess = await resolveNativeFieldAccess(prisma, { token: betaSignIn.token });
   const blockedAccess = await resolveNativeFieldAccess(prisma, { token: blockedSignIn.token });
   const laAccess = await resolveNativeFieldAccess(prisma, { token: laSignIn.token });
+  const deactivateAccess = await resolveNativeFieldAccess(prisma, {
+    token: deactivateSignIn.token,
+  });
   if (
     !memberAccess.ok ||
     !otherAccess.ok ||
     !betaAccess.ok ||
     !blockedAccess.ok ||
-    !laAccess.ok
+    !laAccess.ok ||
+    !deactivateAccess.ok
   ) {
     throw new Error("Time-card offline fixture access failed.");
   }
@@ -1026,6 +1157,193 @@ try {
       overlapRows.length === 0,
   );
 
+  const clockNow = new Date();
+  const runningSince = new Date(clockNow.getTime() - 30 * 60 * 1000);
+  const earlierStartAt = new Date(clockNow.getTime() - 2 * 60 * 60 * 1000).toISOString();
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: earlierRunningJob.id,
+    startedAt: runningSince,
+  });
+  const earlierStart = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    earlierStartJob.id,
+    syncPayload(earlierStartJob, memberMem.id, [
+      { action: "START_JOB", intendedAt: earlierStartAt },
+    ]),
+  );
+  const earlierRunningAfter = await prisma.timeEntry.findMany({
+    where: { jobId: earlierRunningJob.id, businessId: businessA.id },
+  });
+  const earlierStartRows = await prisma.timeEntry.findMany({
+    where: { jobId: earlierStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "A start earlier than time already running is a visible 409 and writes no negative duration",
+    earlierStart.ok === false &&
+      earlierStart.status === 409 &&
+      earlierStart.error === START_EARLIER_THAN_RUNNING_ERROR &&
+      earlierStartRows.length === 0 &&
+      earlierRunningAfter.length === 1 &&
+      earlierRunningAfter[0].status === "RUNNING" &&
+      earlierRunningAfter[0].endedAt === null &&
+      earlierRunningAfter[0].startedAt.getTime() === runningSince.getTime(),
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: earlierRunningJob.id, businessId: businessA.id },
+  });
+
+  const travelEarlier = new Date(clockNow.getTime() - 10 * 60 * 1000).toISOString();
+  const jobEarlier = new Date(clockNow.getTime() - 20 * 60 * 1000).toISOString();
+  const outOfOrderLive = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    outOfOrderJob.id,
+    syncPayload(outOfOrderJob, memberMem.id, [
+      { action: "START_TRAVEL", intendedAt: travelEarlier },
+      { action: "START_JOB", intendedAt: jobEarlier },
+    ]),
+  );
+  const outOfOrderRows = await prisma.timeEntry.findMany({
+    where: { jobId: outOfOrderJob.id, businessId: businessA.id },
+  });
+  check(
+    "An out-of-order travel-then-job draft is refused and writes no negative-duration travel",
+    outOfOrderLive.ok === false &&
+      outOfOrderLive.status === 400 &&
+      outOfOrderLive.error === NATIVE_TIME_CARD_OUT_OF_ORDER &&
+      outOfOrderRows.length === 0,
+  );
+
+  const eightyDaysAgo = new Date(clockNow.getTime() - 80 * 24 * 60 * 60 * 1000).toISOString();
+  const oldStart = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    oldStartJob.id,
+    syncPayload(oldStartJob, memberMem.id, [
+      { action: "START_JOB", intendedAt: eightyDaysAgo },
+    ]),
+  );
+  const oldStartRows = await prisma.timeEntry.findMany({
+    where: { jobId: oldStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "An 80-day-old start is refused and does not create unreviewed time",
+    oldStart.ok === false &&
+      oldStart.status === 400 &&
+      oldStart.error === NATIVE_TIME_CARD_START_TOO_OLD &&
+      oldStartRows.length === 0,
+  );
+
+  const longStartedAt = new Date(clockNow.getTime() - TIME_CORRECTION_MAX_DURATION_MS - 60_000);
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: longStopJob.id,
+    startedAt: longStartedAt,
+  });
+  const longStop = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    longStopJob.id,
+    syncPayload(
+      longStopJob,
+      memberMem.id,
+      [{ action: "STOP_JOB_TIME", intendedAt: clockNow.toISOString() }],
+      {
+        runningTime: {
+          running: true,
+          startedAt: longStartedAt.toISOString(),
+          endedAt: null,
+        },
+      },
+    ),
+  );
+  const longStopRows = await prisma.timeEntry.findMany({
+    where: { jobId: longStopJob.id, businessId: businessA.id },
+  });
+  check(
+    "A sync stop longer than 24 hours is refused and leaves the running entry open",
+    longStop.ok === false &&
+      longStop.status === 409 &&
+      longStop.error === NATIVE_TIME_CARD_DURATION_TOO_LONG &&
+      longStopRows.length === 1 &&
+      longStopRows[0].status === "RUNNING" &&
+      longStopRows[0].endedAt === null,
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: longStopJob.id, businessId: businessA.id },
+  });
+
+  const correctionStart = new Date(clockNow.getTime() - 8 * 60 * 60 * 1000);
+  const correctionEnd = new Date(clockNow.getTime() - 7 * 60 * 60 * 1000);
+  const correctionEntry = await createReadyEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: correctionJob.id,
+    startedAt: correctionStart,
+    endedAt: correctionEnd,
+  });
+  const proposedCorrectionStart = new Date(correctionStart.getTime() - 15 * 60 * 1000);
+  const correctionRequest = await requestNativeTimeCorrection(prisma, memberAccess.access, {
+    timeEntryId: correctionEntry.id,
+    reason: "Offline tap was older than the sync window.",
+    proposedStartDate: formatDateInput(proposedCorrectionStart, "America/New_York"),
+    proposedStartTime: formatTimeInput(proposedCorrectionStart, "America/New_York"),
+    proposedEndDate: formatDateInput(correctionEnd, "America/New_York"),
+    proposedEndTime: formatTimeInput(correctionEnd, "America/New_York"),
+  });
+  const correctionAfter = await prisma.timeEntry.findFirst({
+    where: { id: correctionEntry.id },
+  });
+  check(
+    "Older edits go through a correction request and do not rewrite the TimeEntry",
+    correctionRequest.ok === true &&
+      correctionRequest.request.status === "PENDING" &&
+      correctionAfter?.startedAt.getTime() === correctionStart.getTime() &&
+      correctionAfter?.endedAt?.getTime() === correctionEnd.getTime(),
+  );
+
+  const deactivate = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    deactivateAccess.access,
+    deactivateJob.id,
+    syncPayload(deactivateJob, deactivateMem.id, [
+      { action: "START_JOB", intendedAt: new Date(clockNow.getTime() - 60_000).toISOString() },
+    ]),
+    {
+      afterInitialRead: async () => {
+        const otherClient = new PrismaClient({ datasourceUrl: testUrl });
+        try {
+          await otherClient.membership.update({
+            where: { id: deactivateMem.id },
+            data: { active: false },
+          });
+        } finally {
+          await otherClient.$disconnect();
+        }
+      },
+    },
+  );
+  const deactivateRows = await prisma.timeEntry.findMany({
+    where: { jobId: deactivateJob.id, businessId: businessA.id },
+  });
+  const deactivateJobAfter = await prisma.job.findFirst({
+    where: { id: deactivateJob.id, businessId: businessA.id },
+    select: { status: true, assignedMembershipId: true },
+  });
+  check(
+    "A deactivated membership after the initial read refuses time-card sync with no writes",
+    deactivate.ok === false &&
+      deactivate.status === 404 &&
+      deactivate.error === NATIVE_JOB_NOT_AVAILABLE &&
+      deactivateRows.length === 0 &&
+      deactivateJobAfter?.status === "SCHEDULED" &&
+      deactivateJobAfter?.assignedMembershipId === deactivateMem.id,
+  );
+
   const memberStart = await syncNativeAssignedTimeCardDraft(
     prisma,
     memberAccess.access,
@@ -1118,8 +1436,8 @@ try {
       memberStop.job.status === "IN_PROGRESS",
   );
 
-  const startStopStart = "2026-10-02T18:00:00.000Z";
-  const startStopEnd = "2026-10-02T19:00:00.000Z";
+  const startStopStart = new Date(Date.parse(startAt) + 10 * 60 * 1000).toISOString();
+  const startStopEnd = new Date(Date.parse(startAt) + 20 * 60 * 1000).toISOString();
   const startStop = await syncNativeAssignedTimeCardDraft(
     prisma,
     memberAccess.access,
@@ -1142,7 +1460,7 @@ try {
       startStopRows[0].endedAt?.toISOString() === startStopEnd,
   );
 
-  const retryStart = "2026-10-02T20:00:00.000Z";
+  const retryStart = new Date(Date.parse(startAt) + 25 * 60 * 1000).toISOString();
   const retryPayload = syncPayload(retryJob, memberMem.id, [
     { action: "START_JOB", intendedAt: retryStart },
   ]);
@@ -1170,8 +1488,8 @@ try {
       retryRows.length === 1,
   );
 
-  const deviceAStart = "2026-10-02T21:00:00.000Z";
-  const deviceBStart = "2026-10-02T21:05:00.000Z";
+  const deviceAStart = new Date(Date.parse(startAt) + 30 * 60 * 1000).toISOString();
+  const deviceBStart = new Date(Date.parse(startAt) + 35 * 60 * 1000).toISOString();
   const conflictBase = syncPayload(conflictJob, memberMem.id, [
     { action: "START_JOB", intendedAt: deviceAStart },
   ]);
@@ -1225,8 +1543,10 @@ try {
     };
   }
 
+  const concurrentA = new Date(Date.parse(startAt) + 40 * 60 * 1000).toISOString();
+  const concurrentB = new Date(Date.parse(startAt) + 41 * 60 * 1000).toISOString();
   const concurrentExpected = syncPayload(concurrentJob, memberMem.id, [
-    { action: "START_JOB", intendedAt: "2026-10-02T22:00:00.000Z" },
+    { action: "START_JOB", intendedAt: concurrentA },
   ]).expectedFingerprint;
   const waitForPeer = createTwoPartyBarrier();
   const [left, right] = await Promise.all([
@@ -1236,7 +1556,7 @@ try {
       concurrentJob.id,
       {
         expectedFingerprint: concurrentExpected,
-        intents: [{ action: "START_JOB", intendedAt: "2026-10-02T22:00:00.000Z" }],
+        intents: [{ action: "START_JOB", intendedAt: concurrentA }],
       },
       { afterInitialRead: waitForPeer },
     ),
@@ -1246,7 +1566,7 @@ try {
       concurrentJob.id,
       {
         expectedFingerprint: concurrentExpected,
-        intents: [{ action: "START_JOB", intendedAt: "2026-10-02T22:01:00.000Z" }],
+        intents: [{ action: "START_JOB", intendedAt: concurrentB }],
       },
       { afterInitialRead: waitForPeer },
     ),
@@ -1312,58 +1632,57 @@ try {
       raceAfter?.status === "SCHEDULED",
   );
 
-  const laWeekStart = weekRange(civil("2026-09-21", "10:00", "America/Los_Angeles"), "America/Los_Angeles").start;
+  const saturdayCivil = civil("2026-09-26", "23:00", "America/Los_Angeles");
+  const sundayCivil = civil("2026-09-27", "00:30", "America/Los_Angeles");
+  const laSaturdayWeek = weekRange(saturdayCivil, "America/Los_Angeles");
+  const laSundayWeek = weekRange(sundayCivil, "America/Los_Angeles");
+  const nySaturdayWeek = weekRange(saturdayCivil, "America/New_York");
+  check(
+    "Saturday 23:00 America/Los_Angeles is stored in UTC in the prior week, not the New York week",
+    saturdayCivil.toISOString() === "2026-09-27T06:00:00.000Z" &&
+      sundayCivil.toISOString() === "2026-09-27T07:30:00.000Z" &&
+      laSaturdayWeek.start.toISOString() === "2026-09-20T07:00:00.000Z" &&
+      laSundayWeek.start.toISOString() === "2026-09-27T07:00:00.000Z" &&
+      nySaturdayWeek.start.getTime() !== laSaturdayWeek.start.getTime(),
+  );
+  check(
+    "A Sunday 00:30 America/Los_Angeles instant lands in the next open week",
+    laSundayWeek.start.getTime() > laSaturdayWeek.start.getTime() &&
+      sundayCivil.getTime() >= laSundayWeek.start.getTime() &&
+      sundayCivil.getTime() < laSundayWeek.end.getTime(),
+  );
+
+  const laNow = new Date();
+  const currentLaWeek = weekRange(laNow, "America/Los_Angeles");
   await createReadyEntry({
     businessId: laBusiness.id,
     membershipId: laMem.id,
-    startedAt: civil("2026-09-21", "10:00", "America/Los_Angeles"),
-    endedAt: civil("2026-09-21", "11:00", "America/Los_Angeles"),
+    startedAt: new Date(laNow.getTime() - 2 * 60 * 60 * 1000),
+    endedAt: new Date(laNow.getTime() - 60 * 60 * 1000),
   });
   await approveTimesheetWeek(prisma, ownerLa, {
     membershipId: laMem.id,
-    weekStartedAt: laWeekStart,
+    weekStartedAt: currentLaWeek.start,
     timeZone: "America/Los_Angeles",
   });
-  const approvedSaturday = civil("2026-09-26", "23:00", "America/Los_Angeles").toISOString();
-  const openSunday = civil("2026-09-27", "00:30", "America/Los_Angeles").toISOString();
+  const approvedRecent = new Date(laNow.getTime() - 60_000).toISOString();
   const approvedSync = await syncNativeAssignedTimeCardDraft(
     prisma,
     laAccess.access,
     approvedJob.id,
     syncPayload(approvedJob, laMem.id, [
-      { action: "START_JOB", intendedAt: approvedSaturday },
-    ]),
-  );
-  const openWeekSync = await syncNativeAssignedTimeCardDraft(
-    prisma,
-    laAccess.access,
-    openWeekJob.id,
-    syncPayload(openWeekJob, laMem.id, [
-      { action: "START_JOB", intendedAt: openSunday },
+      { action: "START_JOB", intendedAt: approvedRecent },
     ]),
   );
   const approvedRows = await prisma.timeEntry.findMany({
     where: { jobId: approvedJob.id, businessId: laBusiness.id },
   });
-  const openWeekRows = await prisma.timeEntry.findMany({
-    where: { jobId: openWeekJob.id, businessId: laBusiness.id },
-  });
   check(
-    "A Saturday-night LA tap in an approved week is refused even if the device is in New York",
+    "A recent LA tap in an approved week is refused even if the device is in New York",
     approvedSync.ok === false &&
       approvedSync.status === 409 &&
       String(approvedSync.error).toLowerCase().includes("approved") &&
-      approvedRows.length === 0 &&
-      laWeekStart.toISOString() === "2026-09-20T07:00:00.000Z" &&
-      approvedSaturday === "2026-09-27T06:00:00.000Z",
-  );
-  check(
-    "A Sunday 00:30 America/Los_Angeles tap lands in the next open week",
-    openWeekSync.ok === true &&
-      openWeekSync.alreadySynced === false &&
-      openWeekRows.length === 1 &&
-      openWeekRows[0].startedAt.toISOString() === openSunday &&
-      openSunday === "2026-09-27T07:30:00.000Z",
+      approvedRows.length === 0,
   );
 
   const leftoverB = await prisma.timeEntry.findMany({ where: { businessId: businessB.id } });
