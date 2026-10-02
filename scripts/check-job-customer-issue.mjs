@@ -761,6 +761,16 @@ try {
       queueRowsA[0].id === firstPortal.callbackId &&
       queueRowsOwnerPath[0].id === ownerFirst.id,
   );
+  const maintenanceFollowUpsAfterIssue = await prisma.customerFollowUp.count({
+    where: {
+      businessId: businessA.id,
+      origin: "MAINTENANCE",
+    },
+  });
+  check(
+    "One customer-issue event does not also write a MAINTENANCE owner task",
+    maintenanceFollowUpsAfterIssue === 0,
+  );
   const issueTables = await prisma.$queryRaw`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public'
