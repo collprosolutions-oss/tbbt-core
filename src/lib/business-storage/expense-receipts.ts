@@ -27,6 +27,7 @@ import {
   resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
+import { lockBusinessStorageAccountForUpdate } from "@/lib/business-storage/request-photos";
 import {
   StorageAccessError,
   StorageError,
@@ -258,6 +259,8 @@ async function claimUnreferencedExpenseReceiptInTx(
   assetId: string,
   now: Date,
 ) {
+  // LOCK_ACCOUNT_BEFORE_ASSET: receipt release must match finalize (account, then asset).
+  await lockBusinessStorageAccountForUpdate(tx, access.businessId);
   const referenced = await tx.expense.findFirst({
     where: { receiptStoredAssetId: assetId, businessId: access.businessId },
     select: { id: true },

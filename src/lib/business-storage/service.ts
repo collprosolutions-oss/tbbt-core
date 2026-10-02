@@ -20,6 +20,7 @@ import { createR2StorageProvider } from "@/lib/business-storage/r2-provider";
 import {
   DEFAULT_MANAGED_STORAGE_LIMIT_BYTES,
   PRIVATE_DOWNLOAD_URL_TTL_SECONDS,
+  PUBLIC_REQUEST_PHOTO_PURPOSE,
   STORAGE_PENDING_TTL_MS,
   STORAGE_UPLOAD_URL_TTL_SECONDS,
   StorageAccessError,
@@ -42,6 +43,108 @@ export type StorageServiceDeps = {
 
 function toBigInt(value: number | bigint) {
   return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function reservedBytesForPendingAsset(purpose: string | null | undefined, fileSizeBytes: number) {
+  if (purpose === PUBLIC_REQUEST_PHOTO_PURPOSE) return 0;
+  return fileSizeBytes;
+}
+
+type PendingReservationAsset = {
+  purpose?: string | null;
+  fileSizeBytes: number;
+  width?: number | null;
+};
+
+/**
+ * Bytes this PENDING row still holds on storageReservedBytes.
+ * New public-request-photo rows record width=0 (reserved nothing).
+ * Pre-deploy public rows have width=null and reserved fileSizeBytes.
+ * Never report more than the account still has reserved.
+ */
+function pendingReservationBytesToRelease(
+  asset: PendingReservationAsset,
+  accountReservedBytes: number,
+) {
+  const available = Math.max(0, accountReservedBytes);
+  if (asset.purpose === PUBLIC_REQUEST_PHOTO_PURPOSE) {
+    if (asset.width === 0) return 0;
+    return Math.min(Number(asset.fileSizeBytes), available);
+  }
+  return Math.min(reservedBytesForPendingAsset(asset.purpose, asset.fileSizeBytes), available);
+}
+
+async function lockStorageAccountRow(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM "BusinessStorageAccount" WHERE id = ${accountId} FOR UPDATE
+  `;
+  if (rows.length === 0) {
+    throw new StorageError("File storage is not configured for this business.");
+  }
+  return tx.businessStorageAccount.findUniqueOrThrow({ where: { id: accountId } });
+}
+
+async function lockPendingAssetRow(
+  tx: Prisma.TransactionClient,
+  input: { businessId: string; assetId: string },
+) {
+  await tx.$queryRaw`
+    SELECT id FROM "StoredAsset"
+    WHERE id = ${input.assetId} AND "businessId" = ${input.businessId}
+    FOR UPDATE
+  `;
+}
+
+/** Account row first, then the PENDING asset. The opposite order deadlocks finalize against abort/expiry. */
+async function lockAccountThenPendingAsset(
+  tx: Prisma.TransactionClient,
+  input: { accountId: string; businessId: string; assetId: string },
+) {
+  const account = await lockStorageAccountRow(tx, input.accountId);
+  await lockPendingAssetRow(tx, input);
+  return account;
+}
+
+async function releasePendingReservationInTx(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+  asset: PendingReservationAsset,
+) {
+  const account = await tx.businessStorageAccount.findUniqueOrThrow({
+    where: { id: accountId },
+    select: { storageReservedBytes: true },
+  });
+  const held = pendingReservationBytesToRelease(asset, Number(account.storageReservedBytes));
+  if (held <= 0) return 0;
+  await tx.businessStorageAccount.update({
+    where: { id: accountId },
+    data: { storageReservedBytes: { decrement: held } },
+  });
+  return held;
+}
+
+async function failPendingAssetAndReleaseReservation(
+  tx: Prisma.TransactionClient,
+  input: {
+    businessId: string;
+    assetId: string;
+    storageAccountId: string;
+    purpose: string | null;
+    fileSizeBytes: number;
+    width: number | null;
+    now: Date;
+  },
+) {
+  const updated = await tx.storedAsset.updateMany({
+    where: { id: input.assetId, businessId: input.businessId, status: "PENDING" },
+    data: { status: "FAILED", deletedAt: input.now, publicPath: null },
+  });
+  if (updated.count !== 1) return false;
+  await releasePendingReservationInTx(tx, input.storageAccountId, input);
+  return true;
 }
 
 export function hasEnoughStorage(input: {
@@ -139,7 +242,9 @@ async function releaseExpiredReservations(
     },
     select: {
       id: true,
+      purpose: true,
       fileSizeBytes: true,
+      width: true,
       storageAccountId: true,
       storageKey: true,
       storageAccount: { select: { bucketName: true } },
@@ -147,20 +252,22 @@ async function releaseExpiredReservations(
   });
   if (expired.length === 0) return;
   const claimed = await db.$transaction(async (tx) => {
+    const accountIds = [...new Set(expired.map((row) => row.storageAccountId))].sort();
+    for (const accountId of accountIds) {
+      // LOCK_ACCOUNT_BEFORE_ASSET: expiry must match finalize (account, then asset).
+      await lockStorageAccountRow(tx, accountId);
+    }
     const won: typeof expired = [];
-    for (const row of expired) {
+    for (const row of [...expired].sort((left, right) => (left.id < right.id ? -1 : 1))) {
+      await lockPendingAssetRow(tx, { businessId, assetId: row.id });
       const updated = await tx.storedAsset.updateMany({
         where: { id: row.id, businessId, status: "PENDING" },
         data: { status: "FAILED", deletedAt: now },
       });
       if (updated.count === 1) won.push(row);
     }
-    const reserved = won.reduce((sum, row) => sum + row.fileSizeBytes, 0);
-    if (reserved > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: won[0]!.storageAccountId },
-        data: { storageReservedBytes: { decrement: reserved } },
-      });
+    for (const row of won) {
+      await releasePendingReservationInTx(tx, row.storageAccountId, row);
     }
     return won;
   });
@@ -178,6 +285,10 @@ async function releaseExpiredReservations(
 
 export type AuthorizeManagedUploadOptions = {
   beforeCreate?: (tx: Prisma.TransactionClient) => Promise<void>;
+};
+
+export type FinalizeManagedUploadOptions = {
+  beforeClaim?: (tx: Prisma.TransactionClient) => Promise<void>;
 };
 
 export async function authorizeManagedUpload(
@@ -269,6 +380,7 @@ export async function authorizeManagedUpload(
         "This upload would exceed the entitled storage limit. Existing files are kept.",
       );
     }
+    const reservedBytes = reservedBytesForPendingAsset(input.purpose, input.fileSizeBytes);
     const created = await tx.storedAsset.create({
       data: {
         businessId,
@@ -285,12 +397,17 @@ export async function authorizeManagedUpload(
         visibility: input.visibility,
         status: "PENDING",
         expiresAt: new Date(now.getTime() + STORAGE_PENDING_TTL_MS),
+        // New public-request-photo rows record 0 so abort/expire/finalize
+        // can tell them apart from pre-deploy rows that reserved fileSizeBytes.
+        ...(input.purpose === PUBLIC_REQUEST_PHOTO_PURPOSE ? { width: 0 } : {}),
       },
     });
-    await tx.businessStorageAccount.update({
-      where: { id: account.id },
-      data: { storageReservedBytes: { increment: input.fileSizeBytes } },
-    });
+    if (reservedBytes > 0) {
+      await tx.businessStorageAccount.update({
+        where: { id: account.id },
+        data: { storageReservedBytes: { increment: reservedBytes } },
+      });
+    }
     return created;
   });
 
@@ -336,15 +453,18 @@ export async function abortManagedUpload(
   if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: abort must match finalize (account, then asset).
+    await lockAccountThenPendingAsset(tx, {
+      accountId: existing.storageAccountId,
+      businessId,
+      assetId: existing.id,
+    });
     const updated = await tx.storedAsset.updateMany({
       where: { id: existing.id, businessId, status: "PENDING" },
       data: { status: "FAILED", deletedAt: now },
     });
     if (updated.count !== 1) return false;
-    await tx.businessStorageAccount.update({
-      where: { id: existing.storageAccountId },
-      data: { storageReservedBytes: { decrement: existing.fileSizeBytes } },
-    });
+    await releasePendingReservationInTx(tx, existing.storageAccountId, existing);
     return true;
   });
   if (claimed) {
@@ -387,6 +507,8 @@ export async function discardReadyManagedUpload(
   if (!existing) throw new StorageAccessError();
   const now = deps.now?.() ?? new Date();
   const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: discard must match finalize (account, then asset).
+    await lockStorageAccountRow(tx, existing.storageAccountId);
     const updated = await tx.storedAsset.updateMany({
       where: {
         id: existing.id,
@@ -435,6 +557,7 @@ export async function finalizeManagedUpload(
   deps: StorageServiceDeps,
   businessId: string,
   assetId: string,
+  options?: FinalizeManagedUploadOptions,
 ) {
   const asset = await deps.db.storedAsset.findFirst({
     where: { id: assetId, businessId },
@@ -462,10 +585,44 @@ export async function finalizeManagedUpload(
   const publicPath =
     asset.visibility === "PUBLIC" ? publicAssetPath(asset.id) : null;
   const now = deps.now?.() ?? new Date();
-  const reserved = asset.fileSizeBytes;
   const actual = meta.sizeBytes;
 
-  return deps.db.$transaction(async (tx) => {
+  const result = await deps.db.$transaction(async (tx) => {
+    await options?.beforeClaim?.(tx);
+    const lockedAccount = await lockAccountThenPendingAsset(tx, {
+      accountId: asset.storageAccountId,
+      businessId,
+      assetId: asset.id,
+    });
+    const { resolveEffectiveStorageLimitBytes } = await import("@/lib/product-entitlements/limits");
+    const limitBytes = await resolveEffectiveStorageLimitBytes(
+      tx,
+      businessId,
+      lockedAccount.storageLimitBytes,
+    );
+    const heldReserved = pendingReservationBytesToRelease(
+      asset,
+      Number(lockedAccount.storageReservedBytes),
+    );
+    if (
+      !hasEnoughStorage({
+        usedBytes: lockedAccount.storageUsedBytes,
+        reservedBytes: Number(lockedAccount.storageReservedBytes) - heldReserved,
+        incomingBytes: actual,
+        limitBytes,
+      })
+    ) {
+      await failPendingAssetAndReleaseReservation(tx, {
+        businessId,
+        assetId: asset.id,
+        storageAccountId: asset.storageAccountId,
+        purpose: asset.purpose,
+        fileSizeBytes: asset.fileSizeBytes,
+        width: asset.width,
+        now,
+      });
+      return { kind: "quota" as const };
+    }
     const claimed = await tx.storedAsset.updateMany({
       where: {
         id: asset.id,
@@ -485,20 +642,33 @@ export async function finalizeManagedUpload(
       await tx.businessStorageAccount.update({
         where: { id: asset.storageAccountId },
         data: {
-          storageReservedBytes: { decrement: reserved },
+          ...(heldReserved > 0 ? { storageReservedBytes: { decrement: heldReserved } } : {}),
           storageUsedBytes: { increment: actual },
         },
       });
-      return tx.storedAsset.findFirstOrThrow({
-        where: { id: asset.id, businessId },
-      });
+      return {
+        kind: "ready" as const,
+        asset: await tx.storedAsset.findFirstOrThrow({
+          where: { id: asset.id, businessId },
+        }),
+      };
     }
     const current = await tx.storedAsset.findFirst({
       where: { id: asset.id, businessId },
     });
-    if (current?.status === "READY") return current;
+    if (current?.status === "READY") return { kind: "ready" as const, asset: current };
     throw new StorageError("That upload is no longer pending.");
   });
+  if (result.kind === "quota") {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: asset.storageAccount.bucketName,
+      storageKey: asset.storageKey,
+    });
+    throw new StorageQuotaError(
+      "This upload would exceed the entitled storage limit. Existing files are kept.",
+    );
+  }
+  return result.asset;
 }
 
 export async function finalizeBusinessUpload(
@@ -564,6 +734,8 @@ export async function deleteStoredAsset(
   }).catch(() => undefined);
   const now = deps.now?.() ?? new Date();
   return deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: delete must match finalize (account, then asset).
+    await lockStorageAccountRow(tx, asset.storageAccountId);
     const updated = await tx.storedAsset.update({
       where: { id: asset.id },
       data: { status: "DELETED", deletedAt: now, publicPath: null },
@@ -574,11 +746,8 @@ export async function deleteStoredAsset(
         data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
       });
     }
-    if (asset.status === "PENDING" && asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageReservedBytes: { decrement: asset.fileSizeBytes } },
-      });
+    if (asset.status === "PENDING") {
+      await releasePendingReservationInTx(tx, asset.storageAccountId, asset);
     }
     return updated;
   });

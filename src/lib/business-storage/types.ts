@@ -46,6 +46,29 @@ export const STORAGE_UPLOAD_URL_TTL_SECONDS = 5 * 60;
 /** Short-lived private GET after the server has already authorized the viewer. */
 export const PRIVATE_DOWNLOAD_URL_TTL_SECONDS = 2 * 60;
 export const STORAGE_PENDING_TTL_MS = 15 * 60 * 1000;
+/**
+ * How long a finalized public request photo may wait to be attached.
+ * Starts at finalize, not at form submit. Must stay at least 2 hours;
+ * never reuse STORAGE_PENDING_TTL_MS (the short upload-reservation TTL).
+ */
+export const UNATTACHED_REQUEST_PHOTO_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Outstanding READY unattached public request photos, plus in-flight
+ * PENDING authorizes. Unused PENDING rows do not consume uploaded-byte
+ * allowance; the count still caps legitimate concurrent uploads.
+ */
+export const MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS = 200;
+/**
+ * Uploaded (READY) unattached public request photos may hold at most
+ * this fraction of the business quota. Declared PENDING sizes do not.
+ */
+export const UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO = 0.1;
+/** Purpose for public hire-form photos. PENDING rows with this purpose do not reserve quota bytes. */
+export const PUBLIC_REQUEST_PHOTO_PURPOSE = "public-request-photo";
+/** One public form attempt; must stay equal to MAX_INTAKE_PHOTOS. */
+export const MAX_PUBLIC_INTAKE_REQUEST_PHOTOS = 8;
+export const PUBLIC_REQUEST_PHOTO_CAP_REACHED =
+  "This site is receiving too many photos right now. Please try again in a few minutes.";
 export const WEBSITE_PHOTO_MAX_BYTES = 4 * 1024 * 1024;
 /** Practical phone stills on the existing R2 presigned PUT path. */
 export const REQUEST_PHOTO_MAX_BYTES = 12 * 1024 * 1024;

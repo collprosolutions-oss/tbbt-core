@@ -616,6 +616,10 @@ export async function releaseUnreferencedVaultAsset(
     // Provider absence still allows the tenant-scoped DB cleanup below.
   }
   await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: vault release must match delete/discard (account, then asset).
+    await tx.$queryRaw`
+      SELECT id FROM "BusinessStorageAccount" WHERE id = ${asset.storageAccountId} FOR UPDATE
+    `;
     await tx.storedAsset.update({
       where: { id: asset.id },
       data: { status: "DELETED", deletedAt: now, publicPath: null },
