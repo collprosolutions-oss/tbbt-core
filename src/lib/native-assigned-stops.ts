@@ -108,7 +108,7 @@ function compareAppointmentOrder(left: NativeAssignedStopJob, right: NativeAssig
 export type NativeAssignedJobDisplayProperty = {
   id?: string | null;
   businessId?: string | null;
-  addressLine1: string;
+  addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;
   region?: string | null;
@@ -122,7 +122,7 @@ function routeProperty(
   return {
     id: property.id ?? "",
     businessId: property.businessId ?? "",
-    addressLine1: property.addressLine1,
+    addressLine1: property.addressLine1 ?? "",
     addressLine2: property.addressLine2 ?? null,
     city: property.city ?? null,
     region: property.region ?? null,
@@ -150,6 +150,28 @@ export function nativeAssignedJobDisplayAddress(
   return formatted.trim() ? formatted : null;
 }
 
+export const NATIVE_ASSIGNED_JOB_NEUTRAL_LABEL = "Assigned job";
+
+/**
+ * Customer name first, then a same-business display address. Foreign
+ * or missing properties never fall back to the other tenant's street.
+ */
+export function nativeAssignedJobLabel(
+  job:
+    | {
+        customer?: { name?: string | null } | null;
+        property?: NativeAssignedJobDisplayProperty | null;
+      }
+    | null
+    | undefined,
+  businessId: string,
+  fallback: string | null = null,
+): string | null {
+  const customerName = job?.customer?.name?.trim();
+  if (customerName) return customerName;
+  return nativeAssignedJobDisplayAddress(job?.property ?? null, businessId) ?? fallback;
+}
+
 /**
  * Per-job Directions for an assigned job. Same-business rows keep the
  * existing `directionsUrl` (street-only is enough). Foreign or missing
@@ -166,7 +188,7 @@ export function nativeAssignedJobDirectionsHref(
   return directionsUrl(
     property
       ? {
-          addressLine1: property.addressLine1,
+          addressLine1: property.addressLine1 ?? "",
           addressLine2: property.addressLine2,
           city: property.city,
           region: property.region,

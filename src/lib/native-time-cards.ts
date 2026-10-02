@@ -15,6 +15,7 @@ import { assertBusinessRecord, businessScope } from "@/lib/access-scope";
 import { ForbiddenError } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatTime } from "@/lib/format";
+import { nativeAssignedJobLabel } from "@/lib/native-assigned-stops";
 import { NATIVE_SESSION_TOO_LARGE } from "@/lib/native-session-limits";
 import type { NativeFieldAccess, NativeViewer, NativeWorkspace } from "@/lib/native-session";
 import { addDays } from "@/lib/schedule";
@@ -263,7 +264,7 @@ export async function loadNativeTimeCards(
         job: {
           select: {
             customer: { select: { name: true } },
-            property: { select: { addressLine1: true } },
+            property: { select: { id: true, businessId: true, addressLine1: true } },
           },
         },
         correctionRequests: {
@@ -308,7 +309,7 @@ export async function loadNativeTimeCards(
           id: entry.id,
           activityLabel:
             TIME_ACTIVITY_LABELS[isTimeActivityType(entry.activityType) ? entry.activityType : "OTHER"],
-          jobLabel: entry.job?.customer?.name ?? entry.job?.property?.addressLine1 ?? null,
+          jobLabel: nativeAssignedJobLabel(entry.job, access.businessId),
           clockLabel: `${formatTime(entry.startedAt, timeZone)} – ${formatTime(entry.endedAt, timeZone)}`,
           startDate: formatDateInput(entry.startedAt, timeZone),
           startTime: formatTimeInput(entry.startedAt, timeZone),

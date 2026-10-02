@@ -17,7 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { directionsUrl, telHref } from "@/lib/directions";
+import { telHref } from "@/lib/directions";
 import { requireAssignedJobPageAccess, assignedJobWhere, requireFieldWorkspace } from "@/lib/field-access";
 import {
   appointmentConfirmationLabel,
@@ -25,7 +25,12 @@ import {
   isCurrentAppointmentConfirmed,
 } from "@/lib/appointment-confirmation";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { formatAddress, formatDateTime, formatTime } from "@/lib/format";
+import { formatDateTime, formatTime } from "@/lib/format";
+import {
+  nativeAssignedJobDirectionsHref,
+  nativeAssignedJobDisplayAddress,
+  nativeAssignedJobLabel,
+} from "@/lib/native-assigned-stops";
 import { ownerAccessSummaryLines } from "@/lib/property-access";
 import { TIME_ACTIVITY_LABELS, isTimeActivityType } from "@/lib/time-cards";
 import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
@@ -106,6 +111,8 @@ export default async function FieldJobPage({
       customer: { select: { name: true, phone: true } },
       property: {
         select: {
+          id: true,
+          businessId: true,
           addressLine1: true,
           addressLine2: true,
           city: true,
@@ -168,7 +175,7 @@ export default async function FieldJobPage({
       job: {
         select: {
           customer: { select: { name: true } },
-          property: { select: { addressLine1: true } },
+          property: { select: { id: true, businessId: true, addressLine1: true } },
         },
       },
     },
@@ -200,7 +207,8 @@ export default async function FieldJobPage({
         membershipId: field.membershipId,
       })).filter((request) => request.jobId === job.id)
     : [];
-  const directions = directionsUrl(job.property);
+  const address = nativeAssignedJobDisplayAddress(job.property, field.businessId);
+  const directions = nativeAssignedJobDirectionsHref(job.property, field.businessId);
   const tel = telHref(job.customer?.phone ?? null);
 
   const photosByStage: Record<
@@ -257,7 +265,7 @@ export default async function FieldJobPage({
 
       <Card>
         <CardContent className="space-y-3 pt-6 text-sm">
-          <p>{job.property ? formatAddress(job.property) : "No address on file"}</p>
+          <p>{address ?? "No address on file"}</p>
           {job.scheduledAt
             ? ownerAccessSummaryLines(job).map((line) => <p key={line}>{line}</p>)
             : null}
@@ -299,7 +307,7 @@ export default async function FieldJobPage({
                   TIME_ACTIVITY_LABELS[
                     isTimeActivityType(running.activityType) ? running.activityType : "OTHER"
                   ],
-                jobLabel: running.job?.customer?.name ?? running.job?.property?.addressLine1 ?? null,
+                jobLabel: nativeAssignedJobLabel(running.job, field.businessId),
                 startedAtLabel: formatTime(running.startedAt),
               }
             : null
@@ -307,7 +315,7 @@ export default async function FieldJobPage({
         assignedJobs={[
           {
             id: job.id,
-            label: job.customer?.name ?? (job.property ? formatAddress(job.property) : "This job"),
+            label: nativeAssignedJobLabel(job, field.businessId, "This job") ?? "This job",
           },
         ]}
       />
@@ -385,7 +393,7 @@ export default async function FieldJobPage({
           jobs={[
             {
               id: job.id,
-              label: job.customer?.name ?? (job.property ? formatAddress(job.property) : "This job"),
+              label: nativeAssignedJobLabel(job, field.businessId, "This job") ?? "This job",
             },
           ]}
           requests={reassignmentRequests.map((request) => ({
