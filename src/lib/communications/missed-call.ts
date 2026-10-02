@@ -284,11 +284,7 @@ async function completePhoneLog(
   const digits = normalizePhone(input.callerPhone);
   const usable = isUsableNormalizedPhone(digits);
   const summary = claimed.summary || input.summary.trim();
-  // PHONE_LOG_PRESERVE_CLOSED
-  const alreadyClosed = claimed.status === "CLOSED";
-  const callbackNeeded = alreadyClosed
-    ? claimed.callbackNeeded
-    : claimed.callbackNeeded || Boolean(input.callbackNeeded);
+  const callbackNeeded = claimed.callbackNeeded || Boolean(input.callbackNeeded);
   const kind = (claimed.kind as "MISSED_CALL" | "MANUAL_PHONE") || input.kind;
 
   const thread = customer
@@ -298,17 +294,6 @@ async function completePhoneLog(
         title: customer.name,
       })
     : null;
-
-  let actionItemId = claimed.followUpActionItemId;
-  if (callbackNeeded && !alreadyClosed) {
-    actionItemId = await ensureCallbackAction(db, access, {
-      claimedId: claimed.id,
-      idempotencyKey: input.idempotencyKey,
-      summary,
-      customerName: customer?.name ?? null,
-    });
-    maybeFail("action");
-  }
 
   let communicationId = claimed.communicationId;
   if (customer) {
@@ -326,6 +311,31 @@ async function completePhoneLog(
     maybeFail("communication");
   }
 
+  // PHONE_LOG_PRESERVE_CLOSED — only write status/callbackNeeded onto a live row.
+  // claimed.status is from the pre-lock findFirst and can be stale.
+  const stateWrite = await db.phoneInteraction.updateMany({
+    where: {
+      id: claimed.id,
+      businessId: access.businessId,
+      status: { not: "CLOSED" },
+    },
+    data: {
+      callbackNeeded,
+      status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
+    },
+  });
+
+  let actionItemId = claimed.followUpActionItemId;
+  if (callbackNeeded && stateWrite.count > 0) {
+    actionItemId = await ensureCallbackAction(db, access, {
+      claimedId: claimed.id,
+      idempotencyKey: input.idempotencyKey,
+      summary,
+      customerName: customer?.name ?? null,
+    });
+    maybeFail("action");
+  }
+
   await db.phoneInteraction.updateMany({
     where: { id: claimed.id, businessId: access.businessId },
     data: {
@@ -335,12 +345,6 @@ async function completePhoneLog(
       followUpActionItemId: actionItemId,
       requestId: input.requestId || null,
       jobId: input.jobId || null,
-      ...(alreadyClosed
-        ? {}
-        : {
-            callbackNeeded,
-            status: callbackNeeded ? "CALLBACK_NEEDED" : "LOGGED",
-          }),
     },
   });
   if (thread) {

@@ -181,11 +181,9 @@ async function ensureDispositionEvent(
     return { id: created.id, reused: false, replayedViaLookup: false };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const raced = await db.receptionistEvent.findFirst({
-        where: { businessId: access.businessId, idempotencyKey },
-        select: { id: true },
-      });
-      if (raced) return { id: raced.id, reused: true, replayedViaLookup: false };
+      // Postgres already aborted this transaction. A follow-up findFirst
+      // here raises 25P02 instead of a clean already-recorded outcome.
+      throw new Error("Receptionist disposition event already recorded.");
     }
     throw error;
   }
