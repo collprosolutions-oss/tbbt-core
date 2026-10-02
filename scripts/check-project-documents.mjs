@@ -11,6 +11,7 @@ import { register } from "node:module";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -151,6 +152,24 @@ async function waitForTestDbLockWaiter(admin, ms) {
     `Timed out after ${ms}ms waiting for wait_event_type=Lock in ${testDbName}`,
   );
 }
+
+const documentSrc = readFileSync(
+  new URL("../src/lib/business-storage/project-documents.ts", import.meta.url),
+  "utf8",
+);
+const finalizeFnSrc = documentSrc.slice(documentSrc.indexOf("export async function finalizeProjectTokenDocument"));
+
+console.log("\nSTATIC — finalize write boundary");
+check(
+  "Document finalize locks the Job and re-checks the live token before claim",
+  finalizeFnSrc.includes("lockJobForProjectDocument") &&
+    finalizeFnSrc.includes("assertLiveLockedProjectToken") &&
+    finalizeFnSrc.includes("beforeClaim") &&
+    finalizeFnSrc.indexOf("lockJobForProjectDocument") <
+      finalizeFnSrc.indexOf("assertLiveLockedProjectToken") &&
+    finalizeFnSrc.indexOf("assertLiveLockedProjectToken") <
+      finalizeFnSrc.indexOf("isPrivateUnpublishedProjectDocument(asset)"),
+);
 
 const pdfOk = inspectProjectDocumentUpload({
   type: "application/pdf",

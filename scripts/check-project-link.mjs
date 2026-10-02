@@ -38,6 +38,10 @@ const { createCustomerAdditionalWorkRequest } = await import(
   "@/lib/additional-work-request"
 );
 const {
+  approveCustomerChangeOrder,
+  CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR,
+} = await import("@/lib/public-change-order-ops");
+const {
   JOB_PROJECT_LINK_ALREADY_REVOKED_MESSAGE,
   JOB_PROJECT_LINK_CONFLICT_MESSAGE,
   JOB_PROJECT_LINK_JOB_REQUIRED_MESSAGE,
@@ -178,6 +182,8 @@ const messagingSrc = read("src/lib/customer-messaging/workflows.ts");
 const dayRouteSrc = read("src/lib/owner-day-route-appointment-notice-ops.ts");
 const appointmentActionSrc = read("src/app/actions/public-appointment.ts");
 const changeOrderActionSrc = read("src/app/actions/public-change-order.ts");
+const changeOrderOpsSrc = read("src/lib/public-change-order-ops.ts");
+const additionalWorkSrc = read("src/lib/additional-work-request.ts");
 
 console.log("\nSTATIC — OWNER-only rotate/revoke, no message, additive history");
 check(
@@ -223,8 +229,8 @@ check(
     dataSrc.includes('link?.status !== "REVOKED"') &&
     portalSrc.includes("findLiveJobByProjectToken") &&
     read("src/app/actions/public-appointment.ts").includes("findLiveJobByProjectToken") &&
-    read("src/app/actions/public-change-order.ts").includes("findLiveJobByProjectToken") &&
-    read("src/lib/additional-work-request.ts").includes("findLiveJobByProjectToken"),
+    changeOrderOpsSrc.includes("findLiveJobByProjectToken") &&
+    additionalWorkSrc.includes("findLiveJobByProjectToken"),
 );
 check(
   "Work Order hosts the OWNER panel; rotate/revoke stay on the same job",
@@ -255,7 +261,22 @@ check(
       callbackOpsSrc.indexOf("isPortalJobCallbackCoolingDown(") &&
     documentSrc.includes("assertLiveLockedProjectToken") &&
     documentSrc.indexOf("await lockJobForProjectDocument") <
-      documentSrc.indexOf("assertLiveLockedProjectToken(tx"),
+      documentSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+    changeOrderOpsSrc.includes("assertLiveLockedProjectToken") &&
+    changeOrderOpsSrc.indexOf("await lockTenantOwnedJob") <
+      changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+    changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") <
+      changeOrderOpsSrc.indexOf("changeOrder.updateMany") &&
+    additionalWorkSrc.includes("assertLiveLockedProjectToken") &&
+    additionalWorkSrc.indexOf("await lockTenantOwnedJob") <
+      additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+    additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") <
+      additionalWorkSrc.indexOf("additionalWorkRequest.create") &&
+    documentSrc.includes("beforeClaim") &&
+    documentSrc.lastIndexOf("lockJobForProjectDocument") <
+      documentSrc.lastIndexOf("assertLiveLockedProjectToken(tx") &&
+    documentSrc.lastIndexOf("assertLiveLockedProjectToken(tx") <
+      documentSrc.lastIndexOf("isPrivateUnpublishedProjectDocument(asset)"),
 );
 check(
   "Audit nextToken stores a hash/last4, not the live token",
@@ -282,7 +303,8 @@ check(
 check(
   "Appointment and change-order actions use the live-token resolver",
   appointmentActionSrc.includes("findLiveJobByProjectToken") &&
-    changeOrderActionSrc.includes("findLiveJobByProjectToken"),
+    changeOrderActionSrc.includes("approveCustomerChangeOrder") &&
+    changeOrderOpsSrc.includes("findLiveJobByProjectToken"),
 );
 
 let session;
@@ -776,22 +798,26 @@ try {
     changeRotated.projectToken,
     { id: true },
   );
-  const staleChangeWrite = oldChangeJob
-    ? await prisma.changeOrder.updateMany({
-        where: { id: sentChange.id, jobId: oldChangeJob.id, status: "SENT" },
-        data: { status: "APPROVED", approvedAt: new Date() },
-      })
-    : { count: 0 };
-  const changeAfterOld = await prisma.changeOrder.findUnique({
+  const staleChangeWrite = await approveCustomerChangeOrder(prisma, {
+    token: changeJob.projectToken,
+    changeOrderId: sentChange.id,
+  });
+  const liveChangeWrite = await approveCustomerChangeOrder(prisma, {
+    token: changeRotated.projectToken,
+    changeOrderId: sentChange.id,
+  });
+  const changeAfter = await prisma.changeOrder.findUnique({
     where: { id: sentChange.id },
-    select: { status: true },
+    select: { status: true, jobId: true },
   });
   check(
-    "Change-order approve refuses the old token and does not write",
+    "Change-order approve refuses the old token and writes only on the live token",
     oldChangeJob === null &&
       liveChangeJob?.id === changeJob.id &&
-      staleChangeWrite.count === 0 &&
-      changeAfterOld?.status === "SENT" &&
+      staleChangeWrite.error === CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR &&
+      liveChangeWrite.status === "APPROVED" &&
+      changeAfter?.status === "APPROVED" &&
+      changeAfter.jobId === changeJob.id &&
       (await isLiveProjectToken(prisma, changeRotated.projectToken)) === true,
   );
 
