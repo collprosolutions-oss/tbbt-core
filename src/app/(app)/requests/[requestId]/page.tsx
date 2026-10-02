@@ -30,6 +30,8 @@ import {
   requestedWorkLabels,
   requestedWorkSummary,
 } from "@/lib/service-request-work";
+import { RequestPreferredWindowsList } from "@/components/requests/request-preferred-windows";
+import { preferredWindowsFromOwnedRequest } from "@/lib/request-preferred-windows-data";
 import { requestNotesText } from "@/lib/work-area-intake";
 import { CLEANING_REPEAT_VISIT_OWNER_REVIEW_MESSAGE } from "@/lib/cleaning-repeat-visit";
 
@@ -102,6 +104,11 @@ export default async function RequestRecordPage({
     request.serviceCatalogItem?.name ??
     "Not specified";
   const identityReview = requestIdentityReviewContext(request.description);
+  const preferredWindows = preferredWindowsFromOwnedRequest({
+    businessId: access.businessId,
+    requestBusinessId: request.businessId,
+    description: request.description,
+  });
 
   return (
     <PageContainer>
@@ -157,6 +164,9 @@ export default async function RequestRecordPage({
               request.summary ||
               "No description provided."}
           </p>
+          {preferredWindows ? (
+            <RequestPreferredWindowsList preferredWindows={preferredWindows} />
+          ) : null}
           <p>
             Service address:{" "}
             {request.property ? formatAddress(request.property) : "None on file"}

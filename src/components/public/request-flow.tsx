@@ -44,7 +44,10 @@ import {
   validateWorkAreaIntakeAnswer,
   workAreaIntakeOptionLabel,
 } from "@/lib/work-area-intake";
+import { RequestPreferredWindowsFields } from "@/components/public/request-preferred-windows-fields";
 import { submitPublicIntakeForm } from "@/lib/public-request-submit";
+import type { PreferredWindowDraft } from "@/lib/request-preferred-windows";
+import { PREFERRED_WINDOWS_NOT_A_BOOKING } from "@/lib/request-preferred-windows";
 import { publicServicesPath } from "@/lib/public-site";
 import { formatPublicPhoneDisplay } from "@/lib/format";
 import {
@@ -95,6 +98,7 @@ type PublicRequestDraft = {
   notes: string;
   preferredContact: string;
   smsOptIn: boolean;
+  preferredWindows?: PreferredWindowDraft[];
 };
 
 function requestDraftKey(slug: string, namespace?: string) {
@@ -210,6 +214,7 @@ export function MultiServiceRequestFlow({
   const [notes, setNotes] = useState("");
   const [preferredContact, setPreferredContact] = useState("text");
   const [smsOptIn, setSmsOptIn] = useState(false);
+  const [preferredWindows, setPreferredWindows] = useState<PreferredWindowDraft[]>([]);
   const [photos, setPhotos] = useState<SelectedRequestPhoto[]>([]);
   const [measurements, setMeasurements] = useState<Record<string, MeasurementDraft>>({});
   const [workArea, setWorkArea] = useState<Record<string, WorkAreaDraft>>({});
@@ -248,6 +253,16 @@ export function MultiServiceRequestFlow({
         if (typeof draft.notes === "string") setNotes(draft.notes);
         if (typeof draft.preferredContact === "string") setPreferredContact(draft.preferredContact);
         if (typeof draft.smsOptIn === "boolean") setSmsOptIn(draft.smsOptIn);
+        if (Array.isArray(draft.preferredWindows)) {
+          setPreferredWindows(
+            draft.preferredWindows.filter(
+              (row): row is PreferredWindowDraft =>
+                !!row &&
+                (row.kind === "DAY" || row.kind === "WINDOW") &&
+                typeof row.localDate === "string",
+            ),
+          );
+        }
       }
     } catch {
       // Ignore a corrupted draft and keep the empty form.
@@ -267,12 +282,13 @@ export function MultiServiceRequestFlow({
         notes,
         preferredContact,
         smsOptIn,
+        preferredWindows,
       };
       sessionStorage.setItem(requestDraftKey(slug, draftNamespace), JSON.stringify(draft));
     } catch {
       // Private mode can block sessionStorage. The in-memory form still works.
     }
-  }, [draftNamespace, email, hydrated, name, notes, ok, phone, preferredContact, serviceAddress, slug, smsOptIn, step]);
+  }, [draftNamespace, email, hydrated, name, notes, ok, phone, preferredContact, preferredWindows, serviceAddress, slug, smsOptIn, step]);
 
   const labels = useMemo(
     () => selectedWorkLabels(selected, items),
@@ -543,6 +559,14 @@ export function MultiServiceRequestFlow({
     if (smsOptIn) {
       formData.set("smsOptIn", "true");
     }
+    if (resolvedTrade === "HANDYMAN" && preferredWindows.length > 0) {
+      formData.set(
+        "preferredWindows",
+        JSON.stringify(
+          preferredWindows.filter((row) => row.localDate.trim()),
+        ),
+      );
+    }
     const quantities = catalogQuantitiesFromState(selected);
     for (const id of selected.catalogIds) {
       formData.append("serviceCatalogItemId", id);
@@ -767,6 +791,12 @@ export function MultiServiceRequestFlow({
               onChange={setIntakeAnswers}
             />
           ) : null}
+          {resolvedTrade === "HANDYMAN" ? (
+            <RequestPreferredWindowsFields
+              value={preferredWindows}
+              onChange={setPreferredWindows}
+            />
+          ) : null}
           {photosEnabled ? (
             <RequestPhotoPicker
               photos={photos}
@@ -908,6 +938,28 @@ export function MultiServiceRequestFlow({
           <ReviewBlock title="Project notes">
             <p>{notes || "No additional notes"}</p>
           </ReviewBlock>
+          {resolvedTrade === "HANDYMAN" ? (
+            <ReviewBlock title="Preferred days or times">
+              {preferredWindows.filter((row) => row.localDate.trim()).length > 0 ? (
+                <ul className="list-disc space-y-1 pl-5">
+                  {preferredWindows
+                    .filter((row) => row.localDate.trim())
+                    .map((row, index) => (
+                      <li key={`${row.kind}-${row.localDate}-${index}`}>
+                        {row.kind === "WINDOW"
+                          ? `${row.localDate} · ${row.startLocal || "—"}–${row.endLocal || "—"}`
+                          : `${row.localDate} (all day)`}
+                      </li>
+                    ))}
+                </ul>
+              ) : (
+                <p>No preferred days or times</p>
+              )}
+              <p className="mt-2 text-sm text-muted-foreground">
+                {PREFERRED_WINDOWS_NOT_A_BOOKING}
+              </p>
+            </ReviewBlock>
+          ) : null}
           <ReviewMeasurementSummary items={items} selectedCatalogIds={selected.catalogIds} measurements={measurements} />
           <ReviewWorkAreaSummary items={items} selectedCatalogIds={selected.catalogIds} workArea={workArea} />
           <ReviewBlock title="Photos">

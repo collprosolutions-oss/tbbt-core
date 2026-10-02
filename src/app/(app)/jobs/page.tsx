@@ -26,6 +26,7 @@ import { MonthView } from "@/components/schedule/month-view";
 import { ScheduleDateNav } from "@/components/schedule/schedule-date-nav";
 import { ScheduleViewTabs } from "@/components/schedule/schedule-view-tabs";
 import { UnscheduledJobsPanel } from "@/components/schedule/unscheduled-jobs-panel";
+import { preferredWindowsFromOwnedRequest } from "@/lib/request-preferred-windows-data";
 import { WeekView } from "@/components/schedule/week-view";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
@@ -148,6 +149,9 @@ const UNSCHEDULED_PANEL_SELECT = {
     select: {
       total: true,
       lineItems: { orderBy: { createdAt: "asc" as const }, select: LINE_ITEM_SELECT },
+      serviceRequest: {
+        select: { id: true, businessId: true, description: true },
+      },
     },
   },
 } as const;
@@ -404,7 +408,15 @@ export default async function JobsPage({
         property: {
           select: { addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true },
         },
-        estimate: { select: { total: true, lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT } } },
+        estimate: {
+          select: {
+            total: true,
+            lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT },
+            serviceRequest: {
+              select: { id: true, businessId: true, description: true },
+            },
+          },
+        },
         approvedEstimateOption: {
           select: {
             id: true,
@@ -512,6 +524,11 @@ export default async function JobsPage({
       unpaidDepositWarning: unpaidMaterialDepositWarning(
         requiredDeposit.sub(paidTowardDeposit),
       ),
+      preferredWindows: preferredWindowsFromOwnedRequest({
+        businessId: access.businessId,
+        requestBusinessId: job.estimate?.serviceRequest?.businessId,
+        description: job.estimate?.serviceRequest?.description,
+      }),
     };
   });
   const jobs: JobListItem[] = jobsRawForList.map((job) => {
@@ -588,6 +605,11 @@ export default async function JobsPage({
         ? appointmentConfirmationLabel(effectiveAppointmentConfirmationStatus(job))
         : null,
       projectLinkActive: true,
+      preferredWindows: preferredWindowsFromOwnedRequest({
+        businessId: access.businessId,
+        requestBusinessId: job.estimate?.serviceRequest?.businessId,
+        description: job.estimate?.serviceRequest?.description,
+      }),
     };
   });
   const projectLinkActive = await loadProjectLinkActiveByJobIds(

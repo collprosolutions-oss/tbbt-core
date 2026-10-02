@@ -41,6 +41,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { RecordNav } from "@/components/record-nav";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
+import { preferredWindowsFromOwnedRequest } from "@/lib/request-preferred-windows-data";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Prisma } from "@prisma/client";
@@ -163,6 +164,9 @@ export default async function JobPage({
           status: true,
           total: true,
           lineItems: { orderBy: { createdAt: "asc" }, select: LINE_ITEM_SELECT },
+          serviceRequest: {
+            select: { id: true, businessId: true, description: true },
+          },
         },
       },
       // The immutable EstimateVersion this Work Order was actually created
@@ -396,6 +400,11 @@ export default async function JobPage({
       : `This is a later appointment that day and uses ${
           mode === "WINDOW" ? "an arrival window" : "an exact start time"
         }. Pickup occupies time before the appointment.`;
+  const preferredWindows = preferredWindowsFromOwnedRequest({
+    businessId: access.businessId,
+    requestBusinessId: job.estimate?.serviceRequest?.businessId,
+    description: job.estimate?.serviceRequest?.description,
+  });
   const purchaseWorkspace = await loadPurchaseWorkspace(prisma, access, {
     jobId: job.id,
     estimateId: job.estimateId,
@@ -866,6 +875,7 @@ export default async function JobPage({
               requiredSkills={parseSkillList(job.requiredSkills)}
               requiredProgression={job.requiredProgression ?? ""}
               appointmentNote={appointmentNote}
+              preferredWindows={preferredWindows}
             />
             </>
           )}

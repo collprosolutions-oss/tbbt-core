@@ -6,6 +6,7 @@ import { attachRemainingPublicRequestFallbackPhotos } from "@/lib/business-stora
 import { prisma } from "@/lib/prisma";
 import { readFormStrings } from "@/lib/public-request-submit";
 import { notifyBusinessNewPublicRequest } from "@/lib/request-notify";
+import { parsePreferredWindowDrafts } from "@/lib/request-preferred-windows";
 import { parseWorkAreaFormAnswers } from "@/lib/work-area-intake";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 
@@ -35,6 +36,16 @@ function parseIntakeAnswersField(formData: FormData) {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+function parsePreferredWindowsField(formData: FormData) {
+  const raw = readString(formData, "preferredWindows");
+  if (!raw) return [];
+  try {
+    return parsePreferredWindowDrafts(JSON.parse(raw));
+  } catch {
+    return [];
   }
 }
 
@@ -146,6 +157,7 @@ async function submitServiceRequestInner(
     workAreaAnswers: parseWorkAreaFormAnswers(readFormStrings(formData, "workArea")),
     measurements: parseMeasurementFields(formData),
     intakeAnswers: parseIntakeAnswersField(formData),
+    preferredWindows: parsePreferredWindowsField(formData),
     requestedTradeCode: readString(formData, "requestedTradeCode") || null,
     tenantIntakeSnapshotId: readString(formData, "tenantIntakeSnapshotId") || null,
     websitePublishId: readString(formData, "websitePublishId") || null,
