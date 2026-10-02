@@ -581,7 +581,12 @@ export async function discardReadyManagedUpload(
       accountId: existing.storageAccountId,
       now,
       nextStatus: "FAILED",
-      match,
+      match: {
+        jobId: match.jobId,
+        category: match.category,
+        purpose: match.purpose,
+        visibility: match.visibility,
+      },
     });
     return result.claimed;
   });
