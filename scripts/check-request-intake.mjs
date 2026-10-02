@@ -1023,17 +1023,26 @@ const attachLockBlock = publicIntakeSrc.slice(
   publicIntakeSrc.indexOf("const attachedAssetIds = sortedStoredAssetIds"),
   publicIntakeSrc.indexOf("await rememberAttachedPublicRequestPhotos"),
 );
+const claimReadyUsedSrc = storageServiceSrc.slice(
+  storageServiceSrc.indexOf("async function claimReadyUsedBytesOnce"),
+  storageServiceSrc.indexOf("export async function discardReadyManagedUpload"),
+);
 check(
   "Release, discard, delete, expense claim, and intake attach lock the account before asset rows",
   releaseFnSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
     releaseFnSrc.indexOf("lockBusinessStorageAccountForUpdate") <
       releaseFnSrc.indexOf("claimUnattachedRequestPhotoInTx") &&
     discardManagedSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
-    discardManagedSrc.indexOf("lockStorageAccountRow") <
-      discardManagedSrc.indexOf("storedAsset.updateMany") &&
+    discardManagedSrc.includes("claimReadyUsedBytesOnce") &&
     deleteAssetSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
-    deleteAssetSrc.indexOf("lockStorageAccountRow") <
-      deleteAssetSrc.indexOf("storedAsset.update") &&
+    deleteAssetSrc.includes("claimReadyUsedBytesOnce") &&
+    claimReadyUsedSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
+    claimReadyUsedSrc.indexOf("lockAccountThenPendingAsset") <
+      claimReadyUsedSrc.indexOf('status !== "READY"') &&
+    claimReadyUsedSrc.indexOf('status !== "READY"') <
+      claimReadyUsedSrc.indexOf("storedAsset.updateMany") &&
+    claimReadyUsedSrc.indexOf("storedAsset.updateMany") <
+      claimReadyUsedSrc.indexOf("storageUsedBytes: { decrement: current.fileSizeBytes }") &&
     expenseClaimSrc.includes("LOCK_ACCOUNT_BEFORE_ASSET") &&
     expenseClaimSrc.indexOf("lockBusinessStorageAccountForUpdate") <
       expenseClaimSrc.indexOf("storedAsset.updateMany") &&
