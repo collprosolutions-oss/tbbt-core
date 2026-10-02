@@ -814,7 +814,7 @@ try {
     data: {
       businessId: businessA.id,
       membershipId: memberMem.id,
-      weekStartedAt: weekRange(approvedRunning.startedAt).start,
+      weekStartedAt: weekRange(approvedRunning.startedAt, "America/New_York").start,
       status: "APPROVED",
       approvedAt: new Date(),
       approvedByMembershipId: ownerMem.id,
