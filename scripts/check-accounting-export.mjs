@@ -37,7 +37,14 @@ const { buildBusinessExportZip } = await import("@/lib/business-export");
 const { invoiceNumberFromId, jobReferenceFromId } = await import("@/lib/invoice-document");
 const { attachEstimatePaymentsToInvoice } = await import("@/lib/project-payments");
 const { INVOICE_KIND_ORIGINAL, INVOICE_KIND_SUPPLEMENTAL } = await import("@/lib/revenue-integrity");
-const { toCsv, toCsvCell } = await import("@/lib/zip-store");
+const {
+  ZIP_UTF8_NAME_FLAG,
+  buildZipStore,
+  neutralizeCsvFormulaPrefix,
+  toCsv,
+  toCsvCell,
+  zipNameGeneralPurposeFlag,
+} = await import("@/lib/zip-store");
 const { Prisma } = await import("@prisma/client");
 
 const baseUrl = process.env.DATABASE_URL;
@@ -193,6 +200,15 @@ check(
     !accountingSrc.includes("stripePaymentIntentId") &&
     !accountingSrc.includes("stripeAccountId"),
 );
+const zipStoreSrc = readFileSync(new URL("../src/lib/zip-store.ts", import.meta.url), "utf8");
+check(
+  "Accounting and ZIP CSV formula prefixes include tab and CR",
+  accountingSrc.includes("/^[=+\\-@\\t\\r]/") &&
+    zipStoreSrc.includes("/^[=+\\-@\\t\\r]/") &&
+    zipStoreSrc.includes("/[\",\\n\\r]/") &&
+    zipStoreSrc.includes("neutralizeCsvFormulaPrefix") &&
+    accountingSrc.includes("exportAccountingText"),
+);
 check(
   "Accounting export does not rebuild financial-intelligence or a ledger",
   accountingSrc.includes("not a general ledger") &&
@@ -236,9 +252,11 @@ check(
   })(),
 );
 check(
-  "CSV escaping quotes commas, quotes, and newlines",
+  "CSV escaping quotes commas, quotes, newlines, and CR",
   toCsvCell('Acme, "Best"\nCo') === '"Acme, ""Best""\nCo"' &&
-    toCsv(["Name"], [{ Name: 'Acme, "Best"\nCo' }]).includes('"Acme, ""Best""\nCo"'),
+    toCsv(["Name"], [{ Name: 'Acme, "Best"\nCo' }]).includes('"Acme, ""Best""\nCo"') &&
+    toCsvCell("Line1\rLine2") === `"Line1\rLine2"` &&
+    toCsv(["Note"], [{ Note: "Line1\rLine2" }]).includes(`"Line1\rLine2"`),
 );
 check(
   "Formula-like text is prefixed so spreadsheet cells stay literal",
@@ -247,12 +265,26 @@ check(
     exportAccountingText("+SUM(1,1)") === "'+SUM(1,1)" &&
     exportAccountingText("@anything") === "'@anything" &&
     exportAccountingText("-CMD") === "'-CMD" &&
+    exportAccountingText("\t=1+1") === "'\t=1+1" &&
+    exportAccountingText("\r=1+1") === "'\r=1+1" &&
+    neutralizeCsvFormulaPrefix("\t=1+1") === "'\t=1+1" &&
+    neutralizeCsvFormulaPrefix("\r=1+1") === "'\r=1+1" &&
+    toCsvCell("\t=1+1") === "'\t=1+1" &&
+    toCsvCell("\r=1+1") === `"'\r=1+1"` &&
     exportAccountingText("Home Depot") === "Home Depot" &&
     exportAccountingText("") === "",
 );
 check(
   "Money columns keep a leading minus numeric",
-  exportMoney("-12.50") === "-12.50" && exportAccountingText("-12.50") === "'-12.50",
+  exportMoney("-12.50") === "-12.50" &&
+    exportAccountingText("-12.50") === "'-12.50" &&
+    neutralizeCsvFormulaPrefix("-70.00") === "-70.00" &&
+    neutralizeCsvFormulaPrefix("-1") === "-1" &&
+    neutralizeCsvFormulaPrefix("-0.5") === "-0.5" &&
+    toCsvCell("-70.00") === "-70.00" &&
+    toCsvCell("-1") === "-1" &&
+    toCsvCell("-0.5") === "-0.5" &&
+    toCsvCell("-12.50") === "-12.50",
 );
 
 const formulaSource = {
@@ -324,6 +356,98 @@ check(
     !formulaInvoices.records[0].Customer.startsWith("=") &&
     !formulaExpenses.records[0].Vendor.startsWith("+") &&
     !formulaExpenses.records[0].Description.startsWith("-"),
+);
+
+const controlSource = {
+  businessId: "biz_control",
+  businessName: "Control Co",
+  slug: "control-co",
+  invoices: [
+    {
+      id: "inv_tab",
+      customerId: "cust_tab",
+      jobId: null,
+      status: "SENT",
+      total: "70.00",
+      paidAt: null,
+      paymentMethod: null,
+      paymentReference: null,
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+    {
+      id: "inv_cr",
+      customerId: "cust_cr",
+      jobId: null,
+      status: "SENT",
+      total: "-1",
+      paidAt: null,
+      paymentMethod: null,
+      paymentReference: null,
+      createdAt: new Date("2026-09-02T00:00:00.000Z"),
+      updatedAt: new Date("2026-09-02T00:00:00.000Z"),
+    },
+  ],
+  payments: [
+    {
+      id: "pay_cr",
+      customerId: "cust_cr",
+      invoiceId: "inv_cr",
+      jobId: null,
+      purpose: "INVOICE_BALANCE",
+      amount: "-0.5",
+      method: "CASH",
+      receivedAt: new Date("2026-09-02T12:00:00.000Z"),
+      note: "Line1\rLine2",
+      createdAt: new Date("2026-09-02T12:00:00.000Z"),
+    },
+  ],
+  expenses: [
+    {
+      id: "exp_cr",
+      vendor: "\t=1+1",
+      description: "Line1\rLine2",
+      amount: "-70.00",
+      category: "OTHER",
+      occurredOn: new Date("2026-09-01T00:00:00.000Z"),
+      jobId: null,
+      customerId: "cust_tab",
+      paymentMethod: "CASH",
+      taxCategory: null,
+      reimbursementStatus: "NONE",
+      reviewStatus: "RECORDED",
+      voidedAt: null,
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+  ],
+  customers: [
+    { id: "cust_tab", name: "\t=1+1" },
+    { id: "cust_cr", name: "\r=1+1" },
+  ],
+  jobs: [],
+};
+const controlInvoicesCsv = accountingInvoicesCsv(controlSource);
+const controlPaymentsCsv = accountingPaymentsCsv(controlSource);
+const controlExpensesCsv = accountingExpensesCsv(controlSource);
+const controlInvoices = parseCsv(controlInvoicesCsv);
+const controlPayments = parseCsv(controlPaymentsCsv);
+const controlExpenses = parseCsv(controlExpensesCsv);
+check(
+  "Tab-leading, CR-leading, and embedded-CR cells are neutralized and quoted",
+  controlInvoices.records.find((row) => row["Invoice ID"] === "inv_tab")?.Customer === "'\t=1+1" &&
+    controlInvoices.records.find((row) => row["Invoice ID"] === "inv_cr")?.Customer === "'\r=1+1" &&
+    controlInvoicesCsv.includes("'\t=1+1") &&
+    controlInvoicesCsv.includes(`"'${"\r"}=1+1"`) &&
+    controlPayments.records[0].Note === "Line1\rLine2" &&
+    controlPaymentsCsv.includes(`"Line1\rLine2"`) &&
+    controlExpenses.records[0].Vendor === "'\t=1+1" &&
+    controlExpenses.records[0].Description === "Line1\rLine2" &&
+    controlExpensesCsv.includes(`"Line1\rLine2"`) &&
+    controlInvoices.records.find((row) => row["Invoice ID"] === "inv_tab")?.Total === "70.00" &&
+    controlInvoices.records.find((row) => row["Invoice ID"] === "inv_cr")?.Total === "-1.00" &&
+    controlPayments.records[0].Amount === "-0.50" &&
+    controlExpenses.records[0].Amount === "-70.00" &&
+    !controlInvoices.records.some((row) => row.Customer === "\t=1+1" || row.Customer === "\r=1+1"),
 );
 
 const invoiceA = {
@@ -526,6 +650,15 @@ try {
       email: "pat-alpha@example.com",
     },
   });
+  const tabCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "\t=1+1" },
+  });
+  const crCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "\r=1+1" },
+  });
+  const embeddedCrCustomer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Line1\rLine2" },
+  });
   const customerB = await prisma.customer.create({
     data: { businessId: businessB.id, name: "Beta Only Customer", email: "beta@example.com" },
   });
@@ -593,6 +726,30 @@ try {
       paidAt: new Date("2026-09-04T12:00:00.000Z"),
     },
   });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: tabCustomer.id,
+      status: "SENT",
+      total: new Prisma.Decimal("10.00"),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: crCustomer.id,
+      status: "SENT",
+      total: new Prisma.Decimal("11.00"),
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: embeddedCrCustomer.id,
+      status: "SENT",
+      total: new Prisma.Decimal("12.00"),
+    },
+  });
   const paymentB = await prisma.payment.create({
     data: {
       businessId: businessB.id,
@@ -617,6 +774,18 @@ try {
       customerId: customerA.id,
       paymentMethod: "CARD_EXTERNAL",
       taxCategory: "DEDUCTIBLE",
+    },
+  });
+  const crExpense = await prisma.expense.create({
+    data: {
+      businessId: businessA.id,
+      occurredOn: new Date("2026-09-06T00:00:00.000Z"),
+      description: "Line1\rLine2",
+      amount: new Prisma.Decimal("8.00"),
+      category: "OTHER",
+      vendor: "\t=1+1",
+      customerId: tabCustomer.id,
+      paymentMethod: "CASH",
     },
   });
   const voidedExpense = await prisma.expense.create({
@@ -833,6 +1002,35 @@ try {
       !zipBText.includes(recordedPayment.id) &&
       !zipBText.includes(activeExpense.description) &&
       zipBText.includes("Beta Only Customer"),
+  );
+  check(
+    "Business and accounting ZIP CSVs neutralize tab/CR formulas and quote embedded CR",
+    zipAText.includes("'\t=1+1") &&
+      zipAText.includes(`"'${"\r"}=1+1"`) &&
+      zipAText.includes(`"Line1\rLine2"`) &&
+      accountingZipAText.includes("'\t=1+1") &&
+      accountingZipAText.includes(`"'${"\r"}=1+1"`) &&
+      accountingZipAText.includes(`"Line1\rLine2"`) &&
+      !zipAText.includes(`,${"\t"}=1+1,`) &&
+      !accountingZipAText.includes(`,${"\t"}=1+1,`) &&
+      expenses.records.some(
+        (row) =>
+          row["Expense ID"] === crExpense.id &&
+          row.Vendor === "'\t=1+1" &&
+          row.Description === "Line1\rLine2",
+      ) &&
+      invoices.records.some((row) => row["Customer ID"] === tabCustomer.id && row.Customer === "'\t=1+1") &&
+      invoices.records.some((row) => row["Customer ID"] === crCustomer.id && row.Customer === "'\r=1+1"),
+  );
+  const unicodeEntryName = "vault-documents/id-résumé-日本.pdf";
+  const unicodeZip = buildZipStore([{ name: unicodeEntryName, data: "vault-bytes" }]);
+  check(
+    "Non-ASCII ZIP entry names set UTF-8 general-purpose flag bit 11",
+    ZIP_UTF8_NAME_FLAG === 0x0800 &&
+      zipNameGeneralPurposeFlag(unicodeEntryName) === ZIP_UTF8_NAME_FLAG &&
+      zipNameGeneralPurposeFlag("invoices.csv") === 0 &&
+      unicodeZip.readUInt16LE(6) === ZIP_UTF8_NAME_FLAG &&
+      unicodeZip.includes(Buffer.from(unicodeEntryName, "utf8")),
   );
 } finally {
   await prisma.$disconnect();

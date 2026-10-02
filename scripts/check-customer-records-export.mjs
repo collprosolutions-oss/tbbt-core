@@ -56,7 +56,13 @@ const {
   runBusinessExportDownload,
 } = await import("@/lib/business-export");
 const { PROJECT_DOCUMENT_PURPOSE } = await import("@/lib/business-storage/project-documents");
-const { neutralizeCsvFormulaPrefix } = await import("@/lib/zip-store");
+const {
+  ZIP_UTF8_NAME_FLAG,
+  buildZipStore,
+  neutralizeCsvFormulaPrefix,
+  toCsvCell,
+  zipNameGeneralPurposeFlag,
+} = await import("@/lib/zip-store");
 const { isSecretSettingKey } = await import("@/lib/settings");
 const { CustomerRecordsExportError } = await import("@/lib/customer-records-export/access");
 
@@ -86,6 +92,7 @@ function readZipStoreEntries(bytes) {
   let offset = 0;
   while (offset + 30 <= buf.length) {
     if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+    const localFlags = buf.readUInt16LE(offset + 6);
     const crc = buf.readUInt32LE(offset + 14);
     const size = buf.readUInt32LE(offset + 18);
     const nameLen = buf.readUInt16LE(offset + 26);
@@ -94,10 +101,52 @@ function readZipStoreEntries(bytes) {
     const name = buf.subarray(nameStart, nameStart + nameLen).toString("utf8");
     const dataStart = nameStart + nameLen + extraLen;
     const data = buf.subarray(dataStart, dataStart + size);
-    entries.push({ name, crc, data });
+    entries.push({ name, crc, data, localFlags, centralFlags: null });
     offset = dataStart + size;
   }
+  while (offset + 46 <= buf.length) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+    const centralFlags = buf.readUInt16LE(offset + 8);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const name = buf.subarray(offset + 46, offset + 46 + nameLen).toString("utf8");
+    const entry = entries.find((row) => row.name === name && row.centralFlags == null);
+    if (entry) entry.centralFlags = centralFlags;
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
   return entries;
+}
+
+function probeZipTools(bytes) {
+  const dir = mkdtempSync(join(tmpdir(), "tbbt-zip-probe-"));
+  const zipPath = join(dir, "probe.zip");
+  writeFileSync(zipPath, bytes);
+  try {
+    const unzipTest = spawnSync("unzip", ["-t", "-qq", zipPath]);
+    const pythonTest = spawnSync(
+      "python3",
+      [
+        "-c",
+        "import sys, zipfile; z=zipfile.ZipFile(sys.argv[1]); print('OK' if z.testzip() is None else 'BAD'); print('\\n'.join(z.namelist()))",
+        zipPath,
+      ],
+      { encoding: "utf8" },
+    );
+    return {
+      unzipMissing: unzipTest.error?.code === "ENOENT",
+      unzipOk: unzipTest.status === 0,
+      pythonMissing: pythonTest.error?.code === "ENOENT",
+      pythonOk: pythonTest.status === 0 && (pythonTest.stdout ?? "").startsWith("OK"),
+      pythonNames: (pythonTest.stdout ?? "")
+        .split("\n")
+        .slice(1)
+        .map((row) => row.trim())
+        .filter(Boolean),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function parseCsv(text) {
@@ -334,7 +383,10 @@ check(
   zipStoreSrc.includes("crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1") &&
     !zipStoreSrc.includes("crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 8") &&
     zipStoreSrc.includes("neutralizeCsvFormulaPrefix") &&
-    zipStoreSrc.includes("CSV_NUMERIC_CELL"),
+    zipStoreSrc.includes("CSV_NUMERIC_CELL") &&
+    zipStoreSrc.includes("/^[=+\\-@\\t\\r]/") &&
+    zipStoreSrc.includes("/[\",\\n\\r]/") &&
+    zipStoreSrc.includes("0x0800"),
 );
 const downloadHelperSrc = httpSrc.slice(
   httpSrc.indexOf("export async function runCustomerRecordsExportDownload"),
@@ -437,8 +489,18 @@ check(
   neutralizeCsvFormulaPrefix("=cmd|' /C calc'!A0") === "'=cmd|' /C calc'!A0" &&
     neutralizeCsvFormulaPrefix("+SUM(A1)") === "'+SUM(A1)" &&
     neutralizeCsvFormulaPrefix("@foo") === "'@foo" &&
+    neutralizeCsvFormulaPrefix("\t=1+1") === "'\t=1+1" &&
+    neutralizeCsvFormulaPrefix("\r=1+1") === "'\r=1+1" &&
     neutralizeCsvFormulaPrefix("-70.00") === "-70.00" &&
-    neutralizeCsvFormulaPrefix("100.00") === "100.00",
+    neutralizeCsvFormulaPrefix("-1") === "-1" &&
+    neutralizeCsvFormulaPrefix("-0.5") === "-0.5" &&
+    neutralizeCsvFormulaPrefix("100.00") === "100.00" &&
+    toCsvCell("\t=1+1") === "'\t=1+1" &&
+    toCsvCell("\r=1+1") === `"'\r=1+1"` &&
+    toCsvCell("Line1\rLine2") === `"Line1\rLine2"` &&
+    toCsvCell("-70.00") === "-70.00" &&
+    toCsvCell("-1") === "-1" &&
+    toCsvCell("-0.5") === "-0.5",
 );
 check(
   "boundExportRead keeps the cap and marks overflow",
@@ -960,6 +1022,27 @@ try {
       }),
     );
   }
+  const tabFormulaCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "\t=1+1",
+      createdAt: new Date(Date.UTC(2026, 0, 2)),
+    },
+  });
+  const crFormulaCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "\r=1+1",
+      createdAt: new Date(Date.UTC(2026, 0, 3)),
+    },
+  });
+  const embeddedCrCustomer = await prisma.customer.create({
+    data: {
+      businessId: businessA.id,
+      name: "Line1\rLine2",
+      createdAt: new Date(Date.UTC(2026, 0, 4)),
+    },
+  });
 
   const ownerAccessA = makeAccess(businessA.id, "OWNER", ownerMemA.id);
   const adminAccessA = makeAccess(businessA.id, "ADMIN", adminMemA.id);
@@ -1437,6 +1520,7 @@ try {
   const invoicesCsv = zipEntries.find((entry) => entry.name === "invoices.csv");
   const creditsCsv = zipEntries.find((entry) => entry.name === "invoice-credits.csv");
   const timeEntriesCsv = zipEntries.find((entry) => entry.name === "time-entries.csv");
+  const customersCsv = zipEntries.find((entry) => entry.name === "customers.csv");
   const invoiceRows = invoicesCsv ? parseCsv(invoicesCsv.data.toString("utf8")).records : [];
   const creditRows = creditsCsv ? parseCsv(creditsCsv.data.toString("utf8")).records : [];
   const creditedInvoiceRow = invoiceRows.find((row) => row["Invoice ID"] === creditedInvoice.id);
@@ -1478,26 +1562,49 @@ try {
     zipEntries.length > 0 &&
       zipEntries.every((entry) => entry.crc === (zlibCrc32(entry.data) >>> 0)),
   );
-  let unzipOk = false;
-  let unzipMissing = false;
-  const unzipDir = mkdtempSync(join(tmpdir(), "tbbt-settings-zip-"));
-  try {
-    const unzipPath = join(unzipDir, "tbbt-export.zip");
-    writeFileSync(unzipPath, builtZip.bytes);
-    const unzipTest = spawnSync("unzip", ["-t", "-qq", unzipPath]);
-    unzipMissing = unzipTest.error?.code === "ENOENT";
-    unzipOk = unzipTest.status === 0;
-  } finally {
-    rmSync(unzipDir, { recursive: true, force: true });
-  }
+  const settingsZipProbe = probeZipTools(builtZip.bytes);
   check(
     "unzip -t accepts the Settings ZIP when unzip is available",
-    unzipMissing || unzipOk,
+    settingsZipProbe.unzipMissing || settingsZipProbe.unzipOk,
+  );
+  check(
+    "Python zipfile accepts the Settings ZIP when python3 is available",
+    settingsZipProbe.pythonMissing || settingsZipProbe.pythonOk,
   );
   check(
     "Time-card note formula prefix is neutralized in the ZIP CSV",
     Boolean(timeEntriesCsv?.data.toString("utf8").includes(`'=cmd|' /C calc'!A0`)) &&
       neutralizeCsvFormulaPrefix(formulaNote) === "'=cmd|' /C calc'!A0",
+  );
+  const customersCsvText = customersCsv?.data.toString("utf8") ?? "";
+  const customerRows = customersCsv ? parseCsv(customersCsvText).records : [];
+  check(
+    "ZIP customers.csv prefixes tab/CR formulas and quotes embedded CR",
+    customersCsvText.includes("'\t=1+1") &&
+      customersCsvText.includes(`"'${"\r"}=1+1"`) &&
+      customersCsvText.includes(`"Line1\rLine2"`) &&
+      customerRows.some((row) => row.name === "'\t=1+1" && row.id === tabFormulaCustomer.id) &&
+      customerRows.some((row) => row.name === "'\r=1+1" && row.id === crFormulaCustomer.id) &&
+      customerRows.some((row) => row.name === "Line1\rLine2" && row.id === embeddedCrCustomer.id) &&
+      !customerRows.some((row) => row.name === "\t=1+1" || row.name === "\r=1+1"),
+  );
+
+  const unicodeEntryName = "vault-documents/id-résumé-日本.pdf";
+  const unicodeZip = buildZipStore([{ name: unicodeEntryName, data: "vault-bytes" }]);
+  const unicodeEntries = readZipStoreEntries(unicodeZip);
+  const unicodeEntry = unicodeEntries.find((entry) => entry.name === unicodeEntryName);
+  const unicodeProbe = probeZipTools(unicodeZip);
+  check(
+    "Non-ASCII ZIP entry names set UTF-8 flag bit 11 in local and central headers",
+    ZIP_UTF8_NAME_FLAG === 0x0800 &&
+      zipNameGeneralPurposeFlag(unicodeEntryName) === ZIP_UTF8_NAME_FLAG &&
+      zipNameGeneralPurposeFlag("customers.csv") === 0 &&
+      unicodeEntry?.localFlags === ZIP_UTF8_NAME_FLAG &&
+      unicodeEntry?.centralFlags === ZIP_UTF8_NAME_FLAG &&
+      zipEntries.every((entry) => entry.localFlags === 0 && entry.centralFlags === 0) &&
+      (unicodeProbe.unzipMissing || unicodeProbe.unzipOk) &&
+      (unicodeProbe.pythonMissing ||
+        (unicodeProbe.pythonOk && unicodeProbe.pythonNames.includes(unicodeEntryName))),
   );
 
   const businessAuditsA = await prisma.settingsAuditLog.findMany({
