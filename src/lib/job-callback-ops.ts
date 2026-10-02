@@ -7,8 +7,12 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
+import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
 import {
   JOB_CALLBACK_ALREADY_OPEN_MESSAGE,
+  JOB_CALLBACK_ATTACHMENT_INVALID_MESSAGE,
+  JOB_CALLBACK_ATTACHMENT_LIMIT_MESSAGE,
+  JOB_CALLBACK_CATEGORY_INVALID_MESSAGE,
   JOB_CALLBACK_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_COVERAGE_REFUSED_MESSAGE,
   JOB_CALLBACK_DESCRIPTION_REQUIRED_MESSAGE,
@@ -19,15 +23,22 @@ import {
   JOB_CALLBACK_OWNER_ONLY_MESSAGE,
   JOB_CALLBACK_REPORTED_VIA_REQUIRED_MESSAGE,
   JOB_CALLBACK_REVIEW_FIRST_MESSAGE,
+  JOB_CALLBACK_UNAVAILABLE_MESSAGE,
   JOB_CALLBACK_UNKNOWN_MESSAGE,
+  MAX_JOB_CALLBACK_ATTACHMENTS,
   completedSameBusinessJobEligible,
   isForbiddenCoverageOutcome,
   isJobCallbackOpenStatus,
   jobCallbackWriteAllowed,
+  missingJobCallbackIssueSchema,
+  parseJobCallbackAttachmentIds,
+  parseJobCallbackCategory,
   parseJobCallbackDescription,
   parseJobCallbackOutcome,
   parseJobCallbackOutcomeNotes,
+  parseJobCallbackOwnerNotes,
   parseJobCallbackReportedVia,
+  type JobCallbackCategory,
   type JobCallbackOutcome,
   type JobCallbackReportedVia,
 } from "@/lib/job-callback";
@@ -46,7 +57,32 @@ export function jobCallbackErrorMessage(error: unknown, fallback: string) {
   if (error instanceof JobCallbackError) return error.message;
   if (error instanceof ForbiddenError) return error.message;
   if (error instanceof Error && error.name === "ForbiddenError") return error.message;
+  if (missingJobCallbackIssueSchema(error)) return JOB_CALLBACK_UNAVAILABLE_MESSAGE;
   return fallback;
+}
+
+/**
+ * Test-only barriers. Production never sets these.
+ * beforeJobLock runs inside the write transaction before lockTenantOwnedJob
+ * so concurrent writers can rendezvous, then contend for FOR UPDATE.
+ * afterJobLock runs after the lock is taken.
+ */
+export const jobCallbackTestHooks: {
+  beforeJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
+  afterJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
+} = {};
+
+function rethrowCallbackWriteError(error: unknown): never {
+  if (error instanceof JobCallbackError || error instanceof ForbiddenError) {
+    throw error;
+  }
+  if (error instanceof Error && error.name === "ForbiddenError") {
+    throw error;
+  }
+  if (missingJobCallbackIssueSchema(error)) {
+    throw new JobCallbackError(JOB_CALLBACK_UNAVAILABLE_MESSAGE);
+  }
+  throw error;
 }
 
 function requireOwnerCallbackWrite(access: BusinessAccess) {
@@ -64,6 +100,26 @@ function eventPayload(input: Record<string, unknown>) {
   return JSON.stringify(input);
 }
 
+const JOB_CALLBACK_CORE_SELECT = {
+  id: true,
+  businessId: true,
+  jobId: true,
+  customerId: true,
+  description: true,
+  reportedVia: true,
+  status: true,
+  outcome: true,
+  outcomeNotes: true,
+  recordedByMembershipId: true,
+  reviewedByMembershipId: true,
+  outcomeByMembershipId: true,
+  recordedAt: true,
+  reviewedAt: true,
+  outcomeAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
 async function findOpenCallback(db: Db, businessId: string, jobId: string) {
   return db.jobCallback.findFirst({
     where: {
@@ -72,6 +128,7 @@ async function findOpenCallback(db: Db, businessId: string, jobId: string) {
       status: { in: ["RECORDED", "UNDER_REVIEW"] },
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: JOB_CALLBACK_CORE_SELECT,
   });
 }
 
@@ -83,11 +140,123 @@ async function loadOwnedCallback(
   if (!callbackId) {
     throw new JobCallbackError(JOB_CALLBACK_UNKNOWN_MESSAGE);
   }
-  return access.assertOwned(
-    await db.jobCallback.findFirst({
-      where: { id: callbackId, ...access.scope },
-    }),
-  );
+  const row = await db.jobCallback.findFirst({
+    where: { id: callbackId, ...access.scope },
+    select: JOB_CALLBACK_CORE_SELECT,
+  });
+  if (!row) {
+    throw new JobCallbackError(JOB_CALLBACK_UNKNOWN_MESSAGE);
+  }
+  return access.assertOwned(row);
+}
+
+type AttachablePrivateDocument = {
+  id: string;
+  originalFilename: string;
+};
+
+export async function loadAttachablePrivateDocuments(
+  db: Db,
+  input: { businessId: string; jobId: string },
+): Promise<AttachablePrivateDocument[]> {
+  return db.storedAsset.findMany({
+    where: {
+      businessId: input.businessId,
+      jobId: input.jobId,
+      category: "DOCUMENT",
+      purpose: PROJECT_DOCUMENT_PURPOSE,
+      visibility: "PRIVATE",
+      status: "READY",
+      deletedAt: null,
+      publicPath: null,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: MAX_JOB_CALLBACK_ATTACHMENTS,
+    select: { id: true, originalFilename: true },
+  });
+}
+
+async function lockAttachablePrivateDocuments(
+  tx: Prisma.TransactionClient,
+  input: { businessId: string; jobId: string; storedAssetIds: string[] },
+): Promise<AttachablePrivateDocument[]> {
+  const ids = parseJobCallbackAttachmentIds(input.storedAssetIds);
+  if (ids.length === 0) return [];
+  if (ids.length > MAX_JOB_CALLBACK_ATTACHMENTS) {
+    throw new JobCallbackError(JOB_CALLBACK_ATTACHMENT_LIMIT_MESSAGE);
+  }
+
+  const locked = await tx.$queryRaw<AttachablePrivateDocument[]>`
+    SELECT id, "originalFilename"
+    FROM "StoredAsset"
+    WHERE id IN (${Prisma.join(ids)})
+      AND "businessId" = ${input.businessId}
+      AND "jobId" = ${input.jobId}
+      AND category = 'DOCUMENT'
+      AND purpose = ${PROJECT_DOCUMENT_PURPOSE}
+      AND visibility = 'PRIVATE'
+      AND status = 'READY'
+      AND "deletedAt" IS NULL
+      AND "publicPath" IS NULL
+    FOR UPDATE
+  `;
+  if (locked.length !== ids.length) {
+    throw new JobCallbackError(JOB_CALLBACK_ATTACHMENT_INVALID_MESSAGE);
+  }
+  const byId = new Map(locked.map((row) => [row.id, row]));
+  return ids.map((id) => {
+    const row = byId.get(id);
+    if (!row) {
+      throw new JobCallbackError(JOB_CALLBACK_ATTACHMENT_INVALID_MESSAGE);
+    }
+    return row;
+  });
+}
+
+async function writeCallbackAttachments(
+  tx: Prisma.TransactionClient,
+  input: {
+    businessId: string;
+    jobId: string;
+    callbackId: string;
+    documents: AttachablePrivateDocument[];
+  },
+) {
+  if (input.documents.length === 0) return;
+  try {
+    await tx.jobCallbackAttachment.createMany({
+      data: input.documents.map((document) => ({
+        businessId: input.businessId,
+        jobId: input.jobId,
+        callbackId: input.callbackId,
+        storedAssetId: document.id,
+        originalFilename: document.originalFilename,
+      })),
+    });
+  } catch (error) {
+    if (missingJobCallbackIssueSchema(error)) return;
+    throw error;
+  }
+}
+
+async function applyCallbackIssueFields(
+  tx: Prisma.TransactionClient,
+  callbackId: string,
+  fields: { category?: JobCallbackCategory | null; ownerNotes?: string },
+) {
+  const data: { category?: string; ownerNotes?: string } = {};
+  if (fields.category) data.category = fields.category;
+  if (fields.ownerNotes !== undefined) data.ownerNotes = fields.ownerNotes;
+  if (Object.keys(data).length === 0) return;
+  try {
+    await tx.jobCallback.update({
+      where: { id: callbackId },
+      data,
+    });
+  } catch (error) {
+    if (missingJobCallbackIssueSchema(error)) return;
+    throw error;
+  }
 }
 
 export async function countBusinessInvoices(db: Db, businessId: string) {
@@ -113,6 +282,9 @@ export async function recordCustomerReportedCallback(
     jobId: string;
     description?: string | null;
     reportedVia?: string | null;
+    category?: string | null;
+    ownerNotes?: string | null;
+    storedAssetIds?: readonly string[] | null;
   },
 ) {
   requireOwnerCallbackWrite(access);
@@ -128,14 +300,22 @@ export async function recordCustomerReportedCallback(
   if (!reportedVia) {
     throw new JobCallbackError(JOB_CALLBACK_REPORTED_VIA_REQUIRED_MESSAGE);
   }
+  const category = parseJobCallbackCategory(input.category);
+  if (input.category?.trim() && !category) {
+    throw new JobCallbackError(JOB_CALLBACK_CATEGORY_INVALID_MESSAGE);
+  }
+  const ownerNotes = parseJobCallbackOwnerNotes(input.ownerNotes);
+  const storedAssetIds = parseJobCallbackAttachmentIds(input.storedAssetIds);
 
   try {
     return await db.$transaction(async (tx) => {
+      await jobCallbackTestHooks.beforeJobLock?.({ jobId, kind: "record" });
       const locked = await lockTenantOwnedJob(tx, access.businessId, jobId);
       if (!locked) {
         throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
       }
       access.assertOwned(locked);
+      await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "record" });
       if (!completedSameBusinessJobEligible(locked, access.businessId)) {
         throw new JobCallbackError(JOB_CALLBACK_COMPLETED_JOB_MESSAGE);
       }
@@ -144,6 +324,12 @@ export async function recordCustomerReportedCallback(
       if (existing) {
         throw new JobCallbackError(JOB_CALLBACK_ALREADY_OPEN_MESSAGE);
       }
+
+      const documents = await lockAttachablePrivateDocuments(tx, {
+        businessId: access.businessId,
+        jobId: locked.id,
+        storedAssetIds,
+      });
 
       const created = await tx.jobCallback.create({
         data: {
@@ -156,6 +342,13 @@ export async function recordCustomerReportedCallback(
           recordedByMembershipId: actorMembershipId(access),
         },
       });
+      await applyCallbackIssueFields(tx, created.id, { category, ownerNotes });
+      await writeCallbackAttachments(tx, {
+        businessId: access.businessId,
+        jobId: locked.id,
+        callbackId: created.id,
+        documents,
+      });
       await tx.jobCallbackEvent.create({
         data: {
           businessId: access.businessId,
@@ -166,7 +359,9 @@ export async function recordCustomerReportedCallback(
           actorMembershipId: actorMembershipId(access),
           payload: eventPayload({
             reportedVia,
+            category: category ?? null,
             descriptionLength: description.length,
+            attachmentCount: documents.length,
           }),
         },
       });
@@ -179,16 +374,17 @@ export async function recordCustomerReportedCallback(
     ) {
       throw new JobCallbackError(JOB_CALLBACK_ALREADY_OPEN_MESSAGE);
     }
-    throw error;
+    rethrowCallbackWriteError(error);
   }
 }
 
 export async function reviewCustomerReportedCallback(
   db: PrismaClient,
   access: BusinessAccess,
-  input: { callbackId: string },
+  input: { callbackId: string; ownerNotes?: string | null },
 ) {
   requireOwnerCallbackWrite(access);
+  const ownerNotes = parseJobCallbackOwnerNotes(input.ownerNotes);
   const callback = await loadOwnedCallback(db, access, input.callbackId.trim());
 
   if (callback.status === "OUTCOME_RECORDED") {
@@ -202,13 +398,16 @@ export async function reviewCustomerReportedCallback(
   }
 
   const updated = await db.$transaction(async (tx) => {
+    await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "review" });
     const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
     if (!locked || locked.businessId !== access.businessId) {
       throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
     }
+    await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "review" });
     const current = access.assertOwned(
       await tx.jobCallback.findFirst({
         where: { id: callback.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
       }),
     );
     if (current.status === "UNDER_REVIEW") {
@@ -230,14 +429,16 @@ export async function reviewCustomerReportedCallback(
     if (write.count !== 1) {
       const latest = access.assertOwned(
         await tx.jobCallback.findFirst({
-          where: { id: current.id, businessId: access.businessId },
-        }),
+        where: { id: current.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
+      }),
       );
       if (latest.status === "UNDER_REVIEW") {
         return { callback: latest, unchanged: true as const };
       }
       throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
     }
+    await applyCallbackIssueFields(tx, current.id, { ownerNotes });
     await tx.jobCallbackEvent.create({
       data: {
         businessId: access.businessId,
@@ -246,13 +447,15 @@ export async function reviewCustomerReportedCallback(
         fromStatus: "RECORDED",
         toStatus: "UNDER_REVIEW",
         actorMembershipId: actorMembershipId(access),
+        payload: eventPayload({ notesLength: ownerNotes.length }),
       },
     });
     return {
       callback: access.assertOwned(
         await tx.jobCallback.findFirst({
-          where: { id: current.id, businessId: access.businessId },
-        }),
+        where: { id: current.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
+      }),
       ),
       unchanged: false as const,
     };
@@ -276,6 +479,7 @@ export async function recordCustomerReportedCallbackOutcome(
     callbackId: string;
     outcome?: string | null;
     outcomeNotes?: string | null;
+    ownerNotes?: string | null;
   },
 ) {
   requireOwnerCallbackWrite(access);
@@ -287,6 +491,7 @@ export async function recordCustomerReportedCallbackOutcome(
     throw new JobCallbackError(JOB_CALLBACK_OUTCOME_REQUIRED_MESSAGE);
   }
   const notes = parseJobCallbackOutcomeNotes(input.outcomeNotes);
+  const ownerNotes = parseJobCallbackOwnerNotes(input.ownerNotes);
   const callback = await loadOwnedCallback(db, access, input.callbackId.trim());
 
   if (callback.status === "OUTCOME_RECORDED") {
@@ -300,13 +505,16 @@ export async function recordCustomerReportedCallbackOutcome(
   }
 
   return db.$transaction(async (tx) => {
+    await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "outcome" });
     const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
     if (!locked || locked.businessId !== access.businessId) {
       throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
     }
+    await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "outcome" });
     const current = access.assertOwned(
       await tx.jobCallback.findFirst({
         where: { id: callback.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
       }),
     );
     if (current.status === "OUTCOME_RECORDED") {
@@ -337,8 +545,9 @@ export async function recordCustomerReportedCallbackOutcome(
     if (write.count !== 1) {
       const latest = access.assertOwned(
         await tx.jobCallback.findFirst({
-          where: { id: current.id, businessId: access.businessId },
-        }),
+        where: { id: current.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
+      }),
       );
       if (
         latest.status === "OUTCOME_RECORDED" &&
@@ -348,6 +557,7 @@ export async function recordCustomerReportedCallbackOutcome(
       }
       throw new JobCallbackError(JOB_CALLBACK_OUTCOME_ALREADY_RECORDED_MESSAGE);
     }
+    await applyCallbackIssueFields(tx, current.id, { ownerNotes });
     await tx.jobCallbackEvent.create({
       data: {
         businessId: access.businessId,
@@ -359,14 +569,16 @@ export async function recordCustomerReportedCallbackOutcome(
         payload: eventPayload({
           outcome,
           notesLength: notes.length,
+          ownerNotesLength: ownerNotes.length,
         }),
       },
     });
     return {
       callback: access.assertOwned(
         await tx.jobCallback.findFirst({
-          where: { id: current.id, businessId: access.businessId },
-        }),
+        where: { id: current.id, businessId: access.businessId },
+        select: JOB_CALLBACK_CORE_SELECT,
+      }),
       ),
       unchanged: false as const,
     };

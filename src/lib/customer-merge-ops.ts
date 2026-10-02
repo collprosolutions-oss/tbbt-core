@@ -111,7 +111,6 @@ export type DuplicateReview = {
  *
  * JobCallback.customerId is a denormalized copy of Job.customerId set at
  * record time (onDelete SetNull) and must follow the job's customer.
- * JobCustomerIssue.customerId is the same SetNull FK shape.
  * InvoiceCollectionWorkItem.customerId is the same SetNull FK shape.
  * CustomerCsvImportRow.createdCustomerId and
  * possibleDuplicateCustomerId are plain strings with no database FK.
@@ -158,7 +157,6 @@ export const CUSTOMER_REASSIGN_SPECS: readonly CustomerReassignSpec[] = [
   { kind: "updateMany", model: "Referral", delegate: "referral", field: "referredCustomerId", relation: "referralsReceived" },
   { kind: "updateMany", model: "GrowthActionRequest", delegate: "growthActionRequest", field: "customerId", relation: "growthActionRequests" },
   { kind: "updateMany", model: "JobCallback", delegate: "jobCallback", field: "customerId", relation: "jobCallbacks" },
-  { kind: "updateMany", model: "JobCustomerIssue", delegate: "jobCustomerIssue", field: "customerId", relation: "jobCustomerIssues" },
   { kind: "updateMany", model: "InvoiceCollectionWorkItem", delegate: "invoiceCollectionWorkItem", field: "customerId", relation: "invoiceCollectionWorkItems" },
   { kind: "updateMany", model: "StoredAsset", delegate: "storedAsset", field: "customerId" },
   { kind: "updateMany", model: "ExternalLeadImportRow", delegate: "externalLeadImportRow", field: "possibleDuplicateCustomerId" },

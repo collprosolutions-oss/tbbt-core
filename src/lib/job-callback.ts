@@ -71,10 +71,36 @@ export const JOB_CALLBACK_FORBIDDEN_OUTCOMES = [
   "DENIED",
 ] as const;
 
+export const JOB_CALLBACK_CATEGORIES = [
+  "INCOMPLETE_WORK",
+  "QUALITY_CONCERN",
+  "DAMAGE",
+  "NOT_WORKING",
+  "OTHER",
+] as const;
+export type JobCallbackCategory = (typeof JOB_CALLBACK_CATEGORIES)[number];
+
+export const JOB_CALLBACK_CATEGORY_LABELS: Record<JobCallbackCategory, string> = {
+  INCOMPLETE_WORK: "Incomplete work",
+  QUALITY_CONCERN: "Quality concern",
+  DAMAGE: "Damage",
+  NOT_WORKING: "Something is not working",
+  OTHER: "Something else",
+};
+
+export const JOB_CALLBACK_CUSTOMER_STATUSES = [
+  "received",
+  "in_review",
+  "closed",
+] as const;
+export type JobCallbackCustomerStatus = (typeof JOB_CALLBACK_CUSTOMER_STATUSES)[number];
+
 export const MAX_JOB_CALLBACK_DESCRIPTION_LENGTH = 2000;
 export const MAX_JOB_CALLBACK_OUTCOME_NOTES_LENGTH = 2000;
+export const MAX_JOB_CALLBACK_OWNER_NOTES_LENGTH = 2000;
 export const MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH = 500;
 export const MAX_PORTAL_PROJECT_TOKEN_LENGTH = 128;
+export const MAX_JOB_CALLBACK_ATTACHMENTS = 5;
 
 export const JOB_CALLBACK_PREFERRED_CONTACT = ["PHONE", "TEXT", "EMAIL"] as const;
 export type JobCallbackPreferredContact = (typeof JOB_CALLBACK_PREFERRED_CONTACT)[number];
@@ -170,6 +196,21 @@ export const PORTAL_JOB_CALLBACK_COOLDOWN_MS =
 
 export const JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE =
   "The team already recorded an outcome on a recent callback request for this job. You can send another request after 24 hours. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.";
+
+export const JOB_CALLBACK_PORTAL_CLOSED_MESSAGE =
+  "The team closed this request and is not planning a return visit. You cannot send another request for this job. This is not a warranty claim, does not promise coverage, does not schedule a visit, and does not send a message.";
+
+export const JOB_CALLBACK_CATEGORY_INVALID_MESSAGE =
+  "Choose what kind of concern the customer reported.";
+
+export const JOB_CALLBACK_ATTACHMENT_INVALID_MESSAGE =
+  "That file is not a private document for this job.";
+
+export const JOB_CALLBACK_ATTACHMENT_LIMIT_MESSAGE =
+  `You can attach up to ${MAX_JOB_CALLBACK_ATTACHMENTS} private documents.`;
+
+export const JOB_CALLBACK_UNAVAILABLE_MESSAGE =
+  "Customer-reported callbacks are unavailable on this environment until the callback issue migration is applied.";
 
 export function portalJobCallbackCooldownAvailableAt(resolvedAt: Date): Date {
   return new Date(resolvedAt.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
@@ -275,6 +316,82 @@ export function formatPortalCallbackDescription(
 export function parseJobCallbackOutcomeNotes(raw: string | null | undefined): string {
   return (raw ?? "").trim().slice(0, MAX_JOB_CALLBACK_OUTCOME_NOTES_LENGTH);
 }
+
+export function parseJobCallbackOwnerNotes(raw: string | null | undefined): string {
+  return (raw ?? "").trim().slice(0, MAX_JOB_CALLBACK_OWNER_NOTES_LENGTH);
+}
+
+export function isJobCallbackCategory(value: string): value is JobCallbackCategory {
+  return (JOB_CALLBACK_CATEGORIES as readonly string[]).includes(value);
+}
+
+export function parseJobCallbackCategory(
+  raw: string | null | undefined,
+): JobCallbackCategory | null {
+  const value = (raw ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (!value) return null;
+  return isJobCallbackCategory(value) ? value : null;
+}
+
+export function recordedCallbackCategoryLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (isJobCallbackCategory(value)) return JOB_CALLBACK_CATEGORY_LABELS[value];
+  return value;
+}
+
+export function customerVisibleCallbackStatus(status: string): JobCallbackCustomerStatus {
+  if (status === "UNDER_REVIEW") return "in_review";
+  if (status === "OUTCOME_RECORDED") return "closed";
+  return "received";
+}
+
+export function customerVisibleCallbackStatusLabel(status: string): string {
+  const visible = customerVisibleCallbackStatus(status);
+  if (visible === "in_review") return "In review";
+  if (visible === "closed") return "Closed";
+  return "Received";
+}
+
+export function parseJobCallbackAttachmentIds(
+  raw: readonly string[] | null | undefined,
+): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const value of raw ?? []) {
+    const id = value.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length > MAX_JOB_CALLBACK_ATTACHMENTS) {
+      return ids;
+    }
+  }
+  return ids;
+}
+
+export function isPortalJobCallbackClosed(
+  outcome: string | null | undefined,
+): boolean {
+  return outcome === "NO_RETURN_VISIT";
+}
+
+export function missingJobCallbackIssueSchema(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: string }).code)
+      : "";
+  return code === "P2021" || code === "P2022";
+}
+
+export type OwnerJobCallbackAttachment = {
+  id: string;
+  storedAssetId: string;
+  originalFilename: string;
+};
+
+export type CustomerVisibleCallbackAttachment = {
+  originalFilename: string;
+};
 
 export function parseJobCallbackReportedVia(raw: string | null | undefined): JobCallbackReportedVia | null {
   const value = (raw ?? "").trim().toUpperCase();

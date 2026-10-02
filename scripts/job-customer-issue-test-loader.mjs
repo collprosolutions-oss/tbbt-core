@@ -1,7 +1,6 @@
 /**
  * Test-only loader for check-job-customer-issue.mjs.
- * Resolves "@/..." to src/*.ts or src/*.tsx and transpiles JSX so the
- * ProjectReportedIssue escape proof can render the real component.
+ * Resolves "@/..." to src/*.ts or src/*.tsx.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";

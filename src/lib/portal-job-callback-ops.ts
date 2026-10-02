@@ -7,16 +7,24 @@
  * promises warranty coverage.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
 import {
   JOB_CALLBACK_OPEN_STATUSES,
+  JOB_CALLBACK_PORTAL_CLOSED_MESSAGE,
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
   JOB_CALLBACK_PORTAL_DESCRIPTION_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE,
+  JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+  MAX_JOB_CALLBACK_ATTACHMENTS,
   completedSameBusinessJobEligible,
   formatPortalCallbackDescription,
+  isPortalJobCallbackClosed,
   isPortalJobCallbackCoolingDown,
+  missingJobCallbackIssueSchema,
+  parseJobCallbackAttachmentIds,
+  parseJobCallbackCategory,
   parsePortalJobCallbackDescription,
   parsePortalJobCallbackPreferredContact,
   parsePortalProjectToken,
@@ -26,6 +34,7 @@ import {
   countBusinessInvoices,
   countBusinessJobs,
   countBusinessPayments,
+  jobCallbackTestHooks,
 } from "@/lib/job-callback-ops";
 import {
   findLatestResolvedJobCallback,
@@ -41,6 +50,8 @@ export type PortalJobCallbackSubmitInput = {
   token: string;
   description?: string | null;
   preferredContact?: string | null;
+  category?: string | null;
+  storedAssetIds?: readonly string[] | null;
 };
 
 export type PortalJobCallbackSubmitResult =
@@ -109,6 +120,8 @@ export async function submitPortalJobCallback(
   if (!preferredContact) {
     return { ok: false, error: JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE };
   }
+  const category = parseJobCallbackCategory(input.category);
+  const storedAssetIds = parseJobCallbackAttachmentIds(input.storedAssetIds);
   const storedDescription = formatPortalCallbackDescription(description, preferredContact);
 
   try {
@@ -118,11 +131,13 @@ export async function submitPortalJobCallback(
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
 
+      await jobCallbackTestHooks.beforeJobLock?.({ jobId: job.id, kind: "portal" });
       const locked = await lockTenantOwnedJob(tx, job.businessId, job.id);
       if (!locked || locked.businessId !== job.businessId) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
       await portalJobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, token });
+      await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "portal" });
       if (
         !(await assertLiveLockedProjectToken(tx, {
           jobId: locked.id,
@@ -147,12 +162,36 @@ export async function submitPortalJobCallback(
       }
 
       const resolved = await findLatestResolvedJobCallback(tx, locked.businessId, locked.id);
+      if (isPortalJobCallbackClosed(resolved?.outcome)) {
+        return { ok: false, error: JOB_CALLBACK_PORTAL_CLOSED_MESSAGE };
+      }
       if (isPortalJobCallbackCoolingDown(resolvedJobCallbackAt(resolved))) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE };
       }
 
       const owner = await findActiveOwnerMembership(tx, locked.businessId);
       if (!owner) {
+        return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
+      }
+
+      const documents =
+        storedAssetIds.length === 0
+          ? []
+          : await tx.$queryRaw<Array<{ id: string; originalFilename: string }>>`
+              SELECT id, "originalFilename"
+              FROM "StoredAsset"
+              WHERE id IN (${Prisma.join(storedAssetIds)})
+                AND "businessId" = ${locked.businessId}
+                AND "jobId" = ${locked.id}
+                AND category = 'DOCUMENT'
+                AND purpose = ${PROJECT_DOCUMENT_PURPOSE}
+                AND visibility = 'PRIVATE'
+                AND status = 'READY'
+                AND "deletedAt" IS NULL
+                AND "publicPath" IS NULL
+              FOR UPDATE
+            `;
+      if (storedAssetIds.length > MAX_JOB_CALLBACK_ATTACHMENTS || documents.length !== storedAssetIds.length) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_UNAVAILABLE_MESSAGE };
       }
 
@@ -167,6 +206,35 @@ export async function submitPortalJobCallback(
           recordedByMembershipId: owner.id,
         },
       });
+      if (category) {
+        try {
+          await tx.jobCallback.update({
+            where: { id: created.id },
+            data: { category },
+          });
+        } catch (error) {
+          if (!missingJobCallbackIssueSchema(error)) throw error;
+        }
+      }
+      if (documents.length > 0) {
+        try {
+          const byId = new Map(documents.map((row) => [row.id, row]));
+          await tx.jobCallbackAttachment.createMany({
+            data: storedAssetIds.map((id) => {
+              const document = byId.get(id);
+              return {
+                businessId: locked.businessId,
+                jobId: locked.id,
+                callbackId: created.id,
+                storedAssetId: id,
+                originalFilename: document?.originalFilename ?? "document",
+              };
+            }),
+          });
+        } catch (error) {
+          if (!missingJobCallbackIssueSchema(error)) throw error;
+        }
+      }
       await tx.jobCallbackEvent.create({
         data: {
           businessId: locked.businessId,
@@ -178,7 +246,9 @@ export async function submitPortalJobCallback(
           payload: JSON.stringify({
             source: "PORTAL",
             preferredContact,
+            category: category ?? null,
             descriptionLength: storedDescription.length,
+            attachmentCount: documents.length,
           }),
         },
       });
@@ -210,6 +280,9 @@ export async function submitPortalJobCallback(
           alreadyExists: true,
         };
       }
+    }
+    if (missingJobCallbackIssueSchema(error)) {
+      return { ok: false, error: JOB_CALLBACK_UNAVAILABLE_MESSAGE };
     }
     throw error;
   }

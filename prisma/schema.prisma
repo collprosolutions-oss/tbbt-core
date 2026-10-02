@@ -316,11 +316,7 @@ model Business {
   /// columns stay untouched. Concurrent Job-column chats do not collide.
   jobAftercareInstructions    JobAftercareInstruction[]
   jobAftercareEvents          JobAftercareEvent[]
-  /// Structured customer-reported issue on a completed Job. Separate
-  /// tables so Job columns stay untouched. Never a second JobCallback.
-  jobCustomerIssues           JobCustomerIssue[]
-  jobCustomerIssueEvents      JobCustomerIssueEvent[]
-  jobCustomerIssueAttachments JobCustomerIssueAttachment[]
+  jobCallbackAttachments      JobCallbackAttachment[]
   /// OWNER rotate/revoke of a Job's customer project link. Separate tables
   /// so Job columns stay untouched. Job.projectToken remains the live key.
   jobProjectLinks             JobProjectLink[]
@@ -740,10 +736,6 @@ model Membership {
   publishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercarePublisher")
   unpublishedJobAftercareInstructions JobAftercareInstruction[] @relation("JobAftercareUnpublisher")
   jobAftercareEvents           JobAftercareEvent[]    @relation("JobAftercareEventActor")
-  recordedJobCustomerIssues    JobCustomerIssue[]     @relation("JobCustomerIssueRecorder")
-  reviewedJobCustomerIssues    JobCustomerIssue[]     @relation("JobCustomerIssueReviewer")
-  decidedJobCustomerIssues     JobCustomerIssue[]     @relation("JobCustomerIssueDecider")
-  jobCustomerIssueEvents       JobCustomerIssueEvent[] @relation("JobCustomerIssueEventActor")
   updatedJobProjectLinks       JobProjectLink[]       @relation("JobProjectLinkActor")
   jobProjectLinkEvents         JobProjectLinkEvent[]  @relation("JobProjectLinkEventActor")
   createdEquipmentItems        EquipmentItem[]        @relation("EquipmentItemCreator")
@@ -801,7 +793,6 @@ model Customer {
   referralsReceived Referral[] @relation("ReferralReferredCustomer")
   growthActionRequests GrowthActionRequest[]
   jobCallbacks         JobCallback[]
-  jobCustomerIssues    JobCustomerIssue[]
 
   @@index([businessId])
   @@index([firstCampaignId])
@@ -1698,14 +1689,10 @@ model Job {
   additionalWorkRequests  AdditionalWorkRequest[]
   problemReports          JobProblemReport[]
   callbacks               JobCallback[]
+  callbackAttachments     JobCallbackAttachment[]
   /// One current aftercare document per Job. Job columns stay unchanged.
   aftercareInstruction    JobAftercareInstruction?
   aftercareEvents         JobAftercareEvent[]
-  /// Structured customer-reported issues. Job columns stay unchanged.
-  /// Distinct from JobCallback — submitting an issue never writes one.
-  customerIssues          JobCustomerIssue[]
-  customerIssueEvents     JobCustomerIssueEvent[]
-  customerIssueAttachments JobCustomerIssueAttachment[]
   /// OWNER review decisions for this Job's private project documents.
   /// Relation only — Job columns stay unchanged.
   projectDocumentReviews  ProjectDocumentReview[]
@@ -1946,7 +1933,7 @@ model StoredAsset {
   expenseReceipts      Expense[]
   /// At most one OWNER review decision for a private project document.
   projectDocumentReview ProjectDocumentReview?
-  jobCustomerIssueAttachments JobCustomerIssueAttachment[]
+  jobCallbackAttachments JobCallbackAttachment[]
 
   @@unique([businessId, storageKey])
   @@index([businessId, category, status])
@@ -2491,10 +2478,12 @@ model JobProblemReport {
 }
 
 /// OWNER-recorded or customer-portal-submitted callback against a
-/// completed same-business Job. Portal submissions resolve the Job from
-/// projectToken only and reuse this review path. After OUTCOME_RECORDED,
-/// the project-token portal cannot file another request until 24 hours
-/// after outcomeAt. OWNER record on the same job is not cooled down.
+/// completed same-business Job. This is the single customer-reported
+/// issue queue. Portal submissions resolve the Job from projectToken
+/// only and reuse this review path. After OUTCOME_RECORDED, the
+/// project-token portal cannot file another request until 24 hours
+/// after outcomeAt, except NO_RETURN_VISIT which permanently refuses a
+/// new portal case. OWNER record on the same job is not cooled down.
 /// Trade-neutral operational review only — never a warranty coverage or
 /// legal determination, and never an invoice, scheduled Job, or customer
 /// message by itself. Distinct from AdditionalWorkRequest (portal/field)
@@ -2515,10 +2504,15 @@ model JobCallback {
   reportedVia              String
   /// RECORDED | UNDER_REVIEW | OUTCOME_RECORDED
   status                   String    @default("RECORDED")
+  /// INCOMPLETE_WORK | QUALITY_CONCERN | DAMAGE | NOT_WORKING | OTHER
+  /// Optional structured category. Null on older OWNER-recorded rows.
+  category                 String?
   /// WILL_FOLLOW_UP | NO_RETURN_VISIT | CUSTOMER_WITHDREW | RECORDED_ONLY
-  /// Operational outcome only — never COVERED / NOT_COVERED.
+  /// Operational OWNER decision only — never COVERED / NOT_COVERED.
   outcome                  String?
   outcomeNotes             String?
+  /// Private owner notes. Hidden from the project token. Never published.
+  ownerNotes               String    @default("")
   recordedByMembershipId   String
   reviewedByMembershipId   String?
   outcomeByMembershipId    String?
@@ -2535,6 +2529,7 @@ model JobCallback {
   reviewedBy Membership? @relation("JobCallbackReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
   outcomeBy  Membership? @relation("JobCallbackOutcome", fields: [outcomeByMembershipId], references: [id], onDelete: SetNull)
   events     JobCallbackEvent[]
+  attachments JobCallbackAttachment[]
 
   @@index([businessId])
   @@index([jobId])
@@ -2564,6 +2559,31 @@ model JobCallbackEvent {
 
   @@index([businessId])
   @@index([callbackId, createdAt])
+}
+
+/// Existing private StoredAsset linked to one JobCallback. Reuses private
+/// Business Storage only — this table does not upload bytes or invent a
+/// second store or a second callback queue. Application code must never
+/// publish storageKey or send a customer message from these rows.
+model JobCallbackAttachment {
+  id               String   @id @default(cuid())
+  businessId       String
+  jobId            String
+  callbackId       String
+  storedAssetId    String
+  /// Filename snapshot at attach time. Never a storage key or URL.
+  originalFilename String
+  createdAt        DateTime @default(now())
+
+  business Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  callback JobCallback @relation(fields: [callbackId], references: [id], onDelete: Cascade)
+  asset    StoredAsset @relation(fields: [storedAssetId], references: [id], onDelete: Restrict)
+
+  @@unique([callbackId, storedAssetId])
+  @@index([businessId])
+  @@index([jobId])
+  @@index([storedAssetId])
 }
 
 /// OWNER-authored aftercare instructions for a completed same-business Job.
@@ -2637,119 +2657,6 @@ model JobAftercareEvent {
   @@index([businessId])
   @@index([jobId])
   @@index([aftercareId, createdAt])
-}
-
-/// Structured customer-reported issue on a completed same-business Job.
-/// Portal submissions resolve the Job from projectToken only. OWNER
-/// records a private decision and private notes. customerVisibleStatus
-/// is the only status the project token may read — decision and
-/// ownerNotes stay off that token. Never a warranty coverage or legal
-/// determination, and never an invoice, scheduled Job, customer
-/// message, or JobCallback by itself. Distinct from JobCallback
-/// (operational callback queue), AdditionalWorkRequest (extra-work
-/// review), JobProblemReport (assigned-member field issues), and
-/// JobAftercareInstruction (owner-authored care instructions).
-///
-/// Customer-visible status: RECEIVED -> IN_REVIEW -> CLOSED.
-/// At most one open (RECEIVED | IN_REVIEW) row per Job is enforced by
-/// a partial unique index in the migration, not here — Prisma cannot
-/// express that WHERE clause.
-model JobCustomerIssue {
-  id                       String    @id @default(cuid())
-  businessId               String
-  jobId                    String
-  customerId               String?
-  /// INCOMPLETE_WORK | QUALITY_CONCERN | DAMAGE | NOT_WORKING | OTHER
-  category                 String
-  /// Customer-reported description as submitted or OWNER-recorded.
-  description              String
-  /// PHONE | TEXT | EMAIL | IN_PERSON | PORTAL | OTHER
-  reportedVia              String
-  /// PHONE | TEXT | EMAIL. Optional preferred contact from the portal.
-  preferredContact         String?
-  /// RECEIVED | IN_REVIEW | CLOSED. The only status the token may read.
-  customerVisibleStatus    String    @default("RECEIVED")
-  /// ACKNOWLEDGED | WILL_FOLLOW_UP | NO_RETURN_VISIT | CUSTOMER_WITHDREW |
-  /// RECORDED_ONLY. Private OWNER finding — never COVERED / NOT_COVERED.
-  decision                 String?
-  /// Private owner notes. Hidden from the project token. Never published.
-  ownerNotes               String    @default("")
-  recordedByMembershipId   String
-  reviewedByMembershipId   String?
-  decidedByMembershipId    String?
-  recordedAt               DateTime  @default(now())
-  reviewedAt               DateTime?
-  decidedAt                DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
-
-  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  recordedBy Membership @relation("JobCustomerIssueRecorder", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
-  reviewedBy Membership? @relation("JobCustomerIssueReviewer", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
-  decidedBy  Membership? @relation("JobCustomerIssueDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
-  events     JobCustomerIssueEvent[]
-  attachments JobCustomerIssueAttachment[]
-
-  @@index([businessId])
-  @@index([jobId])
-  @@index([businessId, customerVisibleStatus])
-  @@index([customerId])
-}
-
-/// Append-only status history for one JobCustomerIssue.
-/// Application code must never update or delete an existing row.
-/// Owner notes and coverage determinations are never stored here.
-model JobCustomerIssueEvent {
-  id                         String   @id @default(cuid())
-  businessId                 String
-  jobId                      String
-  issueId                    String
-  /// RECORDED | REVIEWED | DECIDED
-  eventType                  String
-  fromCustomerVisibleStatus  String?
-  toCustomerVisibleStatus    String
-  actorMembershipId          String
-  /// Non-sensitive JSON (category, decision, note length, attachment
-  /// count). Never owner-note text, never a coverage determination,
-  /// never a customer message payload.
-  payload                    String?
-  createdAt                  DateTime @default(now())
-
-  business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  job      Job              @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  issue    JobCustomerIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  actor    Membership       @relation("JobCustomerIssueEventActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
-
-  @@index([businessId])
-  @@index([jobId])
-  @@index([issueId, createdAt])
-}
-
-/// Existing private StoredAsset linked to one JobCustomerIssue.
-/// Reuses private Business Storage only — this table does not upload
-/// bytes or invent a second store. Application code must never publish
-/// storageKey or send a customer message from these rows.
-model JobCustomerIssueAttachment {
-  id               String   @id @default(cuid())
-  businessId       String
-  jobId            String
-  issueId          String
-  storedAssetId    String
-  /// Filename snapshot at attach time. Never a storage key or URL.
-  originalFilename String
-  createdAt        DateTime @default(now())
-
-  business Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  job      Job              @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  issue    JobCustomerIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  asset    StoredAsset      @relation(fields: [storedAssetId], references: [id], onDelete: Restrict)
-
-  @@unique([issueId, storedAssetId])
-  @@index([businessId])
-  @@index([jobId])
-  @@index([storedAssetId])
 }
 
 /// Current OWNER-controlled state of one Job's customer project link.

@@ -29,7 +29,6 @@ import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobAftercarePanel } from "@/components/jobs/job-aftercare-panel";
 import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
-import { JobCustomerIssuePanel } from "@/components/jobs/job-customer-issue-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
@@ -121,7 +120,6 @@ import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-boo
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { loadJobAftercareReview } from "@/lib/job-aftercare-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
-import { loadJobCustomerIssueReview } from "@/lib/job-customer-issue-data";
 import { loadJobProjectLinkReview } from "@/lib/project-link-data";
 
 export const metadata: Metadata = {
@@ -419,7 +417,6 @@ export default async function JobPage({
     : null;
   const jobCallbackReview = await loadJobCallbackReview(prisma, access, job.id);
   const jobAftercareReview = await loadJobAftercareReview(prisma, access, job.id);
-  const jobCustomerIssueReview = await loadJobCustomerIssueReview(prisma, access, job.id);
   const jobProjectLinkReview = await loadJobProjectLinkReview(prisma, access, job.id);
 
   const photosByStage: Record<"BEFORE" | "DURING" | "AFTER", JobPhotoDetails[]> = {
@@ -1194,32 +1191,14 @@ export default async function JobPage({
             <CardTitle>Customer-reported callback</CardTitle>
             <CardDescription>
               OWNER record, review, and outcome for a customer-reported
-              callback on a completed same-business job. Shows recorded
+              callback on a completed same-business job. Customer-visible
+              status stays separate from private owner notes. Shows recorded
               warranty terms only. Does not invent coverage, create an
               invoice, schedule a job, or message the customer.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <JobCallbackPanel review={jobCallbackReview} />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {jobCustomerIssueReview ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Customer-reported issue</CardTitle>
-            <CardDescription>
-              OWNER record, review, and private decision for a structured
-              customer-reported issue on a completed same-business job.
-              Customer-visible status stays separate from private notes.
-              Shows recorded warranty terms only. Does not invent coverage,
-              create a callback, invoice, schedule a job, or message the
-              customer.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <JobCustomerIssuePanel review={jobCustomerIssueReview} />
           </CardContent>
         </Card>
       ) : null}

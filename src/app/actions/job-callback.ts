@@ -27,6 +27,14 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readStringList(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 async function requireOwnerJobCallbackAccess() {
   const operating = await requireOperatingBusinessAccessForForm();
   if (!operating.ok) return operating;
@@ -53,6 +61,9 @@ export async function recordJobCallbackAction(
       jobId,
       description: readString(formData, "description"),
       reportedVia: readString(formData, "reportedVia"),
+      category: readString(formData, "category"),
+      ownerNotes: readString(formData, "ownerNotes"),
+      storedAssetIds: readStringList(formData, "storedAssetIds"),
     });
   } catch (error) {
     return {
@@ -77,6 +88,7 @@ export async function reviewJobCallbackAction(
   try {
     const result = await reviewCustomerReportedCallback(prisma, operating.access, {
       callbackId: readString(formData, "callbackId"),
+      ownerNotes: readString(formData, "ownerNotes"),
     });
     revalidateJob(result.callback.jobId);
     return {
@@ -109,6 +121,7 @@ export async function recordJobCallbackOutcomeAction(
         callbackId: readString(formData, "callbackId"),
         outcome: readString(formData, "outcome"),
         outcomeNotes: readString(formData, "outcomeNotes"),
+        ownerNotes: readString(formData, "ownerNotes"),
       },
     );
     revalidateJob(result.callback.jobId);
