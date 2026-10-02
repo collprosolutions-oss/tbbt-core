@@ -266,6 +266,25 @@ check(
       offlineCheckSrc,
     ),
 );
+const liveOverlapSection = offlineCheckSrc.slice(
+  offlineCheckSrc.indexOf("LIVE — Sync, retry, two-device conflict, overlap, timezone"),
+);
+const leftoverCollisionIdx = liveOverlapSection.indexOf(
+  "Leftover overlap seed 409s a colliding same-worker correction",
+);
+const leftoverIsolationSlice = liveOverlapSection.slice(
+  leftoverCollisionIdx,
+  liveOverlapSection.indexOf("Older edits go through a correction request"),
+);
+check(
+  "Pinned same-worker correction isolates the leftover overlap seed before retry",
+  leftoverCollisionIdx !== -1 &&
+    liveOverlapSection.includes("2026-10-02T11:45:00.000Z") &&
+    liveOverlapSection.includes("That correction would overlap another entry.") &&
+    leftoverIsolationSlice.includes("deleteMany") &&
+    leftoverIsolationSlice.includes("jobId: overlapJob.id") &&
+    leftoverIsolationSlice.includes("After isolating the leftover overlap seed"),
+);
 check(
   "Sign-out clears time drafts; restore 401/403 does not",
   appSrc.includes("clearAllTimeCardDrafts") &&
@@ -1141,7 +1160,8 @@ try {
 
   console.log("\nLIVE — Sync, retry, two-device conflict, overlap, timezone");
   // Overlap runs first with its own closed interval so later start/stop
-  // fixtures do not share the same worker clock window.
+  // fixtures do not share the same worker clock window. That seed stays
+  // on this worker until the correction regression isolates it.
   await createReadyEntry({
     businessId: businessA.id,
     membershipId: memberMem.id,
@@ -1175,6 +1195,16 @@ try {
       overlap.status === 409 &&
       String(overlap.error).includes("overlaps") &&
       overlapRows.length === 0,
+  );
+  const overlapSeed = await prisma.timeEntry.findMany({
+    where: { jobId: overlapJob.id, businessId: businessA.id },
+  });
+  check(
+    "The refused overlapping start leaves the original closed seed and no merged running clock",
+    overlapSeed.length === 1 &&
+      overlapSeed[0].status === "READY" &&
+      overlapSeed[0].startedAt.toISOString() === overlapStartedAt &&
+      overlapSeed[0].endedAt?.toISOString() === overlapEndedAt,
   );
 
   const clockNow = new Date();
@@ -1616,8 +1646,12 @@ try {
     where: { jobId: replayAgedJob.id, businessId: businessA.id },
   });
 
-  const correctionStart = new Date(clockNow.getTime() - 8 * 60 * 60 * 1000);
-  const correctionEnd = new Date(clockNow.getTime() - 7 * 60 * 60 * 1000);
+  // A wall-clock "now" of 2026-10-02T20:00Z makes now-8h15m → now-7h
+  // propose 11:45-13:00, which overlaps the leftover 12:00-13:00 seed.
+  // That 409 is a fixture collision, not a merged offline-sync write.
+  const correctionStart = new Date("2026-10-02T12:00:00.000Z");
+  const correctionEnd = new Date("2026-10-02T13:00:00.000Z");
+  const proposedCorrectionStart = new Date("2026-10-02T11:45:00.000Z");
   const correctionEntry = await createReadyEntry({
     businessId: businessA.id,
     membershipId: memberMem.id,
@@ -1625,18 +1659,43 @@ try {
     startedAt: correctionStart,
     endedAt: correctionEnd,
   });
-  const proposedCorrectionStart = new Date(correctionStart.getTime() - 15 * 60 * 1000);
-  const correctionRequest = await requestNativeTimeCorrection(prisma, memberAccess.access, {
+  const collidingCorrectionInput = {
     timeEntryId: correctionEntry.id,
     reason: "Offline tap was older than the sync window.",
     proposedStartDate: formatDateInput(proposedCorrectionStart, "America/New_York"),
     proposedStartTime: formatTimeInput(proposedCorrectionStart, "America/New_York"),
     proposedEndDate: formatDateInput(correctionEnd, "America/New_York"),
     proposedEndTime: formatTimeInput(correctionEnd, "America/New_York"),
+  };
+  const leftoverOverlapCollision = await requestNativeTimeCorrection(
+    prisma,
+    memberAccess.access,
+    collidingCorrectionInput,
+  );
+  check(
+    "Leftover overlap seed 409s a colliding same-worker correction",
+    leftoverOverlapCollision.ok === false &&
+      leftoverOverlapCollision.status === 409 &&
+      leftoverOverlapCollision.error === "That correction would overlap another entry.",
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: overlapJob.id, businessId: businessA.id },
   });
+  const correctionRequest = await requestNativeTimeCorrection(
+    prisma,
+    memberAccess.access,
+    collidingCorrectionInput,
+  );
   const correctionAfter = await prisma.timeEntry.findFirst({
     where: { id: correctionEntry.id },
   });
+  check(
+    "After isolating the leftover overlap seed, the same correction is PENDING",
+    correctionRequest.ok === true &&
+      correctionRequest.request.status === "PENDING" &&
+      correctionAfter?.startedAt.getTime() === correctionStart.getTime() &&
+      correctionAfter?.endedAt?.getTime() === correctionEnd.getTime(),
+  );
   check(
     "Older edits go through a correction request and do not rewrite the TimeEntry",
     correctionRequest.ok === true &&
