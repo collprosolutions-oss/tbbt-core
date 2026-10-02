@@ -216,6 +216,7 @@ check(
   "proxy still allows public site, webhook, and calendar-feed paths",
   proxySrc.includes("isStripeWebhookPath") &&
     proxySrc.includes("isCustomerMessagingWebhookPath") &&
+    proxySrc.includes("isVoiceWebhookPath") &&
     proxySrc.includes("isPublicWebsitePath") &&
     proxySrc.includes("isScheduleCalendarFeedPath"),
 );

@@ -33,6 +33,11 @@ import {
   isCustomerMessagingWebhookPath,
   isTwilioCustomerMessagingConfigured,
 } from "@/lib/customer-messaging/config";
+import {
+  isTwilioVoiceWebhookConfigured,
+  isVoiceWebhookPath,
+  VOICE_WEBHOOK_PATH,
+} from "@/lib/communications/voice-webhook";
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { SCHEDULE_CALENDAR_FEED_PATH_PREFIX } from "@/lib/schedule-calendar-subscription/contract";
 import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
@@ -924,7 +929,7 @@ function evaluateInside(input: {
     title: "Webhook public reachability",
     status: "MANUAL",
     requirement: "REQUIRED",
-    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio status callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. Calendar clients GET ${PRODUCTION_APP_ORIGIN}${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/<token> with no TBBT session. isStripeWebhookPath, isCustomerMessagingWebhookPath, and isScheduleCalendarFeedPath allow those paths. This checker does not call Vercel.`,
+    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio SMS callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. Twilio Voice callbacks use ${PRODUCTION_APP_ORIGIN}${VOICE_WEBHOOK_PATH}. Calendar clients GET ${PRODUCTION_APP_ORIGIN}${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/<token> with no TBBT session. isStripeWebhookPath, isCustomerMessagingWebhookPath, isVoiceWebhookPath, and isScheduleCalendarFeedPath allow those paths. This checker does not call Vercel.`,
   });
 
   const storageConfigured = isBusinessStorageConfigured();
@@ -1100,6 +1105,37 @@ function evaluateInside(input: {
     });
   }
 
+  if (!isTwilioVoiceWebhookConfigured() || fakeMessaging) {
+    drafts.push({
+      id: "voice_webhook",
+      category: "sms",
+      title: "Twilio Voice webhook",
+      status: fakeMessaging ? "BLOCKED" : "PASS",
+      requirement: "OPTIONAL",
+      detail: fakeMessaging
+        ? "Fake messaging adapter is set, so the Twilio Voice webhook is not a production callback."
+        : `Voice answering stays disconnected. A Twilio Voice URL is not required. When Voice callbacks are enabled the path is the app origin plus ${VOICE_WEBHOOK_PATH}, which isVoiceWebhookPath allows.`,
+    });
+  } else if (!appUrl) {
+    drafts.push({
+      id: "voice_webhook",
+      category: "sms",
+      title: "Twilio Voice webhook",
+      status: "BLOCKED",
+      requirement: "OPTIONAL",
+      detail: "Twilio credentials are present but getAppUrl() is empty, so the Voice webhook URL cannot be built.",
+    });
+  } else {
+    drafts.push({
+      id: "voice_webhook",
+      category: "sms",
+      title: "Twilio Voice webhook",
+      status: "MANUAL",
+      requirement: "OPTIONAL",
+      detail: `Point the inbound Voice URL and status callback at ${appUrl}${VOICE_WEBHOOK_PATH}. The route verifies X-Twilio-Signature, logs one missed call per CallSid, and returns TwiML <Reject/>. It does not record or place calls. This checker does not call Twilio.`,
+    });
+  }
+
   if (!twilioConfigured || fakeMessaging) {
     drafts.push({
       id: "sms_dedicated_number",
@@ -1233,6 +1269,7 @@ function evaluateInside(input: {
     isPublicWebsitePath("/api/storage/public/asset") &&
     isStripeWebhookPath(STRIPE_WEBHOOK_PATH) &&
     isCustomerMessagingWebhookPath(CUSTOMER_MESSAGING_WEBHOOK_PATH) &&
+    isVoiceWebhookPath(VOICE_WEBHOOK_PATH) &&
     isStudioWeeklyReminderCronPath(STUDIO_WEEKLY_REMINDER_CRON_PATH) &&
     isScheduleCalendarFeedPath(`${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/token`);
   drafts.push({
@@ -1242,7 +1279,7 @@ function evaluateInside(input: {
     status: routesOk ? "PASS" : "BLOCKED",
     requirement: "REQUIRED",
     detail: routesOk
-      ? "Public site, storage, Stripe webhook, Twilio webhook, cron, and calendar-feed paths match the existing allow helpers."
+      ? "Public site, storage, Stripe webhook, Twilio SMS webhook, Twilio Voice webhook, cron, and calendar-feed paths match the existing allow helpers."
       : "A public, webhook, cron, or calendar-feed path helper no longer matches the production paths.",
   });
 

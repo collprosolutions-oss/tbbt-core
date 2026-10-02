@@ -29,7 +29,7 @@ Do not invent passing browser results. The isolated harness is
 10. Complete → invoice → payment (`/invoices`, `/p/[token]/invoice`).
 11. Expense → job profitability / reports / financial intelligence (`/expenses`, `/reports`). Linked material purchases must not double-count. Known cash flow uses recorded payments and recorded expenses. PROCESSED payroll gross labor is an operational cost record, not verified bank cash out. Banking and accounting stay Not Connected.
 12. Review request → marketing opportunity → Growth loop → BSOS recommendation (`/reviews`, `/marketing`, `/growth`, `/business-health`). Launch progress, unreviewed knowledge, and candidate learnings feed Business Health facts — they do not replace the BSOS engine.
-13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice is not connected. Growth never sends customer messages; Communications owns delivery.
+13. Communications department → customer timeline, compose, missed-call log (`/communications`). Voice answering is not connected. A verified inbound Twilio Voice webhook can record one missed-call log and owner callback item per CallSid. Growth never sends customer messages; Communications owns delivery.
 14. Knowledge Hub (`/knowledge`) stores owner-approved operational knowledge, procedures/checklists, and Experience Intelligence candidates. Ask Knowledge distinguishes approved knowledge, historical evidence, inference, and unknown. No cross-tenant retrieval.
 15. Business Protection / Vault / Agreement Coach (`/business-protection`). Stores private records and drafts. Does not verify licenses or apply a live e-sign provider.
 
