@@ -941,11 +941,15 @@ try {
   );
   check(
     "Active expense is exported and voided expense truth is omitted",
-    expenses.records.length === 1 &&
-      expenses.records[0]["Expense ID"] === activeExpense.id &&
-      expenses.records[0].Amount === "142.68" &&
-      expenses.records[0].Category === "MATERIALS" &&
-      expenses.records[0]["Job Reference"] === jobReferenceFromId(jobA.id) &&
+    expenses.records.length === 2 &&
+      expenses.records.some(
+        (row) =>
+          row["Expense ID"] === activeExpense.id &&
+          row.Amount === "142.68" &&
+          row.Category === "MATERIALS" &&
+          row["Job Reference"] === jobReferenceFromId(jobA.id),
+      ) &&
+      expenses.records.some((row) => row["Expense ID"] === crExpense.id) &&
       expenses.records.every((row) => row["Expense ID"] !== voidedExpense.id) &&
       !accountingExpensesCsv(sourceA).includes("Voided fuel should not export"),
   );
