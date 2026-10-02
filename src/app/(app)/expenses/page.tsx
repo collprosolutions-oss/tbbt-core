@@ -491,7 +491,15 @@ export default async function ExpensesPage({
       <PageHeader
         title="Expenses"
         description="Track and manage business expenses."
-      />
+      >
+        {access.workspace.role === "OWNER" ? (
+          <p className="text-sm">
+            <Link href="/reconciliation" className="underline underline-offset-4">
+              Review a bank CSV
+            </Link>
+          </p>
+        ) : null}
+      </PageHeader>
 
       <FounderDesignRoot
         pageKey="expenses"

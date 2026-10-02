@@ -446,6 +446,11 @@ model Business {
   externalLeadImportRows   ExternalLeadImportRow[]
   customerCsvImports       CustomerCsvImport[]
   customerCsvImportRows    CustomerCsvImportRow[]
+  /// OWNER-reviewed bank CSV workspace. Never a live bank feed and
+  /// never a verified cash balance.
+  bankReconciliationImports BankReconciliationImport[]
+  bankReconciliationRows    BankReconciliationRow[]
+  bankReconciliationMatches BankReconciliationMatch[]
   /// OWNER-reviewed CSV preview/confirm for this business's catalog.
   /// Confirm writes ServiceCatalogItem only — never LineItem snapshots
   /// or published hourly rates.
@@ -752,6 +757,8 @@ model Membership {
   createdInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemCreator")
   updatedInvoiceCollectionWorkItems InvoiceCollectionWorkItem[] @relation("InvoiceCollectionWorkItemUpdater")
   recordedInvoiceCredits InvoiceCredit[] @relation("InvoiceCreditRecorder")
+  createdBankReconciliationImports BankReconciliationImport[] @relation("BankReconciliationImportCreator")
+  decidedBankReconciliationMatches BankReconciliationMatch[] @relation("BankReconciliationMatchDecider")
   scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
   decidedProjectDocumentReviews ProjectDocumentReview[] @relation("ProjectDocumentReviewDecider")
 
@@ -5780,4 +5787,113 @@ model RegulatoryIntelligenceNote {
 
   @@index([businessId])
   @@index([businessId, jurisdictionCode, tradeCode])
+}
+
+/// OWNER-uploaded bank CSV captured for private review. The exact source
+/// bytes stay on this row. Import never creates a Payment, never changes
+/// an Invoice, never writes InvoiceCredit, and never marks banking
+/// CONNECTED or a verified bank balance.
+model BankReconciliationImport {
+  id                    String   @id @default(cuid())
+  businessId            String
+  /// CSV_UPLOAD. No live bank feed and no owner-supplied URL fetch.
+  sourceKind            String
+  /// Sanitized filename. Display only.
+  sourceLabel           String
+  /// SHA-256 of the exact CSV bytes. Same-business re-upload reuses this row.
+  contentSha256         String
+  /// Exact uploaded bytes. PRIVATE — OWNER download only. Never a public URL.
+  sourceBytes           Bytes
+  capturedAt            DateTime
+  /// REVIEW. This workspace is never a verified bank balance.
+  status                String   @default("REVIEW")
+  rowCount              Int
+  depositCount          Int
+  withdrawalCount       Int
+  unmatchedCount        Int
+  candidateMatchCount   Int
+  duplicateRowCount     Int
+  reversedCount         Int
+  invalidCount          Int
+  createdByMembershipId String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy Membership @relation("BankReconciliationImportCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  rows      BankReconciliationRow[]
+  matches   BankReconciliationMatch[]
+
+  @@unique([businessId, contentSha256])
+  @@index([businessId])
+  @@index([createdByMembershipId])
+}
+
+/// One sanitized bank CSV row. Amounts are signed whole cents. Duplicate
+/// and reversed rows stay stored so the source file remains complete.
+model BankReconciliationRow {
+  id                   String   @id @default(cuid())
+  businessId           String
+  importId             String
+  rowNumber            Int
+  /// YYYY-MM-DD calendar date from the CSV. Never a timezone-shifted Date.
+  postedOn             String?
+  description          String
+  /// Signed whole cents. Deposit > 0, withdrawal < 0, zero allowed.
+  amountCents          Int
+  /// DEPOSIT | WITHDRAWAL | ZERO
+  direction            String
+  rowFingerprint       String
+  rawLine              String
+  /// UNMATCHED | CANDIDATE | DUPLICATE | REVERSED | INVALID | ALREADY_SEEN | ACCEPTED | REJECTED | IGNORED
+  reviewStatus         String
+  invalidReason        String?
+  reversalOfRowNumber  Int?
+  duplicateOfRowNumber Int?
+  createdAt            DateTime @default(now())
+
+  business Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import   BankReconciliationImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  matches  BankReconciliationMatch[]
+
+  @@unique([importId, rowNumber])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowFingerprint])
+}
+
+/// Suggested or owner-reviewed link from a bank row to a recorded TBBT
+/// Payment or Expense. Accepting a match only records the review link.
+/// It never creates a Payment, never updates Invoice / Expense rows,
+/// and never writes InvoiceCredit.
+model BankReconciliationMatch {
+  id                    String    @id @default(cuid())
+  businessId            String
+  importId              String
+  rowId                 String
+  /// PAYMENT | EXPENSE
+  candidateKind         String
+  candidateId           String
+  score                 Int
+  matchReason           String
+  /// SUGGESTED | ACCEPTED | REJECTED
+  status                String    @default("SUGGESTED")
+  decidedAt             DateTime?
+  decidedByMembershipId String?
+  createdAt             DateTime  @default(now())
+
+  business  Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  import    BankReconciliationImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  row       BankReconciliationRow    @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  decidedBy Membership?              @relation("BankReconciliationMatchDecider", fields: [decidedByMembershipId], references: [id], onDelete: SetNull)
+
+  // One ACCEPTED match per (businessId, candidateKind, candidateId) and one
+  // ACCEPTED match per rowId are enforced by partial unique indexes in
+  // 20261002190100_bank_reconciliation_accepted_unique. Prisma cannot model
+  // those WHERE status = 'ACCEPTED' constraints here.
+  @@unique([rowId, candidateKind, candidateId])
+  @@index([businessId])
+  @@index([importId])
+  @@index([rowId])
+  @@index([importId, candidateKind, candidateId])
 }

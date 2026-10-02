@@ -849,6 +849,15 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <p className="text-sm text-muted-foreground">{PROJECTED_BALANCE_UNAVAILABLE_MESSAGE}</p>
         <p className="text-sm text-muted-foreground">{financeStatus?.bankingMessage ?? snapshot.bank.unavailableReason}</p>
         <p className="text-sm text-muted-foreground">{financeStatus?.accountingMessage ?? "Accounting is Not Connected."}</p>
+        {role === "OWNER" ? (
+          <p className="text-sm">
+            <Link href="/reconciliation" className="font-medium underline underline-offset-4">
+              Review a bank CSV
+            </Link>
+            {" "}
+            against recorded payments and expenses. Import never connects a bank or claims a verified balance.
+          </p>
+        ) : null}
       </SectionCard>
     );
   }

@@ -97,6 +97,7 @@ const lifecycle = [
   ["Invoices", "src/app/(app)/invoices/page.tsx"],
   ["Project portal invoice", "src/app/p/[token]/invoice/page.tsx"],
   ["Expenses", "src/app/(app)/expenses/page.tsx"],
+  ["Bank CSV review", "src/app/(app)/reconciliation/page.tsx"],
   ["Reports / job profitability", "src/app/(app)/reports/page.tsx"],
   ["Reviews", "src/app/(app)/reviews/page.tsx"],
   ["Communications", "src/app/(app)/communications/page.tsx"],

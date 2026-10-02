@@ -150,6 +150,15 @@ export default async function ReportsPage({
           Monthly goals
         </Link>{" "}
         compare owner-set targets with recorded jobs completed, invoices paid, and collected payments.
+        {access.workspace.role === "OWNER" ? (
+          <>
+            {" "}
+            <Link href="/reconciliation" className="font-medium text-foreground underline underline-offset-4">
+              Review a bank CSV
+            </Link>{" "}
+            against recorded payments and expenses. That workspace is not a verified bank balance.
+          </>
+        ) : null}
       </p>
 
       <FounderDesignRoot

@@ -271,6 +271,7 @@ try {
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
+    CAPABILITIES.REVIEW_BANK_RECONCILIATION,
   ];
   check(
     "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
@@ -632,6 +633,15 @@ try {
   });
   await expectAllowed("OWNER can pass the expense receipt mutation capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS);
+  });
+  check("OWNER has REVIEW_BANK_RECONCILIATION", roleHasCapability("OWNER", CAPABILITIES.REVIEW_BANK_RECONCILIATION));
+  check("ADMIN does not have REVIEW_BANK_RECONCILIATION", !roleHasCapability("ADMIN", CAPABILITIES.REVIEW_BANK_RECONCILIATION));
+  check("MEMBER does not have REVIEW_BANK_RECONCILIATION", !roleHasCapability("MEMBER", CAPABILITIES.REVIEW_BANK_RECONCILIATION));
+  await expectForbidden("ADMIN cannot pass the bank CSV reconciliation capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.REVIEW_BANK_RECONCILIATION);
+  });
+  await expectAllowed("OWNER can pass the bank CSV reconciliation capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.REVIEW_BANK_RECONCILIATION);
   });
 
   console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");

@@ -42,9 +42,11 @@ export class ForbiddenError extends Error {
  * ADMIN. Sensitive money-movement authorization is OWNER-only
  * (AUTHORIZE_PAYROLL). Consequential Settings (labor minimum, business
  * name) are OWNER-only even though ADMIN may open Settings and edit
- * delegated preference flags. Banking and provider funding remain
- * unbuilt. Ownership transfer, session/TOTP security, and tenant-scoped
- * data export are implemented and OWNER-gated where they change control.
+ * delegated preference flags. Live banking and provider funding remain
+ * unbuilt. OWNER bank-CSV review is a private import, not a bank
+ * connection. Ownership transfer, session/TOTP security, and
+ * tenant-scoped data export are implemented and OWNER-gated where they
+ * change control.
  */
 export const CAPABILITIES = {
   /** Create/edit customers and their properties (service addresses). */
@@ -228,6 +230,13 @@ export const CAPABILITIES = {
    * data, not assigned-job field work. MEMBER stays on field-access.ts.
    */
   MANAGE_EQUIPMENT: "MANAGE_EQUIPMENT",
+  /**
+   * OWNER-only import and review of a manual bank CSV. Suggests matches
+   * to recorded Payment / Expense rows. Never creates a Payment, never
+   * changes an invoice, never writes InvoiceCredit, and never claims a
+   * verified bank balance or live banking connection.
+   */
+  REVIEW_BANK_RECONCILIATION: "REVIEW_BANK_RECONCILIATION",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -241,6 +250,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
+  CAPABILITIES.REVIEW_BANK_RECONCILIATION,
 ]);
 
 /**
