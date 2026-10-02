@@ -218,6 +218,7 @@
     "test:portal-job-callback": "node --experimental-strip-types scripts/check-portal-job-callback.mjs",
     "test:project-conversation": "node --experimental-strip-types scripts/check-project-conversation.mjs",
     "test:public-handyman-customer-journey": "node --experimental-strip-types scripts/check-public-handyman-customer-journey.mjs",
+    "test:handyman-first-sale-a11y": "node --experimental-strip-types scripts/check-handyman-first-sale-a11y.mjs",
     "test:job-aftercare": "node --experimental-strip-types scripts/check-job-aftercare.mjs",
     "test:job-customer-issue": "node --experimental-strip-types scripts/check-job-customer-issue.mjs",
     "test:handyman-maintenance-follow-up": "node --experimental-strip-types scripts/check-handyman-maintenance-follow-up.mjs",

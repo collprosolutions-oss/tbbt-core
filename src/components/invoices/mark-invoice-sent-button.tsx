@@ -1,23 +1,51 @@
 "use client";
 
-import { useTransition } from "react";
-import { markInvoiceSent } from "@/app/actions/invoice";
+import { useActionState, useEffect, useId, useRef } from "react";
+import { markInvoiceSent, type InvoiceActionState } from "@/app/actions/invoice";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
+const initialState: InvoiceActionState = {};
+
+async function sendInvoice(
+  _prev: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  return markInvoiceSent(String(formData.get("invoiceId") ?? ""));
+}
+
 export function MarkInvoiceSentButton({ invoiceId }: { invoiceId: string }) {
-  const [isPending, startTransition] = useTransition();
+  const [state, formAction, pending] = useActionState(sendInvoice, initialState);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const errorId = useId();
+
+  useEffect(() => {
+    if (state.error) errorRef.current?.focus();
+  }, [state.error]);
 
   return (
-    <form
-      action={() => {
-        if (isPending) return;
-        startTransition(async () => {
-          await markInvoiceSent(invoiceId);
-        });
-      }}
-    >
-      <Button type="submit" size="sm" variant="outline" disabled={isPending}>
-        {isPending ? "Sending…" : "Send Invoice"}
+    <form action={formAction}>
+      <input type="hidden" name="invoiceId" value={invoiceId} />
+      {state.error ? (
+        <Alert
+          ref={errorRef}
+          id={errorId}
+          tabIndex={-1}
+          variant="destructive"
+          className="mb-2"
+        >
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      <Button
+        type="submit"
+        size="sm"
+        variant="outline"
+        disabled={pending}
+        aria-busy={pending || undefined}
+        aria-describedby={state.error ? errorId : undefined}
+      >
+        {pending ? "Sending…" : "Send Invoice"}
       </Button>
     </form>
   );

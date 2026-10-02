@@ -36,6 +36,7 @@ export function RequestPreferredWindowsFields({
               onClick={() => onChange(value.filter((_, rowIndex) => rowIndex !== index))}
             >
               Remove
+              <span className="sr-only"> preference {index + 1}</span>
             </button>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

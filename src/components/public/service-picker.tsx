@@ -94,7 +94,9 @@ export function ServicePicker({
   return (
     <div className="space-y-5">
       {crossTradeError ? (
-        <p className="text-sm text-destructive">{crossTradeError}</p>
+        <p role="alert" className="text-sm text-destructive">
+          {crossTradeError}
+        </p>
       ) : null}
       <div className="space-y-2">
         <Label htmlFor={searchId}>Search services</Label>
@@ -111,7 +113,7 @@ export function ServicePicker({
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Service categories">
+      <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Service categories">
         <CategoryChip
           selected={activeCategory === "all"}
           onClick={() => setActiveCategory("all")}
@@ -309,8 +311,7 @@ function CategoryChip({
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={selected}
+      aria-pressed={selected}
       onClick={onClick}
       className={cn(
         "public-chip",

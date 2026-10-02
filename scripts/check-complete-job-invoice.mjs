@@ -196,6 +196,10 @@ try {
   check("SENT invoices do not notify again", invoiceSendShouldNotify("SENT") === false);
   check("PAID invoices do not notify again", invoiceSendShouldNotify("PAID") === false);
 
+  const sendButtonSrc = readFileSync(
+    new URL("../src/components/invoices/mark-invoice-sent-button.tsx", import.meta.url),
+    "utf8",
+  );
   const copySrc = readFileSync(new URL("../src/lib/complete-job-copy.ts", import.meta.url), "utf8");
   const completeSrc = readFileSync(new URL("../src/lib/complete-job-invoice.ts", import.meta.url), "utf8");
   const jobActionSrc = readFileSync(new URL("../src/app/actions/job.ts", import.meta.url), "utf8");
@@ -290,6 +294,14 @@ try {
       workOrderCardSrc.includes("MarkInvoiceSentButton") &&
       workOrderCardSrc.includes("`/invoices/${job.invoice.id}`") &&
       !workOrderCardSrc.includes("invoice was sent"),
+  );
+  check(
+    "explicit Send announces and focuses a returned error",
+    sendButtonSrc.includes("markInvoiceSent(") &&
+      sendButtonSrc.includes("errorRef.current?.focus()") &&
+      sendButtonSrc.includes("tabIndex={-1}") &&
+      sendButtonSrc.includes("aria-describedby={state.error ? errorId : undefined}") &&
+      sendButtonSrc.includes("Send Invoice"),
   );
   check(
     "invoice page renders the derived draft message where Send lives",

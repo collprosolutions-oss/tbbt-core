@@ -127,7 +127,11 @@ export function PublicServicesBrowser({
         </button>
         {selected.includeOther ? (
           <div className="flex flex-wrap items-start gap-3">
+            <label className="sr-only" htmlFor="other-work-description">
+              Describe the other work
+            </label>
             <textarea
+              id="other-work-description"
               className="min-w-0 flex-1 rounded-md border px-3 py-2"
               rows={3}
               value={selected.otherDescription}
@@ -158,6 +162,7 @@ export function PublicServicesBrowser({
             <button
               key={item.category}
               type="button"
+              aria-pressed={item.category === group.category}
               data-active={item.category === group.category ? "true" : "false"}
               onClick={() => {
                 setActive(item.category);
@@ -171,7 +176,7 @@ export function PublicServicesBrowser({
         <div className="public-selected-box">
           <h3>Selected Work ({selectedCount})</h3>
           {selectedCount === 0 ? (
-            <p className="mt-3 text-xs text-muted-foreground">
+            <p id="selected-work-continue-help" className="mt-3 text-xs text-muted-foreground">
               Select one or more tasks to continue.
             </p>
           ) : (
@@ -263,7 +268,11 @@ export function PublicServicesBrowser({
             </div>
           ) : null}
           {crossTradeError || mixedTrade ? (
-            <p className="mt-3 text-sm text-destructive">
+            <p
+              id="selected-work-continue-help"
+              role="alert"
+              className="mt-3 text-sm text-destructive"
+            >
               {crossTradeError || CROSS_TRADE_REQUEST_MESSAGE}
             </p>
           ) : null}
@@ -271,7 +280,16 @@ export function PublicServicesBrowser({
             <Link href={href} className="public-btn public-btn-primary">
               Continue with Selected Work
             </Link>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              className="public-btn public-btn-outline"
+              aria-disabled="true"
+              aria-describedby="selected-work-continue-help"
+            >
+              Continue with Selected Work
+            </button>
+          )}
         </div>
       </aside>
 
@@ -346,10 +364,13 @@ export function PublicServicesBrowser({
                   <button
                     type="button"
                     className="public-details-btn"
+                    aria-expanded={expanded}
                     onClick={() => setOpenId(expanded ? null : item.id)}
                   >
                     <ChevronDown className={cn("size-5 text-[var(--public-blue)]", expanded && "rotate-180")} />
-                    <span className="sr-only">Details</span>
+                    <span className="sr-only">
+                      {expanded ? `Hide details for ${item.name}` : `Details for ${item.name}`}
+                    </span>
                   </button>
                 </div>
                 {expanded && item.description ? (
@@ -397,7 +418,11 @@ export function PublicServicesBrowser({
                 setSelected((current) => ({ ...current, otherQuantity: parsed ?? 1 }));
               }}
             />
+            <label className="sr-only" htmlFor="other-work-description">
+              Describe the other work
+            </label>
             <textarea
+              id="other-work-description"
               className="min-w-0 flex-1 rounded-md border px-3 py-2"
               rows={3}
               value={selected.otherDescription}

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import {
   scheduleJob,
   type JobActionState,
@@ -62,10 +62,15 @@ export function ScheduleJobForm({
   const [dateValue, setDateValue] = useState(date);
   const [timeValue, setTimeValue] = useState(time);
   const [now, setNow] = useState<Date | null>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setNow(new Date());
   }, []);
+
+  useEffect(() => {
+    if (state.error || state.warning) statusRef.current?.focus();
+  }, [state.error, state.warning]);
 
   const parsedDuration = parseDurationMinutes(preset, custom);
   const durationMinutes = parsedDuration.ok ? parsedDuration.minutes : null;
@@ -101,17 +106,20 @@ export function ScheduleJobForm({
     >
       <input type="hidden" name="jobId" value={jobId} />
       {unpaidDepositWarning ? (
-        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+        <p
+          id={`deposit-warning-${jobId}`}
+          className="text-sm font-medium text-amber-800 dark:text-amber-300"
+        >
           {unpaidDepositWarning}
         </p>
       ) : null}
       {state.error ? (
-        <Alert variant="destructive">
+        <Alert ref={statusRef} tabIndex={-1} variant="destructive">
           <AlertDescription>{state.error}</AlertDescription>
         </Alert>
       ) : null}
       {state.warning ? (
-        <Alert>
+        <Alert ref={state.error ? undefined : statusRef} tabIndex={-1}>
           <AlertTitle>Schedule conflict</AlertTitle>
           <AlertDescription>
             <p>{state.warning}</p>
@@ -301,7 +309,12 @@ export function ScheduleJobForm({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={pending}>
+        <Button
+          type="submit"
+          disabled={pending}
+          aria-busy={pending || undefined}
+          aria-describedby={unpaidDepositWarning ? `deposit-warning-${jobId}` : undefined}
+        >
           {pending
             ? "Saving…"
             : isScheduled
