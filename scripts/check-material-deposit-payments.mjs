@@ -329,7 +329,7 @@ try {
   );
   check(
     "deposit pay route uses createCustomerDepositCheckout",
-    depositRouteSrc.includes("createCustomerDepositCheckout(prisma, token)"),
+    depositRouteSrc.includes("createCustomerDepositCheckout(prisma, token, undefined, {"),
   );
   check(
     "owner invoice ops page loads Payment rows through listPaymentsForInvoice",
@@ -393,7 +393,7 @@ try {
   );
   check(
     "project portal reuses createCustomerDepositCheckout for job tokens",
-    portalDepositRouteSrc.includes("createCustomerDepositCheckout(prisma, token)") &&
+    portalDepositRouteSrc.includes("createCustomerDepositCheckout(prisma, token, undefined, {") &&
       portalPageSrc.includes("reconcileEstimateDepositCheckout") &&
       portalPageSrc.includes("PortalMaterialDepositCard") &&
       portalPageSrc.includes("shouldShowPayDeposit"),

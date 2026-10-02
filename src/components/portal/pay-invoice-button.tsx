@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { OnceSubmitButton } from "@/components/payments/once-submit-button";
 import { payInvoiceButtonLabel } from "@/lib/payments/money";
+import { guardPayFormSubmit, onPayFormPageShow } from "@/lib/payments/pay-form-pending";
 
 export { payInvoiceButtonLabel };
 
@@ -23,17 +24,21 @@ export function PayInvoiceButton({
 }) {
   const [pending, setPending] = useState(false);
 
+  useEffect(() => {
+    function onPageShow(event: PageTransitionEvent) {
+      onPayFormPageShow(event, setPending);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   return (
     <form
       action={`/p/${token}/pay`}
       method="post"
       className="pt-3"
       onSubmit={(event) => {
-        if (pending) {
-          event.preventDefault();
-          return;
-        }
-        setPending(true);
+        guardPayFormSubmit(pending, setPending, event);
       }}
     >
       <OnceSubmitButton

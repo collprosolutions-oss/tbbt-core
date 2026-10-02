@@ -195,9 +195,11 @@ check(
 check(
   "Pay Invoice and Pay Deposit ignore a second tap",
   payInvoice.includes("OnceSubmitButton") &&
-    payInvoice.includes("if (pending)") &&
+    payInvoice.includes("guardPayFormSubmit") &&
+    payInvoice.includes("onPayFormPageShow") &&
     payDeposit.includes("OnceSubmitButton") &&
-    payDeposit.includes("if (pending)") &&
+    payDeposit.includes("guardPayFormSubmit") &&
+    payDeposit.includes("onPayFormPageShow") &&
     onceSubmit.includes("setPending(true)") &&
     onceSubmit.includes("window.setTimeout(() => setPending(true), 0)") &&
     onceSubmit.includes('window.addEventListener("pageshow"') &&

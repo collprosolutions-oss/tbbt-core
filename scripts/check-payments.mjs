@@ -37,6 +37,7 @@ const {
   stripeConnectActionLabel,
 } = await import("@/lib/payments/readiness");
 const { invoiceAmountToCents, invoiceDueCents, payDepositButtonLabel, payInvoiceButtonLabel } = await import("@/lib/payments/money");
+const { guardPayFormSubmit, onPayFormPageShow } = await import("@/lib/payments/pay-form-pending");
 const { INVOICE_CHECKOUT_PAYMENT_METHOD_TYPES } = await import(
   "@/lib/payments/stripe-adapter"
 );
@@ -560,6 +561,58 @@ try {
       !payButtonSrc.includes("bg-neutral-950") &&
       !payButtonSrc.includes("bg-neutral-900"),
   );
+  const payDepositButtonSrc = readFileSync(
+    new URL("../src/components/estimates/pay-deposit-button.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Pay Invoice and Pay Deposit forms reset pending only on persisted pageshow",
+    payButtonSrc.includes("onPayFormPageShow") &&
+      payButtonSrc.includes("guardPayFormSubmit") &&
+      payButtonSrc.includes("useState(false)") &&
+      payDepositButtonSrc.includes("onPayFormPageShow") &&
+      payDepositButtonSrc.includes("guardPayFormSubmit") &&
+      payDepositButtonSrc.includes("useState(false)"),
+  );
+
+  console.log("\nBEHAVIOR — Pay form pending after bfcache pageshow");
+  function createPayFormBehavior() {
+    let pending = false;
+    const setPending = (next) => {
+      pending = next;
+    };
+    const window = new EventTarget();
+    function onPageShow(event) {
+      onPayFormPageShow(event, setPending);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return {
+      submit() {
+        const event = {
+          defaultPrevented: false,
+          preventDefault() {
+            this.defaultPrevented = true;
+          },
+        };
+        guardPayFormSubmit(pending, setPending, event);
+        return !event.defaultPrevented;
+      },
+      pageshow(persisted) {
+        const event = new Event("pageshow");
+        Object.defineProperty(event, "persisted", { value: persisted });
+        window.dispatchEvent(event);
+      },
+    };
+  }
+  for (const label of ["Pay Invoice", "Pay Deposit"]) {
+    const form = createPayFormBehavior();
+    check(`${label} first tap submits`, form.submit() === true);
+    check(`${label} second tap is ignored`, form.submit() === false);
+    form.pageshow(false);
+    check(`${label} persisted=false does not reset`, form.submit() === false);
+    form.pageshow(true);
+    check(`${label} tap after persisted pageshow submits`, form.submit() === true);
+  }
   check("portal uses shouldShowPayInvoice", portalSrc.includes("shouldShowPayInvoice"));
   check("portal renders PayInvoiceButton only when allowed", portalSrc.includes("showPayInvoice ? ("));
   check("portal Pay Invoice label uses remaining amount due", portalSrc.includes("invoiceBreakdown?.amountDue"));
