@@ -25,8 +25,8 @@ import {
 import { isMaintenanceFollowUp } from "@/lib/customer-follow-up-origin";
 import {
   assertMaintenanceFollowUpComposeAllowed,
+  claimMaintenanceFollowUpCompose,
   markMaintenanceFollowUpSentAfterCompose,
-  withMaintenanceFollowUpStatusLock,
 } from "@/lib/handyman-maintenance-follow-up-ops";
 import {
   getMailConfig,
@@ -85,12 +85,30 @@ export const communicationEmailDispatchTestHooks: {
 } = {};
 
 /**
- * Test-only pause after the MAINTENANCE compose gate, still under the
- * status lock. Production never assigns this.
+ * Test-only pause/fault points for MAINTENANCE compose. Production never
+ * assigns these. afterClaim runs after the short claim transaction commits
+ * and before the provider call. beforeMarkSent can force a mark-SENT failure.
  */
 export const maintenanceComposeTestHooks: {
-  afterGate?: () => Promise<void> | void;
+  afterClaim?: () => Promise<void> | void;
+  beforeMarkSent?: () => Promise<void> | void;
 } = {};
+
+async function finishMaintenanceMarkSent(
+  db: Db,
+  access: { businessId: string },
+  followUpId: string,
+) {
+  try {
+    await maintenanceComposeTestHooks.beforeMarkSent?.();
+    await markMaintenanceFollowUpSentAfterCompose(db, access, { followUpId });
+  } catch (error) {
+    console.error(
+      "Failed to mark MAINTENANCE follow-up SENT after an accepted compose",
+      error,
+    );
+  }
+}
 
 export function setCommunicationEmailSender(sender: EmailSender | null) {
   emailSender = sender ?? sendTransactionalEmail;
@@ -140,26 +158,6 @@ export async function composeCustomerCommunication(
     browserBusinessId?: string | null;
     resumeCommunicationId?: string | null;
   },
-): Promise<CommunicationSendResult> {
-  return composeCustomerCommunicationLocked(db, access, input, false);
-}
-
-async function composeCustomerCommunicationLocked(
-  db: Db,
-  access: CommunicationAccess,
-  input: {
-    customerId: string;
-    channel: string;
-    purpose: string;
-    subject?: string | null;
-    body: string;
-    idempotencyKey: string;
-    relatedType?: CommunicationRelatedType | null;
-    relatedId?: string | null;
-    browserBusinessId?: string | null;
-    resumeCommunicationId?: string | null;
-  },
-  statusLocked: boolean,
 ): Promise<CommunicationSendResult> {
   requireCommunicationsCapability(access);
 
@@ -228,27 +226,52 @@ async function composeCustomerCommunicationLocked(
   }
   const relatedType = related.record?.relatedType ?? null;
   const relatedId = related.record?.relatedId ?? null;
-  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId && !statusLocked) {
+  let resumeCommunicationId = input.resumeCommunicationId ?? null;
+  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId) {
     const followUp = await db.customerFollowUp.findFirst({
       where: { id: relatedId, businessId: access.businessId },
       select: { origin: true },
     });
     if (followUp && isMaintenanceFollowUp(followUp.origin)) {
-      return withMaintenanceFollowUpStatusLock(db, relatedId, (tx) =>
-        composeCustomerCommunicationLocked(tx, access, input, true),
-      );
+      if ((input.channel === "SMS" || input.channel === "EMAIL") && "$transaction" in db) {
+        const claimed = await claimMaintenanceFollowUpCompose(db as PrismaClient, access, {
+          followUpId: relatedId,
+          customerId: customer.id,
+          idempotencyKey: input.idempotencyKey,
+          channel: input.channel,
+          purpose,
+          subject: input.subject,
+          body: input.body,
+        });
+        if (!claimed.ok) {
+          return blocked(claimed.reason, input.channel);
+        }
+        if (claimed.alreadyAccepted) {
+          await finishMaintenanceMarkSent(db, access, relatedId);
+          return {
+            ok: true,
+            communicationId: claimed.communicationId,
+            threadId: null,
+            status: claimed.status as CommunicationSendResult["status"],
+            channel: input.channel,
+            provider: claimed.provider,
+            reused: true,
+            failureReason: claimed.failureReason,
+          };
+        }
+        resumeCommunicationId = claimed.communicationId;
+        await maintenanceComposeTestHooks.afterClaim?.();
+      } else {
+        const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
+          followUpId: relatedId,
+          customerId: customer.id,
+          idempotencyKey: input.idempotencyKey,
+        });
+        if (!gate.ok) {
+          return blocked(gate.reason, input.channel);
+        }
+      }
     }
-  }
-  if (relatedType === "CUSTOMER_FOLLOW_UP" && relatedId) {
-    const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
-      followUpId: relatedId,
-      customerId: customer.id,
-      idempotencyKey: input.idempotencyKey,
-    });
-    if (!gate.ok) {
-      return blocked(gate.reason, input.channel as CommunicationChannel);
-    }
-    await maintenanceComposeTestHooks.afterGate?.();
   }
 
   const finishCompose = async (result: CommunicationSendResult) => {
@@ -259,9 +282,7 @@ async function composeCustomerCommunicationLocked(
       relatedType === "CUSTOMER_FOLLOW_UP" &&
       relatedId
     ) {
-      await markMaintenanceFollowUpSentAfterCompose(db, access, {
-        followUpId: relatedId,
-      });
+      await finishMaintenanceMarkSent(db, access, relatedId);
     }
     return result;
   };
@@ -295,7 +316,7 @@ async function composeCustomerCommunicationLocked(
   });
 
   if (input.channel === "SMS") {
-    if (!eligibility.permitted) {
+    if (!eligibility.permitted && !resumeCommunicationId) {
       return recordNonProviderAttempt(db, {
         access,
         customerId: customer.id,
@@ -330,7 +351,7 @@ async function composeCustomerCommunicationLocked(
       idempotencyKey: input.idempotencyKey,
       body: input.body,
       initiatedByMembershipId: membershipIdOf(access),
-      resumeCommunicationId: input.resumeCommunicationId,
+      resumeCommunicationId,
     });
     if (result.communicationId && thread) {
       await db.customerCommunication.updateMany({
@@ -370,7 +391,7 @@ async function composeCustomerCommunicationLocked(
       relatedType,
       relatedId,
       eligibility,
-      resumeCommunicationId: input.resumeCommunicationId,
+      resumeCommunicationId,
     }));
   }
 

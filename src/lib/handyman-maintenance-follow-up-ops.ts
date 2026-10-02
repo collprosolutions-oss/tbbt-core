@@ -10,9 +10,11 @@ import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { CUSTOMER_FOLLOW_UP_ORIGINS } from "@/lib/customer-follow-up-origin";
+import { isAcceptedCustomerMessageStatus } from "@/lib/customer-messaging/types";
 import {
   HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE,
   HANDYMAN_MAINTENANCE_CANCELLED_MESSAGE,
+  HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE,
   HANDYMAN_MAINTENANCE_COMPLETED_JOB_MESSAGE,
   HANDYMAN_MAINTENANCE_CUSTOMER_REQUIRED_MESSAGE,
   HANDYMAN_MAINTENANCE_DUE_REQUIRED_MESSAGE,
@@ -79,6 +81,9 @@ async function withMaintenanceWriteLock<T>(
   throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_UNKNOWN_MESSAGE);
 }
 
+export const MAINTENANCE_COMPOSE_CLAIM_STATUS = "READY";
+export const MAINTENANCE_COMPOSE_CLAIM_LEASE_MS = 2 * 60 * 1000;
+
 export async function withMaintenanceFollowUpStatusLock<T>(
   db: Db,
   followUpId: string,
@@ -91,11 +96,52 @@ export async function withMaintenanceFollowUpStatusLock<T>(
   };
   if ("$transaction" in db && typeof db.$transaction === "function") {
     return db.$transaction((tx) => run(tx), {
-      timeout: 30_000,
-      maxWait: 10_000,
+      timeout: 8_000,
+      maxWait: 8_000,
     });
   }
   return run(db);
+}
+
+export function maintenanceFollowUpCommunicationInLease(
+  row: { status: string; attemptedAt: Date | null } | null | undefined,
+  now = new Date(),
+) {
+  if (!row || row.status !== MAINTENANCE_COMPOSE_CLAIM_STATUS || !row.attemptedAt) {
+    return false;
+  }
+  return now.getTime() - row.attemptedAt.getTime() < MAINTENANCE_COMPOSE_CLAIM_LEASE_MS;
+}
+
+export function maintenanceFollowUpCommunicationBlocksSend(
+  row: { status: string; attemptedAt: Date | null } | null | undefined,
+  now = new Date(),
+) {
+  if (!row) return false;
+  return isAcceptedCustomerMessageStatus(row.status) || maintenanceFollowUpCommunicationInLease(row, now);
+}
+
+async function listMaintenanceFollowUpCommunications(
+  db: Db,
+  input: { businessId: string; followUpId: string },
+) {
+  return db.customerCommunication.findMany({
+    where: {
+      businessId: input.businessId,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: input.followUpId,
+    },
+    select: {
+      id: true,
+      idempotencyKey: true,
+      status: true,
+      attemptedAt: true,
+      channel: true,
+      threadId: true,
+      provider: true,
+      failureReason: true,
+    },
+  });
 }
 
 async function loadOwnedJobForMaintenance(
@@ -254,6 +300,13 @@ export async function cancelHandymanMaintenanceFollowUp(
       if (row.status !== "OPEN") {
         throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_NOT_OPEN_MESSAGE);
       }
+      const comms = await listMaintenanceFollowUpCommunications(tx, {
+        businessId: access.businessId,
+        followUpId: row.id,
+      });
+      if (comms.some((comm) => maintenanceFollowUpCommunicationBlocksSend(comm))) {
+        throw new HandymanMaintenanceFollowUpError(HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE);
+      }
       return tx.customerFollowUp.update({
         where: { id: row.id },
         data: { status: "CANCELLED", cancelledAt: new Date() },
@@ -294,27 +347,145 @@ export async function assertMaintenanceFollowUpComposeAllowed(
   if (row.status === "CANCELLED") {
     return { ok: false, reason: HANDYMAN_MAINTENANCE_CANCELLED_MESSAGE };
   }
-  if (row.status === "SENT") {
-    const key = input.idempotencyKey?.trim() ?? "";
-    if (key) {
-      const existing = await db.customerCommunication.findFirst({
-        where: {
-          businessId: access.businessId,
-          customerId: input.customerId,
-          relatedType: "CUSTOMER_FOLLOW_UP",
-          relatedId: row.id,
-          idempotencyKey: key,
-        },
-        select: { id: true },
-      });
-      if (existing) return { ok: true };
+  const comms = await listMaintenanceFollowUpCommunications(db, {
+    businessId: access.businessId,
+    followUpId: row.id,
+  });
+  const key = input.idempotencyKey?.trim() ?? "";
+  const blocking = comms.filter((comm) => maintenanceFollowUpCommunicationBlocksSend(comm));
+  if (blocking.length > 0) {
+    if (key && blocking.some((comm) => comm.idempotencyKey === key)) {
+      return { ok: true };
     }
+    return { ok: false, reason: HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE };
+  }
+  if (row.status === "SENT") {
     return { ok: false, reason: HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE };
   }
   if (row.status !== "OPEN" && row.status !== "FAILED") {
     return { ok: false, reason: HANDYMAN_MAINTENANCE_NOT_SENDABLE_MESSAGE };
   }
   return { ok: true };
+}
+
+export type MaintenanceComposeClaim =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      communicationId: string;
+      alreadyAccepted: boolean;
+      status: string;
+      provider: string;
+      failureReason: string | null;
+    };
+
+export async function claimMaintenanceFollowUpCompose(
+  db: PrismaClient,
+  access: { businessId: string; workspace: { role: string; membership?: { id?: string | null } | null } },
+  input: {
+    followUpId: string;
+    customerId: string;
+    idempotencyKey: string;
+    channel: "SMS" | "EMAIL";
+    purpose: string;
+    subject?: string | null;
+    body: string;
+  },
+): Promise<MaintenanceComposeClaim> {
+  return withMaintenanceFollowUpStatusLock(db, input.followUpId, async (tx) => {
+    const gate = await assertMaintenanceFollowUpComposeAllowed(tx, access, {
+      followUpId: input.followUpId,
+      customerId: input.customerId,
+      idempotencyKey: input.idempotencyKey,
+    });
+    if (!gate.ok) return { ok: false as const, reason: gate.reason };
+
+    const comms = await listMaintenanceFollowUpCommunications(tx, {
+      businessId: access.businessId,
+      followUpId: input.followUpId,
+    });
+    const key = input.idempotencyKey.trim();
+    const sameKey = comms.find((comm) => comm.idempotencyKey === key);
+    if (sameKey && isAcceptedCustomerMessageStatus(sameKey.status)) {
+      return {
+        ok: true as const,
+        communicationId: sameKey.id,
+        alreadyAccepted: true,
+        status: sameKey.status,
+        provider: sameKey.provider,
+        failureReason: sameKey.failureReason,
+      };
+    }
+    if (sameKey && maintenanceFollowUpCommunicationInLease(sameKey)) {
+      return {
+        ok: true as const,
+        communicationId: sameKey.id,
+        alreadyAccepted: false,
+        status: sameKey.status,
+        provider: sameKey.provider,
+        failureReason: sameKey.failureReason,
+      };
+    }
+
+    const now = new Date();
+    const data = {
+      businessId: access.businessId,
+      customerId: input.customerId,
+      direction: "OUTBOUND",
+      channel: input.channel,
+      purpose: input.purpose,
+      subject: input.subject ?? null,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: input.followUpId,
+      idempotencyKey: key,
+      bodySnapshot: input.body,
+      status: MAINTENANCE_COMPOSE_CLAIM_STATUS,
+      provider: input.channel === "EMAIL" ? "resend" : "pending",
+      initiatedByMembershipId: access.workspace.membership?.id ?? null,
+      attemptedAt: now,
+      failureReason: null,
+    };
+    try {
+      const created = sameKey
+        ? await tx.customerCommunication.update({
+            where: { id: sameKey.id },
+            data,
+          })
+        : await tx.customerCommunication.create({ data });
+      return {
+        ok: true as const,
+        communicationId: created.id,
+        alreadyAccepted: false,
+        status: created.status,
+        provider: created.provider,
+        failureReason: created.failureReason,
+      };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const raced = await tx.customerCommunication.findFirst({
+          where: { businessId: access.businessId, idempotencyKey: key },
+          select: {
+            id: true,
+            status: true,
+            provider: true,
+            failureReason: true,
+            attemptedAt: true,
+          },
+        });
+        if (raced) {
+          return {
+            ok: true as const,
+            communicationId: raced.id,
+            alreadyAccepted: isAcceptedCustomerMessageStatus(raced.status),
+            status: raced.status,
+            provider: raced.provider,
+            failureReason: raced.failureReason,
+          };
+        }
+      }
+      throw error;
+    }
+  });
 }
 
 export async function markMaintenanceFollowUpSentAfterCompose(

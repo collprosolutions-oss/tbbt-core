@@ -387,7 +387,7 @@ function acceptedChannel(status: string) {
   return status === "SENT" || isAcceptedCustomerMessageStatus(status);
 }
 
-async function recordWorkflowChannelResult(
+export async function recordWorkflowChannelResult(
   db: Db,
   businessId: string,
   event: { subjectType: string; subjectId: string },

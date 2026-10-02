@@ -53,6 +53,7 @@ const {
   HANDYMAN_MAINTENANCE_OWNER_SEND_MESSAGE,
   HANDYMAN_MAINTENANCE_PAST_DUE_DATE_MESSAGE,
   HANDYMAN_MAINTENANCE_QUEUE_TITLE,
+  HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE,
   HANDYMAN_MAINTENANCE_REVIEWS_REFUSED_MESSAGE,
   handymanMaintenanceDueState,
   handymanMaintenanceWriteAllowed,
@@ -94,7 +95,9 @@ const {
   ensureDefaultAutomationRules,
   processPendingAutomationRuns,
   queueAutomationRunsForEvent,
+  recordWorkflowChannelResult,
 } = await import("@/lib/automation");
+const { attemptAutomationEmail } = await import("@/lib/automation/email");
 const {
   cancelCustomerFollowUp,
   markCustomerFollowUpSentManually,
@@ -275,11 +278,13 @@ check(
 check(
   "Compose is the only customer reminder path",
   engineSrc.includes("assertMaintenanceFollowUpComposeAllowed") &&
-    engineSrc.includes("markMaintenanceFollowUpSentAfterCompose") &&
-    engineSrc.includes("withMaintenanceFollowUpStatusLock") &&
+    engineSrc.includes("claimMaintenanceFollowUpCompose") &&
+    engineSrc.includes("finishMaintenanceMarkSent") &&
+    engineSrc.includes("Failed to mark MAINTENANCE follow-up SENT") &&
+    !engineSrc.includes("composeCustomerCommunicationLocked") &&
     opsSrc.includes("pg_advisory_xact_lock") &&
-    opsSrc.includes("maintenanceFollowUpStatusLockKey") &&
-    opsSrc.includes("withMaintenanceFollowUpStatusLock") &&
+    opsSrc.includes("claimMaintenanceFollowUpCompose") &&
+    opsSrc.includes("timeout: 8_000") &&
     panelSrc.includes("maintenanceFollowUpComposeHref") &&
     panelSrc.includes("Review reminder") &&
     !panelSrc.includes("sendCustomerFollowUp"),
@@ -560,45 +565,51 @@ try {
     followUpsAfterForeign === followUpsBeforeForeign,
   );
 
-  const raceCreateJob = await createCompletedJob(businessA.id);
   const createClientA = session.createClient();
   const createClientB = session.createClient();
-  const createBarrier = createWriteBarrier(2, 5000);
-  const createRace = await Promise.allSettled([
-    (async () => {
-      await createBarrier.arriveAndWait();
-      return createHandymanMaintenanceFollowUp(createClientA, ownerA, {
+  let createRaceFailures = 0;
+  for (let i = 0; i < 25; i += 1) {
+    const raceCreateJob = await createCompletedJob(businessA.id);
+    const createBarrier = createWriteBarrier(2, 5000);
+    const createRace = await Promise.allSettled([
+      (async () => {
+        await createBarrier.arriveAndWait();
+        return createHandymanMaintenanceFollowUp(createClientA, ownerA, {
+          jobId: raceCreateJob.job.id,
+          task: `Concurrent create A ${i}`,
+          dueOn: futureDue,
+        });
+      })(),
+      (async () => {
+        await createBarrier.arriveAndWait();
+        return createHandymanMaintenanceFollowUp(createClientB, ownerA, {
+          jobId: raceCreateJob.job.id,
+          task: `Concurrent create B ${i}`,
+          dueOn: futureDue,
+        });
+      })(),
+    ]);
+    const createOk = createRace.filter((row) => row.status === "fulfilled");
+    const createDenied = createRace.filter(
+      (row) =>
+        row.status === "rejected" &&
+        /already has an open maintenance follow-up/.test(row.reason?.message ?? ""),
+    );
+    const raceCreateCount = await prisma.customerFollowUp.count({
+      where: {
+        businessId: businessA.id,
         jobId: raceCreateJob.job.id,
-        task: "Concurrent create A",
-        dueOn: futureDue,
-      });
-    })(),
-    (async () => {
-      await createBarrier.arriveAndWait();
-      return createHandymanMaintenanceFollowUp(createClientB, ownerA, {
-        jobId: raceCreateJob.job.id,
-        task: "Concurrent create B",
-        dueOn: futureDue,
-      });
-    })(),
-  ]);
-  const createOk = createRace.filter((row) => row.status === "fulfilled");
-  const createDenied = createRace.filter(
-    (row) =>
-      row.status === "rejected" &&
-      /already has an open maintenance follow-up/.test(row.reason?.message ?? ""),
-  );
-  const raceCreateCount = await prisma.customerFollowUp.count({
-    where: {
-      businessId: businessA.id,
-      jobId: raceCreateJob.job.id,
-      origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE,
-      status: "OPEN",
-    },
-  });
+        origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE,
+        status: "OPEN",
+      },
+    });
+    if (!(raceCreateCount === 1 && createOk.length === 1 && createDenied.length === 1)) {
+      createRaceFailures += 1;
+    }
+  }
   check(
-    "Concurrent creates on the same job produce one OPEN MAINTENANCE row",
-    raceCreateCount === 1 && createOk.length === 1 && createDenied.length === 1,
+    "25 concurrent-create races each produce one OPEN MAINTENANCE row",
+    createRaceFailures === 0,
   );
 
   const jobsBeforeScan = await countBusinessJobs(prisma, businessA.id);
@@ -769,6 +780,43 @@ try {
       autoCommsBefore === 0 &&
       autoCommsAfter === 0,
   );
+  const autoEmail = await attemptAutomationEmail(prisma, {
+    businessId: businessA.id,
+    runId: `auto-email-${randomUUID()}`,
+    purpose: "JOB_FOLLOW_UP",
+    subjectType: "CUSTOMER_FOLLOW_UP",
+    subjectId: autoFollowUp.id,
+    customerId: autoJob.customer.id,
+    businessName: "Alpha Handy",
+    payload: { customerId: autoJob.customer.id, followUpId: autoFollowUp.id },
+  });
+  const autoAfterEmail = await prisma.customerFollowUp.findFirst({ where: { id: autoFollowUp.id } });
+  check(
+    "Automation email skip leaves MAINTENANCE OPEN and does not send",
+    autoEmail.status === "SKIPPED" &&
+      /explicit owner review/.test(autoEmail.failureReason ?? "") &&
+      autoAfterEmail?.status === "OPEN" &&
+      autoAfterEmail?.sentAt == null &&
+      (await prisma.customerCommunication.count({
+        where: {
+          businessId: businessA.id,
+          relatedType: "CUSTOMER_FOLLOW_UP",
+          relatedId: autoFollowUp.id,
+        },
+      })) === 0,
+  );
+  await recordWorkflowChannelResult(
+    prisma,
+    businessA.id,
+    { subjectType: "CUSTOMER_FOLLOW_UP", subjectId: autoFollowUp.id },
+    "JOB_FOLLOW_UP",
+    [{ channel: "SMS", status: "SENT" }],
+  );
+  const autoAfterRecord = await prisma.customerFollowUp.findFirst({ where: { id: autoFollowUp.id } });
+  check(
+    "Automation result writer does not mark a MAINTENANCE follow-up SENT",
+    autoAfterRecord?.status === "OPEN" && autoAfterRecord?.sentAt == null,
+  );
 
   console.log("\nDB — Compose path: STOP, changed number, duplicates, cancel");
   const fakeSms = createFakeCustomerMessagingProvider();
@@ -893,6 +941,13 @@ try {
     relatedId: dupeFollowUp.id,
     idempotencyKey: `sms-dupe-2-${randomUUID()}`,
   });
+  const dupeComms = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: dupeFollowUp.id,
+    },
+  });
   check(
     "Same idempotency key is reused; a second send is blocked after SENT",
     firstSend.ok === true &&
@@ -900,7 +955,78 @@ try {
       reuseSend.reused === true &&
       secondIntent.ok === false &&
       secondIntent.failureReason === HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE &&
-      fakeSms.sent.filter((row) => /Paint touch-up/.test(row.body)).length === 1,
+      fakeSms.sent.filter((row) => /Paint touch-up/.test(row.body)).length === 1 &&
+      dupeComms === 1,
+  );
+
+  const failMarkJob = await createCompletedJob(businessA.id, {
+    phone: "2395550188",
+    email: `fail-mark-${suffix}@example.com`,
+  });
+  const failMarkFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
+    jobId: failMarkJob.job.id,
+    task: "Fail mark sent",
+    dueOn: futureDue,
+  });
+  const failMarkKey = `sms-fail-mark-${randomUUID()}`;
+  maintenanceComposeTestHooks.beforeMarkSent = async () => {
+    throw new Error("forced mark-SENT failure");
+  };
+  const sentBeforeFailMark = fakeSms.sent.length;
+  let failMarkSend;
+  let failMarkRetry;
+  try {
+    failMarkSend = await composeCustomerCommunication(prisma, ownerA, {
+      customerId: failMarkJob.customer.id,
+      channel: "SMS",
+      purpose: "GENERAL",
+      body: "Mark-sent should not roll back this SMS.",
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: failMarkFollowUp.id,
+      idempotencyKey: failMarkKey,
+    });
+    failMarkRetry = await composeCustomerCommunication(prisma, ownerA, {
+      customerId: failMarkJob.customer.id,
+      channel: "SMS",
+      purpose: "GENERAL",
+      body: "Mark-sent should not roll back this SMS.",
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: failMarkFollowUp.id,
+      idempotencyKey: failMarkKey,
+    });
+  } finally {
+    maintenanceComposeTestHooks.beforeMarkSent = undefined;
+  }
+  const failMarkRow = await prisma.customerFollowUp.findFirst({
+    where: { id: failMarkFollowUp.id },
+  });
+  const failMarkComms = await prisma.customerCommunication.findMany({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: failMarkFollowUp.id,
+    },
+  });
+  const failMarkDistinct = await composeCustomerCommunication(prisma, ownerA, {
+    customerId: failMarkJob.customer.id,
+    channel: "SMS",
+    purpose: "GENERAL",
+    body: "Distinct key after mark-SENT failure.",
+    relatedType: "CUSTOMER_FOLLOW_UP",
+    relatedId: failMarkFollowUp.id,
+    idempotencyKey: `sms-fail-mark-2-${randomUUID()}`,
+  });
+  check(
+    "Failed mark-SENT keeps one provider send and one communication row",
+    failMarkSend?.ok === true &&
+      failMarkRetry?.ok === true &&
+      failMarkRetry?.reused === true &&
+      failMarkRow?.status === "OPEN" &&
+      failMarkComms.length === 1 &&
+      ["QUEUED", "ACCEPTED", "SENT", "DELIVERED"].includes(failMarkComms[0].status) &&
+      failMarkDistinct.ok === false &&
+      failMarkDistinct.failureReason === HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE &&
+      fakeSms.sent.length === sentBeforeFailMark + 1,
   );
 
   const raceSendJob = await createCompletedJob(businessA.id, {
@@ -914,34 +1040,27 @@ try {
   });
   const raceSendA = session.createClient();
   const raceSendB = session.createClient();
-  maintenanceComposeTestHooks.afterGate = () =>
-    new Promise((resolve) => setTimeout(resolve, 80));
   const sentBeforeRace = fakeSms.sent.length;
-  let raceResults;
-  try {
-    raceResults = await Promise.all([
-      composeCustomerCommunication(raceSendA, ownerA, {
-        customerId: raceSendJob.customer.id,
-        channel: "SMS",
-        purpose: "GENERAL",
-        body: "Race key one.",
-        relatedType: "CUSTOMER_FOLLOW_UP",
-        relatedId: raceSendFollowUp.id,
-        idempotencyKey: `sms-race-a-${randomUUID()}`,
-      }),
-      composeCustomerCommunication(raceSendB, ownerA, {
-        customerId: raceSendJob.customer.id,
-        channel: "SMS",
-        purpose: "GENERAL",
-        body: "Race key two.",
-        relatedType: "CUSTOMER_FOLLOW_UP",
-        relatedId: raceSendFollowUp.id,
-        idempotencyKey: `sms-race-b-${randomUUID()}`,
-      }),
-    ]);
-  } finally {
-    maintenanceComposeTestHooks.afterGate = undefined;
-  }
+  const raceResults = await Promise.all([
+    composeCustomerCommunication(raceSendA, ownerA, {
+      customerId: raceSendJob.customer.id,
+      channel: "SMS",
+      purpose: "GENERAL",
+      body: "Race key one.",
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: raceSendFollowUp.id,
+      idempotencyKey: `sms-race-a-${randomUUID()}`,
+    }),
+    composeCustomerCommunication(raceSendB, ownerA, {
+      customerId: raceSendJob.customer.id,
+      channel: "SMS",
+      purpose: "GENERAL",
+      body: "Race key two.",
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: raceSendFollowUp.id,
+      idempotencyKey: `sms-race-b-${randomUUID()}`,
+    }),
+  ]);
   const raceAccepted = raceResults.filter((row) => row.ok === true);
   const raceBlocked = raceResults.filter(
     (row) =>
@@ -950,12 +1069,146 @@ try {
   const raceSendRow = await prisma.customerFollowUp.findFirst({
     where: { id: raceSendFollowUp.id },
   });
+  const raceComms = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: raceSendFollowUp.id,
+    },
+  });
   check(
     "Two-connection compose with distinct keys sends once",
     raceAccepted.length === 1 &&
       raceBlocked.length === 1 &&
       raceSendRow?.status === "SENT" &&
-      fakeSms.sent.length === sentBeforeRace + 1,
+      raceComms === 1 &&
+      fakeSms.sent.length === sentBeforeRace + 1 &&
+      raceResults.every((row) => !/Transaction already closed/i.test(row.failureReason ?? "")),
+  );
+
+  const cancelInFlightJob = await createCompletedJob(businessA.id, {
+    phone: "2395550200",
+    email: `cancel-inflight-${suffix}@example.com`,
+  });
+  const cancelInFlightFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
+    jobId: cancelInFlightJob.job.id,
+    task: "Cancel during send",
+    dueOn: futureDue,
+  });
+  let cancelDuringSend = null;
+  maintenanceComposeTestHooks.afterClaim = async () => {
+    try {
+      await cancelHandymanMaintenanceFollowUp(prisma, ownerA, {
+        followUpId: cancelInFlightFollowUp.id,
+      });
+      cancelDuringSend = "cancelled";
+    } catch (error) {
+      cancelDuringSend = error?.message ?? "error";
+    }
+  };
+  const sentBeforeCancelInFlight = fakeSms.sent.length;
+  let cancelInFlightSend;
+  try {
+    cancelInFlightSend = await composeCustomerCommunication(prisma, ownerA, {
+      customerId: cancelInFlightJob.customer.id,
+      channel: "SMS",
+      purpose: "GENERAL",
+      body: "In-flight cancel must not leave a sent CANCELLED row.",
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: cancelInFlightFollowUp.id,
+      idempotencyKey: `sms-cancel-inflight-${randomUUID()}`,
+    });
+  } finally {
+    maintenanceComposeTestHooks.afterClaim = undefined;
+  }
+  const cancelInFlightRow = await prisma.customerFollowUp.findFirst({
+    where: { id: cancelInFlightFollowUp.id },
+  });
+  const cancelInFlightComms = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: cancelInFlightFollowUp.id,
+    },
+  });
+  check(
+    "Cancel during an in-lease claim is refused; send completes once",
+    cancelDuringSend === HANDYMAN_MAINTENANCE_HAS_MESSAGE_MESSAGE &&
+      cancelInFlightSend?.ok === true &&
+      cancelInFlightRow?.status === "SENT" &&
+      cancelInFlightRow?.cancelledAt == null &&
+      cancelInFlightComms === 1 &&
+      fakeSms.sent.length === sentBeforeCancelInFlight + 1,
+  );
+
+  const slowJob = await createCompletedJob(businessA.id, {
+    phone: "2395550199",
+    email: `slow-${suffix}@example.com`,
+  });
+  const slowFollowUp = await createHandymanMaintenanceFollowUp(prisma, ownerA, {
+    jobId: slowJob.job.id,
+    task: "Slow provider",
+    dueOn: futureDue,
+  });
+  const emailsBeforeSlow = fakeEmails.length;
+  setCommunicationEmailSender(async (input) => {
+    await new Promise((resolve) => setTimeout(resolve, 32_000));
+    fakeEmails.push(input);
+    return { id: `fake-email:${input.idempotencyKey}` };
+  });
+  const slowA = session.createClient();
+  const slowB = session.createClient();
+  let slowResults;
+  try {
+    slowResults = await Promise.all([
+      composeCustomerCommunication(slowA, ownerA, {
+        customerId: slowJob.customer.id,
+        channel: "EMAIL",
+        purpose: "GENERAL",
+        subject: "Slow A",
+        body: "Slow provider key one.",
+        relatedType: "CUSTOMER_FOLLOW_UP",
+        relatedId: slowFollowUp.id,
+        idempotencyKey: `email-slow-a-${randomUUID()}`,
+      }),
+      composeCustomerCommunication(slowB, ownerA, {
+        customerId: slowJob.customer.id,
+        channel: "EMAIL",
+        purpose: "GENERAL",
+        subject: "Slow B",
+        body: "Slow provider key two.",
+        relatedType: "CUSTOMER_FOLLOW_UP",
+        relatedId: slowFollowUp.id,
+        idempotencyKey: `email-slow-b-${randomUUID()}`,
+      }),
+    ]);
+  } finally {
+    setCommunicationEmailSender(async (input) => {
+      fakeEmails.push(input);
+      return { id: `fake-email:${input.idempotencyKey}` };
+    });
+  }
+  const slowAccepted = slowResults.filter((row) => row.ok === true);
+  const slowBlocked = slowResults.filter(
+    (row) =>
+      row.ok === false && row.failureReason === HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE,
+  );
+  const slowRow = await prisma.customerFollowUp.findFirst({ where: { id: slowFollowUp.id } });
+  const slowComms = await prisma.customerCommunication.count({
+    where: {
+      businessId: businessA.id,
+      relatedType: "CUSTOMER_FOLLOW_UP",
+      relatedId: slowFollowUp.id,
+    },
+  });
+  check(
+    "Provider slower than the claim transaction still sends once",
+    slowAccepted.length === 1 &&
+      slowBlocked.length === 1 &&
+      slowRow?.status === "SENT" &&
+      slowComms === 1 &&
+      fakeEmails.length === emailsBeforeSlow + 1 &&
+      slowResults.every((row) => !/Transaction already closed/i.test(String(row.failureReason ?? ""))),
   );
 
   const cancelJob = await createCompletedJob(businessA.id, {
