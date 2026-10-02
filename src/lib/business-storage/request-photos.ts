@@ -47,12 +47,14 @@ export const requestPhotoTestHooks: {
   afterUnattachedCapLock?: () => Promise<void> | void;
   unattachedCountCap?: number;
   unattachedByteCap?: number;
+  /** Test-only: keep first-seen id order so opposite-order lock races can deadlock. */
+  skipAssetIdSort?: boolean;
 } = {};
 
 export function sortedStoredAssetIds(assetIds: string[]) {
-  return [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))].sort((left, right) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
+  const unique = [...new Set(assetIds.map((id) => id.trim()).filter(Boolean))];
+  if (requestPhotoTestHooks.skipAssetIdSort) return unique;
+  return unique.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 const NOT_PRIVATE_REQUEST_PHOTO = "That photo is not a private request photo.";
 const REQUEST_PHOTO_CANNOT_BE_PUBLISHED = "Request photos cannot be published.";

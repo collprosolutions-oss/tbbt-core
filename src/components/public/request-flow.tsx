@@ -28,6 +28,7 @@ import {
   finalizePublicRequestPhotoUpload,
   releasePublicRequestPhotoUploads,
 } from "@/app/actions/public-request-photos";
+import { releaseRequestPhotosAfterRejectedSubmit } from "@/lib/public-request-photo-release";
 import { MAX_INTAKE_PHOTOS } from "@/lib/service-request-work";
 import {
   catalogAsksMeasurements,
@@ -492,7 +493,10 @@ export function MultiServiceRequestFlow({
         fileSizeBytes: photo.file.size,
       });
       if (!authorized.assetId || !authorized.uploadUrl) {
-        await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
+        await releaseRequestPhotosAfterRejectedSubmit(releasePublicRequestPhotoUploads, {
+          slug,
+          assetIds: uploadedAssetIds,
+        });
         setError(authorized.error || "That photo could not be uploaded.");
         return;
       }
@@ -555,7 +559,10 @@ export function MultiServiceRequestFlow({
       formData,
     );
     if (!result.ok) {
-      await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
+      await releaseRequestPhotosAfterRejectedSubmit(releasePublicRequestPhotoUploads, {
+        slug,
+        assetIds: uploadedAssetIds,
+      });
       setError(result.error);
       return;
     }
@@ -566,7 +573,10 @@ export function MultiServiceRequestFlow({
       // Ignore storage failures after a successful submit.
     }
     } catch {
-      await releasePublicRequestPhotoUploads({ slug, assetIds: uploadedAssetIds });
+      await releaseRequestPhotosAfterRejectedSubmit(releasePublicRequestPhotoUploads, {
+        slug,
+        assetIds: uploadedAssetIds,
+      });
       setError("This request could not be submitted. Please try again.");
     } finally {
       setPending(false);

@@ -8,6 +8,7 @@ import {
   lockStoredAssetRowForUpdate,
   rememberAttachedPublicRequestPhotos,
   releaseUnattachedPublicRequestPhotos,
+  sortedStoredAssetIds,
 } from "@/lib/business-storage/request-photos";
 import type { StorageProvider } from "@/lib/business-storage/types";
 import {
@@ -1171,10 +1172,9 @@ async function createPublicServiceRequestInner(
         })),
       ].slice(0, MAX_INTAKE_PHOTOS);
 
-      const attachedAssetIds = photoRows
-        .map((row) => row.storedAssetId)
-        .filter((id): id is string => Boolean(id))
-        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      const attachedAssetIds = sortedStoredAssetIds(
+        photoRows.map((row) => row.storedAssetId).filter((id): id is string => Boolean(id)),
+      );
       if (typeof tx.$queryRaw === "function") {
         const rawTx = tx as Pick<Prisma.TransactionClient, "$queryRaw">;
         for (const assetId of attachedAssetIds) {
@@ -1192,10 +1192,10 @@ async function createPublicServiceRequestInner(
       }
 
       await rememberAttachedPublicRequestPhotos(tx, business.id, attachedAssetIds);
-      const leftoverAssetIds = [
+      const leftoverAssetIds = sortedStoredAssetIds([
         ...ownedPhotoIds.filter((id) => !attachedAssetIds.includes(id)),
         ...overflowPhotoAssetIds,
-      ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      ]);
 
       return { requestId: request.id, leftoverAssetIds };
     });

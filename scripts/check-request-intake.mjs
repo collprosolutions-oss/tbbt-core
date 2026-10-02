@@ -33,6 +33,7 @@ const {
   attachRemainingPublicRequestFallbackPhotos,
   authorizePublicRequestPhoto,
   finalizePublicRequestPhoto,
+  lockStoredAssetRowForUpdate,
   MAX_PUBLIC_INTAKE_REQUEST_PHOTOS,
   MAX_PUBLIC_REQUEST_PHOTO_ID_LOOKUP,
   MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS,
@@ -72,6 +73,10 @@ const { firstHeaderHostWithPort } = await import("@/lib/vercel-app-host");
 const { submitPublicIntakeForm, PUBLIC_INTAKE_SUBMIT_ERROR } = await import(
   "@/lib/public-request-submit"
 );
+const {
+  countRejectedSubmitPhotoReleaseCalls,
+  releaseRequestPhotosAfterRejectedSubmit,
+} = await import("@/lib/public-request-photo-release");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -214,16 +219,57 @@ check(
 );
 check(
   "Rejected public submit releases that attempt's unattached photos",
-  requestFlowSrc.includes("releasePublicRequestPhotoUploads") &&
+  countRejectedSubmitPhotoReleaseCalls(requestFlowSrc) === 3 &&
     requestFlowSrc.includes("uploadedAssetIds") &&
     requestFlowSrc.includes("photos.slice(0, MAX_INTAKE_PHOTOS)") &&
-    requestFlowSrc.indexOf("releasePublicRequestPhotoUploads") <
+    requestFlowSrc.indexOf("releaseRequestPhotosAfterRejectedSubmit") <
       requestFlowSrc.indexOf("setError(result.error)") &&
+    !requestFlowSrc.includes("await releasePublicRequestPhotoUploads(") &&
     MAX_PUBLIC_INTAKE_REQUEST_PHOTOS === MAX_INTAKE_PHOTOS &&
     MAX_UNATTACHED_PUBLIC_REQUEST_PHOTOS === 200 &&
     UNATTACHED_PUBLIC_REQUEST_PHOTO_QUOTA_RATIO === 0.1 &&
     PUBLIC_REQUEST_PHOTO_CAP_REACHED.includes("too many photos"),
 );
+{
+  const releaseCalls = [];
+  const released = await releaseRequestPhotosAfterRejectedSubmit(
+    async (input) => {
+      releaseCalls.push(input);
+      return { released: input.assetIds.length };
+    },
+    { slug: "collpro-reno", assetIds: ["photo-a", "photo-b"] },
+  );
+  const authorizeFailSrc = requestFlowSrc.slice(
+    requestFlowSrc.indexOf("if (!authorized.assetId || !authorized.uploadUrl)"),
+    requestFlowSrc.indexOf("setError(authorized.error"),
+  );
+  const submitRejectSrc = requestFlowSrc.slice(
+    requestFlowSrc.indexOf("if (!result.ok)"),
+    requestFlowSrc.indexOf("setError(result.error)"),
+  );
+  const submitThrowSrc = requestFlowSrc.slice(
+    requestFlowSrc.lastIndexOf("} catch {"),
+    requestFlowSrc.indexOf('setError("This request could not be submitted.'),
+  );
+  const strippedFlow = requestFlowSrc.replace(
+    /await releaseRequestPhotosAfterRejectedSubmit\([\s\S]*?\);/g,
+    "",
+  );
+  check(
+    "Release-on-failure helper is invoked with the attempt's photo ids",
+    released.released === 2 &&
+      releaseCalls.length === 1 &&
+      releaseCalls[0].slug === "collpro-reno" &&
+      releaseCalls[0].assetIds.join(",") === "photo-a,photo-b",
+  );
+  check(
+    "Authorize-fail, submit-reject, and submit-throw paths each call the release helper",
+    authorizeFailSrc.includes("releaseRequestPhotosAfterRejectedSubmit") &&
+      submitRejectSrc.includes("releaseRequestPhotosAfterRejectedSubmit") &&
+      submitThrowSrc.includes("releaseRequestPhotosAfterRejectedSubmit") &&
+      countRejectedSubmitPhotoReleaseCalls(strippedFlow) === 0,
+  );
+}
 const requestPhotosSrc = readRepo("src/lib/business-storage/request-photos.ts");
 const finalizeFnSrc = requestPhotosSrc.slice(
   requestPhotosSrc.indexOf("export async function finalizePublicRequestPhoto"),
@@ -296,7 +342,8 @@ check(
     attachInsertIdx > attachLockIdx &&
     publicIntakeSrc.includes("PublicRequestPhotoUnavailableError") &&
     requestPhotosSrc.includes("sortedStoredAssetIds") &&
-    publicIntakeSrc.includes(".sort((left, right)") &&
+    publicIntakeSrc.includes("sortedStoredAssetIds") &&
+    !publicIntakeSrc.includes(".sort((left, right)") &&
     sortedStoredAssetIds(["b", "a", "b"]).join(",") === "a,b",
 );
 check(
@@ -1861,6 +1908,219 @@ try {
     await sweepDuringSubmit.$disconnect();
   }
 
+  function isDeadlockError(error) {
+    const text = [
+      error?.code,
+      error?.meta?.code,
+      error?.cause?.code,
+      error?.message,
+      error?.cause?.message,
+      String(error ?? ""),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return /40P01|deadlock detected|P2034/i.test(text);
+  }
+
+  function createCountBarrier(needed) {
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    let count = 0;
+    let arrivedAll;
+    const waiting = new Promise((resolve) => {
+      arrivedAll = resolve;
+    });
+    return {
+      held,
+      waiting,
+      arrive() {
+        count += 1;
+        if (count >= needed) arrivedAll();
+      },
+      release,
+    };
+  }
+
+  async function lockPhotosInListedOrder(client, ids) {
+    return client.$transaction(async (tx) => {
+      for (const assetId of sortedStoredAssetIds(ids)) {
+        const locked = await lockStoredAssetRowForUpdate(tx, business.id, assetId);
+        if (!locked) throw new Error(`missing lock ${assetId}`);
+      }
+      return ids.length;
+    });
+  }
+
+  async function runOppositeOrderPhotoLocks(forwardIds, reverseIds) {
+    const clientA = new PrismaClient({ datasourceUrl: testUrl });
+    const clientB = new PrismaClient({ datasourceUrl: testUrl });
+    await clientA.$executeRawUnsafe(`SET timezone = 'UTC'`);
+    await clientB.$executeRawUnsafe(`SET timezone = 'UTC'`);
+    const firstLocks = createCountBarrier(2);
+    requestPhotoTestHooks.afterStoredAssetLock = async () => {
+      firstLocks.arrive();
+      await firstLocks.held;
+    };
+    try {
+      const first = lockPhotosInListedOrder(clientA, forwardIds);
+      const second = lockPhotosInListedOrder(clientB, reverseIds);
+      const firstLocksReady = Promise.race([
+        firstLocks.waiting,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("first-lock timeout")), 3000);
+        }),
+      ]);
+      try {
+        await firstLocksReady;
+      } catch {
+        firstLocks.release();
+        return Promise.allSettled([first, second]);
+      }
+      firstLocks.release();
+      return Promise.allSettled([first, second]);
+    } finally {
+      delete requestPhotoTestHooks.afterStoredAssetLock;
+      await clientA.$disconnect();
+      await clientB.$disconnect();
+    }
+  }
+
+  const lockOrderLeft = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-left.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const lockOrderRight = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-right.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const [lockLow, lockHigh] =
+    lockOrderLeft.id < lockOrderRight.id
+      ? [lockOrderLeft.id, lockOrderRight.id]
+      : [lockOrderRight.id, lockOrderLeft.id];
+  const oppositeSubmitA = new PrismaClient({ datasourceUrl: testUrl });
+  const oppositeSubmitB = new PrismaClient({ datasourceUrl: testUrl });
+  const oppositeReleaseA = new PrismaClient({ datasourceUrl: testUrl });
+  const oppositeReleaseB = new PrismaClient({ datasourceUrl: testUrl });
+  await Promise.all([
+    oppositeSubmitA.$executeRawUnsafe(`SET timezone = 'UTC'`),
+    oppositeSubmitB.$executeRawUnsafe(`SET timezone = 'UTC'`),
+    oppositeReleaseA.$executeRawUnsafe(`SET timezone = 'UTC'`),
+    oppositeReleaseB.$executeRawUnsafe(`SET timezone = 'UTC'`),
+  ]);
+  const releasePairLeft = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-release-left.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const releasePairRight = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-release-right.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const [releaseLow, releaseHigh] =
+    releasePairLeft.id < releasePairRight.id
+      ? [releasePairLeft.id, releasePairRight.id]
+      : [releasePairRight.id, releasePairLeft.id];
+  try {
+    const oppositeSettled = await Promise.allSettled([
+      createPublicServiceRequest(oppositeSubmitA, {
+        slug: "collpro-reno",
+        name: "Opposite Submit A",
+        email: `opp-a-${randomUUID()}@example.com`,
+        phone: "555-0418",
+        address: "",
+        streetAddress: "12 Oak St",
+        city: "Fort Myers",
+        region: "FL",
+        postalCode: "33901",
+        notes: "Opposite order A",
+        catalogItemIds: [fan.id],
+        includeOther: false,
+        otherDescription: "",
+        photoAssetIds: [lockLow, lockHigh],
+      }),
+      createPublicServiceRequest(oppositeSubmitB, {
+        slug: "collpro-reno",
+        name: "Opposite Submit B",
+        email: `opp-b-${randomUUID()}@example.com`,
+        phone: "555-0418",
+        address: "",
+        streetAddress: "12 Oak St",
+        city: "Fort Myers",
+        region: "FL",
+        postalCode: "33901",
+        notes: "Opposite order B",
+        catalogItemIds: [fan.id],
+        includeOther: false,
+        otherDescription: "",
+        photoAssetIds: [lockHigh, lockLow],
+      }),
+      releaseUnattachedPublicRequestPhotos(
+        { ...storageDeps, db: oppositeReleaseA },
+        business.id,
+        [releaseLow, releaseHigh],
+      ),
+      releaseUnattachedPublicRequestPhotos(
+        { ...storageDeps, db: oppositeReleaseB },
+        business.id,
+        [releaseHigh, releaseLow],
+      ),
+    ]);
+    check(
+      "Opposite-order overlapping submits and releases do not deadlock when ids are sorted",
+      oppositeSettled.every((row) => row.status === "fulfilled") &&
+        !oppositeSettled.some(
+          (row) => row.status === "rejected" && isDeadlockError(row.reason),
+        ),
+    );
+  } finally {
+    await Promise.all([
+      oppositeSubmitA.$disconnect(),
+      oppositeSubmitB.$disconnect(),
+      oppositeReleaseA.$disconnect(),
+      oppositeReleaseB.$disconnect(),
+    ]);
+  }
+
+  const mutationLeft = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-mutation-left.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const mutationRight = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
+    originalFilename: "lock-order-mutation-right.png",
+    mimeType: "image/png",
+    body: pngBytes,
+  });
+  const [mutationLow, mutationHigh] =
+    mutationLeft.id < mutationRight.id
+      ? [mutationLeft.id, mutationRight.id]
+      : [mutationRight.id, mutationLeft.id];
+  requestPhotoTestHooks.skipAssetIdSort = true;
+  try {
+    const unsortedLocks = await runOppositeOrderPhotoLocks(
+      [mutationLow, mutationHigh],
+      [mutationHigh, mutationLow],
+    );
+    const unsortedReleases = await runOppositeOrderPhotoLocks(
+      [mutationHigh, mutationLow],
+      [mutationLow, mutationHigh],
+    );
+    const deadlockSeen = [...unsortedLocks, ...unsortedReleases].some(
+      (row) => row.status === "rejected" && isDeadlockError(row.reason),
+    );
+    check(
+      "Reverting photo lock sort deadlocks opposite-order overlapping transactions",
+      deadlockSeen,
+    );
+  } finally {
+    delete requestPhotoTestHooks.skipAssetIdSort;
+  }
+
   console.log("\nDB — Abandoned and overflow request photos release quota");
   const abandonedBefore = await accountSnapshot(business.id);
   const abandoned = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
@@ -1956,18 +2216,28 @@ try {
   );
 
   console.log("\nDB — Unattached public request photo cap and rejection release");
+  async function unattachedPublicPhotoWhere(businessId) {
+    return {
+      businessId,
+      purpose: "public-request-photo",
+      category: "CUSTOMER_PHOTO",
+      visibility: "PRIVATE",
+      deletedAt: null,
+      status: { in: ["READY", "PENDING"] },
+      serviceRequestPhotos: { none: {} },
+    };
+  }
   async function countUnattachedPublicPhotos(businessId) {
     return prisma.storedAsset.count({
-      where: {
-        businessId,
-        purpose: "public-request-photo",
-        category: "CUSTOMER_PHOTO",
-        visibility: "PRIVATE",
-        deletedAt: null,
-        status: { in: ["READY", "PENDING"] },
-        serviceRequestPhotos: { none: {} },
-      },
+      where: await unattachedPublicPhotoWhere(businessId),
     });
+  }
+  async function sumUnattachedPublicPhotoBytes(businessId) {
+    const rows = await prisma.storedAsset.findMany({
+      where: await unattachedPublicPhotoWhere(businessId),
+      select: { fileSizeBytes: true },
+    });
+    return rows.reduce((sum, row) => sum + Number(row.fileSizeBytes), 0);
   }
   const authorizeInput = {
     originalFilename: "cap-race.png",
@@ -2066,6 +2336,76 @@ try {
       blockedPublic.message === PUBLIC_REQUEST_PHOTO_CAP_REACHED &&
       ownerStillUploads.asset.category === "JOB_PHOTO" &&
       ownerStillUploads.asset.status === "PENDING",
+  );
+
+  const unitBytes = 10_000;
+  const fivePhotoByteCap = 5 * unitBytes;
+  const baselineByteUsed = await sumUnattachedPublicPhotoBytes(business.id);
+  const otherBaselineByteUsed = await sumUnattachedPublicPhotoBytes(other.id);
+  requestPhotoTestHooks.unattachedByteCap = baselineByteUsed + fivePhotoByteCap;
+  const mixedSizes = [
+    ...Array.from({ length: 10 }, () => unitBytes),
+    ...Array.from({ length: 10 }, () => 2 * unitBytes),
+    ...Array.from({ length: 10 }, () => Math.floor(unitBytes / 2)),
+  ];
+  const byteCapResults = await Promise.all(
+    mixedSizes.map(async (fileSizeBytes, index) => {
+      try {
+        const authorized = await authorizePublicRequestPhoto(storageDeps, "collpro-reno", {
+          originalFilename: `byte-cap-${index}.png`,
+          mimeType: "image/png",
+          fileSizeBytes,
+        });
+        return { ok: true, bytes: authorized.asset.fileSizeBytes };
+      } catch (error) {
+        return { ok: false, bytes: fileSizeBytes, error };
+      }
+    }),
+  );
+  const byteWinners = byteCapResults.filter((row) => row.ok);
+  const byteLosers = byteCapResults.filter((row) => !row.ok);
+  const winnerBytes = byteWinners.reduce((sum, row) => sum + Number(row.bytes), 0);
+  const afterWaveBytes = await sumUnattachedPublicPhotoBytes(business.id);
+  const smallestLoser = Math.min(...byteLosers.map((row) => row.bytes));
+  let otherTenantDuringCap = null;
+  try {
+    otherTenantDuringCap = await authorizePublicRequestPhoto(storageDeps, "other-handyman", {
+      originalFilename: "other-tenant-byte-cap.png",
+      mimeType: "image/png",
+      fileSizeBytes: 2 * unitBytes,
+    });
+  } catch (error) {
+    otherTenantDuringCap = error;
+  }
+  const ownerDuringByteCap = await authorizeManagedUpload(storageDeps, business.id, {
+    category: "JOB_PHOTO",
+    purpose: "field-job-photo",
+    originalFilename: "owner-during-byte-cap.png",
+    mimeType: "image/png",
+    fileSizeBytes: 3 * unitBytes,
+    visibility: "PRIVATE",
+  });
+  delete requestPhotoTestHooks.unattachedByteCap;
+  check(
+    "Unattached byte cap admits only what fits 5 photos' worth across 30 mixed-size authorizes",
+    byteWinners.length >= 1 &&
+      byteLosers.length >= 1 &&
+      byteLosers.every(
+        (row) => row.error instanceof StorageError && row.error.message === PUBLIC_REQUEST_PHOTO_CAP_REACHED,
+      ) &&
+      winnerBytes <= fivePhotoByteCap &&
+      afterWaveBytes === baselineByteUsed + winnerBytes &&
+      afterWaveBytes <= baselineByteUsed + fivePhotoByteCap &&
+      winnerBytes + smallestLoser > fivePhotoByteCap,
+  );
+  check(
+    "Unattached byte cap is tenant-scoped and does not block owner uploads",
+    otherTenantDuringCap &&
+      !(otherTenantDuringCap instanceof Error) &&
+      otherTenantDuringCap.asset.status === "PENDING" &&
+      (await sumUnattachedPublicPhotoBytes(other.id)) === otherBaselineByteUsed + 2 * unitBytes &&
+      ownerDuringByteCap.asset.category === "JOB_PHOTO" &&
+      ownerDuringByteCap.asset.status === "PENDING",
   );
 
   const releaseOnce = await putPublicRequestPhotoFromBytes(storageDeps, "collpro-reno", {
