@@ -164,7 +164,8 @@ try {
     "Interactive AI actions use a stable attempt ID instead of Date.now()",
     !writingActionSrc.includes("Date.now") &&
       writingActionSrc.includes("readAttemptId") &&
-      writingBarSrc.includes('name="attemptId"') &&
+      (writingBarSrc.includes('name="attemptId"') ||
+        writingBarSrc.includes('formData.set("attemptId"')) &&
       coachFormSrc.includes('name="attemptId"') &&
       knowledgeFormSrc.includes('name="attemptId"') &&
       reviewFormSrc.includes('name="attemptId"'),
