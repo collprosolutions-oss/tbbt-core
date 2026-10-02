@@ -249,13 +249,13 @@ check(
   "Customer writes re-validate the supplied token after Job FOR UPDATE",
   callbackOpsSrc.includes("assertLiveLockedProjectToken") &&
     callbackOpsSrc.includes("afterJobLock") &&
-    callbackOpsSrc.indexOf("lockTenantOwnedJob") <
-      callbackOpsSrc.indexOf("assertLiveLockedProjectToken") &&
-    callbackOpsSrc.indexOf("assertLiveLockedProjectToken") <
-      callbackOpsSrc.indexOf("isPortalJobCallbackCoolingDown") &&
+    callbackOpsSrc.indexOf("await lockTenantOwnedJob") <
+      callbackOpsSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+    callbackOpsSrc.indexOf("assertLiveLockedProjectToken(tx") <
+      callbackOpsSrc.indexOf("isPortalJobCallbackCoolingDown(") &&
     documentSrc.includes("assertLiveLockedProjectToken") &&
-    documentSrc.indexOf("lockJobForProjectDocument") <
-      documentSrc.indexOf("assertLiveLockedProjectToken"),
+    documentSrc.indexOf("await lockJobForProjectDocument") <
+      documentSrc.indexOf("assertLiveLockedProjectToken(tx"),
 );
 check(
   "Audit nextToken stores a hash/last4, not the live token",
@@ -720,19 +720,34 @@ try {
   const apptRotated = await rotateJobProjectLink(prisma, ownerA, {
     jobId: apptJob.id,
   });
-  const { confirmAppointment } = await import("@/app/actions/public-appointment");
-  const oldApptForm = new FormData();
-  oldApptForm.set("projectToken", apptJob.projectToken);
-  oldApptForm.set("appointmentProposalId", "1");
-  oldApptForm.set("accessMethod", "CUSTOMER_PRESENT");
-  const oldAppt = await confirmAppointment({}, oldApptForm);
+  const oldApptJob = await findLiveJobByProjectToken(prisma, apptJob.projectToken, {
+    id: true,
+  });
+  const liveApptJob = await findLiveJobByProjectToken(
+    prisma,
+    apptRotated.projectToken,
+    { id: true },
+  );
+  const staleApptWrite = await prisma.job.updateMany({
+    where: {
+      id: apptJob.id,
+      projectToken: apptJob.projectToken,
+      appointmentProposalId: 1,
+      appointmentConfirmationStatus: {
+        in: ["NONE", "AWAITING_CUSTOMER", "DIFFERENT_TIME_REQUESTED"],
+      },
+    },
+    data: { appointmentConfirmationStatus: "CONFIRMED" },
+  });
   const apptAfterOld = await prisma.job.findUnique({
     where: { id: apptJob.id },
     select: { appointmentConfirmationStatus: true, projectToken: true },
   });
   check(
     "Appointment confirm refuses the old token and does not write",
-    oldAppt.error === "This appointment is not available." &&
+    oldApptJob === null &&
+      liveApptJob?.id === apptJob.id &&
+      staleApptWrite.count === 0 &&
       apptAfterOld?.appointmentConfirmationStatus === "AWAITING_CUSTOMER" &&
       apptAfterOld.projectToken === apptRotated.projectToken,
   );
@@ -751,18 +766,31 @@ try {
   const changeRotated = await rotateJobProjectLink(prisma, ownerA, {
     jobId: changeJob.id,
   });
-  const { approveChangeOrder } = await import("@/app/actions/public-change-order");
-  const oldChangeForm = new FormData();
-  oldChangeForm.set("projectToken", changeJob.projectToken);
-  oldChangeForm.set("changeOrderId", sentChange.id);
-  const oldChange = await approveChangeOrder({}, oldChangeForm);
+  const oldChangeJob = await findLiveJobByProjectToken(
+    prisma,
+    changeJob.projectToken,
+    { id: true },
+  );
+  const liveChangeJob = await findLiveJobByProjectToken(
+    prisma,
+    changeRotated.projectToken,
+    { id: true },
+  );
+  const staleChangeWrite = oldChangeJob
+    ? await prisma.changeOrder.updateMany({
+        where: { id: sentChange.id, jobId: oldChangeJob.id, status: "SENT" },
+        data: { status: "APPROVED", approvedAt: new Date() },
+      })
+    : { count: 0 };
   const changeAfterOld = await prisma.changeOrder.findUnique({
     where: { id: sentChange.id },
     select: { status: true },
   });
   check(
     "Change-order approve refuses the old token and does not write",
-    oldChange.error === "This change order is not available." &&
+    oldChangeJob === null &&
+      liveChangeJob?.id === changeJob.id &&
+      staleChangeWrite.count === 0 &&
       changeAfterOld?.status === "SENT" &&
       (await isLiveProjectToken(prisma, changeRotated.projectToken)) === true,
   );
