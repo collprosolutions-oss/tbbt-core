@@ -281,18 +281,26 @@ async function proveDispositionActionRoleCheck() {
     phoneInteractionId: "",
     browserBusinessId: tenant.business.id,
   });
-  const exploded = await executeReceptionistDispositionAction(
-    {
-      phoneInteraction: {
-        findFirst: async () => {
-          throw new Error("injected writer failure");
+  const previousError = console.error;
+  console.error = () => {};
+  let exploded;
+  let mapped;
+  try {
+    exploded = await executeReceptionistDispositionAction(
+      {
+        phoneInteraction: {
+          findFirst: async () => {
+            throw new Error("injected writer failure");
+          },
         },
       },
-    },
-    tenant.access,
-    { phoneInteractionId: logged.phoneInteractionId, browserBusinessId: tenant.business.id },
-  );
-  const mapped = communicationsActionError(new Error("injected disposition failure"));
+      tenant.access,
+      { phoneInteractionId: logged.phoneInteractionId, browserBusinessId: tenant.business.id },
+    );
+    mapped = communicationsActionError(new Error("injected disposition failure"));
+  } finally {
+    console.error = previousError;
+  }
   const stillOpen = await prisma.phoneInteraction.findFirst({
     where: { id: logged.phoneInteractionId, businessId: tenant.business.id },
   });
@@ -773,10 +781,7 @@ try {
     "P2002 disposition event race does not query again inside the aborted transaction",
     dispositionSrc.includes('error.code === "P2002"') &&
       dispositionSrc.includes("Receptionist disposition event already recorded.") &&
-      !dispositionSrc
-        .split('error.code === "P2002"')[1]
-        ?.slice(0, 500)
-        ?.includes("findFirst"),
+      !/error\.code === "P2002"[\s\S]{0,400}receptionistEvent\.findFirst/.test(dispositionSrc),
   );
   check(
     "Disposition server action distinguishes ForbiddenError from unexpected errors",
