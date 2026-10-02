@@ -15,7 +15,6 @@ import {
   publicQuoteHeroPosition,
   publicRequestPath,
 } from "@/lib/public-site";
-import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 import { requirePublicWebsiteView } from "@/lib/require-public-site";
 import { publicTenantPageMetadata } from "@/lib/public-site-seo";
 import { parseSelectedWorkSearch } from "@/lib/selected-work";
@@ -28,6 +27,7 @@ import {
 } from "@/lib/intake-schema";
 import {
   loadPublicWebsiteIntakeOverlays,
+  publicServiceAreaFromView,
   snapshotIntakeSchemasByTrade,
 } from "@/lib/website-engine/public";
 import { PUBLIC_INTAKE_REFRESH_FORM } from "@/lib/intake-snapshot";
@@ -168,7 +168,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                   groups={site.groups}
                   initialSelected={initialSelected}
                   photosEnabled={isBusinessStorageConfigured()}
-                  serviceArea={resolveBusinessServiceArea(site.business)}
+                  serviceArea={publicServiceAreaFromView(view)}
                   intakeSchemasByTrade={intakeSchemasByTrade}
                   publishedIntakeByTrade={publishedIntake.overlays}
                   activeTrades={

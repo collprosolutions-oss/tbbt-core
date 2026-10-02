@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
-import { publicIndexableSitemapPaths } from "@/lib/public-site";
+import { PRODUCTION_APP_ORIGIN } from "@/lib/mail";
+import { publicHomePath, publicIndexableSitemapPaths } from "@/lib/public-site";
 import { publicCanonicalUrl } from "@/lib/public-site-seo";
+import { getTenantAppOrigin } from "@/lib/tenant-app-url";
 import type { PublishedSeoPage, PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import type { PublicWebsiteView } from "@/lib/website-engine/public";
 
@@ -59,4 +61,20 @@ export function publishedSitemapPaths(snapshot: PublishedWebsiteSnapshot) {
     paths.push(`/hire/${slug}/in/${local.citySlug}/${local.serviceSlug}`);
   }
   return paths;
+}
+
+/** Next.js sitemap entries must be absolute http(s) URLs or the route 500s. */
+export function absolutePublicSitemapUrl(
+  slug: string,
+  pathname: string,
+  origin?: string | null,
+) {
+  const url = publicCanonicalUrl(slug, pathname, origin);
+  if (/^https?:\/\//i.test(url)) return url;
+  const fallback = (origin || getTenantAppOrigin(slug) || PRODUCTION_APP_ORIGIN).replace(/\/$/, "");
+  if (!pathname || pathname === "/" || pathname === publicHomePath(slug)) {
+    return `${fallback}/`;
+  }
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `${fallback}${path}`;
 }

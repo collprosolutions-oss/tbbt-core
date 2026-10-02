@@ -192,7 +192,9 @@ export function qualifyServiceAddress(
   };
 }
 
-export function serviceAreaCities(areas: readonly RecordedServiceArea[]) {
+export function serviceAreaCities(
+  areas: readonly Pick<RecordedServiceArea, "enabled" | "kind" | "city" | "label">[],
+) {
   return [
     ...new Set(
       areas

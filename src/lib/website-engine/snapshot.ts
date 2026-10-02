@@ -145,6 +145,7 @@ export type PublishedServiceArea = {
   label: string;
   city: string | null;
   region: string | null;
+  postalCode: string | null;
   slug: string;
 };
 
@@ -419,15 +420,33 @@ export function parseWebsiteSnapshot(raw: string | unknown): PublishedWebsiteSna
   const serviceAreas = Array.isArray(parsed.serviceAreas)
     ? parsed.serviceAreas
         .filter(isRecord)
-        .map((row) => ({
-          id: asString(row.id),
-          kind: asString(row.kind),
-          label: asString(row.label),
-          city: asNullableString(row.city),
-          region: asNullableString(row.region),
-          slug: asString(row.slug),
-        }))
-        .filter((row) => row.id && row.label && row.slug)
+        .map((row) => {
+          const kind = asString(row.kind);
+          const label = asString(row.label);
+          const city = asNullableString(row.city);
+          const postalCode =
+            asNullableString(row.postalCode) ??
+            (kind === "POSTAL" ? label || null : null);
+          const slug =
+            asString(row.slug) ||
+            (kind === "POSTAL"
+              ? (postalCode ?? label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+              : "");
+          return {
+            id: asString(row.id),
+            kind,
+            label,
+            city,
+            region: asNullableString(row.region),
+            postalCode,
+            slug,
+          };
+        })
+        .filter((row) =>
+          row.id &&
+          row.label &&
+          (row.kind === "POSTAL" ? Boolean(row.postalCode || row.label) : Boolean(row.slug)),
+        )
     : [];
 
   const localPages = Array.isArray(parsed.localPages)

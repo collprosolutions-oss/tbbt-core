@@ -8,7 +8,12 @@ import {
   loadPublicSite,
   type PublicSitePayload,
 } from "@/lib/public-site-data";
+import { resolveBusinessServiceArea } from "@/lib/business-service-area";
 import { groupPublicCatalog, type PublicBusiness, type PublicCatalogItem } from "@/lib/public-site";
+import {
+  serviceAreaCities,
+  type RecordedServiceArea,
+} from "@/lib/service-areas";
 import { resolvePublishedAboutCopy } from "@/lib/website-story";
 import {
   loadPublishedIntakeOverlaysByTrade,
@@ -113,6 +118,43 @@ export function snapshotIntakeSchemaForTrade(
   return intakeSchemaFromPublicProjection(projection);
 }
 
+export function snapshotServiceAreaRecords(
+  snapshot: PublishedWebsiteSnapshot,
+): RecordedServiceArea[] {
+  return snapshot.serviceAreas.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    label: row.label,
+    city: row.city,
+    region: row.region,
+    postalCode:
+      row.postalCode ??
+      (row.kind === "POSTAL" ? row.label : null),
+    enabled: true,
+    travelAdjustment: null,
+    minimumAdjustment: null,
+    notes: "",
+  }));
+}
+
+export function publicServiceAreaFromSnapshot(snapshot: PublishedWebsiteSnapshot) {
+  const areas = snapshotServiceAreaRecords(snapshot);
+  return {
+    configuredCities: serviceAreaCities(areas),
+    configuredRegion: areas.find((row) => row.region)?.region ?? null,
+  };
+}
+
+export function publicServiceAreaFromView(view: PublicWebsiteView) {
+  if (view.snapshot) {
+    return resolveBusinessServiceArea({
+      slug: view.site.business.slug,
+      ...publicServiceAreaFromSnapshot(view.snapshot),
+    });
+  }
+  return resolveBusinessServiceArea(view.site.business);
+}
+
 function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
   const items: PublicCatalogItem[] = snapshot.services.map((service) => ({
     id: service.id,
@@ -130,6 +172,7 @@ function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
     recurrenceEligible: service.recurrenceEligible,
     unitLabel: service.unitLabel,
   }));
+  const publishedArea = publicServiceAreaFromSnapshot(snapshot);
   const business: PublicBusiness = {
     id: snapshot.business.id,
     name: snapshot.business.name,
@@ -139,6 +182,8 @@ function snapshotToSite(snapshot: PublishedWebsiteSnapshot): PublicSitePayload {
     publicEmail: snapshot.business.publicEmail,
     publicWebsite: snapshot.business.publicWebsite,
     publicServiceAreaLabel: snapshot.business.publicServiceAreaLabel,
+    configuredCities: publishedArea.configuredCities,
+    configuredRegion: publishedArea.configuredRegion,
     activeTrades: snapshot.trades.map((trade) => ({
       code: isConfiguredTrade(trade.code) ? trade.code : DEFAULT_TRADE,
       label: trade.customerFacingLabel,

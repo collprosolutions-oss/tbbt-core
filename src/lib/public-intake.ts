@@ -55,6 +55,7 @@ import { resolveReferencedTenantIntakeSnapshot } from "@/lib/intake-snapshot-ops
 import { parseWebsiteSnapshot, type PublishedWebsiteSnapshot } from "@/lib/website-engine/snapshot";
 import {
   snapshotIntakeSchemaForTrade,
+  snapshotServiceAreaRecords,
   snapshotTenantIntakeStateForTrade,
 } from "@/lib/website-engine/public";
 import {
@@ -395,6 +396,12 @@ export type PublicIntakeTx = {
       select: { id: true; serviceCatalogItemId: true };
     }) => Promise<Array<{ id: string; serviceCatalogItemId: string | null }>>;
   };
+  serviceArea?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
+  };
   serviceRequestPhoto: {
     createMany: (args: {
       data: Array<{
@@ -432,6 +439,54 @@ export function readIntakeCatalogIds(rawIds: string[]) {
     .filter((value) => value && value !== OTHER_SERVICE_VALUE);
 }
 
+async function liveMatchedServiceAreaId(
+  tx: PublicIntakeTx,
+  businessId: string,
+  areaId: string | null | undefined,
+): Promise<string | null> {
+  if (!areaId) return null;
+  try {
+    const row = await tx.serviceArea?.findFirst?.({
+      where: { id: areaId, businessId },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveIntakePublishedSnapshot(
+  db: PublicIntakeDb,
+  safeSlug: string,
+): Promise<{
+  business: { id: string; tradeCode?: string; publishedWebsiteId?: string | null };
+  publishedSnapshot: PublishedWebsiteSnapshot | null;
+} | null> {
+  const business = await db.business.findUnique({
+    where: { slug: safeSlug },
+    select: { id: true, tradeCode: true, publishedWebsiteId: true },
+  });
+  if (!business) return null;
+  let publishedSnapshot: PublishedWebsiteSnapshot | null = null;
+  if (business.publishedWebsiteId && db.websitePublish) {
+    try {
+      const publish = await db.websitePublish.findFirst({
+        where: { id: business.publishedWebsiteId, businessId: business.id },
+      });
+      if (publish) {
+        const parsed = parseWebsiteSnapshot(publish.snapshotJson);
+        if (parsed.business.id === business.id && parsed.business.slug === safeSlug) {
+          publishedSnapshot = parsed;
+        }
+      }
+    } catch {
+      publishedSnapshot = null;
+    }
+  }
+  return { business, publishedSnapshot };
+}
+
 export async function createPublicServiceRequest(
   db: PublicIntakeDb,
   input: PublicIntakeInput,
@@ -464,7 +519,14 @@ async function createPublicServiceRequestInner(
     postalCode: input.postalCode ?? "",
   };
   const notes = input.notes.trim();
-  const configuredAreas = input.configuredAreas ?? [];
+  const published = await resolveIntakePublishedSnapshot(db, safeSlug);
+  if (!published) {
+    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
+  }
+  const { business, publishedSnapshot } = published;
+  const configuredAreas = publishedSnapshot
+    ? snapshotServiceAreaRecords(publishedSnapshot)
+    : (input.configuredAreas ?? []);
   const serviceArea = resolveBusinessServiceArea({
     slug: safeSlug,
     configuredCities: serviceAreaCities(configuredAreas),
@@ -506,31 +568,6 @@ async function createPublicServiceRequestInner(
   });
   if (!parsed.ok) {
     return parsed;
-  }
-
-  const business = await db.business.findUnique({
-    where: { slug: safeSlug },
-    select: { id: true, tradeCode: true, publishedWebsiteId: true },
-  });
-  if (!business) {
-    return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
-  }
-
-  let publishedSnapshot: PublishedWebsiteSnapshot | null = null;
-  if (business.publishedWebsiteId && db.websitePublish) {
-    try {
-      const publish = await db.websitePublish.findFirst({
-        where: { id: business.publishedWebsiteId, businessId: business.id },
-      });
-      if (publish) {
-        const parsed = parseWebsiteSnapshot(publish.snapshotJson);
-        if (parsed.business.id === business.id && parsed.business.slug === safeSlug) {
-          publishedSnapshot = parsed;
-        }
-      }
-    } catch {
-      publishedSnapshot = null;
-    }
   }
 
   if (campaignId) {
@@ -963,7 +1000,11 @@ async function createPublicServiceRequestInner(
           landingPagePath,
           localPageSlug,
           serviceAreaQualification: qualification.qualification,
-          matchedServiceAreaId: qualification.matchedAreaId,
+          matchedServiceAreaId: await liveMatchedServiceAreaId(
+            tx,
+            business.id,
+            qualification.matchedAreaId,
+          ),
           tradeCode: requestTradeCode,
           intakeSchemaKey: intakeSchema.key,
           intakeSchemaVersion: intakeSchema.version,

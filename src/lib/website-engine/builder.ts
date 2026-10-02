@@ -192,7 +192,8 @@ export async function buildWebsiteSnapshot(
       label: row.label,
       city: row.city,
       region: row.region,
-      slug: slugifyLocalPagePart(row.city || row.label),
+      postalCode: row.postalCode,
+      slug: slugifyLocalPagePart(row.city || row.postalCode || row.label),
     };
   });
 
