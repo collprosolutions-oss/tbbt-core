@@ -51,6 +51,7 @@ export type BusinessExportLimits = {
   pageSize: number;
   maxRowsPerCollection: number;
   maxZipBytes: number;
+  maxEstimatedBytes: number;
   maxDocumentBytes: number;
   maxDocuments: number;
 };
@@ -60,6 +61,7 @@ export function defaultBusinessExportLimits(): BusinessExportLimits {
     pageSize: BUSINESS_EXPORT_PAGE_SIZE,
     maxRowsPerCollection: BUSINESS_EXPORT_MAX_ROWS_PER_COLLECTION,
     maxZipBytes: BUSINESS_EXPORT_MAX_ZIP_BYTES,
+    maxEstimatedBytes: BUSINESS_EXPORT_MAX_ZIP_BYTES,
     maxDocumentBytes: BUSINESS_EXPORT_MAX_DOCUMENT_BYTES,
     maxDocuments: BUSINESS_EXPORT_MAX_DOCUMENTS,
   };
@@ -106,6 +108,9 @@ export function resolveBusinessExportLimits(
 ): BusinessExportLimits {
   const defaults = defaultBusinessExportLimits();
   const merged = { ...defaults, ...overrides };
+  if (overrides && overrides.maxEstimatedBytes === undefined) {
+    merged.maxEstimatedBytes = merged.maxZipBytes;
+  }
   if (
     !Number.isInteger(merged.pageSize) ||
     merged.pageSize < 1 ||
@@ -113,6 +118,8 @@ export function resolveBusinessExportLimits(
     merged.maxRowsPerCollection < 1 ||
     !Number.isFinite(merged.maxZipBytes) ||
     merged.maxZipBytes < 1 ||
+    !Number.isFinite(merged.maxEstimatedBytes) ||
+    merged.maxEstimatedBytes < 1 ||
     !Number.isFinite(merged.maxDocumentBytes) ||
     merged.maxDocumentBytes < 1 ||
     !Number.isInteger(merged.maxDocuments) ||

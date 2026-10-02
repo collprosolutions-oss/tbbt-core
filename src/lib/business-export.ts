@@ -19,8 +19,6 @@ import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documen
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
 import {
-  BUSINESS_EXPORT_INCOMPLETE_PREFIX,
-  BUSINESS_EXPORT_INCOMPLETE_SUFFIX,
   BUSINESS_EXPORT_TX_MAX_WAIT_MS,
   BUSINESS_EXPORT_TX_TIMEOUT_MS,
   BusinessExportIncompleteError,
@@ -28,6 +26,7 @@ import {
   businessExportTestHooks,
   collectPagedRows,
   createExportByteBudget,
+  estimateExportRowBytes,
   exportPagedCsv,
   headersOf,
   resolveBusinessExportLimits,
@@ -53,7 +52,6 @@ export {
   BUSINESS_EXPORT_TX_MAX_WAIT_MS,
   BUSINESS_EXPORT_TX_TIMEOUT_MS,
   BusinessExportIncompleteError,
-  businessExportTestHooks,
   collectPagedRows,
   exportPagedCsv,
   resolveBusinessExportLimits,
@@ -145,29 +143,32 @@ export async function buildBusinessExportZip(
   options?: BusinessExportOptions,
 ): Promise<BusinessExportResult> {
   const limits = resolveBusinessExportLimits(options?.limits);
-  const isolation = businessExportTestHooks.isolationLevel ?? "RepeatableRead";
-  if (isolation === "none") {
-    return buildBusinessExportZipFromDb(prisma, businessId, options, limits);
-  }
-  return prisma.$transaction(
-    (tx) => buildBusinessExportZipFromDb(tx, businessId, options, limits),
-    {
-      isolationLevel:
-        isolation === "ReadCommitted"
-          ? Prisma.TransactionIsolationLevel.ReadCommitted
-          : Prisma.TransactionIsolationLevel.RepeatableRead,
-      maxWait: BUSINESS_EXPORT_TX_MAX_WAIT_MS,
-      timeout: BUSINESS_EXPORT_TX_TIMEOUT_MS,
-    },
-  );
+  const isolation =
+    process.env.NODE_ENV === "production"
+      ? "RepeatableRead"
+      : (businessExportTestHooks.isolationLevel ?? "RepeatableRead");
+  const snapshot =
+    isolation === "none"
+      ? await loadBusinessExportSnapshot(prisma, businessId, limits)
+      : await prisma.$transaction(
+          (tx) => loadBusinessExportSnapshot(tx, businessId, limits),
+          {
+            isolationLevel:
+              isolation === "ReadCommitted"
+                ? Prisma.TransactionIsolationLevel.ReadCommitted
+                : Prisma.TransactionIsolationLevel.RepeatableRead,
+            maxWait: BUSINESS_EXPORT_TX_MAX_WAIT_MS,
+            timeout: BUSINESS_EXPORT_TX_TIMEOUT_MS,
+          },
+        );
+  return assembleBusinessExportZip(snapshot, options, limits);
 }
 
-async function buildBusinessExportZipFromDb(
+async function loadBusinessExportSnapshot(
   prisma: BusinessExportDb,
   businessId: string,
-  options: BusinessExportOptions | undefined,
   limits: BusinessExportLimits,
-): Promise<BusinessExportResult> {
+) {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
     select: {
@@ -194,12 +195,8 @@ async function buildBusinessExportZipFromDb(
     throw new Error("Business not found.");
   }
 
-  const budget = createExportByteBudget(limits.maxZipBytes);
+  const budget = createExportByteBudget(limits.maxEstimatedBytes);
   const page = { collection: "", limits, budget };
-
-  function chargeFile(name: string, data: string | Buffer) {
-    budget.add(name, Buffer.byteLength(typeof data === "string" ? data : data));
-  }
 
   const customers = await collectPagedRows(
     (args) =>
@@ -750,6 +747,242 @@ async function buildBusinessExportZipFromDb(
       )
     : {};
 
+  const saasSubscription = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId },
+    select: {
+      planCode: true,
+      status: true,
+      founderEligible: true,
+      founderConvertedAt: true,
+      founderEligibilityEndedAt: true,
+      trialStartedAt: true,
+      trialEndsAt: true,
+      legacyExempt: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: true,
+    },
+  });
+  const productAddons = await collectPagedRows(
+    (args) =>
+      prisma.businessProductAddon.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          addonCode: true,
+          status: true,
+          quantity: true,
+          source: true,
+          grantedAt: true,
+          revokedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "product-addons" },
+  );
+  const productGrants = await collectPagedRows(
+    (args) =>
+      prisma.businessProductGrant.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          grantType: true,
+          code: true,
+          quantity: true,
+          status: true,
+          source: true,
+          note: true,
+          grantedAt: true,
+          revokedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "product-grants" },
+  );
+  const invoiceCredits = await collectPagedRows(
+    (args) =>
+      prisma.invoiceCredit.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          invoiceId: true,
+          customerId: true,
+          amount: true,
+          reason: true,
+          recordedByMembershipId: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "invoice-credits" },
+  );
+  const projectDocuments = await collectPagedRows(
+    (args) =>
+      prisma.storedAsset.findMany({
+        where: {
+          businessId,
+          category: "DOCUMENT",
+          purpose: PROJECT_DOCUMENT_PURPOSE,
+          visibility: "PRIVATE",
+          status: "READY",
+          deletedAt: null,
+          publicPath: null,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          customerId: true,
+          originalFilename: true,
+          mimeType: true,
+          visibility: true,
+          status: true,
+          fileSizeBytes: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "project-documents" },
+  );
+
+  return {
+    businessId,
+    business,
+    budget,
+    customers,
+    propertiesCsv,
+    requestsCsv,
+    estimatesCsv,
+    jobs,
+    invoices,
+    payments,
+    expenses,
+    timeEntriesCsv,
+    reviewsCsv,
+    reviewRequestsCsv,
+    campaignsCsv,
+    serviceAreasCsv,
+    membersCsv,
+    followUpsCsv,
+    referralRequestsCsv,
+    marketingContentsCsv,
+    settingsAuditCsv,
+    websitePublishes,
+    websiteGalleryCsv,
+    websiteLocalDraftsCsv,
+    vaultRecords,
+    agreementsCsv,
+    agreementVersions,
+    protectionAuditCsv,
+    protectionAcksCsv,
+    safeSettings,
+    saasSubscription,
+    productAddons,
+    productGrants,
+    invoiceCredits,
+    projectDocuments,
+  };
+}
+
+function chargeExportFile(
+  budget: ReturnType<typeof createExportByteBudget>,
+  name: string,
+  data: string | Buffer,
+) {
+  budget.add(name, Buffer.byteLength(typeof data === "string" ? data : data));
+}
+
+function chargeJsonParseExpansion(
+  budget: ReturnType<typeof createExportByteBudget>,
+  collection: string,
+  rows: readonly unknown[],
+  json: string,
+) {
+  const expanded = Buffer.byteLength(json, "utf8");
+  let already = 0;
+  for (const row of rows) {
+    already += estimateExportRowBytes(row);
+  }
+  const extra = expanded - already;
+  if (extra > 0) {
+    budget.add(collection, extra);
+  }
+}
+
+const ROW_OR_STREAM_CHARGED_FILES = new Set([
+  "customers.csv",
+  "properties.csv",
+  "requests.csv",
+  "estimates.csv",
+  "jobs.csv",
+  "project-documents.csv",
+  "invoices.csv",
+  "payments.csv",
+  "expenses.csv",
+  "invoice-credits.csv",
+  "time-entries.csv",
+  "reviews.csv",
+  "review-requests.csv",
+  "campaigns.csv",
+  "marketing-content.csv",
+  "service-areas.csv",
+  "follow-ups.csv",
+  "referral-requests.csv",
+  "members.csv",
+  "settings-audit.csv",
+  "website-gallery.csv",
+  "website-local-drafts.csv",
+  "business-vault.csv",
+  "business-agreements.csv",
+  "business-protection-audit.csv",
+  "business-protection-acknowledgments.csv",
+]);
+
+async function assembleBusinessExportZip(
+  snapshot: Awaited<ReturnType<typeof loadBusinessExportSnapshot>>,
+  options: BusinessExportOptions | undefined,
+  limits: BusinessExportLimits,
+): Promise<BusinessExportResult> {
+  const {
+    businessId,
+    business,
+    budget,
+    customers,
+    propertiesCsv,
+    requestsCsv,
+    estimatesCsv,
+    jobs,
+    invoices,
+    payments,
+    expenses,
+    timeEntriesCsv,
+    reviewsCsv,
+    reviewRequestsCsv,
+    campaignsCsv,
+    serviceAreasCsv,
+    membersCsv,
+    followUpsCsv,
+    referralRequestsCsv,
+    marketingContentsCsv,
+    settingsAuditCsv,
+    websitePublishes,
+    websiteGalleryCsv,
+    websiteLocalDraftsCsv,
+    vaultRecords,
+    agreementsCsv,
+    agreementVersions,
+    protectionAuditCsv,
+    protectionAcksCsv,
+    safeSettings,
+    saasSubscription,
+    productAddons,
+    productGrants,
+    invoiceCredits,
+    projectDocuments,
+  } = snapshot;
+
   const date = new Date().toISOString().slice(0, 10);
   const usedDocumentNames = new Set<string>();
   const documentManifest: BusinessExportDocumentManifestRow[] = [];
@@ -864,105 +1097,6 @@ async function buildBusinessExportZipFromDb(
         ? "complete"
         : "partial";
 
-  const saasSubscription = await prisma.businessSaasSubscription.findUnique({
-    where: { businessId },
-    select: {
-      planCode: true,
-      status: true,
-      founderEligible: true,
-      founderConvertedAt: true,
-      founderEligibilityEndedAt: true,
-      trialStartedAt: true,
-      trialEndsAt: true,
-      legacyExempt: true,
-      cancelAtPeriodEnd: true,
-      currentPeriodEnd: true,
-    },
-  });
-  const productAddons = await collectPagedRows(
-    (args) =>
-      prisma.businessProductAddon.findMany({
-        where: { businessId },
-        select: {
-          id: true,
-          addonCode: true,
-          status: true,
-          quantity: true,
-          source: true,
-          grantedAt: true,
-          revokedAt: true,
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        ...args,
-      }),
-    { ...page, collection: "product-addons" },
-  );
-  const productGrants = await collectPagedRows(
-    (args) =>
-      prisma.businessProductGrant.findMany({
-        where: { businessId },
-        select: {
-          id: true,
-          grantType: true,
-          code: true,
-          quantity: true,
-          status: true,
-          source: true,
-          note: true,
-          grantedAt: true,
-          revokedAt: true,
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        ...args,
-      }),
-    { ...page, collection: "product-grants" },
-  );
-  const invoiceCredits = await collectPagedRows(
-    (args) =>
-      prisma.invoiceCredit.findMany({
-        where: { businessId },
-        select: {
-          id: true,
-          invoiceId: true,
-          customerId: true,
-          amount: true,
-          reason: true,
-          recordedByMembershipId: true,
-          createdAt: true,
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        ...args,
-      }),
-    { ...page, collection: "invoice-credits" },
-  );
-  const projectDocuments = await collectPagedRows(
-    (args) =>
-      prisma.storedAsset.findMany({
-        where: {
-          businessId,
-          category: "DOCUMENT",
-          purpose: PROJECT_DOCUMENT_PURPOSE,
-          visibility: "PRIVATE",
-          status: "READY",
-          deletedAt: null,
-          publicPath: null,
-        },
-        select: {
-          id: true,
-          jobId: true,
-          customerId: true,
-          originalFilename: true,
-          mimeType: true,
-          visibility: true,
-          status: true,
-          fileSizeBytes: true,
-          createdAt: true,
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        ...args,
-      }),
-    { ...page, collection: "project-documents" },
-  );
   const accountingSource: AccountingExportSource = {
     businessId: business.id,
     businessName: business.name,
@@ -978,6 +1112,41 @@ async function buildBusinessExportZipFromDb(
     customers: customers.map((customer) => ({ id: customer.id, name: customer.name })),
     jobs: jobs.map((job) => ({ id: job.id })),
   };
+
+  const websitePublishesJson = JSON.stringify(
+    websitePublishes.map((row) => ({
+      id: row.id,
+      versionNumber: row.versionNumber,
+      status: row.status,
+      schemaVersion: row.schemaVersion,
+      summary: row.summary,
+      publishedAt: row.publishedAt,
+      sourcePublishId: row.sourcePublishId,
+      snapshot: JSON.parse(row.snapshotJson),
+    })),
+    null,
+    2,
+  );
+  chargeJsonParseExpansion(budget, "website-publishes", websitePublishes, websitePublishesJson);
+  const agreementVersionsJson = JSON.stringify(
+    agreementVersions.map((row) => ({
+      ...row,
+      answers: safeJson(row.answersJson),
+      riskReview: safeJson(row.riskReviewJson),
+    })),
+    null,
+    2,
+  );
+  chargeJsonParseExpansion(
+    budget,
+    "business-agreement-versions",
+    agreementVersions,
+    agreementVersionsJson,
+  );
+
+  function chargeFile(name: string, data: string | Buffer) {
+    chargeExportFile(budget, name, data);
+  }
 
   const zip = new ZipStoreWriter({ maxBytes: limits.maxZipBytes });
   const files: Array<{ name: string; data: string | Buffer }> = [
@@ -1065,23 +1234,7 @@ async function buildBusinessExportZipFromDb(
       data: toCsv(Object.keys(safeSettings), [safeSettings]),
     },
     { name: "settings-audit.csv", data: settingsAuditCsv },
-    {
-      name: "website-publishes.json",
-      data: JSON.stringify(
-        websitePublishes.map((row) => ({
-          id: row.id,
-          versionNumber: row.versionNumber,
-          status: row.status,
-          schemaVersion: row.schemaVersion,
-          summary: row.summary,
-          publishedAt: row.publishedAt,
-          sourcePublishId: row.sourcePublishId,
-          snapshot: JSON.parse(row.snapshotJson),
-        })),
-        null,
-        2,
-      ),
-    },
+    { name: "website-publishes.json", data: websitePublishesJson },
     { name: "website-gallery.csv", data: websiteGalleryCsv },
     {
       name: "website-local-drafts.csv",
@@ -1133,18 +1286,7 @@ async function buildBusinessExportZipFromDb(
       ),
     },
     { name: "business-agreements.csv", data: agreementsCsv },
-    {
-      name: "business-agreement-versions.json",
-      data: JSON.stringify(
-        agreementVersions.map((row) => ({
-          ...row,
-          answers: safeJson(row.answersJson),
-          riskReview: safeJson(row.riskReviewJson),
-        })),
-        null,
-        2,
-      ),
-    },
+    { name: "business-agreement-versions.json", data: agreementVersionsJson },
     {
       name: "business-protection-audit.csv",
       data: protectionAuditCsv,
@@ -1217,7 +1359,14 @@ async function buildBusinessExportZipFromDb(
 
   try {
     for (const file of files) {
-      chargeFile(file.name, file.data);
+      if (
+        !ROW_OR_STREAM_CHARGED_FILES.has(file.name) &&
+        !file.name.startsWith("vault-documents/") &&
+        file.name !== "website-publishes.json" &&
+        file.name !== "business-agreement-versions.json"
+      ) {
+        chargeFile(file.name, file.data);
+      }
       zip.add(file);
     }
   } catch (error) {
@@ -1315,22 +1464,8 @@ export async function runBusinessExportDownload(
     if (error instanceof BusinessExportIncompleteError || error instanceof ZipStoreLimitError) {
       return { ok: false, status: 413, error: error.message };
     }
-    if (isExportSnapshotConflict(error)) {
-      return {
-        ok: false,
-        status: 413,
-        error: `${BUSINESS_EXPORT_INCOMPLETE_PREFIX} the RepeatableRead snapshot conflicted with a concurrent writer. ${BUSINESS_EXPORT_INCOMPLETE_SUFFIX}`,
-      };
-    }
     throw error;
   }
-}
-
-function isExportSnapshotConflict(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = "code" in error ? String(error.code) : "";
-  const message = "message" in error ? String(error.message) : "";
-  return code === "P2034" || code === "40001" || /could not serialize|serialization failure/i.test(message);
 }
 
 function safeJson(value: string | null) {

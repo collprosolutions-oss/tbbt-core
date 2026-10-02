@@ -26,10 +26,10 @@ const {
   BUSINESS_EXPORT_INCOMPLETE_PREFIX,
   BUSINESS_EXPORT_PAGE_SIZE,
   BusinessExportIncompleteError,
-  businessExportTestHooks,
   collectPagedRows,
   runBusinessExportDownload,
 } = await import("@/lib/business-export");
+const { businessExportTestHooks } = await import("@/lib/business-export-paging");
 const { canExportBusinessData } = await import("@/lib/accounting-export");
 const { PROJECT_DOCUMENT_PURPOSE } = await import("@/lib/business-storage/project-documents");
 const { VAULT_DOCUMENT_PURPOSE } = await import("@/lib/business-protection");
@@ -205,6 +205,20 @@ const projectQuery = businessExportSrc.slice(
     ? businessExportSrc.length
     : businessExportSrc.indexOf("]);", projectQueryStart),
 );
+const loadFn = businessExportSrc.slice(
+  businessExportSrc.indexOf("async function loadBusinessExportSnapshot"),
+  businessExportSrc.indexOf("async function assembleBusinessExportZip"),
+);
+const assembleFn = businessExportSrc.slice(
+  businessExportSrc.indexOf("async function assembleBusinessExportZip"),
+);
+const pagingExportStart = businessExportSrc.indexOf(
+  "export {\n  BUSINESS_EXPORT_INCOMPLETE_PREFIX",
+);
+const pagingExportSurface = businessExportSrc.slice(
+  pagingExportStart,
+  businessExportSrc.indexOf("} from \"@/lib/business-export-paging\";", pagingExportStart),
+);
 
 console.log("\nSTATIC — paging, fail-closed, preserved #279/#280 behavior");
 check(
@@ -224,7 +238,22 @@ check(
     !settingsSrc.includes("not size-capped") &&
     !settingsWorkspaceSrc.includes("not size-capped") &&
     settingsSrc.includes("RepeatableRead snapshot") &&
+    settingsSrc.includes("downloaded after that snapshot commits") &&
     packageSrc.includes("test:business-export-large-tenant"),
+);
+check(
+  "Vault getObject and isolation test hooks stay off the production snapshot path",
+  businessExportSrc.includes("(tx) => loadBusinessExportSnapshot(tx") &&
+    businessExportSrc.includes("assembleBusinessExportZip(snapshot") &&
+    businessExportSrc.includes('process.env.NODE_ENV === "production"') &&
+    !loadFn.includes("getObject") &&
+    assembleFn.includes("provider.getObject") &&
+    !pagingExportSurface.includes("businessExportTestHooks") &&
+    !businessExportSrc.includes("isExportSnapshotConflict") &&
+    pagingSrc.includes("options.budget.add(options.collection, estimateExportRowBytes(row))") &&
+    pagingSrc.includes("options.budget?.add(options.collection, Buffer.byteLength(body, \"utf8\"))") &&
+    businessExportSrc.includes("chargeFile(file.name, file.data)") &&
+    businessExportSrc.includes("chargeJsonParseExpansion"),
 );
 check(
   "Invoice credits, project-document references, CRC, UTF-8, and formula protection stay",
@@ -965,6 +994,171 @@ try {
     auditsAfterRaces === 3,
   );
 
+  console.log("\nVAULT — downloads run after the snapshot transaction commits");
+  const vaultDownloadBiz = await makeRaceBusiness("vault-download");
+  const vaultStorage = await prisma.businessStorageAccount.create({
+    data: {
+      businessId: vaultDownloadBiz.business.id,
+      provider: "R2",
+      mode: "MANAGED",
+      bucketName: "tbbt-slow-vault",
+      namespacePrefix: `businesses/${vaultDownloadBiz.business.id}`,
+      storageLimitBytes: BigInt(1024 * 1024),
+    },
+  });
+  const slowVaultKey = `slow-vault-${randomUUID()}`;
+  const slowVaultAsset = await prisma.storedAsset.create({
+    data: {
+      businessId: vaultDownloadBiz.business.id,
+      storageAccountId: vaultStorage.id,
+      category: "DOCUMENT",
+      purpose: VAULT_DOCUMENT_PURPOSE,
+      originalFilename: "slow-vault.pdf",
+      storageKey: slowVaultKey,
+      mimeType: "application/pdf",
+      fileSizeBytes: 24,
+      visibility: "PRIVATE",
+      status: "READY",
+    },
+  });
+  await prisma.businessVaultRecord.create({
+    data: {
+      businessId: vaultDownloadBiz.business.id,
+      title: "Slow vault",
+      category: "INSURANCE",
+      storedAssetId: slowVaultAsset.id,
+      createdByMembershipId: vaultDownloadBiz.access.workspace.membership.id,
+    },
+  });
+  const slowVaultBytes = Buffer.from("%PDF-1.4 slow-vault");
+  let idleDuringDownload = [{ pid: -1 }];
+  let secondQueryMs = Number.POSITIVE_INFINITY;
+  let downloadStarted = false;
+  const insertedDuringDownload = `After commit ${randomUUID()}`;
+  const slowProvider = {
+    async getObject({ key }) {
+      downloadStarted = true;
+      const started = Date.now();
+      idleDuringDownload = await writer.$queryRaw`
+        SELECT pid
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND state = 'idle in transaction'
+      `;
+      await writer.customer.create({
+        data: { businessId: vaultDownloadBiz.business.id, name: insertedDuringDownload },
+      });
+      await writer.business.findUnique({ where: { id: vaultDownloadBiz.business.id } });
+      secondQueryMs = Date.now() - started;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (key !== slowVaultKey) return null;
+      return { body: slowVaultBytes };
+    },
+  };
+  const slowDownload = await runBusinessExportDownload(prisma, vaultDownloadBiz.access, {
+    limits: raceLimits,
+    provider: slowProvider,
+  });
+  const slowIds = slowDownload.ok ? csvIds(slowDownload.body, "customers.csv") : [];
+  const liveAfterSlow = await prisma.customer.findMany({
+    where: { businessId: vaultDownloadBiz.business.id },
+  });
+  check(
+    "Slow vault getObject does not hold the snapshot connection idle-in-transaction",
+    slowDownload.ok === true &&
+      downloadStarted &&
+      idleDuringDownload.length === 0 &&
+      secondQueryMs < 200 &&
+      liveAfterSlow.some((row) => row.name === insertedDuringDownload) &&
+      !slowIds.some((id) => liveAfterSlow.some((row) => row.id === id && row.name === insertedDuringDownload)),
+  );
+  if (slowDownload.ok) {
+    const slowFiles = readZipStoreFiles(slowDownload.body);
+    check(
+      "Vault files downloaded after commit still apply tenant and PRIVATE READY filters",
+      slowFiles.some((file) => file.name.includes("slow-vault.pdf") && file.data.equals(slowVaultBytes)),
+    );
+  }
+
+  console.log("\nBYTE CAP — fat-row estimated-bytes charges fail closed independently");
+  const fatLimits = {
+    pageSize: 5,
+    maxRowsPerCollection: 5_000,
+    maxZipBytes: 8 * 1024 * 1024,
+    maxEstimatedBytes: 8_000,
+    maxDocumentBytes: 1024 * 1024,
+    maxDocuments: 20,
+  };
+
+  async function auditCount(businessId) {
+    return prisma.settingsAuditLog.count({
+      where: { businessId, settingKey: BUSINESS_EXPORT_AUDIT_KEY },
+    });
+  }
+
+  const fatRowBiz = await makeRaceBusiness("fat-row");
+  await prisma.customer.create({
+    data: { businessId: fatRowBiz.business.id, name: `Fat ${"X".repeat(20_000)}` },
+  });
+  const fatRowDownload = await runBusinessExportDownload(prisma, fatRowBiz.access, {
+    limits: fatLimits,
+  });
+  check(
+    "Fat customer row trips the per-row charge with 413, no ZIP body, and no audit",
+    fatRowDownload.ok === false &&
+      fatRowDownload.status === 413 &&
+      !("body" in fatRowDownload) &&
+      fatRowDownload.error.includes(BUSINESS_EXPORT_INCOMPLETE_PREFIX) &&
+      fatRowDownload.error.includes("customers") &&
+      fatRowDownload.error.includes("estimated retained export bytes") &&
+      (await auditCount(fatRowBiz.business.id)) === 0,
+  );
+
+  const fatCsvBiz = await makeRaceBusiness("fat-csv");
+  const fatCsvCustomer = await prisma.customer.create({
+    data: { businessId: fatCsvBiz.business.id, name: "Small" },
+  });
+  await prisma.property.create({
+    data: {
+      businessId: fatCsvBiz.business.id,
+      customerId: fatCsvCustomer.id,
+      label: `Fat ${"Y".repeat(20_000)}`,
+      addressLine1: "1 Main",
+    },
+  });
+  const fatCsvDownload = await runBusinessExportDownload(prisma, fatCsvBiz.access, {
+    limits: fatLimits,
+  });
+  check(
+    "Fat property label trips the streamed-CSV charge with 413, no ZIP body, and no audit",
+    fatCsvDownload.ok === false &&
+      fatCsvDownload.status === 413 &&
+      !("body" in fatCsvDownload) &&
+      fatCsvDownload.error.includes(BUSINESS_EXPORT_INCOMPLETE_PREFIX) &&
+      fatCsvDownload.error.includes("properties") &&
+      fatCsvDownload.error.includes("estimated retained export bytes") &&
+      (await auditCount(fatCsvBiz.business.id)) === 0,
+  );
+
+  const fatFileBiz = await makeRaceBusiness("fat-file");
+  await prisma.business.update({
+    where: { id: fatFileBiz.business.id },
+    data: { name: `Fat ${"Z".repeat(20_000)}` },
+  });
+  const fatFileDownload = await runBusinessExportDownload(prisma, fatFileBiz.access, {
+    limits: fatLimits,
+  });
+  check(
+    "Fat business.name trips chargeFile with 413, no ZIP body, and no audit",
+    fatFileDownload.ok === false &&
+      fatFileDownload.status === 413 &&
+      !("body" in fatFileDownload) &&
+      fatFileDownload.error.includes(BUSINESS_EXPORT_INCOMPLETE_PREFIX) &&
+      fatFileDownload.error.includes("estimated retained export bytes") &&
+      (await auditCount(fatFileBiz.business.id)) === 0,
+  );
+
   console.log("\nMUTATION — a silent slice would hide overflow");
   const mutatedPager = pagingSrc.replace(
     "if (nextCount > maxRows || (hasMore && nextCount === maxRows)) {",
@@ -984,6 +1178,28 @@ try {
     !mutatedSnapshot.includes("Prisma.TransactionIsolationLevel.RepeatableRead") &&
       businessExportSrc.includes("isolation === \"none\"") &&
       businessExportSrc.includes("prisma.$transaction"),
+  );
+  check(
+    "Removing getObject from assemble would put downloads back inside the snapshot loader",
+    assembleFn.includes("provider.getObject") && !loadFn.includes("getObject"),
+  );
+  const mutatedRowCharge = pagingSrc.replace(
+    "options.budget.add(options.collection, estimateExportRowBytes(row));",
+    "",
+  );
+  const mutatedCsvCharge = pagingSrc.replace(
+    "options.budget?.add(options.collection, Buffer.byteLength(body, \"utf8\"));",
+    "",
+  );
+  const mutatedFileCharge = businessExportSrc.replace("chargeFile(file.name, file.data);", "");
+  check(
+    "Removing the per-row, streamed-CSV, or chargeFile site is a detectable source mutation",
+    pagingSrc.includes("options.budget.add(options.collection, estimateExportRowBytes(row));") &&
+      pagingSrc.includes("options.budget?.add(options.collection, Buffer.byteLength(body, \"utf8\"));") &&
+      businessExportSrc.includes("chargeFile(file.name, file.data);") &&
+      !mutatedRowCharge.includes("estimateExportRowBytes(row)") &&
+      !mutatedCsvCharge.includes("Buffer.byteLength(body, \"utf8\")") &&
+      !mutatedFileCharge.includes("chargeFile(file.name, file.data);"),
   );
 } catch (error) {
   failures += 1;
