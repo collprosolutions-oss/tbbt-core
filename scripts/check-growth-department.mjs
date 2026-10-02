@@ -49,7 +49,7 @@ const {
   preserveOriginalSource,
   shouldPreserveCustomerFirstTouch,
 } = await import("@/lib/growth-engine");
-const { loadGrowthWorkspace } = await import("@/lib/growth-data");
+const { loadGrowthSource, loadGrowthWorkspace } = await import("@/lib/growth-data");
 const {
   approveReactivationCandidates,
   correctLeadAttribution,
@@ -157,6 +157,46 @@ try {
       payments: [],
     }).totalCollected === 0,
   );
+  const dualInvoiceCash = resolveCollectedCash({
+    invoices: [
+      { id: "inv-orig", status: "SENT", total: 1000, jobId: "job-dual", kind: "ORIGINAL" },
+      { id: "inv-supp", status: "SENT", total: 500, jobId: "job-dual", kind: "SUPPLEMENTAL" },
+    ],
+    payments: [{ id: "pay-job-only", amount: 300, invoiceId: null, jobId: "job-dual" }],
+  });
+  check(
+    "ORIGINAL + SUPPLEMENTAL + job-only $300 collects $300 once on the ORIGINAL invoice",
+    dualInvoiceCash.totalCollected === 300 &&
+      dualInvoiceCash.collectionCount === 1 &&
+      dualInvoiceCash.byInvoiceId.get("inv-orig")?.amount === 300 &&
+      !dualInvoiceCash.byInvoiceId.has("inv-supp"),
+  );
+  check(
+    "collectedForJob does not double-count a job-only deposit across invoice kinds",
+    collectedForJob({
+      jobId: "job-dual",
+      invoices: [
+        { id: "inv-orig", status: "SENT", total: 1000, jobId: "job-dual", kind: "ORIGINAL" },
+        { id: "inv-supp", status: "SENT", total: 500, jobId: "job-dual", kind: "SUPPLEMENTAL" },
+      ],
+      payments: [{ id: "pay-job-only", amount: 300, invoiceId: null, jobId: "job-dual" }],
+    }).collected === 300,
+  );
+  const missingKindCash = resolveCollectedCash({
+    invoices: [
+      { id: "inv-orig-bare", status: "SENT", total: 1000, jobId: "job-bare" },
+      { id: "inv-supp-bare", status: "SENT", total: 500, jobId: "job-bare" },
+    ],
+    payments: [{ id: "pay-bare", amount: 300, invoiceId: null, jobId: "job-bare" }],
+  });
+  check(
+    "invoices missing kind do not claim or double-count a job-only payment",
+    missingKindCash.totalCollected === 300 &&
+      missingKindCash.collectionCount === 1 &&
+      missingKindCash.unattachedPaymentTotal === 300 &&
+      !missingKindCash.byInvoiceId.has("inv-orig-bare") &&
+      !missingKindCash.byInvoiceId.has("inv-supp-bare"),
+  );
   check(
     "Original source is preserved when a later campaign arrives",
     JSON.stringify(
@@ -207,6 +247,15 @@ try {
   });
   check("Empty records do not fabricate funnel stages", emptyFunnel.stages.length === 0);
   const socialSrc = readFileSync(new URL("../src/lib/growth.ts", import.meta.url), "utf8");
+  const growthDataSrc = readFileSync(new URL("../src/lib/growth-data.ts", import.meta.url), "utf8");
+  const invoiceSelectSrc = growthDataSrc.slice(
+    growthDataSrc.indexOf("prisma.invoice.findMany({"),
+    growthDataSrc.indexOf("prisma.payment.findMany({"),
+  );
+  check(
+    "loadGrowthSource selects invoice kind and jobId for collected-cash attribution",
+    invoiceSelectSrc.includes("jobId: true") && invoiceSelectSrc.includes("kind: true"),
+  );
   const workspaceSrc = readFileSync(new URL("../src/components/growth/growth-workspace.tsx", import.meta.url), "utf8");
   const attemptFormSrc = readFileSync(new URL("../src/components/growth/growth-attempt-form.tsx", import.meta.url), "utf8");
   check("Growth copy states social is disconnected", socialSrc.includes(SOCIAL_DISCONNECTED_MESSAGE));
@@ -1013,6 +1062,78 @@ try {
   check(
     "Referral collected stays on the referred customer's own cash",
     referralAfter.collectedRevenue === 250,
+  );
+
+  const moneyJob = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const originalInvoice = await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      jobId: moneyJob.id,
+      kind: "ORIGINAL",
+      status: "SENT",
+      total: 1000,
+    },
+  });
+  await prisma.invoice.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      jobId: moneyJob.id,
+      kind: "SUPPLEMENTAL",
+      status: "SENT",
+      total: 500,
+    },
+  });
+  await prisma.payment.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      jobId: moneyJob.id,
+      invoiceId: null,
+      purpose: "MATERIAL_DEPOSIT",
+      amount: 300,
+      method: "CASH",
+    },
+  });
+  const moneySource = await loadGrowthSource(prisma, businessA.id);
+  const moneyInvoices = moneySource.invoices.filter((invoice) => invoice.jobId === moneyJob.id);
+  const moneyPayments = (moneySource.payments ?? []).filter(
+    (payment) =>
+      payment.jobId === moneyJob.id || moneyInvoices.some((invoice) => invoice.id === payment.invoiceId),
+  );
+  check(
+    "loadGrowthSource selects invoice kind for collected-cash attribution",
+    moneyInvoices.length === 2 &&
+      moneyInvoices.some((invoice) => invoice.id === originalInvoice.id && invoice.kind === "ORIGINAL") &&
+      moneyInvoices.some((invoice) => invoice.kind === "SUPPLEMENTAL"),
+  );
+  const moneyCash = resolveCollectedCash({
+    invoices: moneyInvoices,
+    payments: moneyPayments,
+    credits: moneySource.invoiceCredits ?? [],
+  });
+  check(
+    "Growth collected cash counts a job-only $300 deposit once across ORIGINAL + SUPPLEMENTAL",
+    moneyCash.totalCollected === 300 &&
+      moneyCash.collectionCount === 1 &&
+      moneyCash.byInvoiceId.get(originalInvoice.id)?.amount === 300,
+  );
+  check(
+    "collectedForJob counts the same job-only deposit once",
+    collectedForJob({
+      jobId: moneyJob.id,
+      invoices: moneySource.invoices,
+      payments: moneySource.payments ?? [],
+      credits: moneySource.invoiceCredits ?? [],
+    }).collected === 300,
   );
 
   console.log("\nGrowth department check complete.");

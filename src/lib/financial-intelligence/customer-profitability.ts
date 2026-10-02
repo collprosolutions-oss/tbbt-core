@@ -107,6 +107,7 @@ export function buildCustomerLifetime(
           total: invoice.total,
           customerId: invoice.customerId,
           jobId: null,
+          kind: null,
           paymentMethod: invoice.paymentMethod ?? null,
           paymentReference: invoice.paymentReference ?? null,
         })),

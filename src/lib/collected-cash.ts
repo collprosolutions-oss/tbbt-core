@@ -54,7 +54,10 @@ export function paymentsForInvoice(
   invoice: string | Pick<CollectedCashInvoice, "id" | "jobId" | "kind">,
   payments: readonly CollectedCashPayment[],
 ): CollectedCashPayment[] {
-  const target = typeof invoice === "string" ? { id: invoice } : invoice;
+  const target =
+    typeof invoice === "string"
+      ? { id: invoice, jobId: null, kind: null }
+      : { id: invoice.id, jobId: invoice.jobId ?? null, kind: invoice.kind ?? null };
   const seen = new Set<string>();
   const rows: CollectedCashPayment[] = [];
   for (const payment of payments) {

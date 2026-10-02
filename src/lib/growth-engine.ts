@@ -73,6 +73,7 @@ export type GrowthJobRow = {
 export type GrowthInvoiceRow = {
   id: string;
   jobId: string | null;
+  kind: string | null;
   customerId: string | null;
   status: string;
   total: GrowthMoney;

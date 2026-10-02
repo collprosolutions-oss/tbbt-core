@@ -22,8 +22,8 @@ export type CollectedInvoice = {
   id: string;
   status: string;
   total: number;
-  jobId?: string | null;
-  kind?: string | null;
+  jobId: string | null;
+  kind: string | null;
   customerId?: string | null;
   paidAt?: Date | null;
   paymentMethod?: string | null;
@@ -50,7 +50,10 @@ export function paymentsAppliedToInvoice(
   payments: readonly CollectedPayment[],
   invoice: string | Pick<CollectedInvoice, "id" | "jobId" | "kind">,
 ): number {
-  const target = typeof invoice === "string" ? { id: invoice } : invoice;
+  const target =
+    typeof invoice === "string"
+      ? { id: invoice, jobId: null, kind: null }
+      : { id: invoice.id, jobId: invoice.jobId ?? null, kind: invoice.kind ?? null };
   return roundMoney(
     payments
       .filter((payment) =>
@@ -89,7 +92,7 @@ function creditsAppliedToInvoice(
 
 /** Remaining SENT/PAID balance after recorded payments and OWNER credits. Never negative. */
 export function invoiceBalanceDue(
-  invoice: Pick<CollectedInvoice, "id" | "total" | "jobId" | "kind">,
+  invoice: { id: string; total: number; jobId: string | null; kind: string | null },
   payments: readonly CollectedPayment[],
   credits: readonly CollectedInvoiceCredit[],
 ): number {
@@ -107,7 +110,10 @@ export function invoiceHasPaymentRows(
   invoice: string | Pick<CollectedInvoice, "id" | "jobId" | "kind">,
   payments: readonly CollectedPayment[],
 ): boolean {
-  const target = typeof invoice === "string" ? { id: invoice } : invoice;
+  const target =
+    typeof invoice === "string"
+      ? { id: invoice, jobId: null, kind: null }
+      : { id: invoice.id, jobId: invoice.jobId ?? null, kind: invoice.kind ?? null };
   return payments.some((payment) =>
     paymentBelongsToInvoice(
       { invoiceId: payment.invoiceId ?? null, jobId: payment.jobId ?? null },

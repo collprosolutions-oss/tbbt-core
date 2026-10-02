@@ -435,7 +435,7 @@ export function proveJobMoney(records: JobMoneyRecords): JobMoneyProof {
     records.payments.reduce((sum, payment) => sum + moneyNumber(payment.amount), 0) +
       records.invoices.reduce((sum, invoice) => {
         const rows = paymentsBelongingToInvoice(
-          { id: invoice.id, jobId: invoice.jobId ?? records.jobId, kind: invoice.kind },
+          { id: invoice.id, jobId: invoice.jobId ?? records.jobId, kind: invoice.kind ?? null },
           records.payments,
         );
         if (rows.length > 0) return sum;

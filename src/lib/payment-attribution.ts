@@ -12,12 +12,12 @@
  * 3. Once a job has ORIGINAL + SUPPLEMENTAL invoices, an unallocated
  *    job-only Payment is never counted independently on every invoice.
  */
-import { isOriginalInvoiceKind } from "@/lib/revenue-integrity";
+import { INVOICE_KIND_ORIGINAL } from "@/lib/revenue-integrity";
 
 export type InvoicePaymentTarget = {
   id: string;
-  jobId?: string | null;
-  kind?: string | null;
+  jobId: string | null;
+  kind: string | null;
 };
 
 export function paymentBelongsToInvoice(
@@ -27,7 +27,9 @@ export function paymentBelongsToInvoice(
   if (payment.invoiceId) {
     return payment.invoiceId === invoice.id;
   }
-  if (!isOriginalInvoiceKind(invoice.kind)) {
+  // Fail closed: missing/unknown kind must not claim a job-only payment.
+  // isOriginalInvoiceKind(undefined) is true — do not use it here.
+  if (invoice.kind !== INVOICE_KIND_ORIGINAL) {
     return false;
   }
   return Boolean(invoice.jobId) && payment.jobId === invoice.jobId;

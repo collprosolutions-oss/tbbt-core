@@ -620,6 +620,23 @@ try {
     jobOnlyDepositDue === 700,
   );
   check(
+    "SENT $1000 missing kind does not apply a job-only $300 deposit",
+    invoiceBalanceDue(
+      { id: "inv-bare-kind", total: 1000, jobId: "job-bare", kind: null },
+      [
+        {
+          id: "pay-bare-kind",
+          amount: 300,
+          invoiceId: null,
+          jobId: "job-bare",
+          customerId: "c1",
+          receivedAt: new Date(),
+        },
+      ],
+      [],
+    ) === 1000,
+  );
+  check(
     "SENT $100 with a $40 credit has $60 remaining",
     invoiceBalanceDue({ id: "inv-credit-100", total: 100 }, [], [{ invoiceId: "inv-credit-100", amount: 40 }]) === 60,
   );

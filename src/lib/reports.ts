@@ -287,7 +287,7 @@ export type ReportInvoice = {
   jobId: string | null;
   paymentMethod: string | null;
   paymentReference: string | null;
-  kind?: string | null;
+  kind: string | null;
 };
 
 export type ReportChangeOrder = {
@@ -446,7 +446,7 @@ function paymentsOnInvoice(
       .filter((payment) =>
         paymentBelongsToInvoice(
           { invoiceId: payment.invoiceId, jobId: payment.jobId },
-          invoice,
+          { id: invoice.id, jobId: invoice.jobId, kind: invoice.kind },
         ),
       )
       .reduce((sum, payment) => sum + payment.amount, 0),

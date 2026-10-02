@@ -148,7 +148,7 @@ export type AccountingInvoiceRecord = {
   id: string;
   customerId: string | null;
   jobId: string | null;
-  kind?: string | null;
+  kind: string | null;
   status: string;
   total: AccountingMoney;
   paidAt: Date | null;
@@ -310,7 +310,7 @@ export function invoiceCountByJobId(
 export function paymentsAllocatedToInvoice<
   T extends { id: string; invoiceId: string | null; jobId: string | null },
 >(
-  invoice: { id: string; jobId?: string | null; kind?: string | null },
+  invoice: { id: string; jobId: string | null; kind: string | null },
   payments: readonly T[],
 ): T[] {
   return paymentsBelongingToInvoice(invoice, [...payments]);
