@@ -29,6 +29,7 @@ import { jobPhotoSrc } from "@/lib/business-storage/field-job-photos";
 import { JobPhotoItem, type JobPhotoDetails } from "@/components/jobs/job-photo-item";
 import { JobAftercarePanel } from "@/components/jobs/job-aftercare-panel";
 import { JobCallbackPanel } from "@/components/jobs/job-callback-panel";
+import { ProjectConversationPanel } from "@/components/jobs/project-conversation-panel";
 import { JobMilestonesCard } from "@/components/jobs/job-milestones-card";
 import { JobProblemReportList } from "@/components/jobs/job-problem-report-list";
 import { MarkJobCompleteButton } from "@/components/jobs/mark-job-complete-button";
@@ -120,6 +121,7 @@ import { loadCleaningRecurringBookingReview } from "@/lib/cleaning-recurring-boo
 import { loadCleaningVisitView } from "@/lib/cleaning-visit-data";
 import { loadJobAftercareReview } from "@/lib/job-aftercare-data";
 import { loadJobCallbackReview } from "@/lib/job-callback-data";
+import { loadOwnerProjectConversationReview } from "@/lib/project-conversation-data";
 import { loadJobProjectLinkReview } from "@/lib/project-link-data";
 
 export const metadata: Metadata = {
@@ -416,6 +418,11 @@ export default async function JobPage({
     ? await loadCleaningNextBookingReview(prisma, access, job.id)
     : null;
   const jobCallbackReview = await loadJobCallbackReview(prisma, access, job.id);
+  const projectConversationReview = await loadOwnerProjectConversationReview(
+    prisma,
+    access,
+    job.id,
+  );
   const jobAftercareReview = await loadJobAftercareReview(prisma, access, job.id);
   const jobProjectLinkReview = await loadJobProjectLinkReview(prisma, access, job.id);
 
@@ -1181,6 +1188,22 @@ export default async function JobPage({
           </CardHeader>
           <CardContent>
             <JobAftercarePanel review={jobAftercareReview} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {projectConversationReview ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Project conversation</CardTitle>
+            <CardDescription>
+              Customer messages for this active Handyman job. OWNER replies
+              require an explicit Send through Communications. Opening this
+              page does not send a message. This is not a callback request.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProjectConversationPanel review={projectConversationReview} />
           </CardContent>
         </Card>
       ) : null}

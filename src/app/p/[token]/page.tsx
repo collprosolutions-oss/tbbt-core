@@ -15,6 +15,7 @@ import { WorkPerformedList } from "@/components/invoices/work-performed-list";
 import { RequestAdditionalWorkForm } from "@/components/portal/request-additional-work-form";
 import { RequestAnotherVisitCard } from "@/components/portal/request-another-visit-card";
 import { RequestJobCallbackForm } from "@/components/portal/request-job-callback-form";
+import { ProjectConversationCard } from "@/components/portal/project-conversation-card";
 import { ProjectDocumentUpload } from "@/components/portal/project-document-upload";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import {
@@ -68,6 +69,7 @@ import { selectPortalInvoice } from "@/lib/revenue-integrity";
 import { backfillEmptyInvoiceWorkLinesForProjectToken } from "@/lib/invoice-carry-forward";
 import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { loadPortalJobCallbackView } from "@/lib/portal-job-callback-data";
+import { loadPortalProjectConversationView } from "@/lib/project-conversation-data";
 import {
   JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
@@ -411,6 +413,7 @@ export default async function CustomerProjectPortalPage({
     token,
   );
   const callbackView = await loadPortalJobCallbackView(prisma, token);
+  const conversationView = await loadPortalProjectConversationView(prisma, token);
   const repeatVisit = await loadCleaningRepeatVisitPublicView(prisma, token);
   const portalMessages = await loadPortalCustomerCommunications(prisma, token);
   const currentRequest = portalRequestSummary(job.estimate?.serviceRequest ?? null);
@@ -669,6 +672,14 @@ export default async function CustomerProjectPortalPage({
             <RequestAnotherVisitCard
               projectToken={token}
               alreadyRequested={repeatVisit.alreadyRequested}
+            />
+          ) : null}
+
+          {conversationView.status !== "hidden" ? (
+            <ProjectConversationCard
+              projectToken={token}
+              view={conversationView}
+              timeZone={timeZone}
             />
           ) : null}
 
