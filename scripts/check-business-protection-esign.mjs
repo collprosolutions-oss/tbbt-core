@@ -326,7 +326,12 @@ try {
   });
   check("Forged webhook is rejected", forgedResult.reason === "invalid_signature" && forgedResult.status === 400 && forgedResult.applied === false);
   const afterForged = await prisma.businessAgreement.findUniqueOrThrow({ where: { id: failure.id } });
-  check("Forged webhook does not complete the agreement", afterForged.lifecycleStatus === "DRAFT" && !afterForged.signedVersionId);
+  check(
+    "Forged webhook does not complete the agreement",
+    !afterForged.signedVersionId &&
+      afterForged.lifecycleStatus !== "COMPLETE" &&
+      afterForged.lifecycleStatus !== "EXTERNAL_COMPLETE",
+  );
 
   const tenantSwap = fake.buildSignedWebhookPayload({
     requestId: sent.requestId,

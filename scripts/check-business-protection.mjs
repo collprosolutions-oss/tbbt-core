@@ -410,7 +410,12 @@ try {
   const aiSrc = readRepo("src/lib/ai/agreements.ts");
   const workspaceSrc = readRepo("src/lib/workspace.ts");
   check("Protection page uses management + capability gates", pageSrc.includes("requireManagementPageAccess") && pageSrc.includes("MANAGE_BUSINESS_PROTECTION"));
-  check("Ops never apply a digital signature when disconnected", opsSrc.includes("assertDigitalSignatureAllowed") && opsSrc.includes("will not invent a digital signature"));
+  check(
+    "Ops never apply a digital signature when disconnected",
+    opsSrc.includes("assertDigitalSignatureAllowed") &&
+      opsSrc.includes("ESIGN_WEBHOOK_ONLY_COMPLETION_MESSAGE") &&
+      esignSrc.includes("will not invent a digital signature"),
+  );
   check(
     "E-sign helper stays NOT_CONNECTED without credentials or the fake adapter",
     esignSrc.includes("isEsignProviderConfigured") &&

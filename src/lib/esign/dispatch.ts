@@ -75,11 +75,14 @@ export async function dispatchEsignWebhook(
   }
 
   try {
-    await completeAgreementFromEsignWebhook(db, {
+    const completed = await completeAgreementFromEsignWebhook(db, {
       event,
       signedPdf,
       storage: input.storage ?? { db: db as PrismaClient },
     });
+    if (completed.reused) {
+      return { applied: false, reason: "already_applied", status: 200, hello: true };
+    }
     return { applied: true, reason: "applied", status: 200, hello: true };
   } catch (error) {
     const message = error instanceof BusinessProtectionError ? error.message : "";

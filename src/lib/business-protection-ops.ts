@@ -1649,7 +1649,10 @@ export async function completeAgreementFromEsignWebhook(
         (existingClaim?.attemptKey ?? agreement.completionAttemptKey) === metadata.attemptKey &&
         agreement.signedVersionId === version.id
       ) {
-        return loadCompletionWinnerByIds(tx, metadata.businessId, agreement.id);
+        return {
+          ...(await loadCompletionWinnerByIds(tx, metadata.businessId, agreement.id)),
+          reused: true as const,
+        };
       }
       throw new BusinessProtectionError(
         "This agreement is already complete. Later edits belong on a new agreement.",
@@ -1759,7 +1762,7 @@ export async function completeAgreementFromEsignWebhook(
         boundVersionId: signed.id,
       },
     });
-    return { agreement: updated, vault, signedVersion: signed };
+    return { agreement: updated, vault, signedVersion: signed, reused: false as const };
   };
 
   try {
@@ -1775,13 +1778,19 @@ export async function completeAgreementFromEsignWebhook(
       winner.completionAttemptKey === metadata.attemptKey &&
       winner.signedVersionId === metadata.versionId
     ) {
-      return loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId);
+      return {
+        ...(await loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId)),
+        reused: true as const,
+      };
     }
     const claim = await db.businessAgreementCompletionClaim.findFirst({
       where: { businessId: metadata.businessId, attemptKey: metadata.attemptKey },
     });
     if (claim?.agreementId === metadata.agreementId && claim.signedVersionId === metadata.versionId) {
-      return loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId);
+      return {
+        ...(await loadCompletionWinnerByIds(db, metadata.businessId, metadata.agreementId)),
+        reused: true as const,
+      };
     }
     throw new BusinessProtectionError(
       "This agreement is already complete. Later edits belong on a new agreement.",
