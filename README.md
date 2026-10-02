@@ -105,6 +105,7 @@ npm run test:customer-merge
 npm run test:production-certification
 npm run test:plan-entitlements
 npm run test:materials-suppliers
+npm run test:supplier-quote-compare
 npm run test:communications-department
 npm run test:native-field
 npm run test:native-field-photos

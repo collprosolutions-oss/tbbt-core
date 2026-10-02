@@ -25,7 +25,11 @@ export default async function MaterialsPage() {
         title="Materials & suppliers"
         description="Reusable materials, preferred vendors, and last-paid prices for this business. Sent estimates stay frozen when a catalog price changes."
       />
-      <MaterialsWorkspace suppliers={data.suppliers} catalog={data.catalog} />
+      <MaterialsWorkspace
+        suppliers={data.suppliers}
+        catalog={data.catalog}
+        quoteDateDefault={data.quoteDateDefault}
+      />
     </PageContainer>
   );
 }

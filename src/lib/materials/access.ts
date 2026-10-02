@@ -72,6 +72,10 @@ export function requireOwnerPurchaseReceipt(access: BusinessAccess) {
   requireBusinessRole(access, "OWNER");
 }
 
+export function requireOwnerSupplierQuoteWrite(access: BusinessAccess) {
+  requireBusinessRole(access, "OWNER");
+}
+
 export function rejectMemberVendorEconomics(access: BusinessAccess) {
   if (access.workspace.role === "MEMBER") {
     throw new ForbiddenError();
