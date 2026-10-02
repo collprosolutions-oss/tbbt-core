@@ -256,9 +256,8 @@ check(
   "Domain verification is read-only, OWNER-visible, and uses injectable DNS",
   domainVerificationSrc.includes("setWebsiteDomainDnsLookup") &&
     domainVerificationSrc.includes("PENDING") &&
-    domainVerificationSrc.includes("does not write DNS") === false &&
     domainVerificationSrc.includes("Never writes DNS") &&
-    domainVerificationSrc.includes("never publishes") &&
+    domainVerificationSrc.includes("never treats a typed publicWebsite URL as connected") &&
     domainVerificationSrc.includes("requireBusinessRole") &&
     domainVerificationSrc.includes('"OWNER"') &&
     domainVerificationUi.includes("Read-only OWNER check") &&

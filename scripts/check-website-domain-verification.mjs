@@ -117,7 +117,7 @@ const goLiveData = read("src/lib/go-live-data.ts");
 check(
   "Verification never writes DNS, publish, or stored VERIFIED from text",
   verificationSrc.includes("Never writes DNS") &&
-    verificationSrc.includes("never publishes") &&
+    verificationSrc.includes("never treats a typed publicWebsite URL as connected") &&
     !verificationSrc.includes("status: \"VERIFIED\"") &&
     !verificationSrc.includes("publishWebsite(") &&
     !verificationSrc.includes("websiteHostBinding.update") &&
