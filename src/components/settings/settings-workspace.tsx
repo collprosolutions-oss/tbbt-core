@@ -12,6 +12,7 @@ import { EstimateLineTemplatesPanel } from "@/components/settings/estimate-line-
 import { ServiceAreaSettings } from "@/components/settings/service-area-settings";
 import { WebsiteStoryForm } from "@/components/settings/website-story-form";
 import { WebsitePublishPanel } from "@/components/settings/website-publish-panel";
+import { WebsiteDomainVerificationCard } from "@/components/settings/website-domain-verification";
 import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website-link";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
@@ -212,6 +213,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     operatingBlockedMessage,
     websitePhotos,
     websitePublish,
+    domainVerification,
     supplierPricing,
     canClearTestData,
     testDataCleanupPreview,
@@ -276,6 +278,10 @@ function SectionBody(props: SettingsWorkspaceProps) {
         title="Website Publish"
         description="Draft website copy and selections stay private until you publish. Publishing freezes a snapshot and any intake versions captured at that moment. The public site does not update from later edits until you publish again. OWNER can restore a prior published website. Captured intake versions are restored only when that publish recorded them. ADMIN can read history but cannot restore."
       >
+        <div className="space-y-6">
+        {role === "OWNER" && domainVerification ? (
+          <WebsiteDomainVerificationCard verification={domainVerification} />
+        ) : null}
         {websitePublish ? (
           <WebsitePublishPanel
             slug={snapshot.business.slug}
@@ -295,6 +301,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
         ) : (
           <p className="text-sm text-muted-foreground">Website publish data is not available.</p>
         )}
+        </div>
         {!canOperate ? (
           <p className="mt-2 text-sm text-muted-foreground">{operatingBlockedMessage}</p>
         ) : null}

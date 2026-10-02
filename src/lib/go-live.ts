@@ -178,6 +178,7 @@ export type GoLiveDomainInput = {
   verifiedHostname: string | null;
   unverifiedHostname: string | null;
   failedHostname: string | null;
+  pendingHostname?: string | null;
 };
 
 export type GoLiveInput = {
@@ -294,7 +295,9 @@ export function classifyAiProvider(aiConnected: boolean): GoLiveStatus {
 
 export function classifyCustomDomain(input: GoLiveDomainInput): GoLiveStatus {
   if (input.verifiedHostname) return "LIVE";
-  if (input.unverifiedHostname || input.failedHostname) return "PARTIAL";
+  if (input.pendingHostname || input.unverifiedHostname || input.failedHostname) {
+    return "PARTIAL";
+  }
   return "NOT_CONFIGURED";
 }
 
@@ -595,25 +598,30 @@ function domainCard(input: GoLiveDomainInput): GoLiveCard {
       status,
       requirement: "OPTIONAL",
       currentState: `Verified custom host: ${input.verifiedHostname}.`,
-      whatWorks: "The verified hostname can resolve to this business's public site.",
-      whatDoesNot: "TBBT does not purchase domains or change DNS from this page.",
-      ownerNextAction: "No domain verification is started from this page.",
+      whatWorks: "The verified hostname can resolve to this business's published site.",
+      whatDoesNot: "TBBT does not purchase domains or change DNS from this page. A typed website URL is not enough.",
+      ownerNextAction: "No domain verification write is started from this page.",
       settingsHref: "/settings?section=website-publish",
     };
   }
   if (status === "PARTIAL") {
-    const hostname = input.unverifiedHostname ?? input.failedHostname;
+    const hostname = input.pendingHostname ?? input.unverifiedHostname ?? input.failedHostname;
+    const pending = Boolean(input.pendingHostname);
     return {
       id: "custom_domain",
       label: "Custom / public domain",
       group: "OPTIONAL_PLANNED",
       status,
       requirement: "OPTIONAL",
-      currentState: input.failedHostname
-        ? `Custom host ${hostname} failed verification.`
-        : `Custom host ${hostname} is on file but unverified.`,
+      currentState: pending
+        ? `Custom host ${hostname} verification is Pending.`
+        : input.failedHostname
+          ? `Custom host ${hostname} failed verification.`
+          : `Custom host ${hostname} is on file but unverified.`,
       whatWorks: "The public /hire site for this business slug still works.",
-      whatDoesNot: "Unverified hosts never route. This page does not mark a hostname verified.",
+      whatDoesNot: pending
+        ? "Pending means DNS/host ownership could not be completed. This page does not change DNS or publish the website."
+        : "Unverified hosts never route. This page does not mark a hostname verified from text entry.",
       ownerNextAction: "Finish DNS with your registrar when you want a custom domain. Publishing stays a separate owner action.",
       settingsHref: "/settings?section=website-publish",
     };

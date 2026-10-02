@@ -16,6 +16,11 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const { ForbiddenError } = await import("@/lib/authorization");
 const {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  resetWebsiteDomainDnsLookup,
+  setWebsiteDomainDnsLookup,
+} = await import("@/lib/website-engine");
+const {
   assertGoLiveProjectionSafe,
   buildGoLiveCenter,
   classifyCustomDomain,
@@ -531,6 +536,27 @@ try {
       status: "UNVERIFIED",
     },
   });
+  const publishA = await prisma.websitePublish.create({
+    data: {
+      businessId: businessA.id,
+      versionNumber: 1,
+      status: "PUBLISHED",
+      schemaVersion: 1,
+      snapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      summary: "integration-domain",
+      idempotencyKey: `int-a-${businessA.id}`,
+    },
+  });
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { publishedWebsiteId: publishA.id },
+  });
+  setWebsiteDomainDnsLookup(async (hostname) => {
+    if (hostname === "alpha-int.example.test") {
+      return { cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] };
+    }
+    return { cnames: [], addresses: [] };
+  });
   await prisma.businessPaymentAccount.create({
     data: {
       businessId: businessA.id,
@@ -623,6 +649,7 @@ try {
       (await prisma.websiteHostBinding.count()) === 2,
   );
 } finally {
+  resetWebsiteDomainDnsLookup();
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {

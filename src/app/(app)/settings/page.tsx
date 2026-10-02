@@ -29,7 +29,7 @@ import { previewOperationalTestData } from "@/lib/test-data-cleanup";
 import { loadPublicCatalog } from "@/lib/public-site-data";
 import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
-import { loadWebsitePublishPanelData } from "@/lib/website-engine";
+import { loadWebsiteDomainVerification, loadWebsitePublishPanelData } from "@/lib/website-engine";
 import { getFinanceConnectionProvider } from "@/lib/finance-connections";
 import { asNumberOrNull } from "@/lib/reports";
 
@@ -91,6 +91,10 @@ export default async function SettingsPage({
   const websitePublish =
     section === "website-publish" && canEditPreferences
       ? await loadWebsitePublishPanelData(prisma, access)
+      : undefined;
+  const domainVerification =
+    section === "website-publish" && role === "OWNER"
+      ? await loadWebsiteDomainVerification(prisma, access)
       : undefined;
 
   const supplierPricing =
@@ -202,6 +206,7 @@ export default async function SettingsPage({
           operatingBlockedMessage={operating.blockedMessage}
           websitePhotos={websitePhotos}
           websitePublish={websitePublish}
+          domainVerification={domainVerification}
           supplierPricing={supplierPricing}
           canClearTestData={canClearTestData}
           testDataCleanupPreview={testDataCleanupPreview}
