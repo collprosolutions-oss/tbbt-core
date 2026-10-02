@@ -707,10 +707,10 @@ function socialCard(): GoLiveCard {
     group: "OPTIONAL_PLANNED",
     status: classifySocialPublishing(),
     requirement: "OPTIONAL",
-    currentState: "Social publishing is disconnected.",
-    whatWorks: "Internal marketing drafts and recorded permissions still exist.",
-    whatDoesNot: "TBBT does not publish autonomously to Facebook, Instagram, or Google.",
-    ownerNextAction: "No social connection is available. Publishing stays manual and disconnected.",
+    currentState: "Social publishing is disconnected at the platform.",
+    whatWorks: "Internal marketing drafts, OWNER review, and creator-package export still exist. Facebook Page publish is an explicit OWNER action only when that destination is connected.",
+    whatDoesNot: "Instagram and Google stay disconnected. TBBT does not publish autonomously. A DRAFT or planned day is not a publish. Failed provider results are not labeled PUBLISHED.",
+    ownerNextAction: "Facebook publish stays off until that destination is connected. Instagram and Google stay disconnected.",
     settingsHref: "/settings?section=marketing",
   };
 }

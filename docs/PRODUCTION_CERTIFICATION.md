@@ -47,7 +47,7 @@ Do not invent passing browser results. The isolated harness is
 
 ## Explicit blockers
 
-- External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`. Growth does not claim social publishing or Google rankings.
+- Instagram and Google publishing remain **disconnected**. Facebook Page publish is an explicit OWNER action only when that destination is connected; a DRAFT or planned day never publishes. Failed provider results are recorded and shown without the `PUBLISHED` label. MarketingContent.status is never advanced to `PUBLISHED`. Growth does not claim Instagram, Google rankings, or autonomous posting.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
 - Supplier commerce adapters are **DISCONNECTED**. No Home Depot / Lowe’s scrape or live order API. Production provider integrations need API/licensing review.
 - Marketing AI uses the canonical provider only after an OWNER requests a content draft and a key is configured. Unconfigured providers show Unavailable. Template creator-package drafts stay available. Generated items remain DRAFT. An env string does not mean a provider is called. This harness does not make a live AI call.

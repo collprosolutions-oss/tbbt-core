@@ -1,0 +1,901 @@
+/**
+ * OWNER Facebook Page publish for one connected social destination.
+ *
+ * Uses the official Graph API v26.0 client in production and a fake
+ * provider in these tests. Proves OWNER authorization, tenant isolation,
+ * claim-before-provider, DRAFT/planned-day refusal, retry after FAILED,
+ * and that failures are never labeled PUBLISHED. Instagram and Google
+ * stay disconnected. No live Graph API post.
+ *
+ * Run with:
+ *   npm run test:marketing-social-publish
+ */
+import { register } from "node:module";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+
+const generateEarly = spawnSync("npx", ["prisma", "generate"], { stdio: "inherit" });
+if (generateEarly.status !== 0) {
+  console.error("Failed to generate Prisma client for social publish checks.");
+  process.exit(generateEarly.status ?? 1);
+}
+
+const { ForbiddenError } = await import("@/lib/authorization");
+const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
+const {
+  FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE,
+  OWNER_SOCIAL_PUBLISH_MESSAGE,
+  PHOTO_PERMISSION_REVOKED_MESSAGE,
+  SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
+  SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+  SOCIAL_PUBLISH_ATTEMPT_FAILED,
+  SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+  SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+  SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
+  SOCIAL_PUBLISH_EMPTY_MESSAGE,
+  SOCIAL_PUBLISH_FAILED_MESSAGE,
+  SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+  SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
+  SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  SOCIAL_PUBLISH_STALE_MESSAGE,
+  canPublishMarketingToSocial,
+  composeSocialPublishMessage,
+  socialPublishDisplay,
+} = await import("@/lib/marketing");
+const { MarketingError } = await import("@/lib/marketing-ops");
+const {
+  advanceMarketingContentStatus,
+  createMarketingContent,
+  grantJobPhotoMarketingPermission,
+  planStudioPublicationDay,
+} = await import("@/lib/marketing-ops");
+const {
+  missingMarketingSocialPublishSchema,
+  publishMarketingContentToSocial,
+} = await import("@/lib/marketing-social-publish");
+const { loadMarketingSource } = await import("@/lib/marketing-data");
+const { createFakeSocialPublishingProvider } = await import("@/lib/social-publishing/fake");
+const {
+  FACEBOOK_GRAPH_API_HOST,
+  FACEBOOK_GRAPH_API_VERSION,
+  facebookPageFeedUrl,
+  isFakeSocialPublishingAdapterEnabled,
+} = await import("@/lib/social-publishing");
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+function readSrc(relative) {
+  return readFileSync(join(root, relative), "utf8");
+}
+
+const previousFake = process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
+delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
+
+const opsSrc = readSrc("src/lib/marketing-social-publish.ts");
+const facebookSrc = readSrc("src/lib/social-publishing/facebook.ts");
+const fakeSrc = readSrc("src/lib/social-publishing/fake.ts");
+const actionSrc = readSrc("src/app/actions/marketing.ts");
+const buttonSrc = readSrc("src/components/marketing/publish-social-button.tsx");
+const workspaceSrc = readSrc("src/components/marketing/marketing-workspace.tsx");
+const dataSrc = readSrc("src/lib/marketing-data.ts");
+const migrationSql = readSrc(
+  "prisma/migrations/20261002182000_marketing_social_publish/migration.sql",
+);
+const claimFnSrc = opsSrc.slice(opsSrc.indexOf("async function claimSocialPublishAttempt"));
+const publishFnSrc = opsSrc.slice(opsSrc.indexOf("export async function publishMarketingContentToSocial"));
+
+const baseUrl = process.env.DATABASE_URL;
+if (!baseUrl) {
+  console.error("DATABASE_URL must be set to run this check.");
+  process.exit(1);
+}
+
+const testDbName = "tbbt_marketing_social_publish_test";
+const parsed = new URL(baseUrl);
+parsed.pathname = `/${testDbName}`;
+const testUrl = parsed.toString();
+
+const adminUrl = new URL(baseUrl);
+adminUrl.search = "";
+const createDb = spawnSync("psql", [adminUrl.toString(), "-c", `CREATE DATABASE "${testDbName}"`], {
+  encoding: "utf8",
+});
+if (createDb.status !== 0 && !/already exists/i.test(`${createDb.stderr}${createDb.stdout}`)) {
+  console.warn(createDb.stderr || createDb.stdout);
+}
+
+const push = spawnSync(
+  "npx",
+  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
+);
+if (push.status !== 0) {
+  console.error("Failed to push schema for social publish test database.");
+  process.exit(push.status ?? 1);
+}
+
+const require = createRequire(import.meta.url);
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient({ datasourceUrl: testUrl });
+
+let failures = 0;
+function check(label, condition) {
+  if (condition) {
+    console.log(`  ok  - ${label}`);
+  } else {
+    console.error(`FAIL - ${label}`);
+    failures += 1;
+  }
+}
+
+function makeAccess(businessId, role, membershipId, userId) {
+  return {
+    businessId,
+    workspace: { role, membership: { id: membershipId }, user: { id: userId } },
+    scope: businessScope(businessId),
+    assertOwned(record) {
+      return assertBusinessRecord(record, businessId);
+    },
+  };
+}
+
+async function expectError(label, run, predicate) {
+  try {
+    await run();
+    check(label, false);
+  } catch (error) {
+    check(label, predicate(error));
+  }
+}
+
+async function approvePackage(db, owner, admin, input) {
+  const draft = await createMarketingContent(db, admin, input);
+  await advanceMarketingContentStatus(db, owner, { contentId: draft.id });
+  const approved = await advanceMarketingContentStatus(db, owner, { contentId: draft.id });
+  return approved;
+}
+
+try {
+  console.log("\nSTATIC — Reserved migration and official Facebook Graph API");
+  check(
+    "Reserved migration folder is exactly 20261002182000_marketing_social_publish",
+    existsSync(join(root, "prisma/migrations/20261002182000_marketing_social_publish/migration.sql")) &&
+      !existsSync(join(root, "prisma/migrations/20261002180000_marketing_social_publish/migration.sql")),
+  );
+  check(
+    "Social publish migration is additive IF NOT EXISTS",
+    !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(migrationSql) &&
+      migrationSql.includes('CREATE TABLE IF NOT EXISTS "MarketingSocialDestination"') &&
+      migrationSql.includes('CREATE TABLE IF NOT EXISTS "MarketingSocialPublishAttempt"') &&
+      migrationSql.includes("20261002182000") &&
+      migrationSql.includes("20261002050000_job_project_link"),
+  );
+  check(
+    "Official provider uses current Graph API v26.0 Page feed",
+    FACEBOOK_GRAPH_API_VERSION === "v26.0" &&
+      FACEBOOK_GRAPH_API_HOST === "https://graph.facebook.com" &&
+      facebookPageFeedUrl("123") === "https://graph.facebook.com/v26.0/123/feed" &&
+      facebookSrc.includes("pages_manage_posts") &&
+      facebookSrc.includes("/{page-id}/feed"),
+  );
+  check(
+    "Fake adapter cannot enable in Vercel production",
+    isFakeSocialPublishingAdapterEnabled() === false,
+  );
+  const previousVercel = process.env.VERCEL_ENV;
+  process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER = "fake";
+  process.env.VERCEL_ENV = "production";
+  check(
+    "Vercel production ignores the fake social adapter",
+    isFakeSocialPublishingAdapterEnabled() === false,
+  );
+  delete process.env.VERCEL_ENV;
+  if (previousVercel != null) process.env.VERCEL_ENV = previousVercel;
+  delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
+  check(
+    "Claim writes CLAIMED before the provider is called",
+    publishFnSrc.indexOf("claimSocialPublishAttempt") < publishFnSrc.indexOf("provider.publish") &&
+      publishFnSrc.includes("beforeProvider") &&
+      claimFnSrc.includes('status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED') &&
+      claimFnSrc.includes("liveKey"),
+  );
+  check(
+    "Ops fail closed without request-time DDL",
+    opsSrc.includes("missingMarketingSocialPublishSchema") &&
+      !opsSrc.includes("$executeRawUnsafe") &&
+      !opsSrc.includes("ALTER TABLE") &&
+      !opsSrc.includes("CREATE TABLE") &&
+      !opsSrc.includes("ADD COLUMN"),
+  );
+  check(
+    "OWNER may publish; ADMIN and MEMBER cannot",
+    canPublishMarketingToSocial({
+      role: "OWNER",
+      status: "APPROVED",
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      destinationConnected: true,
+      photos: [{ approved: true }],
+    }) === true &&
+      canPublishMarketingToSocial({
+        role: "ADMIN",
+        status: "APPROVED",
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        destinationConnected: true,
+        photos: [{ approved: true }],
+      }) === false &&
+      canPublishMarketingToSocial({
+        role: "MEMBER",
+        status: "APPROVED",
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        destinationConnected: true,
+        photos: [{ approved: true }],
+      }) === false,
+  );
+  check(
+    "DRAFT and planned-only packages cannot publish",
+    canPublishMarketingToSocial({
+      role: "OWNER",
+      status: "DRAFT",
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      destinationConnected: true,
+      photos: [{ approved: true }],
+    }) === false &&
+      canPublishMarketingToSocial({
+        role: "OWNER",
+        status: "READY_FOR_REVIEW",
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        destinationConnected: true,
+        photos: [{ approved: true }],
+      }) === false,
+  );
+  check(
+    "Failed and in-flight attempts are not displayed as PUBLISHED",
+    socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_FAILED).published === false &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_FAILED).label === SOCIAL_PUBLISH_FAILED_MESSAGE &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_CLAIMED).published === false &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_CLAIMED).label === SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_PUBLISHED).published === true &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_PUBLISHED).label === SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  );
+  check(
+    "Missing schema detector stays scoped to social publish tables",
+    missingMarketingSocialPublishSchema({
+      code: "P2021",
+      message: "The table `MarketingSocialPublishAttempt` does not exist in the current database.",
+    }) &&
+      missingMarketingSocialPublishSchema({
+        code: "P2022",
+        message: "The column `MarketingSocialDestination.accessToken` does not exist in the current database.",
+      }) &&
+      !missingMarketingSocialPublishSchema({
+        code: "P2002",
+        message: "Unique constraint failed on the fields: (`MarketingSocialPublishAttempt`)",
+      }) &&
+      !missingMarketingSocialPublishSchema({
+        code: "P2021",
+        message: "The table `WebsitePublish` does not exist in the current database.",
+      }),
+  );
+  check(
+    "Workspace exposes an explicit OWNER Publish to Facebook action",
+    workspaceSrc.includes("PublishSocialButton") &&
+      workspaceSrc.includes("canPublishMarketingToSocial") &&
+      buttonSrc.includes("Publish to Facebook") &&
+      buttonSrc.includes("Retry Facebook publish") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_FACEBOOK") &&
+      actionSrc.includes("publishMarketingContentToSocial") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_PUBLISHED_MESSAGE") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_FAILED_MESSAGE"),
+  );
+  check(
+    "Page loader never selects an access token",
+    dataSrc.includes("loadMarketingSocialDestinations") &&
+      !dataSrc.includes("accessToken") &&
+      opsSrc.includes("select: { destination: true, pageId: true }"),
+  );
+  check(
+    "Dedicated tests use a fake provider and do not post to Graph API",
+    fakeSrc.includes("createFakeSocialPublishingProvider") &&
+      !fakeSrc.includes("graph.facebook.com") &&
+      facebookSrc.includes("FACEBOOK_SOCIAL_PUBLISHING_PROVIDER") &&
+      facebookSrc.includes("graph.facebook.com"),
+  );
+  check(
+    "Caption plus hashtags compose the Facebook message",
+    composeSocialPublishMessage({ caption: "Work completed.", hashtags: "Reno" }) ===
+      "Work completed.\n\n#Reno",
+  );
+
+  const businessA = await prisma.business.create({
+    data: { name: "Alpha Social", slug: `alpha-soc-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const businessB = await prisma.business.create({
+    data: { name: "Beta Social", slug: `beta-soc-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const ownerUser = await prisma.user.create({
+    data: { name: "Olivia Owner", email: `owner-soc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const adminUser = await prisma.user.create({
+    data: { name: "Amir Admin", email: `admin-soc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const memberUser = await prisma.user.create({
+    data: { name: "Mia Member", email: `member-soc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const betaOwner = await prisma.user.create({
+    data: { name: "Bea Owner", email: `beta-soc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const ownerMem = await prisma.membership.create({
+    data: { userId: ownerUser.id, businessId: businessA.id, role: "OWNER" },
+  });
+  const adminMem = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: businessA.id, role: "ADMIN" },
+  });
+  const memberMem = await prisma.membership.create({
+    data: { userId: memberUser.id, businessId: businessA.id, role: "MEMBER" },
+  });
+  const betaMem = await prisma.membership.create({
+    data: { userId: betaOwner.id, businessId: businessB.id, role: "OWNER" },
+  });
+  const ownerA = makeAccess(businessA.id, "OWNER", ownerMem.id, ownerUser.id);
+  const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id, adminUser.id);
+  const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id, memberUser.id);
+  const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id, betaOwner.id);
+
+  const customer = await prisma.customer.create({
+    data: { businessId: businessA.id, name: "Ada Homeowner" },
+  });
+  const job = await prisma.job.create({
+    data: {
+      businessId: businessA.id,
+      customerId: customer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const photo = await prisma.jobPhoto.create({
+    data: {
+      businessId: businessA.id,
+      jobId: job.id,
+      stage: "AFTER",
+      url: "https://example.test/after.jpg",
+      caption: "Ada cell 555-0100",
+    },
+  });
+  await grantJobPhotoMarketingPermission(prisma, ownerA, { photoId: photo.id });
+  await prisma.marketingSocialDestination.create({
+    data: {
+      businessId: businessA.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      pageId: "111222333",
+      accessToken: "fake-page-token",
+    },
+  });
+
+  const packageInput = {
+    contentType: "COMPLETED_JOB",
+    title: "Reno faucet post",
+    body: "Faucet repair completed in Reno.",
+    channelIntent: "FACEBOOK",
+    jobId: job.id,
+    photoIds: [photo.id],
+    hashtags: "Reno faucetrepair",
+  };
+
+  console.log("\nTEST — DRAFT or merely planned day never publishes");
+  const draft = await createMarketingContent(prisma, adminA, packageInput);
+  const plannedDraft = await planStudioPublicationDay(prisma, ownerA, {
+    contentId: draft.id,
+    plannedFor: "2026-10-08",
+    expectedUpdatedAt: draft.updatedAt,
+  });
+  const plannedDraftCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Planned DRAFT never reaches the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: draft.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: plannedDraft.updatedAt,
+        },
+        { provider: plannedDraftCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE &&
+      plannedDraftCalls.published.length === 0,
+  );
+  await advanceMarketingContentStatus(prisma, ownerA, { contentId: draft.id });
+  const readyRow = await prisma.marketingContent.findFirst({
+    where: { id: draft.id, businessId: businessA.id },
+  });
+  const plannedReady = await planStudioPublicationDay(prisma, ownerA, {
+    contentId: draft.id,
+    plannedFor: "2026-10-09",
+    expectedUpdatedAt: readyRow.updatedAt,
+  });
+  await expectError(
+    "Planned READY_FOR_REVIEW never reaches the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: draft.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: plannedReady.updatedAt,
+        },
+        { provider: plannedDraftCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE &&
+      plannedDraftCalls.published.length === 0,
+  );
+  const draftStatus = await prisma.marketingContent.findFirst({
+    where: { id: draft.id, businessId: businessA.id },
+    select: { status: true },
+  });
+  check("Planned draft/review rows stay off PUBLISHED content status", draftStatus.status !== "PUBLISHED");
+
+  console.log("\nTEST — Permission, tenant, disconnected destinations");
+  const approved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Approved Facebook post",
+  });
+  await expectError(
+    "ADMIN cannot publish",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        adminA,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: createFakeSocialPublishingProvider() },
+      ),
+    (error) => error instanceof MarketingError && error.message === OWNER_SOCIAL_PUBLISH_MESSAGE,
+  );
+  await expectError(
+    "MEMBER cannot publish",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        memberA,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: createFakeSocialPublishingProvider() },
+      ),
+    (error) =>
+      (error instanceof MarketingError && error.message === OWNER_SOCIAL_PUBLISH_MESSAGE) ||
+      error instanceof ForbiddenError,
+  );
+  const tenantCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Business B cannot publish A's package",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerB,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: tenantCalls },
+      ),
+    (error) => error instanceof Error && tenantCalls.published.length === 0,
+  );
+  const instagramCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Instagram stays disconnected and never calls the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: instagramCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE &&
+      instagramCalls.published.length === 0,
+  );
+  await expectError(
+    "Google stays disconnected and never calls the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: instagramCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
+  );
+
+  const disconnectedBusiness = await prisma.business.create({
+    data: {
+      name: "No Destination",
+      slug: `none-soc-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const disconnectedUser = await prisma.user.create({
+    data: { name: "No Dest Owner", email: `none-soc-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const disconnectedMem = await prisma.membership.create({
+    data: { userId: disconnectedUser.id, businessId: disconnectedBusiness.id, role: "OWNER" },
+  });
+  const disconnectedAccess = makeAccess(
+    disconnectedBusiness.id,
+    "OWNER",
+    disconnectedMem.id,
+    disconnectedUser.id,
+  );
+  const disconnectedCustomer = await prisma.customer.create({
+    data: { businessId: disconnectedBusiness.id, name: "Ned" },
+  });
+  const disconnectedJob = await prisma.job.create({
+    data: {
+      businessId: disconnectedBusiness.id,
+      customerId: disconnectedCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const disconnectedPhoto = await prisma.jobPhoto.create({
+    data: {
+      businessId: disconnectedBusiness.id,
+      jobId: disconnectedJob.id,
+      stage: "AFTER",
+      url: "https://example.test/none.jpg",
+      marketingPermissionStatus: "APPROVED",
+    },
+  });
+  const disconnectedApproved = await approvePackage(prisma, disconnectedAccess, disconnectedAccess, {
+    contentType: "GENERAL_POST",
+    title: "No destination",
+    body: "Should not post.",
+    photoIds: [disconnectedPhoto.id],
+  });
+  const disconnectedCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Missing Facebook destination never calls the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        disconnectedAccess,
+        {
+          contentId: disconnectedApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: disconnectedApproved.updatedAt,
+        },
+        { provider: disconnectedCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE &&
+      disconnectedCalls.published.length === 0,
+  );
+
+  console.log("\nTEST — Stale snapshot is refused before the provider");
+  const staleApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Stale snapshot post",
+  });
+  const staleBefore = staleApproved.updatedAt;
+  await planStudioPublicationDay(prisma, ownerA, {
+    contentId: staleApproved.id,
+    plannedFor: "2026-10-12",
+    expectedUpdatedAt: staleBefore,
+  });
+  const staleCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Stale content snapshot never calls the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: staleApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: staleBefore,
+        },
+        { provider: staleCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_STALE_MESSAGE &&
+      staleCalls.published.length === 0,
+  );
+
+  console.log("\nTEST — Fake provider records failures without PUBLISHED");
+  const failApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Fail then retry",
+  });
+  const failing = createFakeSocialPublishingProvider();
+  failing.setFailNext(true);
+  const failed = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: failApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: failApproved.updatedAt,
+    },
+    { provider: failing },
+  );
+  const failedRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: failed.attemptId, businessId: businessA.id },
+  });
+  const failedContent = await prisma.marketingContent.findFirst({
+    where: { id: failApproved.id, businessId: businessA.id },
+  });
+  check(
+    "Provider rejection is FAILED and not PUBLISHED",
+    failed.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      failed.published === false &&
+      failed.posted === false &&
+      failed.message.includes(SOCIAL_PUBLISH_FAILED_MESSAGE) &&
+      failedRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      failedRow.liveKey == null &&
+      failedContent?.status === "APPROVED" &&
+      failing.published.length === 0,
+  );
+
+  const retried = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: failApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: failApproved.updatedAt,
+    },
+    { provider: failing },
+  );
+  check(
+    "Retry after FAILED calls the provider once and can publish",
+    retried.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      retried.published === true &&
+      retried.message === SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      failing.published.length === 1 &&
+      failing.published[0].pageId === "111222333" &&
+      failing.published[0].message.includes("Faucet repair completed in Reno."),
+  );
+  const afterRetry = await prisma.marketingContent.findFirst({
+    where: { id: failApproved.id, businessId: businessA.id },
+  });
+  check("Successful publish does not rewrite MarketingContent.status to PUBLISHED", afterRetry.status === "APPROVED");
+
+  console.log("\nTEST — Duplicate click claims once");
+  const dupApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Duplicate click post",
+  });
+  const dupProvider = createFakeSocialPublishingProvider();
+  let releaseSecond;
+  const hold = new Promise((resolve) => {
+    releaseSecond = resolve;
+  });
+  const firstClaim = publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: dupApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: dupApproved.updatedAt,
+    },
+    { provider: dupProvider, beforeProvider: () => hold },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  let duplicateError = null;
+  try {
+    await publishMarketingContentToSocial(
+      prisma,
+      ownerA,
+      {
+        contentId: dupApproved.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        expectedUpdatedAt: dupApproved.updatedAt,
+      },
+      { provider: dupProvider },
+    );
+  } catch (error) {
+    duplicateError = error;
+  }
+  releaseSecond();
+  const firstResult = await firstClaim;
+  check(
+    "Second click is refused as in-flight or already published",
+    duplicateError instanceof MarketingError &&
+      (duplicateError.message === SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE ||
+        duplicateError.message === SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE),
+  );
+  check(
+    "Provider is called once for the claimed attempt",
+    firstResult.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      firstResult.published === true &&
+      dupProvider.published.length === 1,
+  );
+  await expectError(
+    "A later click after PUBLISHED does not post again",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: dupApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: dupApproved.updatedAt,
+        },
+        { provider: dupProvider },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE &&
+      dupProvider.published.length === 1,
+  );
+
+  console.log("\nTEST — Empty text and revoked photos fail closed");
+  const emptyApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Empty caption",
+    body: "   ",
+    hashtags: "",
+  });
+  const emptyCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Empty approved text never calls the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: emptyApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: emptyApproved.updatedAt,
+        },
+        { provider: emptyCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_EMPTY_MESSAGE &&
+      emptyCalls.published.length === 0,
+  );
+
+  const revokeApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Revoked photo post",
+  });
+  await prisma.jobPhoto.update({
+    where: { id: photo.id },
+    data: { marketingPermissionStatus: "PRIVATE" },
+  });
+  const revokeCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Revoked photo blocks publish before the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: revokeApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: revokeApproved.updatedAt,
+        },
+        { provider: revokeCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === PHOTO_PERMISSION_REVOKED_MESSAGE &&
+      revokeCalls.published.length === 0,
+  );
+  await grantJobPhotoMarketingPermission(prisma, ownerA, { photoId: photo.id });
+
+  console.log("\nTEST — Loader presents connected Facebook and keeps others disconnected");
+  const sourceA = await loadMarketingSource(prisma, businessA.id, new Date(), "OWNER");
+  const sourceB = await loadMarketingSource(prisma, businessB.id, new Date(), "OWNER");
+  const publishedRow = sourceA.contents.find((row) => row.id === failApproved.id);
+  const failedDisplay = socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_FAILED);
+  check(
+    "Tenant A shows Facebook connected and Instagram/Google disconnected",
+    sourceA.channels.connected === true &&
+      sourceA.channels.message === FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE &&
+      sourceA.channels.destinations.FACEBOOK.connected === true &&
+      sourceA.channels.destinations.INSTAGRAM.connected === false &&
+      sourceA.channels.destinations.GOOGLE.connected === false &&
+      sourceA.channels.destinations.INSTAGRAM.implemented === false &&
+      sourceA.channels.destinations.GOOGLE.implemented === false,
+  );
+  check(
+    "Published attempt is labeled PUBLISHED only after a provider success",
+    publishedRow?.socialPublish.published === true &&
+      publishedRow.socialPublish.attemptStatus === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      publishedRow.socialPublish.label === SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      publishedRow.status === "APPROVED",
+  );
+  check("Tenant B does not see A's packages or destination", sourceB.contents.length === 0 && sourceB.channels.connected === false);
+  check(
+    "Display helper never calls a failure PUBLISHED",
+    failedDisplay.published === false && failedDisplay.label !== SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  );
+
+  const throwing = createFakeSocialPublishingProvider();
+  throwing.setThrowNext(true);
+  const throwApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Provider throw",
+  });
+  const thrown = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: throwApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: throwApproved.updatedAt,
+    },
+    { provider: throwing },
+  );
+  const thrownRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: thrown.attemptId, businessId: businessA.id },
+  });
+  check(
+    "Provider throw is recorded FAILED and not PUBLISHED",
+    thrown.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      thrown.published === false &&
+      thrownRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      thrownRow.liveKey == null &&
+      throwing.published.length === 0,
+  );
+
+  console.log(
+    failures === 0
+      ? "\nAll marketing social publish checks passed."
+      : `\n${failures} marketing social publish check(s) failed.`,
+  );
+} finally {
+  if (previousFake == null) delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
+  else process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER = previousFake;
+  await prisma.$disconnect();
+  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
+  try {
+    await cleanup.$executeRawUnsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${testDbName}' AND pid <> pg_backend_pid()`,
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
+  } finally {
+    await cleanup.$disconnect();
+  }
+}
+
+process.exit(failures === 0 ? 0 : 1);

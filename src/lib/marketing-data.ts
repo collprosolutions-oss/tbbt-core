@@ -10,12 +10,13 @@ import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { workspaceTradeLabel } from "@/lib/trade-config";
 import { rollupAttribution } from "@/lib/lead-attribution";
 import {
-  CHANNELS_DISCONNECTED_MESSAGE,
   jobMarketingReadiness,
   LEAD_SOURCE_TRACKED_MESSAGE,
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   PERFORMANCE_UNAVAILABLE_MESSAGE,
-  SOCIAL_MANUAL_COPY_MESSAGE,
+  presentMarketingSocialDestinations,
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  socialPublishDisplay,
   STUDIO_APPROVAL_QUEUE_LIMIT,
   STUDIO_APPROVAL_QUEUE_STATUS,
   STUDIO_CONTENT_CALENDAR_LIMIT,
@@ -30,6 +31,11 @@ import {
   loadStudioWeeklyReminderState,
   presentStudioWeeklyReminderForViewer,
 } from "@/lib/marketing-studio-reminder";
+import {
+  latestSocialPublishAttempt,
+  loadMarketingSocialDestinations,
+  loadMarketingSocialPublishAttempts,
+} from "@/lib/marketing-social-publish";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
@@ -71,7 +77,7 @@ export async function loadMarketingSource(
 
   const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder, socialDestinations, socialPublishAttempts] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -211,6 +217,8 @@ export async function loadMarketingSource(
     }),
     prisma.marketingContent.count({ where: approvalQueueWhere }),
     loadStudioWeeklyReminderState(prisma, businessId, now),
+    loadMarketingSocialDestinations(prisma, businessId),
+    loadMarketingSocialPublishAttempts(prisma, businessId),
   ]);
 
   const timeZone = resolveBusinessTimeZone(business);
@@ -313,30 +321,45 @@ export async function loadMarketingSource(
       identityNotes: settings?.marketingIdentityNotes ?? "",
     },
     opportunities,
-    contents: contents.map((content) => ({
-      id: content.id,
-      contentType: content.contentType,
-      title: content.title,
-      body: content.body,
-      channelIntent: content.channelIntent,
-      status: content.status,
-      plannedFor: content.plannedFor,
-      jobId: content.jobId,
-      jobCustomerName: content.job?.customer?.name ?? null,
-      createdAt: content.createdAt,
-      updatedAt: content.updatedAt,
-      storyboardJson: content.storyboardJson,
-      shotListJson: content.shotListJson,
-      hashtags: content.hashtags,
-      exportedAt: content.exportedAt,
-      photos: content.photos.map((row) => ({
-        id: row.jobPhoto.id,
-        url: row.jobPhoto.url,
-        caption: row.jobPhoto.caption,
-        stage: row.jobPhoto.stage,
-        approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
-      })),
-    })),
+    contents: contents.map((content) => {
+      const attempt = latestSocialPublishAttempt(
+        socialPublishAttempts,
+        content.id,
+        SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      );
+      const display = socialPublishDisplay(attempt?.status);
+      return {
+        id: content.id,
+        contentType: content.contentType,
+        title: content.title,
+        body: content.body,
+        channelIntent: content.channelIntent,
+        status: content.status,
+        plannedFor: content.plannedFor,
+        jobId: content.jobId,
+        jobCustomerName: content.job?.customer?.name ?? null,
+        createdAt: content.createdAt,
+        updatedAt: content.updatedAt,
+        storyboardJson: content.storyboardJson,
+        shotListJson: content.shotListJson,
+        hashtags: content.hashtags,
+        exportedAt: content.exportedAt,
+        photos: content.photos.map((row) => ({
+          id: row.jobPhoto.id,
+          url: row.jobPhoto.url,
+          caption: row.jobPhoto.caption,
+          stage: row.jobPhoto.stage,
+          approved: row.jobPhoto.marketingPermissionStatus === "APPROVED",
+        })),
+        socialPublish: {
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          attemptStatus: attempt?.status ?? null,
+          published: display.published,
+          label: attempt?.status === "FAILED" ? attempt.failureLabel || display.label : display.label,
+          providerPostId: display.published ? attempt?.providerPostId ?? null : null,
+        },
+      };
+    }),
     weeklyReminder: presentStudioWeeklyReminderForViewer(weeklyReminder, viewerRole),
     contentCalendar: presentStudioContentCalendar({
       fromToday: fromTodayRows,
@@ -461,11 +484,9 @@ export async function loadMarketingSource(
       homeTitle: settings?.seoTitleHome ?? "",
       homeDescription: settings?.seoDescriptionHome ?? "",
     },
-    channels: {
-      connected: false,
-      message: CHANNELS_DISCONNECTED_MESSAGE,
-      manualCopy: SOCIAL_MANUAL_COPY_MESSAGE,
-    },
+    channels: presentMarketingSocialDestinations(
+      socialDestinations.map((row) => row.destination),
+    ),
     performance: {
       available: false,
       message: PERFORMANCE_UNAVAILABLE_MESSAGE,

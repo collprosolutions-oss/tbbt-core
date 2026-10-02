@@ -133,7 +133,7 @@ export const UNSUPPORTED_INTEGRATIONS: readonly UnsupportedIntegration[] = [
     key: "social_publishing",
     category: "Communications",
     goLiveCapabilityId: "social_publishing",
-    reason: "Social publishing is disconnected. TBBT does not publish to Facebook, Instagram, or Google.",
+    reason: "Instagram and Google stay disconnected. Facebook Page publish is an explicit OWNER action only when that destination is connected. TBBT does not publish autonomously.",
   },
 ];
 

@@ -338,6 +338,8 @@ model Business {
   marketingContents        MarketingContent[]
   marketingContentPhotos   MarketingContentPhoto[]
   marketingStudioWeeklyReminders MarketingStudioWeeklyReminder[]
+  marketingSocialDestinations MarketingSocialDestination[]
+  marketingSocialPublishAttempts MarketingSocialPublishAttempt[]
   reviewRequests           ReviewRequest[]
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
@@ -655,6 +657,7 @@ model Membership {
   createdMarketingContent MarketingContent[] @relation("MarketingContentCreator")
   reviewedMarketingContent MarketingContent[] @relation("MarketingContentReviewer")
   exportedMarketingContent MarketingContent[] @relation("MarketingContentExporter")
+  createdSocialPublishAttempts MarketingSocialPublishAttempt[] @relation("MarketingSocialPublishAttemptCreator")
   createdReviewRequests   ReviewRequest[]    @relation("ReviewRequestCreator")
   recordedReviews         Review[]           @relation("ReviewRecorder")
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
@@ -3047,8 +3050,9 @@ model Expense {
 }
 
 /// Internal marketing content. Never implies an external publish.
-/// Status is DRAFT | READY_FOR_REVIEW | APPROVED only -- there is no
-/// PUBLISHED state until a real channel integration exists.
+/// Status is DRAFT | READY_FOR_REVIEW | APPROVED only. External publish
+/// is recorded on MarketingSocialPublishAttempt, never by advancing this
+/// status to PUBLISHED. A DRAFT or planned day is not a publish.
 model MarketingContent {
   id                     String    @id @default(cuid())
   businessId             String
@@ -3088,6 +3092,7 @@ model MarketingContent {
   exportedBy Membership?             @relation("MarketingContentExporter", fields: [exportedByMembershipId], references: [id], onDelete: SetNull)
   review    Review?                  @relation(fields: [reviewId], references: [id], onDelete: SetNull)
   photos    MarketingContentPhoto[]
+  socialPublishAttempts MarketingSocialPublishAttempt[]
 
   @@index([businessId])
   @@index([businessId, status])
@@ -3095,6 +3100,62 @@ model MarketingContent {
   @@index([jobId])
   @@index([reviewId])
   @@index([campaignId])
+}
+
+/// One connected social destination per business. FACEBOOK is the only
+/// implemented destination. Instagram and Google stay disconnected.
+/// accessToken is server-side only and is never selected for page loads.
+model MarketingSocialDestination {
+  id          String   @id @default(cuid())
+  businessId  String
+  /// FACEBOOK
+  destination String
+  pageId      String
+  /// Page access token. Server-side only.
+  accessToken String
+  connectedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, destination])
+  @@index([businessId])
+}
+
+/// OWNER publish attempt for one connected destination. Claimed before
+/// the provider call. FAILED rows are never labeled PUBLISHED. liveKey
+/// is set while CLAIMED or PUBLISHED so a duplicate click cannot post
+/// again; FAILED clears it so an OWNER can retry.
+model MarketingSocialPublishAttempt {
+  id                       String    @id @default(cuid())
+  businessId               String
+  contentId                String
+  destination              String
+  /// CLAIMED | PUBLISHED | FAILED
+  status                   String
+  claimedAt                DateTime
+  expectedContentUpdatedAt DateTime
+  destinationPageId        String
+  /// contentId:destination while CLAIMED or PUBLISHED. Null after FAILED.
+  liveKey                  String?
+  providerPostId           String?
+  /// Raw provider error. Server-side only.
+  providerError            String?
+  failureLabel             String    @default("")
+  publishedAt              DateTime?
+  createdByMembershipId    String
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  content   MarketingContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  createdBy Membership       @relation("MarketingSocialPublishAttemptCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([liveKey])
+  @@index([businessId])
+  @@index([contentId, destination])
+  @@index([businessId, contentId, destination])
 }
 
 /// One OWNER-opted weekly in-app reminder that studio packages await
