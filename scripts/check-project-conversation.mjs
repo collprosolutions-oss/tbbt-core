@@ -218,7 +218,7 @@ check(
     ownerActionSrc.includes("composeIdempotencyKey") &&
     ownerActionSrc.includes("resolveComposeSendIntent") &&
     ownerActionSrc.includes('template: "job_update"') &&
-    ownerPanelSrc.includes(">Send<") &&
+    ownerPanelSrc.includes('{pending ? "Sending…" : "Send"}') &&
     ownerPanelSrc.includes("sendProjectConversationReplyAction") &&
     !dataSrc.includes("composeCustomerCommunication") &&
     !dataSrc.includes("submitPortalProjectConversation") &&
