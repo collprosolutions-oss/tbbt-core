@@ -5,7 +5,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { asNumber, asNumberOrNull } from "@/lib/reports";
 import {
   ASSUMPTION_SET_NOT_FOUND_MESSAGE,
@@ -121,7 +121,7 @@ export async function loadOwnerScenarioPlannerSource(
         orderBy: { createdAt: "desc" },
       }),
       prisma.expense.findMany({
-        where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
+        where: { ...scope, ...REPORTED_EXPENSE_WHERE },
         select: {
           id: true,
           businessId: true,

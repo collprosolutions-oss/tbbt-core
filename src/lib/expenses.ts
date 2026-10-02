@@ -61,6 +61,16 @@ export const EXPENSE_CATEGORY_ACCENTS: Record<
 /** Active expenses only. Voided rows stay for job-cost history. */
 export const ACTIVE_EXPENSE_WHERE = { voidedAt: null } as const;
 
+/**
+ * Recorded/approved/flagged expenses that may enter Reports, KPIs,
+ * financial intelligence, and accounting export. Receipt-extraction
+ * DRAFT rows stay off this path until the OWNER confirms them.
+ */
+export const REPORTED_EXPENSE_WHERE = {
+  voidedAt: null,
+  reviewStatus: { not: "DRAFT" },
+} as const;
+
 export const REIMBURSEMENT_STATUSES = ["NONE", "PENDING", "REIMBURSED"] as const;
 export type ReimbursementStatus = (typeof REIMBURSEMENT_STATUSES)[number];
 
@@ -70,10 +80,11 @@ export const REIMBURSEMENT_STATUS_LABELS: Record<ReimbursementStatus, string> = 
   REIMBURSED: "Reimbursed",
 };
 
-export const EXPENSE_REVIEW_STATUSES = ["RECORDED", "APPROVED", "FLAGGED"] as const;
+export const EXPENSE_REVIEW_STATUSES = ["DRAFT", "RECORDED", "APPROVED", "FLAGGED"] as const;
 export type ExpenseReviewStatus = (typeof EXPENSE_REVIEW_STATUSES)[number];
 
 export const EXPENSE_REVIEW_LABELS: Record<ExpenseReviewStatus, string> = {
+  DRAFT: "Draft",
   RECORDED: "Recorded",
   APPROVED: "Approved",
   FLAGGED: "Flagged",

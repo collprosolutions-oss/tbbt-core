@@ -20,6 +20,7 @@ export const AI_TASK_TYPES = [
   "COMM_FOLLOW_UP",
   "COMPANY_SETUP",
   "AGREEMENT_ASSIST",
+  "RECEIPT_EXTRACT",
 ] as const;
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 

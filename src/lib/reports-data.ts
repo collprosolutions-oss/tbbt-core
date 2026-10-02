@@ -4,11 +4,13 @@
  * business id. Callers must obtain that id from requireBusinessAccess() /
  * requireManagementPageAccess().
  *
- * Includes merged Expense rows (occurredOn, amount, category, vendor, jobId).
+ * Includes merged recorded Expense rows (occurredOn, amount, category,
+ * vendor, jobId). Receipt-extraction DRAFT rows are excluded until the
+ * OWNER confirms them.
  */
 
 import type { PrismaClient } from "@prisma/client";
-import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { asNumber, asNumberOrNull, type ReportSource } from "@/lib/reports";
 
 export async function loadReportSource(
@@ -114,7 +116,7 @@ export async function loadReportSource(
       select: { id: true, role: true, active: true, user: { select: { name: true } } },
     }),
     prisma.expense.findMany({
-      where: { ...scope, ...ACTIVE_EXPENSE_WHERE },
+      where: { ...scope, ...REPORTED_EXPENSE_WHERE },
       select: {
         id: true,
         businessId: true,

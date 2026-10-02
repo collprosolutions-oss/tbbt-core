@@ -6,7 +6,7 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
-import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { emptyLaborBurdenConfig } from "@/lib/financial-intelligence";
 import { asNumber, asNumberOrNull } from "@/lib/reports";
 import {
@@ -157,7 +157,7 @@ export async function loadJobProfitabilityCloseout(
       orderBy: { startedAt: "asc" },
     }),
     prisma.expense.findMany({
-      where: { businessId, jobId: job.id, ...ACTIVE_EXPENSE_WHERE },
+      where: { businessId, jobId: job.id, ...REPORTED_EXPENSE_WHERE },
       select: {
         id: true,
         businessId: true,

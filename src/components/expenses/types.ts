@@ -38,6 +38,7 @@ export type ExpenseListItem = {
   customerName: string | null;
   hasReceipt: boolean;
   hasPrivateReceipt: boolean;
+  receiptStoredAssetId: string | null;
   receiptHref: string | null;
   legacyReceiptHref: string | null;
   reimbursable: boolean;
@@ -101,6 +102,8 @@ export type ExpenseWorkspaceData = {
   filters: ExpenseFilterChip[];
   storageConfigured: boolean;
   canChangeReceipts: boolean;
+  canExtractReceipts: boolean;
+  aiExtractAvailable: boolean;
   defaultDate: string;
   page: number;
   totalPages: number;

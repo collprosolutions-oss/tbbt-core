@@ -21,6 +21,7 @@ import {
   voidExpenseAction,
   type ExpenseActionState,
 } from "@/app/actions/expenses";
+import { RequestReceiptExtractForm } from "@/components/expenses/request-receipt-extract";
 import {
   AddExpenseSheet,
   type ExpenseSheetMode,
@@ -263,6 +264,8 @@ export function ExpensesWorkspace({
               expense={selected}
               storageConfigured={workspace.storageConfigured}
               canChangeReceipts={workspace.canChangeReceipts}
+              canExtractReceipts={workspace.canExtractReceipts}
+              aiExtractAvailable={workspace.aiExtractAvailable}
               onEdit={() => {
                 setMobileOpen(false);
                 setSheetMode("edit");
@@ -567,6 +570,8 @@ function RightRail({
           expense={selected}
           storageConfigured={workspace.storageConfigured}
           canChangeReceipts={workspace.canChangeReceipts}
+          canExtractReceipts={workspace.canExtractReceipts}
+          aiExtractAvailable={workspace.aiExtractAvailable}
           onEdit={() => onAdd("edit")}
           onAttach={workspace.canChangeReceipts ? () => onAdd("receipt") : undefined}
         />
@@ -612,12 +617,16 @@ function ExpenseDetails({
   expense,
   storageConfigured,
   canChangeReceipts,
+  canExtractReceipts,
+  aiExtractAvailable,
   onEdit,
   onAttach,
 }: {
   expense: ExpenseListItem;
   storageConfigured: boolean;
   canChangeReceipts: boolean;
+  canExtractReceipts: boolean;
+  aiExtractAvailable: boolean;
   onEdit?: () => void;
   onAttach?: () => void;
 }) {
@@ -691,6 +700,15 @@ function ExpenseDetails({
           <p className="text-xs text-muted-foreground">Only the owner can change receipts</p>
         )}
 
+        <RequestReceiptExtractForm
+          storedAssetId={expense.receiptStoredAssetId}
+          expenseId={expense.id}
+          reviewStatus={expense.reviewStatus}
+          canExtract={canExtractReceipts}
+          providerConfigured={aiExtractAvailable}
+        />
+
+        {expense.reviewStatus === "DRAFT" ? null : (
         <form action={reviewAction} className="flex flex-wrap gap-2">
           <input type="hidden" name="expenseId" value={expense.id} />
           <Button type="submit" name="reviewStatus" value="APPROVED" size="sm" disabled={reviewPending}>
@@ -709,7 +727,10 @@ function ExpenseDetails({
             Flag
           </Button>
         </form>
-        {reviewState.error ? <p className="text-sm text-destructive">{reviewState.error}</p> : null}
+        )}
+        {expense.reviewStatus === "DRAFT" ? null : reviewState.error ? (
+          <p className="text-sm text-destructive">{reviewState.error}</p>
+        ) : null}
 
         {expense.reimbursable ? (
           <form action={reimbAction}>

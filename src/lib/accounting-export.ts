@@ -15,7 +15,7 @@
  * stays blank and is never invented.
  *
  * Human text cells neutralize spreadsheet formula prefixes. Expense rows
- * follow ACTIVE_EXPENSE_WHERE (non-voided). Stripe session, payment-intent,
+ * follow REPORTED_EXPENSE_WHERE (non-voided, non-draft). Stripe session, payment-intent,
  * and provider tokens are never selected.
  *
  * Callers must pass access.businessId from requireBusinessAccess().
@@ -28,7 +28,7 @@ import { Prisma } from "@prisma/client";
 import { ForbiddenError, CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 import {
-  ACTIVE_EXPENSE_WHERE,
+  REPORTED_EXPENSE_WHERE,
   EXPENSE_REVIEW_LABELS,
   REIMBURSEMENT_STATUS_LABELS,
   TAX_CATEGORY_LABELS,
@@ -534,7 +534,7 @@ export async function loadAccountingExportSource(
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     prisma.expense.findMany({
-      where: { businessId, ...ACTIVE_EXPENSE_WHERE },
+      where: { businessId, ...REPORTED_EXPENSE_WHERE },
       select: {
         id: true,
         vendor: true,
