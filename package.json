@@ -108,6 +108,7 @@
     "test:public-site-images": "node --experimental-strip-types scripts/check-public-site-images.mjs",
     "test:business-storage": "node --experimental-strip-types scripts/check-business-storage.mjs",
     "test:field-job-photos": "node --experimental-strip-types scripts/check-field-job-photos.mjs",
+    "test:private-asset-lifecycle": "npm run test:field-job-photos && npm run test:request-intake && npm run test:native-field-photos && npm run test:expense-receipts && npm run test:project-documents",
     "test:project-documents": "node --experimental-strip-types scripts/check-project-documents.mjs",
     "test:project-document-review": "node --experimental-strip-types scripts/check-project-document-review.mjs",
     "test:r2-cors": "node --experimental-strip-types scripts/check-r2-browser-upload-cors.mjs",
