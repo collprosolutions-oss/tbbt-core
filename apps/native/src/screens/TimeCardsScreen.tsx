@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -13,9 +13,11 @@ import {
   NATIVE_NETWORK_ERROR,
   isApiError,
   isLostAssignment,
+  isSessionExpired,
   loadNativeTimeCards,
   requestNativeTimeCorrection,
 } from "../api";
+import { applyLostAssignment, nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
 import type { NativeTimeCardEntry, NativeTimeCardsPayload, NativeWorkspace } from "../types";
 
 type CorrectionDraft = {
@@ -40,10 +42,12 @@ export function TimeCardsScreen({
   token,
   workspace,
   onBack,
+  onSessionExpired,
 }: {
   token: string;
   workspace: NativeWorkspace;
   onBack: () => void;
+  onSessionExpired: () => void;
 }) {
   const [payload, setPayload] = useState<NativeTimeCardsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,15 +56,24 @@ export function TimeCardsScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [pendingEntryId, setPendingEntryId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, CorrectionDraft>>({});
+  const requestGeneration = useRef(0);
+  const actionsLocked = pendingEntryId != null || refreshing;
 
   const refresh = useCallback(async () => {
+    const generation = nextNativeRequestGeneration(requestGeneration.current);
+    requestGeneration.current = generation;
     setRefreshing(true);
     try {
       const result = await loadNativeTimeCards(token);
+      if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
       if (isApiError(result)) {
+        if (isSessionExpired(result)) {
+          onSessionExpired();
+          return;
+        }
         setError(result.error);
         if (isLostAssignment(result)) {
-          setPayload(null);
+          setPayload((current) => applyLostAssignment(current, result));
         }
         return;
       }
@@ -74,19 +87,37 @@ export function TimeCardsScreen({
         return next;
       });
     } catch {
+      if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
       setError("Could not load time cards.");
     } finally {
-      setRefreshing(false);
+      if (shouldApplyNativeResponse(requestGeneration.current, generation)) {
+        setRefreshing(false);
+      }
     }
-  }, [token]);
+  }, [onSessionExpired, token]);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
+    };
   }, [refresh]);
 
   async function reloadTimeCards(fallback: NativeTimeCardsPayload | null) {
+    const generation = nextNativeRequestGeneration(requestGeneration.current);
+    requestGeneration.current = generation;
     const reloaded = await loadNativeTimeCards(token);
+    if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
     if (isApiError(reloaded)) {
+      if (isSessionExpired(reloaded)) {
+        onSessionExpired();
+        return;
+      }
+      if (isLostAssignment(reloaded)) {
+        setPayload((current) => applyLostAssignment(current, reloaded));
+        setError(reloaded.error);
+        return;
+      }
       if (fallback) {
         setPayload(fallback);
         return;
@@ -94,6 +125,7 @@ export function TimeCardsScreen({
       setActionError(reloaded.error);
       return;
     }
+    setRefreshing(false);
     setPayload(reloaded);
     setDrafts((current) => {
       const next: Record<string, CorrectionDraft> = {};
@@ -105,7 +137,7 @@ export function TimeCardsScreen({
   }
 
   async function requestCorrection(entry: NativeTimeCardEntry) {
-    if (pendingEntryId) return;
+    if (actionsLocked) return;
     const draft = drafts[entry.id] ?? emptyDraft(entry);
     setPendingEntryId(entry.id);
     setActionError(null);
@@ -120,8 +152,12 @@ export function TimeCardsScreen({
         proposedEndTime: draft.proposedEndTime.trim(),
       });
       if (isApiError(result)) {
+        if (isSessionExpired(result)) {
+          onSessionExpired();
+          return;
+        }
         if (isLostAssignment(result)) {
-          setPayload(null);
+          setPayload((current) => applyLostAssignment(current, result));
           setError(result.error);
         }
         setActionError(result.error);
@@ -161,6 +197,9 @@ export function TimeCardsScreen({
             style={styles.action}
           >
             <Text style={styles.actionLabel}>Retry</Text>
+          </Pressable>
+          <Pressable onPress={onSessionExpired} style={styles.action}>
+            <Text style={styles.actionLabel}>Sign in again</Text>
           </Pressable>
         </>
       ) : null}
@@ -252,11 +291,11 @@ export function TimeCardsScreen({
                       value={draft.reason}
                     />
                     <Pressable
-                      disabled={pendingEntryId != null}
+                      disabled={actionsLocked}
                       onPress={() => {
                         void requestCorrection(entry);
                       }}
-                      style={[styles.action, pendingEntryId != null ? styles.actionDisabled : null]}
+                      style={[styles.action, actionsLocked ? styles.actionDisabled : null]}
                     >
                       <Text style={styles.actionLabel}>
                         {pendingEntryId === entry.id ? "Sending request…" : "Request correction"}

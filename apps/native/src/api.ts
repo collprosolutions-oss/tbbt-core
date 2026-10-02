@@ -1,4 +1,5 @@
 import { nativeApiUrl } from "./config";
+import { isLostAssignment, isSessionExpired } from "./recovery";
 import type {
   NativeFieldActivityType,
   NativeJobDetail,
@@ -54,7 +55,7 @@ function jsonHeaders(token?: string | null): Record<string, string> {
   };
 }
 
-async function requestNativeJson<T>(
+export async function requestNativeJson<T>(
   path: string,
   init: RequestInit,
   fallbackError: string,
@@ -78,9 +79,7 @@ async function requestNativeJson<T>(
   }
 }
 
-export function isLostAssignment(error: NativeApiError) {
-  return error.status === 401 || error.status === 403 || error.status === 404;
-}
+export { isLostAssignment, isSessionExpired };
 
 export async function signInNative(input: {
   email: string;

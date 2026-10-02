@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { isApiError, loadNativeSession, signOutNative } from "./src/api";
+import { isApiError, isSessionExpired, loadNativeSession, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
 import { TimeCardsScreen } from "./src/screens/TimeCardsScreen";
@@ -40,7 +40,7 @@ export default function App() {
     }
     const restored = await loadNativeSession(token);
     if (isApiError(restored)) {
-      if (restored.status === 401 || restored.status === 403) {
+      if (isSessionExpired(restored)) {
         await clearSessionToken();
         setSession(null);
       } else {
@@ -68,15 +68,19 @@ export default function App() {
     };
   }, []);
 
+  async function expireSession() {
+    await clearSessionToken();
+    setJobId(null);
+    setTimeCardsOpen(false);
+    setSession(null);
+  }
+
   async function signOut() {
     if (session) {
       await signOutNative(session.token);
     }
-    await clearSessionToken();
     await clearAllChecklistDrafts(secureChecklistDraftStorage);
-    setJobId(null);
-    setTimeCardsOpen(false);
-    setSession(null);
+    await expireSession();
   }
 
   if (!ready || restoring) {
@@ -120,6 +124,9 @@ export default function App() {
         <JobScreen
           jobId={jobId}
           onBack={() => setJobId(null)}
+          onSessionExpired={() => {
+            void expireSession();
+          }}
           token={session.token}
           workspace={session.workspace}
         />
@@ -133,6 +140,9 @@ export default function App() {
       <>
         <TimeCardsScreen
           onBack={() => setTimeCardsOpen(false)}
+          onSessionExpired={() => {
+            void expireSession();
+          }}
           token={session.token}
           workspace={session.workspace}
         />
@@ -146,6 +156,9 @@ export default function App() {
       <TodayScreen
         onOpenJob={setJobId}
         onOpenTimeCards={() => setTimeCardsOpen(true)}
+        onSessionExpired={() => {
+          void expireSession();
+        }}
         onSignOut={() => {
           void signOut();
         }}

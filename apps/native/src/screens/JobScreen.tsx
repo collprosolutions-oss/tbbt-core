@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -14,6 +14,7 @@ import {
   completeNativeJob,
   isApiError,
   isLostAssignment,
+  isSessionExpired,
   loadNativeJob,
   recordNativeJobVisit,
   startNativeActivityTime,
@@ -22,6 +23,7 @@ import {
   stopNativeJobRunningTime,
   type NativeApiError,
 } from "../api";
+import { nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
 import type {
   NativeFieldActivityType,
   NativeJobDetail,
@@ -39,11 +41,13 @@ export function JobScreen({
   jobId,
   workspace,
   onBack,
+  onSessionExpired,
 }: {
   token: string;
   jobId: string;
   workspace: NativeWorkspace;
   onBack: () => void;
+  onSessionExpired: () => void;
 }) {
   const [job, setJob] = useState<NativeJobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,36 +61,48 @@ export function JobScreen({
   );
   const [unsyncedChecklist, setUnsyncedChecklist] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const requestGeneration = useRef(0);
+  const actionsLocked = pending || refreshing;
+
+  function beginAssignedRequest() {
+    requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
+    return requestGeneration.current;
+  }
 
   function applyLostAssignment(result: NativeApiError) {
-    setJob(null);
+    if (isSessionExpired(result)) {
+      onSessionExpired();
+      return;
+    }
+    if (isLostAssignment(result)) {
+      setJob(null);
+    }
     setError(result.error);
     setActionError(result.error);
   }
 
   useEffect(() => {
-    let cancelled = false;
+    const generation = beginAssignedRequest();
     void loadNativeJob(token, jobId).then((result) => {
-      if (cancelled) return;
+      if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
-          setJob(null);
-        }
-        setError(result.error);
+        applyLostAssignment(result);
         return;
       }
       setJob(result.job);
       setError(null);
     });
     return () => {
-      cancelled = true;
+      requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
     };
   }, [jobId, token]);
 
   async function reloadAssignedJob(fallback: NativeJobDetail | null) {
+    const generation = beginAssignedRequest();
     const reloaded = await loadNativeJob(token, jobId);
+    if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
     if (isApiError(reloaded)) {
-      if (isLostAssignment(reloaded)) {
+      if (isSessionExpired(reloaded) || isLostAssignment(reloaded)) {
         applyLostAssignment(reloaded);
         return;
       }
@@ -97,35 +113,35 @@ export function JobScreen({
       setActionError(reloaded.error);
       return;
     }
+    setRefreshing(false);
     setJob(reloaded.job);
     setError(null);
   }
 
   const retryAssignedJob = useCallback(async () => {
+    const generation = beginAssignedRequest();
     setRefreshing(true);
     setError(null);
     setActionError(null);
     const reloaded = await loadNativeJob(token, jobId);
+    if (!shouldApplyNativeResponse(requestGeneration.current, generation)) return;
+    setRefreshing(false);
     if (isApiError(reloaded)) {
-      if (isLostAssignment(reloaded)) {
-        setJob(null);
-      }
-      setError(reloaded.error);
+      applyLostAssignment(reloaded);
     } else {
       setJob(reloaded.job);
     }
-    setRefreshing(false);
-  }, [jobId, token]);
+  }, [jobId, onSessionExpired, token]);
 
   async function startAssignedJob() {
-    if (pending) return;
+    if (actionsLocked) return;
     setPending(true);
     setPendingAction("start");
     setActionError(null);
     try {
       const result = await startNativeJob(token, jobId);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -142,14 +158,14 @@ export function JobScreen({
   }
 
   async function stopAssignedJobTime() {
-    if (pending) return;
+    if (actionsLocked) return;
     setPending(true);
     setPendingAction("stop");
     setActionError(null);
     try {
       const result = await stopNativeJobRunningTime(token, jobId);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -166,14 +182,14 @@ export function JobScreen({
   }
 
   async function startAssignedActivity(activityType: NativeFieldActivityType) {
-    if (pending) return;
+    if (actionsLocked) return;
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "start-travel" : "start-pickup");
     setActionError(null);
     try {
       const result = await startNativeActivityTime(token, jobId, activityType);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -190,14 +206,14 @@ export function JobScreen({
   }
 
   async function stopAssignedActivity(activityType: NativeFieldActivityType) {
-    if (pending) return;
+    if (actionsLocked) return;
     setPending(true);
     setPendingAction(activityType === "TRAVEL" ? "stop-travel" : "stop-pickup");
     setActionError(null);
     try {
       const result = await stopNativeActivityTime(token, jobId, activityType);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -214,7 +230,7 @@ export function JobScreen({
   }
 
   async function completeAssignedJob() {
-    if (pending) return;
+    if (actionsLocked) return;
     if (unsyncedChecklist) {
       setActionError("Sync or discard unsynced checklist changes before completing this job.");
       return;
@@ -225,7 +241,7 @@ export function JobScreen({
     try {
       const result = await completeNativeJob(token, jobId);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -242,7 +258,7 @@ export function JobScreen({
   }
 
   async function recordVisitOutcome(outcomeStatus: NativeVisitOutcomeStatus) {
-    if (pending) return;
+    if (actionsLocked) return;
     if (unsyncedChecklist) {
       setActionError(
         "Sync or discard unsynced checklist changes before recording a visit outcome.",
@@ -255,7 +271,7 @@ export function JobScreen({
     try {
       const result = await recordNativeJobVisit(token, jobId, outcomeStatus);
       if (isApiError(result)) {
-        if (isLostAssignment(result)) {
+        if (isSessionExpired(result) || isLostAssignment(result)) {
           applyLostAssignment(result);
           return;
         }
@@ -290,6 +306,9 @@ export function JobScreen({
             style={styles.secondaryAction}
           >
             <Text style={styles.primaryActionLabel}>Retry</Text>
+          </Pressable>
+          <Pressable onPress={onSessionExpired} style={styles.secondaryAction}>
+            <Text style={styles.primaryActionLabel}>Sign in again</Text>
           </Pressable>
         </>
       ) : null}
@@ -358,11 +377,11 @@ export function JobScreen({
           </View>
           {job.startAction.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void startAssignedJob();
               }}
-              style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.primaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "start" ? "Starting…" : "Start job"}
@@ -373,11 +392,11 @@ export function JobScreen({
           ) : null}
           {job.stopTimeAction.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void stopAssignedJobTime();
               }}
-              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "stop" ? "Stopping…" : "Stop job time"}
@@ -386,11 +405,11 @@ export function JobScreen({
           ) : null}
           {job.startTravelAction?.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void startAssignedActivity("TRAVEL");
               }}
-              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "start-travel" ? "Starting…" : "Start travel"}
@@ -399,11 +418,11 @@ export function JobScreen({
           ) : null}
           {job.stopTravelAction?.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void stopAssignedActivity("TRAVEL");
               }}
-              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "stop-travel" ? "Stopping…" : "Stop travel"}
@@ -412,11 +431,11 @@ export function JobScreen({
           ) : null}
           {job.startPickupAction?.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void startAssignedActivity("MATERIAL_PICKUP");
               }}
-              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "start-pickup" ? "Starting…" : "Start material pickup"}
@@ -425,11 +444,11 @@ export function JobScreen({
           ) : null}
           {job.stopPickupAction?.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void stopAssignedActivity("MATERIAL_PICKUP");
               }}
-              style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "stop-pickup" ? "Stopping…" : "Stop material pickup"}
@@ -438,11 +457,11 @@ export function JobScreen({
           ) : null}
           {job.completeAction.available ? (
             <Pressable
-              disabled={pending}
+              disabled={actionsLocked}
               onPress={() => {
                 void completeAssignedJob();
               }}
-              style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+              style={[styles.primaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
             >
               <Text style={styles.primaryActionLabel}>
                 {pendingAction === "complete" ? "Completing…" : "Complete job"}
@@ -470,11 +489,11 @@ export function JobScreen({
               </Text>
               {job.visit.recordCompleted.available ? (
                 <Pressable
-                  disabled={pending}
+                  disabled={actionsLocked}
                   onPress={() => {
                     void recordVisitOutcome("VISIT_COMPLETED");
                   }}
-                  style={[styles.primaryAction, pending ? styles.primaryActionDisabled : null]}
+                  style={[styles.primaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
                 >
                   <Text style={styles.primaryActionLabel}>
                     {pendingOutcome === "VISIT_COMPLETED"
@@ -487,11 +506,11 @@ export function JobScreen({
               ) : null}
               {job.visit.recordReclean.available ? (
                 <Pressable
-                  disabled={pending}
+                  disabled={actionsLocked}
                   onPress={() => {
                     void recordVisitOutcome("RE_CLEAN_REQUESTED");
                   }}
-                  style={[styles.secondaryAction, pending ? styles.primaryActionDisabled : null]}
+                  style={[styles.secondaryAction, actionsLocked ? styles.primaryActionDisabled : null]}
                 >
                   <Text style={styles.primaryActionLabel}>
                     {pendingOutcome === "RE_CLEAN_REQUESTED" ? "Recording…" : "Request re-clean"}
