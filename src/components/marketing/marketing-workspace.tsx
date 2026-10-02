@@ -16,11 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { GenerateMarketingAiPanel } from "@/components/marketing/generate-ai-panel";
+import { RequestOwnerContentDraftForm } from "@/components/marketing/request-owner-content-draft";
+import { isAiProviderConnected } from "@/lib/ai/config";
 import { createCampaignAction, saveBrandVoiceAction, setCampaignStatusAction } from "@/app/actions/campaigns";
 import { ActionForm } from "@/components/action-form";
 import {
   canDownloadMarketingReviewPacket,
   canExportCreatorPackage,
+  canRequestOwnerMarketingContentDraft,
   COMING_NEXT_MESSAGE,
   CREATOR_PACKAGE_LIMITS_MESSAGE,
   MARKETING_AREA_LABELS,
@@ -67,7 +70,7 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
 
         <FounderRegion id="opportunities">
           {area === "grow" || area === "overview" || area === "completed-jobs" ? (
-            <OpportunityBody area={area} source={source} />
+            <OpportunityBody area={area} source={source} viewerRole={viewerRole} />
           ) : null}
         </FounderRegion>
 
@@ -128,9 +131,11 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
 function OpportunityBody({
   area,
   source,
+  viewerRole,
 }: {
   area: MarketingArea;
   source: MarketingWorkspaceProps["source"];
+  viewerRole: MarketingWorkspaceProps["viewerRole"];
 }) {
   if (area === "grow") {
     return (
@@ -160,6 +165,11 @@ function OpportunityBody({
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <GenerateMarketingAiPanel />
+            {canRequestOwnerMarketingContentDraft(viewerRole) ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href="/marketing?area=create-content">Request owner content draft</Link>
+              </Button>
+            ) : null}
             <p className="text-muted-foreground">{source.activityPlan.message}</p>
             <ul className="space-y-1">
               {source.activityPlan.items.map((item) => (
@@ -324,18 +334,40 @@ function ContentBody({
 
   if (area === "create-content") {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Creator package</CardTitle>
-          <CardDescription>
-            Select an approved job photo, edit the storyboard and shot list, then preview. OWNER approval
-            is required before export. {CREATOR_PACKAGE_LIMITS_MESSAGE}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <CreateContentForm source={source} />
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Owner-requested content draft</CardTitle>
+            <CardDescription>
+              Ask the configured AI provider for one reviewable draft from recorded TBBT facts.
+              This is not the template creator package. TBBT will not publish, post, or message
+              customers.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RequestOwnerContentDraftForm
+              providerConfigured={isAiProviderConnected()}
+              viewerRole={viewerRole}
+              completedJobs={source.opportunities.map((row) => ({
+                jobId: row.jobId,
+                workPerformed: row.workPerformed,
+              }))}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Creator package</CardTitle>
+            <CardDescription>
+              Select an approved job photo, edit the storyboard and shot list, then preview. OWNER approval
+              is required before export. {CREATOR_PACKAGE_LIMITS_MESSAGE}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CreateContentForm source={source} />
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 

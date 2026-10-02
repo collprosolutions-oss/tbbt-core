@@ -50,5 +50,5 @@ Do not invent passing browser results. The isolated harness is
 - External Facebook / Instagram / Google publishing is **not connected**. Marketing never writes `PUBLISHED`. Growth does not claim social publishing or Google rankings.
 - Banking / accounting are **Not Connected**. TBBT will not invent a cash balance or tax conclusion.
 - Supplier commerce adapters are **DISCONNECTED**. No Home Depot / Lowe’s scrape or live order API. Production provider integrations need API/licensing review.
-- Marketing AI is not connected. Template drafts are available. An env string does not mean a provider is called.
+- Marketing AI uses the canonical provider only after an OWNER requests a content draft and a key is configured. Unconfigured providers show Unavailable. Template creator-package drafts stay available. Generated items remain DRAFT. An env string does not mean a provider is called. This harness does not make a live AI call.
 - This checklist does not replace a human production walkthrough on www.collproreno.com.

@@ -130,6 +130,7 @@ try {
     marketingAiSrc.includes("weeklyMarketingPlanWithAi") &&
       marketingAiSrc.includes("campaignIdeasWithAi") &&
       marketingAiSrc.includes("draftMarketingVariationsWithAi") &&
+      marketingAiSrc.includes("requestOwnerMarketingContentDraft") &&
       marketingAiSrc.includes("runAiTask") &&
       marketingAiSrc.includes('publishable: false'),
   );

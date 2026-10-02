@@ -3,14 +3,23 @@
  * sent to a model or stored on an AiInteraction.
  */
 
+import { readAiApiKey } from "@/lib/ai/config";
+
 const SECRET_KEY_PATTERN =
   /(password|token|secret|authorization|cookie|ssn|cardNumber|cvv|totp|backupCode|api[_-]?key|private[_-]?key)/i;
 
 const SECRET_VALUE_PATTERN =
-  /(sk_live_|sk_test_|whsec_|Bearer\s+[A-Za-z0-9._-]+|BLOB_READ_WRITE_TOKEN)/i;
+  /(sk_live_[A-Za-z0-9_-]+|sk_test_[A-Za-z0-9_-]+|(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]+|(?<![A-Za-z0-9])sk-svcacct-[A-Za-z0-9_-]+|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|whsec_[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+|BLOB_READ_WRITE_TOKEN)/gi;
+
+function redactConfiguredAiKey(value: string) {
+  const configured = readAiApiKey();
+  if (!configured || configured.length < 8) return value;
+  return value.split(configured).join("[redacted]");
+}
 
 export function sanitizeAiText(value: string, max = 8_000) {
-  const stripped = value
+  SECRET_VALUE_PATTERN.lastIndex = 0;
+  const stripped = redactConfiguredAiKey(value)
     .replace(SECRET_VALUE_PATTERN, "[redacted]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
     .replace(/\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, "[phone]")

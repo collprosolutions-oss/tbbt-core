@@ -14,6 +14,7 @@ import {
   AI_MAX_RETRIES,
   AI_NOT_CONNECTED_MESSAGE,
   AI_VALIDATION_MESSAGE,
+  type AiProvider,
   type AiRunResult,
   type AiTaskType,
   type StructuredAiOutput,
@@ -222,6 +223,12 @@ export async function runAiTask(
      * stay one worker.
      */
     alreadyClaimed?: boolean;
+    /**
+     * Test-only provider override. Production callers omit this so
+     * runAiTask uses resolveAiProvider() — the single canonical path.
+     */
+    provider?: AiProvider;
+    maxOutputTokens?: number;
   },
 ): Promise<AiRunResult> {
   let pending = await db.aiInteraction.findUnique({
@@ -281,7 +288,7 @@ export async function runAiTask(
     throw new Error("That AI request could not be recorded.");
   }
 
-  const provider = resolveAiProvider();
+  const provider = input.provider ?? resolveAiProvider();
   if (!provider.connected) {
     const result: AiRunResult = {
       status: "SKIPPED_NOT_CONNECTED",
@@ -299,7 +306,7 @@ export async function runAiTask(
         status: result.status,
         provider: provider.id,
         outputSummary: JSON.stringify(input.fallback),
-        failureReason: AI_NOT_CONNECTED_MESSAGE,
+        failureReason: sanitizeAiText(AI_NOT_CONNECTED_MESSAGE, 400),
       },
     });
     await recordUsage(db, actor.businessId, result.status);
@@ -318,7 +325,7 @@ export async function runAiTask(
       system: input.system,
       user: input.user,
       jsonSchemaName: "tbbt_ai_output",
-      maxOutputTokens: AI_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: input.maxOutputTokens ?? AI_MAX_OUTPUT_TOKENS,
     });
     if (completed.ok) {
       const parsed = parseStructuredAiOutput(completed.text, input.allowedFactKeys);
@@ -333,7 +340,7 @@ export async function runAiTask(
             model: completed.model,
             output: input.fallback,
             message: AI_VALIDATION_MESSAGE,
-            failureReason: AI_VALIDATION_MESSAGE,
+            failureReason: sanitizeAiText(AI_VALIDATION_MESSAGE, 400),
             retryable: false,
             usage: completed.usage,
             interactionId: pending.id,
@@ -349,7 +356,7 @@ export async function runAiTask(
               completionTokens: completed.usage?.completionTokens,
               retryCount: attempts - 1,
               outputSummary: JSON.stringify(input.fallback),
-              failureReason: AI_VALIDATION_MESSAGE,
+              failureReason: sanitizeAiText(AI_VALIDATION_MESSAGE, 400),
             },
           });
           await recordUsage(db, actor.businessId, result.status, completed.usage);
@@ -393,7 +400,7 @@ export async function runAiTask(
         model: completed.model ?? readAiModel(),
         output: input.fallback,
         message: AI_FAILURE_MESSAGE,
-        failureReason: completed.error,
+        failureReason: sanitizeAiText(completed.error, 400),
         retryable: false,
         interactionId: pending.id,
       };
@@ -406,7 +413,7 @@ export async function runAiTask(
           latencyMs: completed.latencyMs,
           retryCount: attempts - 1,
           outputSummary: JSON.stringify(input.fallback),
-          failureReason: completed.error,
+          failureReason: sanitizeAiText(completed.error, 400),
         },
       });
       await recordUsage(db, actor.businessId, result.status);
@@ -421,7 +428,7 @@ export async function runAiTask(
     model: readAiModel(),
     output: input.fallback,
     message: AI_FAILURE_MESSAGE,
-    failureReason: lastFailure,
+    failureReason: sanitizeAiText(lastFailure, 400),
     retryable: false,
     usage: lastUsage,
     interactionId: pending.id,
@@ -430,7 +437,7 @@ export async function runAiTask(
     where: { id: pending.id },
     data: {
       status: result.status,
-      failureReason: lastFailure,
+      failureReason: sanitizeAiText(lastFailure, 400),
       outputSummary: JSON.stringify(input.fallback),
     },
   });

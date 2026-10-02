@@ -84,8 +84,16 @@ export function shouldRotateAiAttemptId(state: {
   inProgress?: boolean;
   text?: string;
   error?: string;
+  status?: string;
 }) {
   if (state.inProgress) return false;
+  if (
+    state.status === "FAILED" ||
+    state.status === "VALIDATION_FAILED" ||
+    state.status === "UNAVAILABLE"
+  ) {
+    return true;
+  }
   return Boolean(state.text || state.error);
 }
 
