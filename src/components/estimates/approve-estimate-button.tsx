@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useId, useRef } from "react";
 import {
   approveEstimate,
   type ApproveEstimateResult,
@@ -38,11 +38,17 @@ export function ApproveEstimateButton({
     approveEstimate,
     initialState,
   );
+  const errorRef = useRef<HTMLDivElement>(null);
+  const errorId = useId();
   const currentStatus = state.status ?? status;
   const needsDeposit =
     Boolean(requiredDeposit) &&
     depositStatus !== "none" &&
     depositStatus !== "paid";
+
+  useEffect(() => {
+    if (state.error) errorRef.current?.focus();
+  }, [state.error]);
 
   useEffect(() => {
     if (
@@ -140,7 +146,13 @@ export function ApproveEstimateButton({
         </fieldset>
       ) : null}
       {state.error ? (
-        <Alert variant="destructive" className="mb-3">
+        <Alert
+          ref={errorRef}
+          id={errorId}
+          tabIndex={-1}
+          variant="destructive"
+          className="mb-3"
+        >
           <AlertDescription>{state.error}</AlertDescription>
         </Alert>
       ) : null}
@@ -158,7 +170,13 @@ export function ApproveEstimateButton({
           deposit payment is not available yet.
         </p>
       ) : null}
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button
+        type="submit"
+        className="w-full"
+        disabled={pending}
+        aria-busy={pending || undefined}
+        aria-describedby={state.error ? errorId : undefined}
+      >
         {pending ? "Approving…" : approveLabel}
       </Button>
     </form>

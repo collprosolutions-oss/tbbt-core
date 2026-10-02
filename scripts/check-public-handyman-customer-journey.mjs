@@ -176,6 +176,17 @@ check(
     packageSrc.includes("check-public-handyman-customer-journey.mjs"),
 );
 check(
+  "First-sale public request and estimate approve keep keyboard error focus",
+  read("src/components/public/request-flow.tsx").includes("errorRef.current?.focus()") &&
+    read("src/components/public/request-flow.tsx").includes("stepHeadingRef.current?.focus()") &&
+    read("src/components/estimates/approve-estimate-button.tsx").includes(
+      "errorRef.current?.focus()",
+    ) &&
+    read("src/components/invoices/mark-invoice-sent-button.tsx").includes(
+      "errorRef.current?.focus()",
+    ),
+);
+check(
   "HTTP isolation waits for a production BUILD_ID, not a Turbopack .next/dev folder",
   read("scripts/check-public-handyman-customer-journey.mjs").includes(".next/BUILD_ID"),
 );

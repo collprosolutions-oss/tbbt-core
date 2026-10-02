@@ -223,6 +223,9 @@ export function MultiServiceRequestFlow({
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [pending, setPending] = useState(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const skipStepFocusRef = useRef(true);
   const submissionIdRef = useRef(
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -269,6 +272,19 @@ export function MultiServiceRequestFlow({
     }
     setHydrated(true);
   }, [draftNamespace, serviceArea.region, slug]);
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
+
+  useEffect(() => {
+    if (skipStepFocusRef.current) {
+      skipStepFocusRef.current = false;
+      return;
+    }
+    if (error) return;
+    stepHeadingRef.current?.focus();
+  }, [step, error]);
 
   useEffect(() => {
     if (!hydrated || ok) return;
@@ -719,14 +735,18 @@ export function MultiServiceRequestFlow({
       </ol>
 
       {error ? (
-        <Alert variant="destructive">
+        <Alert ref={errorRef} tabIndex={-1} variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
 
       {step === "details" ? (
         <form className="space-y-4" onSubmit={goInfo}>
-          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+          <h2
+            ref={stepHeadingRef}
+            tabIndex={-1}
+            className="text-2xl font-extrabold tracking-tight uppercase"
+          >
             Project Details
           </h2>
           <div className="space-y-2">
@@ -766,6 +786,7 @@ export function MultiServiceRequestFlow({
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">Which type of work is this?</legend>
               <select
+                id="requestedTradeCode"
                 name="requestedTradeCode"
                 value={customTradeCode}
                 onChange={(event) => {
@@ -819,7 +840,11 @@ export function MultiServiceRequestFlow({
 
       {step === "info" ? (
         <form className="space-y-4" onSubmit={goReview}>
-          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+          <h2
+            ref={stepHeadingRef}
+            tabIndex={-1}
+            className="text-2xl font-extrabold tracking-tight uppercase"
+          >
             Your Information
           </h2>
           <div className="space-y-2">
@@ -908,7 +933,11 @@ export function MultiServiceRequestFlow({
 
       {step === "review" ? (
         <div className="space-y-5">
-          <h2 className="text-2xl font-extrabold tracking-tight uppercase">
+          <h2
+            ref={stepHeadingRef}
+            tabIndex={-1}
+            className="text-2xl font-extrabold tracking-tight uppercase"
+          >
             Review & Submit
           </h2>
           <ReviewBlock title="Selected services / tasks">

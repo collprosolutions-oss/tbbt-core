@@ -98,6 +98,11 @@
   border: 1px solid var(--public-blue);
 }
 
+.public-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .public-header {
   position: sticky;
   top: 0;

@@ -241,6 +241,13 @@ check(
     ),
 );
 check(
+  "Approve button focuses and describes errors for keyboard users",
+  approve.includes("errorRef.current?.focus()") &&
+    approve.includes("tabIndex={-1}") &&
+    approve.includes("aria-describedby={state.error ? errorId : undefined}") &&
+    approve.includes("aria-busy={pending || undefined}"),
+);
+check(
   "Customer totals show labor, materials, estimate total, material deposit, and remaining balance",
   page.includes("CustomerEstimateTotals") &&
     readRepo("src/components/estimates/customer-estimate-totals.tsx").includes(

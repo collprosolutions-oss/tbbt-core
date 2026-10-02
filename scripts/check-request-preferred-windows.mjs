@@ -51,6 +51,9 @@ function readRepo(rel) {
 }
 
 console.log("\nSTATIC — preferences stay requests, not bookings");
+const preferredFieldsSrc = readRepo(
+  "src/components/public/request-preferred-windows-fields.tsx",
+);
 const preferredSrc = readRepo("src/lib/request-preferred-windows.ts");
 const preferredDataSrc = readRepo("src/lib/request-preferred-windows-data.ts");
 const intakeSrc = readRepo("src/lib/public-intake.ts");
@@ -79,6 +82,14 @@ check(
     requestFlowSrc.includes("RequestPreferredWindowsFields") &&
     !intakeSrc.includes("scheduleJob(") &&
     !preferredSrc.includes("scheduleJob("),
+);
+check(
+  "Preferred-window remove controls name the row; schedule explains unpaid-deposit disablement",
+  preferredFieldsSrc.includes("preference {index + 1}") &&
+    requestFlowSrc.includes("errorRef.current?.focus()") &&
+    requestFlowSrc.includes("stepHeadingRef.current?.focus()") &&
+    scheduleFormSrc.includes('id={`deposit-warning-${jobId}`}') &&
+    scheduleFormSrc.includes("aria-describedby={unpaidDepositWarning ? `deposit-warning-${jobId}` : undefined}"),
 );
 check(
   "OWNER scheduling shows preferences and still uses scheduleJob",

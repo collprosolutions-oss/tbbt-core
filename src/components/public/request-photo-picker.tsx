@@ -76,26 +76,35 @@ export function RequestPhotoPicker({
   return (
     <div className="space-y-2">
       <Label htmlFor="photos">Project photos (optional)</Label>
-      <p className="text-sm text-muted-foreground">
+      <p id="photos-help" className="text-sm text-muted-foreground">
         Photos help {businessName} understand the work. You can add up to{" "}
         {MAX_INTAKE_PHOTOS} JPEG, PNG, WebP, or HEIC images, up to{" "}
         {requestPhotoMaxBytesLabel()} each. These stay private and are not
         published on the website.
       </p>
+      {remaining <= 0 ? (
+        <p id="photos-full" className="text-sm text-muted-foreground">
+          Photo limit reached. Remove a photo to add another.
+        </p>
+      ) : null}
       <Input
         id="photos"
         name="photos"
         type="file"
         accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,image/*"
         multiple
-        disabled={remaining <= 0}
+        aria-describedby={remaining <= 0 ? "photos-help photos-full" : "photos-help"}
         className="h-12 bg-white pt-2"
         onChange={(event) => {
           addFiles(event.target.files);
           event.target.value = "";
         }}
       />
-      {localError ? <p className="text-sm text-red-700">{localError}</p> : null}
+      {localError ? (
+        <p role="alert" className="text-sm text-red-700">
+          {localError}
+        </p>
+      ) : null}
       {previews.length > 0 ? (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {previews.map((photo) => (
@@ -119,6 +128,7 @@ export function RequestPhotoPicker({
                 onClick={() => removePhoto(photo.id)}
               >
                 Remove
+                <span className="sr-only"> {photo.file.name}</span>
               </button>
             </li>
           ))}

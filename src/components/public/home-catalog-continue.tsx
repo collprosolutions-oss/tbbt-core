@@ -56,9 +56,19 @@ export function HomeCatalogContinue({
           Continue to request
         </Link>
       ) : (
-        <button type="button" className="public-btn public-btn-outline w-full sm:w-auto" disabled>
+        <button
+          type="button"
+          className="public-btn public-btn-outline w-full sm:w-auto"
+          aria-disabled="true"
+          aria-describedby="home-select-work-help"
+        >
           Select work to continue
         </button>
+      )}
+      {canContinue ? null : (
+        <p id="home-select-work-help" className="text-sm text-muted-foreground">
+          Choose at least one service or other work before continuing to the request.
+        </p>
       )}
     </div>
   );
