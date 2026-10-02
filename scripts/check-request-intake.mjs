@@ -1974,8 +1974,10 @@ try {
   }
 
   function runPsqlLockScript(sql) {
+    const psqlUrl = new URL(testUrl);
+    psqlUrl.searchParams.delete("schema");
     return new Promise((resolve) => {
-      const child = spawn("psql", [testUrl, "-v", "ON_ERROR_STOP=1", "-c", sql], {
+      const child = spawn("psql", [psqlUrl.toString(), "-v", "ON_ERROR_STOP=1", "-c", sql], {
         encoding: "utf8",
       });
       let out = "";
