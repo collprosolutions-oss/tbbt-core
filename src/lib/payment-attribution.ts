@@ -28,7 +28,6 @@ export function paymentBelongsToInvoice(
     return payment.invoiceId === invoice.id;
   }
   // Fail closed: missing/unknown kind must not claim a job-only payment.
-  // isOriginalInvoiceKind(undefined) is true — do not use it here.
   if (invoice.kind !== INVOICE_KIND_ORIGINAL) {
     return false;
   }
