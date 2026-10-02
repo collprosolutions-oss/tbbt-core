@@ -23,6 +23,7 @@ import { loadFinancialSource } from "@/lib/financial-intelligence-data";
 import { invoiceBalanceDue } from "@/lib/financial-intelligence/collected-revenue";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { hasProductCapability } from "@/lib/product-entitlements";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { asNumber, buildReport, percentChange, resolveReportRange } from "@/lib/reports";
 import { listCompletedUnbilledJobs } from "@/lib/revenue-integrity";
 import { loadReportSource } from "@/lib/reports-data";
@@ -143,7 +144,7 @@ export async function loadBsosFactsBundle(
       _sum: { total: true },
     }),
     prisma.expense.aggregate({
-      where: { ...scope, voidedAt: null },
+      where: { ...scope, ...REPORTED_EXPENSE_WHERE },
       _sum: { amount: true },
     }),
     loadReportSource(prisma, businessId),

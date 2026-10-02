@@ -50,6 +50,7 @@ export type ExpenseListItem = {
   taxCategory: string | null;
   reviewStatus: string;
   reviewLabel: string;
+  updatedAtValue: string | null;
   recurring: boolean;
   recurringNote: string | null;
   mileageMilesValue: string;

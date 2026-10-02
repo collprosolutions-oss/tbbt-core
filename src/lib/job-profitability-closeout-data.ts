@@ -195,6 +195,7 @@ export async function loadJobProfitabilityCloseout(
                 jobId: true,
                 amount: true,
                 voidedAt: true,
+                reviewStatus: true,
                 category: true,
               },
             },
@@ -271,6 +272,7 @@ export async function loadJobProfitabilityCloseout(
             jobId: item.expense.jobId,
             amount: asNumber(item.expense.amount),
             voidedAt: item.expense.voidedAt,
+            reviewStatus: item.expense.reviewStatus,
             category: item.expense.category,
           }
         : null,

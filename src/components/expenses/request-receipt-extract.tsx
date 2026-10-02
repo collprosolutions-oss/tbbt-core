@@ -26,12 +26,16 @@ export function RequestReceiptExtractForm({
   storedAssetId,
   expenseId,
   reviewStatus,
+  draftUpdatedAt,
+  draftAmount,
   canExtract,
   providerConfigured,
 }: {
   storedAssetId: string | null;
   expenseId: string;
   reviewStatus: string;
+  draftUpdatedAt: string | null;
+  draftAmount: string | null;
   canExtract: boolean;
   providerConfigured: boolean;
 }) {
@@ -121,6 +125,12 @@ export function RequestReceiptExtractForm({
       {confirmable ? (
         <form action={confirmAction}>
           <input type="hidden" name="expenseId" value={state.expenseId ?? expenseId} />
+          <input
+            type="hidden"
+            name="expectedUpdatedAt"
+            value={state.updatedAt ?? draftUpdatedAt ?? ""}
+          />
+          <input type="hidden" name="expectedAmount" value={state.amount ?? draftAmount ?? ""} />
           <Button type="submit" size="sm" disabled={confirmPending}>
             {confirmPending ? "Confirming…" : "Confirm draft"}
           </Button>

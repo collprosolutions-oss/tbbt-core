@@ -30,6 +30,8 @@ import {
   EXPENSE_RECEIPT_EXTRACT_MAX_OUTPUT_TOKENS,
   EXPENSE_RECEIPT_EXTRACT_OWNER_ONLY_MESSAGE,
   EXPENSE_RECEIPT_EXTRACT_REVIEW_MESSAGE,
+  EXPENSE_RECEIPT_EXTRACT_STALE_CONFIRM_MESSAGE,
+  EXPENSE_RECEIPT_EXTRACT_TAX_EXCEEDS_MESSAGE,
   EXPENSE_RECEIPT_EXTRACT_UNAVAILABLE_MESSAGE,
   amountDecimalFromCents,
   emptyReceiptExtractFields,
@@ -38,6 +40,7 @@ import {
   receiptExtractHasValidAmount,
   receiptExtractHasValidTax,
   receiptExtractIsLowConfidence,
+  receiptExtractTaxExceedsAmount,
   receiptExtractTaxNote,
   sanitizeReceiptExtractText,
   type ExpenseReceiptExtractFields,
@@ -66,6 +69,7 @@ function closedResult(
     fields: extra?.fields ?? emptyReceiptExtractFields(),
     expenseId: extra?.expenseId,
     reviewStatus: extra?.reviewStatus,
+    updatedAt: extra?.updatedAt,
     interactionId: extra?.interactionId,
     applied: extra?.applied === true,
     confirmable: extra?.confirmable === true,
@@ -120,6 +124,54 @@ function draftDescription(fields: ExpenseReceiptExtractFields) {
   return fields.vendor ? `${fields.vendor} receipt` : "Receipt draft";
 }
 
+function snapshotIso(value: Date | string | null | undefined) {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+const draftExpenseWhere = (access: BusinessAccess, expenseId: string): Prisma.ExpenseWhereInput => ({
+  id: expenseId,
+  businessId: access.businessId,
+  reviewStatus: "DRAFT",
+  voidedAt: null,
+});
+
+async function applyDraftExpenseUpdate(
+  db: Db,
+  access: BusinessAccess,
+  expenseId: string,
+  data: {
+    occurredOn: Date;
+    description: string;
+    amount: Prisma.Decimal;
+    vendor: string | null;
+    notes: string | null;
+  },
+) {
+  const written = await db.expense.updateMany({
+    where: draftExpenseWhere(access, expenseId),
+    data,
+  });
+  const current = await db.expense.findFirst({
+    where: { id: expenseId, ...access.scope },
+  });
+  if (written.count === 0) {
+    return {
+      expenseId,
+      reviewStatus: current?.reviewStatus,
+      updatedAt: snapshotIso(current?.updatedAt),
+      applied: false as const,
+    };
+  }
+  return {
+    expenseId,
+    reviewStatus: current?.reviewStatus ?? "DRAFT",
+    updatedAt: snapshotIso(current?.updatedAt),
+    applied: true as const,
+  };
+}
+
 async function persistDraftExpense(
   db: Db,
   access: BusinessAccess,
@@ -131,14 +183,29 @@ async function persistDraftExpense(
   },
 ) {
   if (input.existing && input.existing.reviewStatus !== "DRAFT") {
-    return { expenseId: input.existing.id, reviewStatus: input.existing.reviewStatus, applied: false as const };
+    return {
+      expenseId: input.existing.id,
+      reviewStatus: input.existing.reviewStatus,
+      updatedAt: undefined,
+      applied: false as const,
+    };
   }
   if (!receiptExtractCanPersistDraft(input.fields) || !input.fields.amountCents || !input.fields.occurredOn) {
-    return { expenseId: input.existing?.id, reviewStatus: input.existing?.reviewStatus, applied: false as const };
+    return {
+      expenseId: input.existing?.id,
+      reviewStatus: input.existing?.reviewStatus,
+      updatedAt: undefined,
+      applied: false as const,
+    };
   }
   const occurredOn = parseExpenseDate(input.fields.occurredOn, input.timeZone);
   if (!occurredOn) {
-    return { expenseId: input.existing?.id, reviewStatus: input.existing?.reviewStatus, applied: false as const };
+    return {
+      expenseId: input.existing?.id,
+      reviewStatus: input.existing?.reviewStatus,
+      updatedAt: undefined,
+      applied: false as const,
+    };
   }
   const data = {
     occurredOn,
@@ -152,17 +219,13 @@ async function persistDraftExpense(
   };
 
   if (input.existing?.reviewStatus === "DRAFT") {
-    const updated = await db.expense.update({
-      where: { id: input.existing.id },
-      data: {
-        occurredOn: data.occurredOn,
-        description: data.description,
-        amount: data.amount,
-        vendor: data.vendor,
-        notes: data.notes,
-      },
+    return applyDraftExpenseUpdate(db, access, input.existing.id, {
+      occurredOn: data.occurredOn,
+      description: data.description,
+      amount: data.amount,
+      vendor: data.vendor,
+      notes: data.notes,
     });
-    return { expenseId: updated.id, reviewStatus: updated.reviewStatus, applied: true as const };
   }
 
   try {
@@ -172,25 +235,23 @@ async function persistDraftExpense(
         ...data,
       },
     });
-    return { expenseId: created.id, reviewStatus: created.reviewStatus, applied: true as const };
+    return {
+      expenseId: created.id,
+      reviewStatus: created.reviewStatus,
+      updatedAt: snapshotIso(created.updatedAt),
+      applied: true as const,
+    };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const raced = await loadExpenseForReceipt(db, access, input.assetId);
-      if (raced?.reviewStatus === "DRAFT") {
-        const updated = await db.expense.update({
-          where: { id: raced.id },
-          data: {
-            occurredOn: data.occurredOn,
-            description: data.description,
-            amount: data.amount,
-            vendor: data.vendor,
-            notes: data.notes,
-          },
-        });
-        return { expenseId: updated.id, reviewStatus: updated.reviewStatus, applied: true as const };
-      }
       if (raced) {
-        return { expenseId: raced.id, reviewStatus: raced.reviewStatus, applied: false as const };
+        return applyDraftExpenseUpdate(db, access, raced.id, {
+          occurredOn: data.occurredOn,
+          description: data.description,
+          amount: data.amount,
+          vendor: data.vendor,
+          notes: data.notes,
+        });
       }
     }
     throw error;
@@ -285,6 +346,14 @@ export async function requestExpenseReceiptExtraction(
       reviewStatus: existing?.reviewStatus,
     });
   }
+  if (receiptExtractTaxExceedsAmount(fields)) {
+    return closedResult("VALIDATION_FAILED", EXPENSE_RECEIPT_EXTRACT_TAX_EXCEEDS_MESSAGE, {
+      fields,
+      interactionId: result.interactionId,
+      expenseId: existing?.id,
+      reviewStatus: existing?.reviewStatus,
+    });
+  }
   if (receiptExtractIsLowConfidence(fields)) {
     return closedResult("LOW_CONFIDENCE", EXPENSE_RECEIPT_EXTRACT_LOW_CONFIDENCE_MESSAGE, {
       fields,
@@ -311,11 +380,23 @@ export async function requestExpenseReceiptExtraction(
     fields,
     timeZone,
   });
+  if (!persisted.applied && persisted.reviewStatus && persisted.reviewStatus !== "DRAFT") {
+    return closedResult("COMPLETED", EXPENSE_RECEIPT_EXTRACT_EXISTING_MESSAGE, {
+      fields,
+      interactionId: result.interactionId,
+      expenseId: persisted.expenseId,
+      reviewStatus: persisted.reviewStatus,
+      updatedAt: persisted.updatedAt,
+      applied: false,
+      confirmable: false,
+    });
+  }
   return closedResult("COMPLETED", EXPENSE_RECEIPT_EXTRACT_REVIEW_MESSAGE, {
     fields,
     interactionId: result.interactionId,
     expenseId: persisted.expenseId,
     reviewStatus: persisted.reviewStatus,
+    updatedAt: persisted.updatedAt,
     applied: persisted.applied,
     confirmable: persisted.applied && persisted.reviewStatus === "DRAFT",
   });
@@ -324,24 +405,61 @@ export async function requestExpenseReceiptExtraction(
 export async function confirmExpenseReceiptDraft(
   db: Db,
   access: BusinessAccess,
-  input: { expenseId: string },
+  input: {
+    expenseId: string;
+    expectedUpdatedAt?: string | Date | null;
+    expectedAmount?: string | number | null;
+  },
 ) {
   await requireOwnerReceiptExtract(db, access);
-  const expense = access.assertOwned(
-    await db.expense.findFirst({
-      where: { id: input.expenseId, ...access.scope },
-    }),
-  );
-  if (expense.voidedAt) {
-    throw new ExpenseError("This expense has been voided.");
+  const expenseId = input.expenseId.trim();
+  if (!expenseId) {
+    throw new ExpenseError("That expense could not be found.");
   }
-  if (expense.reviewStatus !== "DRAFT") {
-    throw new ExpenseError(EXPENSE_RECEIPT_EXTRACT_EXISTING_MESSAGE);
+
+  const where: Prisma.ExpenseWhereInput = draftExpenseWhere(access, expenseId);
+  if (input.expectedUpdatedAt != null && input.expectedUpdatedAt !== "") {
+    const at =
+      input.expectedUpdatedAt instanceof Date
+        ? input.expectedUpdatedAt
+        : new Date(input.expectedUpdatedAt);
+    if (Number.isNaN(at.getTime())) {
+      throw new ExpenseError("Retry that request from the form.");
+    }
+    where.updatedAt = at;
   }
-  const confirmed = await db.expense.update({
-    where: { id: expense.id },
+  if (input.expectedAmount != null && input.expectedAmount !== "") {
+    try {
+      where.amount = new Prisma.Decimal(String(input.expectedAmount));
+    } catch {
+      throw new ExpenseError("Retry that request from the form.");
+    }
+  }
+
+  const written = await db.expense.updateMany({
+    where,
     data: { reviewStatus: "RECORDED" },
   });
+  if (written.count === 0) {
+    const current = access.assertOwned(
+      await db.expense.findFirst({
+        where: { id: expenseId, ...access.scope },
+      }),
+    );
+    if (current.voidedAt) {
+      throw new ExpenseError("This expense has been voided.");
+    }
+    if (current.reviewStatus !== "DRAFT") {
+      throw new ExpenseError(EXPENSE_RECEIPT_EXTRACT_EXISTING_MESSAGE);
+    }
+    throw new ExpenseError(EXPENSE_RECEIPT_EXTRACT_STALE_CONFIRM_MESSAGE);
+  }
+
+  const confirmed = access.assertOwned(
+    await db.expense.findFirst({
+      where: { id: expenseId, ...access.scope },
+    }),
+  );
   return {
     expense: confirmed,
     message: EXPENSE_RECEIPT_EXTRACT_CONFIRM_MESSAGE,

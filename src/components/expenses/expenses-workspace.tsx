@@ -704,6 +704,8 @@ function ExpenseDetails({
           storedAssetId={expense.receiptStoredAssetId}
           expenseId={expense.id}
           reviewStatus={expense.reviewStatus}
+          draftUpdatedAt={expense.updatedAtValue}
+          draftAmount={expense.amountValue}
           canExtract={canExtractReceipts}
           providerConfigured={aiExtractAvailable}
         />

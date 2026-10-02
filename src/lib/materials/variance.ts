@@ -18,7 +18,7 @@ export async function materialEstimateVsActual(
     },
     include: {
       items: {
-        include: { expense: { select: { amount: true, voidedAt: true } } },
+        include: { expense: { select: { amount: true, voidedAt: true, reviewStatus: true } } },
         orderBy: { createdAt: "asc" },
       },
     },

@@ -52,6 +52,7 @@ export type ExpenseExtractActionState = {
   amount?: string | null;
   tax?: string | null;
   expenseId?: string;
+  updatedAt?: string;
   confirmable?: boolean;
   lowConfidence?: boolean;
 };
@@ -314,6 +315,7 @@ export async function extractExpenseReceiptAction(
       amount: result.fields.amountCents != null ? centsToMoneyString(result.fields.amountCents) : null,
       tax: result.fields.taxCents != null ? centsToMoneyString(result.fields.taxCents) : null,
       expenseId: result.expenseId,
+      updatedAt: result.updatedAt,
       confirmable: result.confirmable,
       lowConfidence: result.lowConfidence,
     };
@@ -329,8 +331,17 @@ export async function confirmExpenseReceiptDraftAction(
   try {
     const access = await requireOperatingBusinessAccess();
     const expenseId = readString(formData, "expenseId");
+    const expectedUpdatedAt = readString(formData, "expectedUpdatedAt");
+    const expectedAmount = readString(formData, "expectedAmount");
     if (!expenseId) return { error: "That expense could not be found." };
-    const result = await confirmExpenseReceiptDraft(prisma, access, { expenseId });
+    if (!expectedUpdatedAt || !expectedAmount) {
+      return { error: "Retry that request from the form." };
+    }
+    const result = await confirmExpenseReceiptDraft(prisma, access, {
+      expenseId,
+      expectedUpdatedAt,
+      expectedAmount,
+    });
     revalidateExpenses();
     return { message: result.message };
   } catch (error) {

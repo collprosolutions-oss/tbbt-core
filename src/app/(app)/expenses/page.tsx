@@ -366,6 +366,7 @@ export default async function ExpensesPage({
       reviewLabel: isExpenseReviewStatus(expense.reviewStatus)
         ? EXPENSE_REVIEW_LABELS[expense.reviewStatus]
         : expense.reviewStatus,
+      updatedAtValue: expense.updatedAt.toISOString(),
       recurring: expense.recurring,
       recurringNote: expense.recurringNote,
       mileageMilesValue: expense.mileageMiles != null ? String(asMoneyNumber(expense.mileageMiles)) : "",

@@ -25,6 +25,12 @@ export const EXPENSE_RECEIPT_EXTRACT_LOW_CONFIDENCE_MESSAGE =
 export const EXPENSE_RECEIPT_EXTRACT_CENTS_MESSAGE =
   "The provider amount or tax was not valid cents. Recorded expenses were not changed.";
 
+export const EXPENSE_RECEIPT_EXTRACT_TAX_EXCEEDS_MESSAGE =
+  "The provider tax exceeds the receipt total. Recorded expenses were not changed.";
+
+export const EXPENSE_RECEIPT_EXTRACT_STALE_CONFIRM_MESSAGE =
+  "This receipt draft changed. Review the latest extract before confirming.";
+
 export const EXPENSE_RECEIPT_EXTRACT_CONFIRM_MESSAGE =
   "Receipt draft confirmed. It is now a recorded expense and can appear in reports.";
 
@@ -32,6 +38,10 @@ export const EXPENSE_RECEIPT_EXTRACT_MIN_CONFIDENCE = 0.7;
 export const EXPENSE_RECEIPT_EXTRACT_MAX_INPUT_CHARS = 4_000;
 export const EXPENSE_RECEIPT_EXTRACT_MAX_OUTPUT_TOKENS = 400;
 export const EXPENSE_RECEIPT_EXTRACT_MAX_VENDOR_CHARS = 80;
+/** $1,000,000.00 — amount and tax must be safe integers at or below this. */
+export const EXPENSE_RECEIPT_EXTRACT_MAX_CENTS = 100_000_000;
+
+const MONEY_STRING_PATTERN = /^\d{1,3}(,\d{3})*(\.\d{1,2})?$|^\d+(\.\d{1,2})?$/;
 
 const HOSTILE_VENDOR_PATTERN =
   /ignore (all |previous |prior )?instructions|system prompt|you are now|api[_-]?key|overwrite (the )?(expense|report)/i;
@@ -59,6 +69,7 @@ export type ExpenseReceiptExtractResult = {
   fields: ExpenseReceiptExtractFields;
   expenseId?: string;
   reviewStatus?: ExpenseReviewStatus | string;
+  updatedAt?: string;
   interactionId?: string;
   applied: false | true;
   confirmable: boolean;
@@ -86,21 +97,25 @@ export function centsToMoneyString(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
+export function isReceiptExtractCentsInRange(cents: number) {
+  return Number.isSafeInteger(cents) && cents >= 0 && cents <= EXPENSE_RECEIPT_EXTRACT_MAX_CENTS;
+}
+
 export function parseMoneyToCents(raw: unknown): number | null {
   if (typeof raw === "number") {
     if (!Number.isFinite(raw) || raw < 0) return null;
     const cents = Math.round(raw * 100);
     if (Math.abs(raw * 100 - cents) > 1e-6) return null;
-    return cents;
+    return isReceiptExtractCentsInRange(cents) ? cents : null;
   }
   if (typeof raw !== "string") return null;
-  const cleaned = raw.replace(/[$,\s]/g, "").trim();
-  if (!cleaned) return null;
-  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
+  const normalized = raw.replace(/[$\s]/g, "").trim();
+  if (!normalized || !MONEY_STRING_PATTERN.test(normalized)) return null;
   try {
-    const value = new Prisma.Decimal(cleaned);
+    const value = new Prisma.Decimal(normalized.replace(/,/g, ""));
     if (value.isNaN() || value.lt(0)) return null;
-    return Number(value.toDecimalPlaces(2).mul(100).toFixed(0));
+    const cents = Number(value.toDecimalPlaces(2).mul(100).toFixed(0));
+    return isReceiptExtractCentsInRange(cents) ? cents : null;
   } catch {
     return null;
   }
@@ -108,12 +123,11 @@ export function parseMoneyToCents(raw: unknown): number | null {
 
 export function parseIntegerCents(raw: unknown): number | null {
   if (typeof raw === "number") {
-    if (!Number.isInteger(raw) || raw < 0) return null;
-    return raw;
+    return isReceiptExtractCentsInRange(raw) ? raw : null;
   }
   if (typeof raw !== "string" || !/^\d+$/.test(raw.trim())) return null;
   const value = Number(raw.trim());
-  return Number.isInteger(value) && value >= 0 ? value : null;
+  return isReceiptExtractCentsInRange(value) ? value : null;
 }
 
 export function parseExtractConfidence(raw: unknown): number | null {
@@ -184,13 +198,21 @@ export function receiptExtractFieldsFromAiNotes(notes: string | undefined, timeZ
 }
 
 export function receiptExtractHasValidAmount(fields: ExpenseReceiptExtractFields) {
-  return fields.amountCents != null && fields.amountCents > 0;
+  return fields.amountCents != null && fields.amountCents > 0 && isReceiptExtractCentsInRange(fields.amountCents);
 }
 
 export function receiptExtractHasValidTax(fields: ExpenseReceiptExtractFields) {
   if (fields.taxInvalid) return false;
   if (fields.taxCents == null) return true;
-  return Number.isInteger(fields.taxCents) && fields.taxCents >= 0;
+  return isReceiptExtractCentsInRange(fields.taxCents);
+}
+
+export function receiptExtractTaxExceedsAmount(fields: ExpenseReceiptExtractFields) {
+  return (
+    fields.amountCents != null &&
+    fields.taxCents != null &&
+    fields.taxCents > fields.amountCents
+  );
 }
 
 export function receiptExtractIsLowConfidence(fields: ExpenseReceiptExtractFields) {
@@ -201,6 +223,7 @@ export function receiptExtractCanPersistDraft(fields: ExpenseReceiptExtractField
   return (
     receiptExtractHasValidAmount(fields) &&
     receiptExtractHasValidTax(fields) &&
+    !receiptExtractTaxExceedsAmount(fields) &&
     Boolean(fields.occurredOn) &&
     !receiptExtractIsLowConfidence(fields)
   );
