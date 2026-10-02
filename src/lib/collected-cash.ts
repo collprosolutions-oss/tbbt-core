@@ -11,6 +11,7 @@
  */
 
 import { invoiceIsCreditClosed } from "@/lib/financial-intelligence/collected-revenue";
+import { paymentBelongsToInvoice } from "@/lib/payment-attribution";
 import { asNumber } from "@/lib/reports";
 
 export type CollectedCashMoney = { toString(): string } | number | string | null | undefined;
@@ -20,6 +21,7 @@ export type CollectedCashInvoice = {
   status: string;
   total: CollectedCashMoney;
   jobId?: string | null;
+  kind?: string | null;
   customerId?: string | null;
   paymentMethod?: string | null;
   paymentReference?: string | null;
@@ -49,13 +51,22 @@ function money(value: CollectedCashMoney): number {
 }
 
 export function paymentsForInvoice(
-  invoiceId: string,
+  invoice: string | Pick<CollectedCashInvoice, "id" | "jobId" | "kind">,
   payments: readonly CollectedCashPayment[],
 ): CollectedCashPayment[] {
+  const target = typeof invoice === "string" ? { id: invoice } : invoice;
   const seen = new Set<string>();
   const rows: CollectedCashPayment[] = [];
   for (const payment of payments) {
-    if (payment.invoiceId !== invoiceId || seen.has(payment.id)) continue;
+    if (seen.has(payment.id)) continue;
+    if (
+      !paymentBelongsToInvoice(
+        { invoiceId: payment.invoiceId ?? null, jobId: payment.jobId ?? null },
+        target,
+      )
+    ) {
+      continue;
+    }
     seen.add(payment.id);
     rows.push(payment);
   }
@@ -67,7 +78,7 @@ export function resolveInvoiceCollected(
   payments: readonly CollectedCashPayment[],
   credits: readonly CollectedCashCredit[] = [],
 ): { amount: number; source: CollectedCashSource | null; paymentIds: string[] } {
-  const rows = paymentsForInvoice(invoice.id, payments);
+  const rows = paymentsForInvoice(invoice, payments);
   if (rows.length > 0) {
     return {
       amount: rows.reduce((sum, payment) => sum + money(payment.amount), 0),

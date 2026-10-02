@@ -58,7 +58,7 @@ export function buildReceivables(source: FinancialSource, now: Date = new Date()
   const rows: ReceivableRow[] = source.invoices
     .filter((invoice) => invoice.status === "SENT")
     .map((invoice) => {
-      const collectedAgainstInvoice = paymentsAppliedToInvoice(source.payments, invoice.id);
+      const collectedAgainstInvoice = paymentsAppliedToInvoice(source.payments, invoice);
       const balanceDue = invoiceBalanceDue(
         invoice,
         source.payments,

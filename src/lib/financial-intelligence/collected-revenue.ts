@@ -14,6 +14,7 @@
  *
  * SENT / unpaid invoice value is never collected cash.
  */
+import { paymentBelongsToInvoice } from "@/lib/payment-attribution";
 import { roundMoney } from "@/lib/time-cards";
 import type { FinancialPayment, FinancialSource } from "@/lib/financial-intelligence/source";
 
@@ -22,6 +23,7 @@ export type CollectedInvoice = {
   status: string;
   total: number;
   jobId?: string | null;
+  kind?: string | null;
   customerId?: string | null;
   paidAt?: Date | null;
   paymentMethod?: string | null;
@@ -46,10 +48,18 @@ function uniquePayments(payments: readonly CollectedPayment[]): CollectedPayment
 
 export function paymentsAppliedToInvoice(
   payments: readonly CollectedPayment[],
-  invoiceId: string,
+  invoice: string | Pick<CollectedInvoice, "id" | "jobId" | "kind">,
 ): number {
+  const target = typeof invoice === "string" ? { id: invoice } : invoice;
   return roundMoney(
-    payments.filter((payment) => payment.invoiceId === invoiceId).reduce((sum, payment) => sum + payment.amount, 0),
+    payments
+      .filter((payment) =>
+        paymentBelongsToInvoice(
+          { invoiceId: payment.invoiceId ?? null, jobId: payment.jobId ?? null },
+          target,
+        ),
+      )
+      .reduce((sum, payment) => sum + payment.amount, 0),
   );
 }
 
@@ -79,7 +89,7 @@ function creditsAppliedToInvoice(
 
 /** Remaining SENT/PAID balance after recorded payments and OWNER credits. Never negative. */
 export function invoiceBalanceDue(
-  invoice: Pick<CollectedInvoice, "id" | "total">,
+  invoice: Pick<CollectedInvoice, "id" | "total" | "jobId" | "kind">,
   payments: readonly CollectedPayment[],
   credits: readonly CollectedInvoiceCredit[],
 ): number {
@@ -87,17 +97,23 @@ export function invoiceBalanceDue(
     Math.max(
       0,
       invoice.total -
-        paymentsAppliedToInvoice(payments, invoice.id) -
+        paymentsAppliedToInvoice(payments, invoice) -
         creditsAppliedToInvoice(credits, invoice.id),
     ),
   );
 }
 
 export function invoiceHasPaymentRows(
-  invoiceId: string,
+  invoice: string | Pick<CollectedInvoice, "id" | "jobId" | "kind">,
   payments: readonly CollectedPayment[],
 ): boolean {
-  return payments.some((payment) => payment.invoiceId === invoiceId);
+  const target = typeof invoice === "string" ? { id: invoice } : invoice;
+  return payments.some((payment) =>
+    paymentBelongsToInvoice(
+      { invoiceId: payment.invoiceId ?? null, jobId: payment.jobId ?? null },
+      target,
+    ),
+  );
 }
 
 export const RECORDED_CREDIT_REFERENCE_PREFIX = "Recorded credit ";
@@ -162,7 +178,7 @@ export function legacyCollectedForInvoice(
   credits: readonly CollectedInvoiceCredit[] = [],
 ): number {
   if (invoice.status !== "PAID") return 0;
-  if (invoiceHasPaymentRows(invoice.id, payments)) return 0;
+  if (invoiceHasPaymentRows(invoice, payments)) return 0;
   // CREDIT_CLOSED_NOT_LEGACY_CASH
   if (invoiceIsCreditClosed(invoice, credits)) return 0;
   return roundMoney(invoice.total);
@@ -173,7 +189,7 @@ export function collectedAmountForInvoice(
   payments: readonly CollectedPayment[],
   credits: readonly CollectedInvoiceCredit[] = [],
 ): number {
-  const applied = paymentsAppliedToInvoice(payments, invoice.id);
+  const applied = paymentsAppliedToInvoice(payments, invoice);
   return roundMoney(applied + legacyCollectedForInvoice(invoice, payments, credits));
 }
 

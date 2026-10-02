@@ -114,6 +114,7 @@ npm run test:native-field-activity
 npm run test:native-field-pickup
 npm run test:native-field-problem
 npm run test:collections-worklist
+npm run test:job-money-reconciliation
 npx tsc --noEmit
 npm run build
 ```
