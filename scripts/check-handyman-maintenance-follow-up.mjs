@@ -80,6 +80,7 @@ const { loadOwnerDailyMaintenanceFollowUpAttention } = await import(
 );
 const {
   composeCustomerCommunication,
+  composeIdempotencyKey,
   maintenanceComposeTestHooks,
   resetCommunicationEmailSender,
   setCommunicationEmailSender,
@@ -106,6 +107,21 @@ const {
   sendCustomerFollowUp,
 } = await import("@/lib/referral-ops");
 const { loadReviewsSource } = await import("@/lib/reviews-data");
+const { JOB_CALLBACK_OPEN_STATUSES } = await import("@/lib/job-callback");
+const { recordCustomerReportedCallback } = await import("@/lib/job-callback-ops");
+const {
+  loadOwnerProjectConversationReview,
+} = await import("@/lib/project-conversation-data");
+const {
+  sendProjectConversationOwnerReply,
+  submitPortalProjectConversation,
+} = await import("@/lib/project-conversation-ops");
+const { MAX_PROJECT_CONVERSATION_MESSAGES } = await import(
+  "@/lib/project-conversation"
+);
+const { buildOwnerDailyCallbackAttention, OWNER_DAILY_CALLBACK_SELECT } = await import(
+  "@/lib/owner-daily-attention"
+);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -637,6 +653,105 @@ try {
       jobsAfter === jobsBeforeScan &&
       commsAfterCreate === commsBeforeScan &&
       recurringAfter === 0,
+  );
+  const callbacksAfterScan = await prisma.jobCallback.count({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Creating or scanning a MAINTENANCE follow-up does not open a JobCallback",
+    callbacksAfterScan === 0,
+  );
+
+  console.log("\nDB — Merged interaction: one event stays one owner task; follow-up never sends");
+  const complaintJob = await createCompletedJob(businessA.id);
+  const conversationJob = await createCompletedJob(businessA.id, {
+    status: "IN_PROGRESS",
+    phone: "",
+    email: `merged-convo-${suffix}@example.com`,
+    smsConsentStatus: "REVOKED",
+  });
+  const followUpsBeforeComplaint = await prisma.customerFollowUp.count({
+    where: { businessId: businessA.id, origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE },
+  });
+  const commsBeforeMerged = await countBusinessCommunications(prisma, businessA.id);
+  const mergedSms = createFakeCustomerMessagingProvider();
+  setCustomerMessagingProvider(mergedSms);
+  const complaint = await recordCustomerReportedCallback(prisma, ownerA, {
+    jobId: complaintJob.job.id,
+    description: "Latch still sticks after the visit.",
+    reportedVia: "PHONE",
+  });
+  const inboundConversation = await submitPortalProjectConversation(prisma, {
+    token: conversationJob.job.projectToken,
+    body: "Can you confirm the arrival window?",
+    attemptId: randomUUID(),
+  });
+  const blockedConversationKey = composeIdempotencyKey({
+    channel: "SMS",
+    purpose: "JOB_UPDATE",
+    customerId: conversationJob.customer.id,
+    attemptId: randomUUID(),
+  });
+  const blockedConversationSms = await sendProjectConversationOwnerReply(prisma, ownerA, {
+    jobId: conversationJob.job.id,
+    channel: "SMS",
+    body: "Blocked reservation should not eat the cap",
+    idempotencyKey: blockedConversationKey,
+  });
+  await scanScheduledBusinessEvents(prisma, businessA.id);
+  const callbackRows = await prisma.jobCallback.findMany({
+    where: {
+      businessId: businessA.id,
+      status: { in: [...JOB_CALLBACK_OPEN_STATUSES] },
+    },
+    select: OWNER_DAILY_CALLBACK_SELECT,
+    orderBy: { recordedAt: "desc" },
+  });
+  const callbackAttention = buildOwnerDailyCallbackAttention(callbackRows, businessA.id);
+  const maintenanceAttention = await loadOwnerDailyMaintenanceFollowUpAttention(
+    prisma,
+    businessA.id,
+    { todayStart: onDueStart },
+  );
+  const followUpsAfterMerged = await prisma.customerFollowUp.count({
+    where: { businessId: businessA.id, origin: CUSTOMER_FOLLOW_UP_ORIGINS.MAINTENANCE },
+  });
+  const conversationReview = await loadOwnerProjectConversationReview(
+    prisma,
+    ownerA,
+    conversationJob.job.id,
+  );
+  const blockedConversationRows = await prisma.customerCommunication.findMany({
+    where: { businessId: businessA.id, idempotencyKey: blockedConversationKey },
+  });
+  check(
+    "One customer-issue event is one JobCallback owner task and not a second MAINTENANCE row",
+    complaint.id != null &&
+      callbackAttention.length === 1 &&
+      callbackAttention[0].key === complaint.id &&
+      followUpsAfterMerged === followUpsBeforeComplaint &&
+      maintenanceAttention.items.every((item) => item.key !== complaint.id),
+  );
+  check(
+    "Conversation inbound plus blocked OWNER SMS do not become callback or follow-up owner tasks",
+    inboundConversation.ok === true &&
+      blockedConversationSms.ok === false &&
+      blockedConversationSms.status === "BLOCKED" &&
+      blockedConversationSms.provider === "none" &&
+      mergedSms.sent.length === 0 &&
+      blockedConversationRows.length === 1 &&
+      blockedConversationRows[0].status === "BLOCKED" &&
+      conversationReview?.remaining === MAX_PROJECT_CONVERSATION_MESSAGES - 1 &&
+      callbackAttention.length === 1 &&
+      followUpsAfterMerged === followUpsBeforeComplaint,
+  );
+  check(
+    "Creating or scanning follow-ups during the merged path still never sends",
+    (await countBusinessCommunications(prisma, businessA.id)) === commsBeforeMerged + 2 &&
+      (await prisma.businessEvent.count({
+        where: { businessId: businessA.id, type: "CUSTOMER_FOLLOW_UP_DUE" },
+      })) === 0 &&
+      mergedSms.sent.length === 0,
   );
 
   console.log("\nDB — Owner queue is due/overdue only and tenant-scoped");

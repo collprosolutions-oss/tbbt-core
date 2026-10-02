@@ -242,7 +242,13 @@ check(
       composeSrc.indexOf('if (input.channel === "SMS")'),
       composeSrc.indexOf("attemptCustomerSms"),
     );
+    const permittedLine = smsBlockedSrc
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("if (!eligibility.permitted"));
     return (
+      permittedLine === "if (!eligibility.permitted) {" &&
+      !smsBlockedSrc.includes("&& !resumeCommunicationId") &&
       smsBlockedSrc.includes("recordNonProviderAttempt") &&
       smsBlockedSrc.includes("resumeCommunicationId: input.resumeCommunicationId") &&
       smsBlockedSrc.includes('status: "BLOCKED"') &&
@@ -1376,6 +1382,16 @@ try {
     callbackStillHidden.status === "hidden" &&
       callbackSubmitOnActive.ok === false &&
       callbackSubmitOnActive.error === JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
+  );
+  const callbackRowsAfterConversation = await prisma.jobCallback.count({
+    where: { businessId: businessA.id },
+  });
+  const followUpRowsAfterConversation = await prisma.customerFollowUp.count({
+    where: { businessId: businessA.id },
+  });
+  check(
+    "Conversation posts and OWNER Send do not become JobCallback or follow-up owner tasks",
+    callbackRowsAfterConversation === 0 && followUpRowsAfterConversation === 0,
   );
 
   console.log("\nPAGE OPEN — loaders do not increment provider sends");
