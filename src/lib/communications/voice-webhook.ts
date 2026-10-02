@@ -1,6 +1,7 @@
 /**
  * Verified inbound Twilio Voice webhook for the Communications missed-call
- * log. Signature validation follows current Twilio docs:
+ * log. Official X-Twilio-Signature validation (HMAC-SHA1 of the exact
+ * URL plus every received form parameter) follows current Twilio docs:
  * https://www.twilio.com/docs/usage/webhooks/webhooks-security
  * Inbound parameters and CallStatus values:
  * https://www.twilio.com/docs/voice/twiml
