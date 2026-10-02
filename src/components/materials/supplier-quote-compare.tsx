@@ -86,11 +86,7 @@ export function SupplierQuoteCompareTable({
                 ) : null}
               </td>
               <td className="py-1.5 pr-2">
-                {new Date(quote.quotedAt).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
+                {quote.quotedOnLabel}
                 <span className="block text-muted-foreground">
                   {quote.freshnessLabel}
                   {quote.stale ? " — confirm before choosing" : ""}

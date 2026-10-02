@@ -63,6 +63,7 @@ export type PurchaseListItemView = {
   selectedQuoteId: string | null;
   notes: string | null;
   quotes: SupplierQuoteCompareRow[];
+  quoteSelectable: boolean;
 };
 
 export type PurchaseOrderItemView = {
@@ -379,7 +380,7 @@ function PurchaseItemForm({
             purchaseListItemId={item.id}
             jobId={jobId}
             estimateId={estimateId}
-            canSelect={canSelectQuote}
+            canSelect={canSelectQuote && item.quoteSelectable}
           />
         </div>
       ) : null}

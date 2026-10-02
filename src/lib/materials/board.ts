@@ -1,12 +1,14 @@
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { formatDate } from "@/lib/format";
 import { asMoneyNumber } from "@/lib/materials/money";
 import { financialMaterialCost } from "@/lib/materials/expense-link";
 import { listMaterialCatalog, listSuppliers } from "@/lib/materials";
 import { listMaterialPriceHistory } from "@/lib/materials/price-history";
 import { ensurePurchaseList, loadPurchaseListBoard } from "@/lib/materials/purchase";
-import { compareSupplierQuotes } from "@/lib/materials/quotes";
+import { businessLocalQuoteDateInput, compareSupplierQuotes } from "@/lib/materials/quotes";
+import { canSelectSupplierQuoteForPurchaseItem } from "@/lib/materials/types";
 import { materialEstimateVsActual } from "@/lib/materials/variance";
 import type { MaterialsCatalogRow, MaterialsSupplierRow } from "@/components/materials/materials-workspace";
 import { purchaseOrderReceiptQuantities } from "@/lib/materials/receipt-quantities";
@@ -64,7 +66,13 @@ export async function loadMaterialsWorkspaceData(db: PrismaClient, access: Busin
     categories: supplier.categories,
     locationDescription: supplier.locationDescription,
   }));
-  return { suppliers: supplierRows, catalog: catalogRows };
+  const timeZone = resolveBusinessTimeZone(access.workspace?.business);
+  return {
+    suppliers: supplierRows,
+    catalog: catalogRows,
+    quoteDateDefault: businessLocalQuoteDateInput(new Date(), timeZone),
+    timeZone,
+  };
 }
 
 export async function loadPurchaseWorkspace(
@@ -92,6 +100,21 @@ export async function loadPurchaseWorkspace(
       }),
     );
   }
+  const itemIds = (board?.items ?? []).map((item) => item.id);
+  const activePoItemIds = new Set(
+    itemIds.length === 0
+      ? []
+      : (
+          await db.materialPurchaseOrderItem.findMany({
+            where: {
+              businessId: access.businessId,
+              purchaseListItemId: { in: itemIds },
+              purchaseOrder: { status: { not: "CANCELLED" } },
+            },
+            select: { purchaseListItemId: true },
+          })
+        ).map((row) => row.purchaseListItemId),
+  );
   const items: PurchaseListItemView[] = (board?.items ?? []).map((item) => {
     const financial = financialMaterialCost(item);
     return {
@@ -123,6 +146,8 @@ export async function loadPurchaseWorkspace(
       selectedQuoteId: item.selectedQuoteId,
       notes: item.notes,
       quotes: item.materialId ? (quoteByMaterial.get(item.materialId) ?? []) : [],
+      quoteSelectable:
+        canSelectSupplierQuoteForPurchaseItem(item.status) && !activePoItemIds.has(item.id),
     };
   });
   const orders: PurchaseOrderView[] = (board?.purchaseOrders ?? []).map((order) => ({

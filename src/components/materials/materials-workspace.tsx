@@ -85,9 +85,11 @@ function FormStatus({ state }: { state: MaterialsActionState }) {
 export function MaterialsWorkspace({
   suppliers,
   catalog,
+  quoteDateDefault,
 }: {
   suppliers: MaterialsSupplierRow[];
   catalog: MaterialsCatalogRow[];
+  quoteDateDefault: string;
 }) {
   const [createSupplierState, createSupplier, creatingSupplier] = useActionState(
     createSupplierAction,
@@ -268,7 +270,14 @@ export function MaterialsWorkspace({
           {catalog.length === 0 ? (
             <p className="text-sm text-muted-foreground">No reusable materials yet.</p>
           ) : (
-            catalog.map((item) => <CatalogEditForm key={item.id} item={item} suppliers={suppliers} />)
+            catalog.map((item) => (
+              <CatalogEditForm
+                key={item.id}
+                item={item}
+                suppliers={suppliers}
+                quoteDateDefault={quoteDateDefault}
+              />
+            ))
           )}
         </CardContent>
       </Card>
@@ -319,9 +328,11 @@ function SupplierEditForm({ supplier }: { supplier: MaterialsSupplierRow }) {
 function CatalogEditForm({
   item,
   suppliers,
+  quoteDateDefault,
 }: {
   item: MaterialsCatalogRow;
   suppliers: MaterialsSupplierRow[];
+  quoteDateDefault: string;
 }) {
   const [state, action, pending] = useActionState(updateCatalogItemAction, initial);
   return (
@@ -376,7 +387,7 @@ function CatalogEditForm({
           ))}
         </ul>
       ) : null}
-      <RecordSupplierQuoteForm item={item} suppliers={suppliers} />
+      <RecordSupplierQuoteForm item={item} suppliers={suppliers} quoteDateDefault={quoteDateDefault} />
       <SupplierQuoteCompareTable quotes={item.quotes} />
     </div>
   );
@@ -385,12 +396,14 @@ function CatalogEditForm({
 function RecordSupplierQuoteForm({
   item,
   suppliers,
+  quoteDateDefault,
 }: {
   item: MaterialsCatalogRow;
   suppliers: MaterialsSupplierRow[];
+  quoteDateDefault: string;
 }) {
   const [state, action, pending] = useActionState(recordSupplierQuoteAction, initial);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = quoteDateDefault;
   return (
     <form action={action} className="space-y-2 rounded-md border p-2">
       <FormStatus state={state} />

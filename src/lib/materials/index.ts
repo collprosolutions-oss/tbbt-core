@@ -44,9 +44,11 @@ export {
 } from "@/lib/materials/quote-lock";
 export {
   buildSupplierQuoteComparison,
+  businessLocalQuoteDateInput,
   compareSupplierQuotes,
   listSupplierQuotes,
   MATERIAL_SUPPLIER_QUOTE_SCHEMA_SOURCE,
+  parseQuotedAt,
   recordSupplierQuote,
   selectSupplierQuoteForPurchaseList,
 } from "@/lib/materials/quotes";
@@ -58,6 +60,7 @@ export {
   convertMaterialQuoteUnits,
   materialUnitFactor,
   normalizeMaterialUnit,
+  quoteCostForNeededQuantity,
 } from "@/lib/materials/units";
 export {
   purchaseOrderReceiptQuantities,
@@ -96,6 +99,8 @@ export {
   canSelectSupplierQuoteForPurchaseItem,
   canTransitionPurchaseOrder,
   classifySupplierQuoteFreshness,
+  PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES,
+  SUPPLIER_QUOTE_FUTURE_SLACK_MS,
   isMaterialPriceSource,
   isPurchaseItemStatus,
   isPurchaseOrderStatus,

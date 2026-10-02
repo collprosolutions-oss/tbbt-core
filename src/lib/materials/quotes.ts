@@ -11,6 +11,13 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  formatISODateInTimeZone,
+  parseCivilDateInTimeZone,
+  resolveBusinessTimeZone,
+} from "@/lib/business-timezone";
+import { formatDate } from "@/lib/format";
+import {
   requireMaterialsCatalogAccess,
   requireOwnerSupplierQuoteWrite,
   requirePurchaseListWriteAccess,
@@ -29,10 +36,11 @@ import {
   isSupplierQuoteAvailability,
   SUPPLIER_QUOTE_AVAILABILITY_LABELS,
   SUPPLIER_QUOTE_FRESHNESS_LABELS,
+  SUPPLIER_QUOTE_FUTURE_SLACK_MS,
   type SupplierQuoteAvailability,
   type SupplierQuoteCompareRow,
 } from "@/lib/materials/types";
-import { convertMaterialQuoteUnits } from "@/lib/materials/units";
+import { convertMaterialQuoteUnits, quoteCostForNeededQuantity } from "@/lib/materials/units";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -48,14 +56,59 @@ export type RecordSupplierQuoteInput = {
   deliveryCost?: string | number | null;
   availability?: string | null;
   notes?: string | null;
+  now?: Date;
 };
 
-function parseQuotedAt(raw: Date | string) {
-  const at = raw instanceof Date ? raw : new Date(raw);
-  if (Number.isNaN(at.getTime())) {
+const CIVIL_DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const CIVIL_UTC_MIDNIGHT = /^(\d{4})-(\d{2})-(\d{2})T00:00:00(?:\.\d+)?Z$/;
+
+export function businessLocalQuoteDateInput(
+  now: Date = new Date(),
+  timeZone: string = DEFAULT_BUSINESS_TIMEZONE,
+) {
+  return formatISODateInTimeZone(now, timeZone);
+}
+
+function parseCivilQuoteDate(raw: string, timeZone: string) {
+  const match = raw.match(CIVIL_DATE_ONLY) ?? raw.match(CIVIL_UTC_MIDNIGHT);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return parseCivilDateInTimeZone(year, month, day, timeZone);
+}
+
+export function parseQuotedAt(
+  raw: Date | string,
+  timeZone: string = DEFAULT_BUSINESS_TIMEZONE,
+  now: Date = new Date(),
+) {
+  let at: Date | null = null;
+  if (raw instanceof Date) {
+    at = Number.isNaN(raw.getTime()) ? null : raw;
+  } else {
+    const text = raw.trim();
+    at = parseCivilQuoteDate(text, timeZone);
+    if (!at) {
+      const parsed = new Date(text);
+      at = Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+  }
+  if (!at) {
     throw new MaterialsError("Enter a valid quote date.");
   }
+  const todayCivil = formatISODateInTimeZone(now, timeZone);
+  const quotedCivil = formatISODateInTimeZone(at, timeZone);
+  if (quotedCivil > todayCivil || at.getTime() > now.getTime() + SUPPLIER_QUOTE_FUTURE_SLACK_MS) {
+    throw new MaterialsError(
+      "Quote date cannot be in the future. Use the business-local date the supplier quoted.",
+    );
+  }
   return at;
+}
+
+function quoteTimeZone(access: BusinessAccess) {
+  return resolveBusinessTimeZone(access.workspace?.business);
 }
 
 export async function recordSupplierQuote(
@@ -98,7 +151,7 @@ export async function recordSupplierQuote(
       businessId: access.businessId,
       materialId: material.id,
       supplierId: supplier.id,
-      quotedAt: parseQuotedAt(input.quotedAt),
+      quotedAt: parseQuotedAt(input.quotedAt, quoteTimeZone(access), input.now),
       unit: input.unit.trim() || material.unit,
       unitPrice,
       quantity,
@@ -144,8 +197,10 @@ export function buildSupplierQuoteComparison(input: {
   neededQuantity?: Prisma.Decimal | number | string | null;
   packSize?: Prisma.Decimal | number | string | null;
   now?: Date;
+  timeZone?: string;
 }): SupplierQuoteCompareRow[] {
   const now = input.now ?? new Date();
+  const timeZone = input.timeZone || DEFAULT_BUSINESS_TIMEZONE;
   const needed =
     input.neededQuantity == null || input.neededQuantity === ""
       ? null
@@ -171,11 +226,18 @@ export function buildSupplierQuoteComparison(input: {
         packSize: input.packSize,
       });
       comparableUnit = converted.toUnit;
-      comparableUnitPrice = converted.unitPrice;
+      comparableUnitPrice = converted.unitPrice.toDecimalPlaces(2);
       comparableQuantity = converted.quantity;
       conversionLabel = converted.label;
       neededLanded = needed
-        ? landedCost(needed, converted.unitPrice, quote.deliveryCost)
+        ? quoteCostForNeededQuantity({
+            unitPrice: quote.unitPrice,
+            fromUnit: quote.unit,
+            toUnit: input.targetUnit,
+            neededQuantity: needed,
+            deliveryCost: quote.deliveryCost,
+            packSize: input.packSize,
+          }).plannedCost
         : quoteLanded;
     } catch (error) {
       conversionError =
@@ -188,6 +250,8 @@ export function buildSupplierQuoteComparison(input: {
       supplierId: quote.supplierId,
       supplierName: quote.supplierName,
       quotedAt: quote.quotedAt.toISOString(),
+      quotedOn: formatISODateInTimeZone(quote.quotedAt, timeZone),
+      quotedOnLabel: formatDate(quote.quotedAt, timeZone),
       freshness,
       freshnessLabel: SUPPLIER_QUOTE_FRESHNESS_LABELS[freshness],
       stale: freshness === "stale",
@@ -254,6 +318,7 @@ export async function compareSupplierQuotes(
     neededQuantity: input.neededQuantity,
     packSize: material.packSize,
     now: input.now,
+    timeZone: quoteTimeZone(access),
   });
 }
 
@@ -288,7 +353,20 @@ async function selectSupplierQuoteForPurchaseListInTx(
   await requirePurchaseListWriteAccess(db as PrismaClient, access, list);
   if (!canSelectSupplierQuoteForPurchaseItem(locked.status)) {
     throw new MaterialsError(
-      "That purchase-list item can no longer take a supplier quote. Purchased, received, and cancelled rows stay as recorded.",
+      "That purchase-list item can no longer take a supplier quote. Only needed and planned rows can be updated; ordered, purchased, received, and cancelled rows stay as recorded.",
+    );
+  }
+  const activePurchaseOrderItem = await db.materialPurchaseOrderItem.findFirst({
+    where: {
+      businessId: access.businessId,
+      purchaseListItemId: locked.id,
+      purchaseOrder: { status: { not: "CANCELLED" } },
+    },
+    select: { id: true },
+  });
+  if (activePurchaseOrderItem) {
+    throw new MaterialsError(
+      "That purchase-list item is already on a purchase order. Cancel the order before choosing a different supplier quote.",
     );
   }
   const expected = input.expectedSelectedQuoteId ? input.expectedSelectedQuoteId : null;
@@ -328,11 +406,16 @@ async function selectSupplierQuoteForPurchaseListInTx(
     toUnit: locked.unit,
     packSize: material.packSize,
   });
-  const plannedUnitCost = converted.unitPrice;
-  const plannedCost = landedCost(locked.quantityNeeded, plannedUnitCost, quote.deliveryCost);
-  if (!plannedCost) {
-    throw new MaterialsError("That quote could not produce an exact purchase-list total.");
-  }
+  const priced = quoteCostForNeededQuantity({
+    unitPrice: quote.unitPrice,
+    fromUnit: quote.unit,
+    toUnit: locked.unit,
+    neededQuantity: locked.quantityNeeded,
+    deliveryCost: quote.deliveryCost,
+    packSize: material.packSize,
+  });
+  const plannedUnitCost = priced.plannedUnitCost;
+  const plannedCost = priced.plannedCost;
   const nextStatus = locked.status === "NEEDED" ? "PLANNED" : locked.status;
   const updated = await db.materialPurchaseListItem.update({
     where: { id: locked.id },

@@ -33,16 +33,21 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { createEstimateVersionSnapshot } = await import("@/lib/estimate-version");
 const {
   addPurchaseListItem,
+  businessLocalQuoteDateInput,
+  canSelectSupplierQuoteForPurchaseItem,
   classifySupplierQuoteFreshness,
   compareSupplierQuotes,
   convertMaterialQuoteUnits,
   createMaterialCatalogItem,
+  createPurchaseOrder,
   createSupplier,
   ensurePurchaseList,
   getSupplierCommerceAdapter,
   listSupplierQuotes,
   MATERIAL_SUPPLIER_QUOTE_SCHEMA_SOURCE,
   MATERIALS_SUPPLIERS_SCHEMA_SOURCE,
+  parseQuotedAt,
+  quoteCostForNeededQuantity,
   recordSupplierQuote,
   selectSupplierQuoteForPurchaseList,
   SUPPLIER_COMMERCE_DISCONNECTED_LIMITATION,
@@ -124,7 +129,7 @@ if (migrate.status !== 0) {
 }
 
 const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
+const { Prisma, PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
 const prismaRace = new PrismaClient({ datasourceUrl: testUrl });
 const prismaHold = new PrismaClient({ datasourceUrl: testUrl });
@@ -225,6 +230,7 @@ try {
   console.log("\nSTATIC — Append-only quotes, no scrape, reserved migration");
   const quotesSrc = readRepo("src/lib/materials/quotes.ts");
   const unitsSrc = readRepo("src/lib/materials/units.ts");
+  const typesSrc = readRepo("src/lib/materials/types.ts");
   const adapterSrc = readRepo("src/lib/materials/adapter.ts");
   const actionsSrc = readRepo("src/app/actions/materials.ts");
   const schema = readRepo("prisma/schema.prisma");
@@ -274,6 +280,32 @@ try {
       !unitsSrc.includes("cheerio") &&
       adapterSrc.includes('connectionState: "DISCONNECTED"') &&
       adapterSrc.includes("TBBT does not scrape"),
+  );
+  const workspaceSrc = readRepo("src/components/materials/materials-workspace.tsx");
+  const compareViewSrc = readRepo("src/components/materials/supplier-quote-compare.tsx");
+  check(
+    "Converted unit price is not rounded to cents before multiplication",
+    !unitsSrc.includes("unitPrice.div(factor).toDecimalPlaces(2)") &&
+      unitsSrc.includes("quoteCostForNeededQuantity") &&
+      quotesSrc.includes("quoteCostForNeededQuantity") &&
+      quotesSrc.includes("priced.plannedUnitCost"),
+  );
+  check(
+    "Quote dates use the business timezone and reject the future",
+    quotesSrc.includes("parseCivilDateInTimeZone") &&
+      quotesSrc.includes("Quote date cannot be in the future") &&
+      workspaceSrc.includes("quoteDateDefault") &&
+      !workspaceSrc.includes("toISOString().slice(0, 10)") &&
+      compareViewSrc.includes("quotedOnLabel") &&
+      !compareViewSrc.includes("toLocaleDateString"),
+  );
+  check(
+    "Quote selection is limited to NEEDED/PLANNED items with no active PO line",
+    typesSrc.includes('"NEEDED"') &&
+      typesSrc.includes('"PLANNED"') &&
+      !/PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES = \[[^\]]*ORDERED/.test(typesSrc) &&
+      quotesSrc.includes("already on a purchase order") &&
+      quotesSrc.includes('status: { not: "CANCELLED" }'),
   );
 
   const liveAdapter = getSupplierCommerceAdapter();
@@ -348,12 +380,86 @@ try {
     (error) => /cannot be converted/i.test(String(error.message)),
   );
 
+  const tenPerYard = convertMaterialQuoteUnits({
+    quantity: "1",
+    unitPrice: "10.00",
+    fromUnit: "yd",
+    toUnit: "ft",
+  });
+  const yardNeed = quoteCostForNeededQuantity({
+    unitPrice: "10.00",
+    fromUnit: "yd",
+    toUnit: "ft",
+    neededQuantity: "300",
+    deliveryCost: "0",
+  });
+  const inchNeed = quoteCostForNeededQuantity({
+    unitPrice: "1.00",
+    fromUnit: "in",
+    toUnit: "ft",
+    neededQuantity: "10",
+    deliveryCost: "0",
+  });
+  const bagNeed = quoteCostForNeededQuantity({
+    unitPrice: "1.00",
+    fromUnit: "bag",
+    toUnit: "ea",
+    neededQuantity: "8000",
+    deliveryCost: "0",
+    packSize: "80",
+  });
+  const tonNeed = quoteCostForNeededQuantity({
+    unitPrice: "1.00",
+    fromUnit: "ton",
+    toUnit: "lb",
+    neededQuantity: "20000",
+    deliveryCost: "0",
+  });
+  check(
+    "Non-terminating yd→ft keeps the unrounded unit price and exact $1000 total",
+    tenPerYard.unitPrice.toString() !== "3.33" &&
+      tenPerYard.unitPrice.eq(new Prisma.Decimal(10).div(3)) &&
+      yardNeed.plannedCost.toString() === "1000" &&
+      yardNeed.plannedUnitCost.eq(yardNeed.materialCost.div(300)) &&
+      !yardNeed.plannedUnitCost.eq(new Prisma.Decimal("3.33")),
+  );
+  check(
+    "in→ft, bag→ea at $1, and ton→lb round once at the landed total",
+    inchNeed.plannedCost.toString() === "120" &&
+      bagNeed.plannedCost.toString() === "100" &&
+      bagNeed.plannedUnitCost.toString() === "0.0125" &&
+      tonNeed.plannedCost.toString() === "10" &&
+      tonNeed.plannedUnitCost.toString() === "0.0005",
+  );
+
   const now = new Date("2026-10-02T17:00:00.000Z");
+  const lateEveningUtc = new Date("2026-10-03T01:00:00.000Z");
   check(
     "Quotes older than 7 days are stale",
     classifySupplierQuoteFreshness(new Date("2026-09-20T17:00:00.000Z"), now) === "stale" &&
       classifySupplierQuoteFreshness(new Date("2026-10-02T12:00:00.000Z"), now) === "current" &&
       classifySupplierQuoteFreshness(new Date("2026-09-28T17:00:00.000Z"), now) === "recently_checked",
+  );
+  check(
+    "Future-dated quotes are stale, not current",
+    classifySupplierQuoteFreshness(new Date("2099-01-01T00:00:00.000Z"), now) === "stale" &&
+      classifySupplierQuoteFreshness("2099-01-01", now) === "stale",
+  );
+  const storedCivil = parseQuotedAt("2026-10-02", "America/New_York", now);
+  check(
+    "Date-only quotes store the business-local civil day, not UTC midnight",
+    storedCivil.toISOString() === "2026-10-02T04:00:00.000Z" &&
+      storedCivil.toISOString() !== new Date("2026-10-02").toISOString(),
+  );
+  check(
+    "Form default is the business-local date after 8pm ET",
+    businessLocalQuoteDateInput(lateEveningUtc, "America/New_York") === "2026-10-02" &&
+      lateEveningUtc.toISOString().slice(0, 10) === "2026-10-03",
+  );
+  await expectError(
+    "Future quote dates are rejected",
+    async () => parseQuotedAt("2099-01-01", "America/New_York", now),
+    (error) => /future/i.test(String(error.message)),
   );
 
   const ownerUser = await prisma.user.create({
@@ -520,6 +626,105 @@ try {
     staleRow?.stale === true &&
       staleRow?.freshness === "stale" &&
       staleRow?.neededLandedTotal === "115",
+  );
+  check(
+    "Compared quote dates stay on the business-local civil day",
+    currentRow?.quotedOn === "2026-10-02" &&
+      currentRow?.quotedOnLabel.includes("Oct 2") &&
+      cheaperRow?.quotedOn === "2026-10-01",
+  );
+
+  const longStock = await createMaterialCatalogItem(prisma, ownerA, {
+    name: "Long stock",
+    unit: "ft",
+    packSize: "1",
+  });
+  const yardTen = await recordSupplierQuote(prisma, ownerA, {
+    materialId: longStock.id,
+    supplierId: depot.id,
+    quotedAt: "2026-10-02",
+    unit: "yd",
+    unitPrice: "10.00",
+    quantity: "1",
+    deliveryCost: "0",
+    availability: "IN_STOCK",
+  });
+  const footThreeThirtyThree = await recordSupplierQuote(prisma, ownerA, {
+    materialId: longStock.id,
+    supplierId: yard.id,
+    quotedAt: "2026-10-02",
+    unit: "ft",
+    unitPrice: "3.33",
+    quantity: "1",
+    deliveryCost: "0",
+    availability: "IN_STOCK",
+  });
+  const longCompared = await compareSupplierQuotes(prisma, ownerA, {
+    materialId: longStock.id,
+    targetUnit: "ft",
+    neededQuantity: "300",
+    now,
+  });
+  const yardTenRow = longCompared.find((row) => row.quoteId === yardTen.id);
+  const footRow = longCompared.find((row) => row.quoteId === footThreeThirtyThree.id);
+  check(
+    "$10/yd for 300 ft is $1000.00 and does not tie $3.33/ft at $999.00",
+    yardTenRow?.neededLandedTotal === "1000" &&
+      yardTenRow?.comparableUnitPrice === "3.33" &&
+      yardTenRow?.lowestLanded === false &&
+      footRow?.neededLandedTotal === "999" &&
+      footRow?.lowestLanded === true,
+  );
+
+  const bagPacks = await createMaterialCatalogItem(prisma, ownerA, {
+    name: "Mortar bags",
+    unit: "ea",
+    packSize: "80",
+  });
+  const cheapBag = await recordSupplierQuote(prisma, ownerA, {
+    materialId: bagPacks.id,
+    supplierId: depot.id,
+    quotedAt: "2026-10-02",
+    unit: "bag",
+    unitPrice: "1.00",
+    quantity: "1",
+    deliveryCost: "0",
+    availability: "IN_STOCK",
+  });
+  const bagCompared = await compareSupplierQuotes(prisma, ownerA, {
+    materialId: bagPacks.id,
+    targetUnit: "ea",
+    neededQuantity: "8000",
+    now,
+  });
+  check(
+    "$1/bag pack 80 for 8000 ea is $100.00, not $80.00",
+    bagCompared[0]?.quoteId === cheapBag.id && bagCompared[0]?.neededLandedTotal === "100",
+  );
+
+  const gravel = await createMaterialCatalogItem(prisma, ownerA, {
+    name: "Gravel",
+    unit: "lb",
+  });
+  const tonQuote = await recordSupplierQuote(prisma, ownerA, {
+    materialId: gravel.id,
+    supplierId: depot.id,
+    quotedAt: "2026-10-02",
+    unit: "ton",
+    unitPrice: "1.00",
+    quantity: "1",
+    deliveryCost: "0",
+    availability: "IN_STOCK",
+  });
+  const tonCompared = await compareSupplierQuotes(prisma, ownerA, {
+    materialId: gravel.id,
+    targetUnit: "lb",
+    neededQuantity: "20000",
+    now,
+  });
+  check(
+    "$1/ton for 20000 lb is $10.00, not $0.00",
+    tonCompared[0]?.quoteId === tonQuote.id && tonCompared[0]?.neededLandedTotal === "10",
   );
 
   console.log("\nTEST — Tenant isolation");
@@ -809,6 +1014,154 @@ try {
     "Zero delivery keeps an exact material-only total",
     bagSelected.plannedUnitCost.toString() === "6.47" &&
       bagSelected.plannedCost.toString() === "129.4",
+  );
+
+  const longList = await ensurePurchaseList(prisma, ownerA, {
+    estimateId: (
+      await prisma.estimate.create({
+        data: {
+          businessId: businessA.id,
+          customerId: customer.id,
+          status: "DRAFT",
+          publicToken: randomUUID(),
+        },
+      })
+    ).id,
+  });
+  const longItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: longStock.id,
+    name: longStock.name,
+    quantityNeeded: "300",
+    unit: "ft",
+  });
+  const longSelected = await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: longItem.id,
+    quoteId: yardTen.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  check(
+    "Selection stores exact $1000 plannedCost and a unit cost derived from that total",
+    longSelected.plannedCost.toString() === "1000" &&
+      longSelected.plannedUnitCost.eq(new Prisma.Decimal(1000).div(300)) &&
+      !longSelected.plannedUnitCost.eq(new Prisma.Decimal("3.33")),
+  );
+
+  const bagPackItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: bagPacks.id,
+    name: bagPacks.name,
+    quantityNeeded: "8000",
+    unit: "ea",
+  });
+  const bagPackSelected = await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: bagPackItem.id,
+    quoteId: cheapBag.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  check(
+    "Selection of $1/bag for 8000 ea stores $100.00, not $80.00",
+    bagPackSelected.plannedCost.toString() === "100" &&
+      bagPackSelected.plannedUnitCost.toString() === "0.0125",
+  );
+
+  await expectError(
+    "Future-dated quote cannot be recorded",
+    () =>
+      recordSupplierQuote(prisma, ownerA, {
+        materialId: lumber.id,
+        supplierId: depot.id,
+        quotedAt: "2099-01-01",
+        unit: "ft",
+        unitPrice: "1.00",
+        quantity: "1",
+      }),
+    (error) => /future/i.test(String(error.message)),
+  );
+
+  console.log("\nTEST — Selection refuses items already on a purchase order");
+  check(
+    "ORDERED items are not quote-selectable",
+    canSelectSupplierQuoteForPurchaseItem("NEEDED") &&
+      canSelectSupplierQuoteForPurchaseItem("PLANNED") &&
+      !canSelectSupplierQuoteForPurchaseItem("ORDERED") &&
+      !canSelectSupplierQuoteForPurchaseItem("PURCHASED"),
+  );
+  const poItem = await addPurchaseListItem(prisma, ownerA, {
+    purchaseListId: longList.id,
+    materialId: lumber.id,
+    name: lumber.name,
+    quantityNeeded: "30",
+    unit: "ft",
+    plannedUnitCost: "4.00",
+    supplierId: depot.id,
+  });
+  const poSelected = await selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+    purchaseListItemId: poItem.id,
+    quoteId: currentQuote.id,
+    expectedSelectedQuoteId: null,
+    now,
+  });
+  const draftPo = await createPurchaseOrder(prisma, ownerA, {
+    purchaseListId: longList.id,
+    supplierId: depot.id,
+    itemIds: [poItem.id],
+  });
+  const itemOnPo = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: poItem.id },
+  });
+  const poLineBefore = await prisma.materialPurchaseOrderItem.findFirst({
+    where: { purchaseOrderId: draftPo.id, purchaseListItemId: poItem.id },
+  });
+  await expectError(
+    "Selecting a different quote is refused while the item is on a DRAFT PO",
+    () =>
+      selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+        purchaseListItemId: poItem.id,
+        quoteId: cheaperQuote.id,
+        expectedSelectedQuoteId: currentQuote.id,
+        now,
+      }),
+    (error) => /already on a purchase order/i.test(String(error.message)),
+  );
+  const itemAfterPoBlock = await prisma.materialPurchaseListItem.findUnique({
+    where: { id: poItem.id },
+  });
+  const poAfterBlock = await prisma.materialPurchaseOrder.findUnique({
+    where: { id: draftPo.id },
+  });
+  const poLineAfter = await prisma.materialPurchaseOrderItem.findFirst({
+    where: { purchaseOrderId: draftPo.id, purchaseListItemId: poItem.id },
+  });
+  check(
+    "PO membership keeps supplier A and the recorded unit cost",
+    poSelected.plannedUnitCost.toString() === "4" &&
+      itemOnPo.supplierId === depot.id &&
+      itemAfterPoBlock.supplierId === depot.id &&
+      itemAfterPoBlock.selectedQuoteId === currentQuote.id &&
+      itemAfterPoBlock.plannedUnitCost.toString() === "4" &&
+      itemAfterPoBlock.plannedCost.toString() === "135" &&
+      poAfterBlock.supplierId === depot.id &&
+      poLineBefore.unitCost.toString() === "4" &&
+      poLineAfter.unitCost.toString() === "4",
+  );
+
+  await prisma.materialPurchaseListItem.update({
+    where: { id: longItem.id },
+    data: { status: "ORDERED" },
+  });
+  await expectError(
+    "ORDERED items cannot take a supplier quote even without a PO line",
+    () =>
+      selectSupplierQuoteForPurchaseList(prisma, ownerA, {
+        purchaseListItemId: longItem.id,
+        quoteId: footThreeThirtyThree.id,
+        expectedSelectedQuoteId: yardTen.id,
+        now,
+      }),
+    (error) => /needed and planned/i.test(String(error.message)),
   );
 
   console.log("\nTEST — Concurrent selection uses a real lock barrier");

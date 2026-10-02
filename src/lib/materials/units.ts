@@ -3,7 +3,8 @@
  *
  * Converts quantity and unit price between compatible construction units.
  * Incompatible families are refused — never guessed. Pack-to-each uses an
- * explicit pack size. Exact Decimal math; money stays two places.
+ * explicit pack size. Converted unit price stays unrounded for math;
+ * landed totals round once at the end.
  */
 import { Prisma } from "@prisma/client";
 import { MaterialsError } from "@/lib/materials/errors";
@@ -157,7 +158,7 @@ export function convertMaterialQuoteUnits(input: {
   }
   const factor = materialUnitFactor(input.fromUnit, input.toUnit, input.packSize);
   const convertedQuantity = quantity.mul(factor).toDecimalPlaces(4);
-  const convertedPrice = unitPrice.div(factor).toDecimalPlaces(2);
+  const convertedPrice = unitPrice.div(factor);
   const from = input.fromUnit.trim() || "ea";
   const to = input.toUnit.trim() || "ea";
   const label = factor.eq(1)
@@ -170,5 +171,43 @@ export function convertMaterialQuoteUnits(input: {
     quantity: convertedQuantity,
     unitPrice: convertedPrice,
     label,
+  };
+}
+
+/**
+ * Landed cost for a needed quantity in `targetUnit`.
+ *
+ * `plannedCost = quote.unitPrice × (needed / factor) + delivery`,
+ * rounded once. `plannedUnitCost` is derived from that exact material
+ * total (`materialCost / needed`), not from a cents-rounded unit price.
+ */
+export function quoteCostForNeededQuantity(input: {
+  unitPrice: Prisma.Decimal | number | string;
+  fromUnit: string;
+  toUnit: string;
+  neededQuantity: Prisma.Decimal | number | string;
+  deliveryCost?: Prisma.Decimal | number | string | null;
+  packSize?: Prisma.Decimal | number | string | null;
+}) {
+  const unitPrice = decimalMoney(input.unitPrice);
+  const needed = decimalQuantity(input.neededQuantity);
+  if (!unitPrice || !needed) {
+    throw new MaterialsError("Enter a quote quantity and unit price greater than zero.");
+  }
+  const factor = materialUnitFactor(input.fromUnit, input.toUnit, input.packSize);
+  const materialCost = unitPrice.mul(needed.div(factor));
+  const delivery =
+    input.deliveryCost == null || input.deliveryCost === ""
+      ? new Prisma.Decimal(0)
+      : input.deliveryCost instanceof Prisma.Decimal
+        ? input.deliveryCost
+        : new Prisma.Decimal(input.deliveryCost);
+  const plannedCost = materialCost.add(delivery).toDecimalPlaces(2);
+  const plannedUnitCost = materialCost.div(needed);
+  return {
+    factor,
+    materialCost,
+    plannedCost,
+    plannedUnitCost,
   };
 }

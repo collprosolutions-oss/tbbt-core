@@ -279,6 +279,8 @@ export const SUPPLIER_QUOTE_FRESHNESS_LABELS: Record<SupplierQuoteFreshness, str
 export const SUPPLIER_QUOTE_CURRENT_MS = 24 * 60 * 60 * 1000;
 /** 7 days. */
 export const SUPPLIER_QUOTE_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+/** Clock-skew allowance. Dates further ahead than this are stale. */
+export const SUPPLIER_QUOTE_FUTURE_SLACK_MS = 2 * 60 * 60 * 1000;
 
 export function classifySupplierQuoteFreshness(
   quotedAt: Date | string | null | undefined,
@@ -288,7 +290,7 @@ export function classifySupplierQuoteFreshness(
   const at = quotedAt instanceof Date ? quotedAt : new Date(quotedAt);
   if (Number.isNaN(at.getTime())) return "stale";
   const age = now.getTime() - at.getTime();
-  if (age < 0) return "current";
+  if (age < -SUPPLIER_QUOTE_FUTURE_SLACK_MS) return "stale";
   if (age <= SUPPLIER_QUOTE_CURRENT_MS) return "current";
   if (age <= SUPPLIER_QUOTE_RECENT_MS) return "recently_checked";
   return "stale";
@@ -297,7 +299,6 @@ export function classifySupplierQuoteFreshness(
 export const PURCHASE_ITEM_QUOTE_SELECTABLE_STATUSES = [
   "NEEDED",
   "PLANNED",
-  "ORDERED",
 ] as const;
 
 export function canSelectSupplierQuoteForPurchaseItem(status: string) {
@@ -309,6 +310,8 @@ export type SupplierQuoteCompareRow = {
   supplierId: string;
   supplierName: string;
   quotedAt: string;
+  quotedOn: string;
+  quotedOnLabel: string;
   freshness: SupplierQuoteFreshness;
   freshnessLabel: string;
   stale: boolean;
