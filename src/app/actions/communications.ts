@@ -11,6 +11,7 @@ import {
   isCommunicationAiAction,
   recordInboundCallEvent,
   recordMissedOrManualCall,
+  recordReceptionistCallbackDisposition,
   runCommunicationAssist,
 } from "@/lib/communications";
 import {
@@ -35,6 +36,7 @@ function readString(formData: FormData, key: string) {
 
 function revalidateCommunications(customerId?: string) {
   revalidatePath("/communications");
+  revalidatePath("/communications/receptionist");
   revalidatePath("/customers");
   if (customerId) revalidatePath(`/customers/${customerId}`);
 }
@@ -134,6 +136,31 @@ export async function logMissedCallAction(
         : result.actionItemId
           ? "Call logged and a callback task was created."
           : "Call logged.",
+    };
+  } catch {
+    return { error: "You do not have permission to do that." };
+  }
+}
+
+export async function recordReceptionistDispositionAction(
+  _prev: CommunicationsActionState,
+  formData: FormData,
+): Promise<CommunicationsActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
+    const result = await recordReceptionistCallbackDisposition(prisma, access, {
+      phoneInteractionId: readString(formData, "phoneInteractionId"),
+      browserBusinessId: readString(formData, "businessId") || null,
+    });
+    revalidateCommunications(result.customerId ?? undefined);
+    if (!result.ok) {
+      return { error: result.failureReason ?? "That callback-needed item could not be marked handled." };
+    }
+    return {
+      message: result.reused
+        ? "That callback-needed item was already recorded as handled."
+        : "Callback-needed item recorded as handled. No call or message was sent.",
     };
   } catch {
     return { error: "You do not have permission to do that." };

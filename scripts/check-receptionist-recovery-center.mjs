@@ -1,8 +1,10 @@
 /**
  * Receptionist & missed-call recovery center proofs.
  *
- * Recorded PhoneInteraction / ReceptionistEvent workspace only.
- * No schema, no carrier, no auto follow-up, no fake resolved state.
+ * Recorded PhoneInteraction / ReceptionistEvent workspace, plus an
+ * authorized manual disposition that uses canonical CLOSED + a
+ * ReceptionistEvent audit row. No schema, no carrier, no auto follow-up,
+ * and no invented successful contact.
  *
  * Run with:
  *   npm run test:receptionist-recovery-center
@@ -49,8 +51,16 @@ const {
   RECEPTIONIST_RECOVERY_SCAN_LIMIT,
   appendReceptionistRecoveryFacts,
   loadReceptionistRecoveryCenter,
+  PHONE_INTERACTION_CLOSED_STATUS,
+  RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
+  RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+  RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
   recordMissedOrManualCall,
   recordInboundCallEvent,
+  recordReceptionistCallbackDisposition,
+  receptionistDispositionIdempotencyKey,
   VOICE_NOT_CONNECTED_REASON,
 } = await import("@/lib/communications");
 const { planSpecialists } = await import("@/lib/chief-of-staff");
@@ -114,17 +124,32 @@ async function seedBusiness(name) {
   const memberMembership = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: business.id, role: "MEMBER" },
   });
+  const adminUser = await prisma.user.create({
+    data: {
+      name: `${name} Admin`,
+      email: `${name.toLowerCase().replace(/\s+/g, ".")}.admin.${randomUUID().slice(0, 8)}@example.com`,
+      passwordHash: "x",
+    },
+  });
+  const adminMembership = await prisma.membership.create({
+    data: { userId: adminUser.id, businessId: business.id, role: "ADMIN" },
+  });
   return {
     business,
     membership,
     memberMembership,
+    adminMembership,
     access: makeAccess(business.id, "OWNER", membership.id, ownerUser.id),
     memberAccess: makeAccess(business.id, "MEMBER", memberMembership.id, memberUser.id),
+    adminAccess: makeAccess(business.id, "ADMIN", adminMembership.id, adminUser.id),
   };
 }
 
 try {
   const recoverySrc = readRepo("src/lib/communications/receptionist-recovery.ts");
+  const dispositionSrc = readRepo("src/lib/communications/receptionist-disposition.ts");
+  const actionSrc = readRepo("src/app/actions/communications.ts");
+  const formSrc = readRepo("src/components/communications/receptionist-disposition-form.tsx");
   const pageSrc = readRepo("src/app/(app)/communications/receptionist/page.tsx");
   const uiSrc = readRepo("src/components/communications/receptionist-recovery-center.tsx");
   const workspaceSrc = readRepo("src/components/communications/communications-workspace.tsx");
@@ -172,12 +197,32 @@ try {
       !pageSrc.includes("attemptCustomerSms"),
   );
   check(
-    "No fake resolved persistence is invented",
-    !recoverySrc.includes('status: "CLOSED"') &&
-      !recoverySrc.includes("updateMany") &&
-      !recoverySrc.includes("phoneInteraction.update") &&
+    "Manual disposition reuses canonical CLOSED and ReceptionistEvent audit rows",
+    dispositionSrc.includes('status: PHONE_INTERACTION_CLOSED_STATUS') &&
+      dispositionSrc.includes('kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND') &&
+      dispositionSrc.includes('status: RECEPTIONIST_MANUAL_DISPOSITION_STATUS') &&
+      dispositionSrc.includes("initiatedByMembershipId") &&
+      dispositionSrc.includes("pg_advisory_xact_lock") &&
+      dispositionSrc.includes("phoneInteraction.updateMany") &&
+      dispositionSrc.includes("businessId: access.businessId") &&
+      !dispositionSrc.includes("phoneInteraction.update(") &&
+      !dispositionSrc.includes("phoneInteraction.delete") &&
       !uiSrc.includes("Mark resolved") &&
-      !pageSrc.includes("Mark resolved"),
+      !pageSrc.includes("Mark resolved") &&
+      !formSrc.includes("Mark resolved"),
+  );
+  check(
+    "Disposition writer does not send SMS, email, place a call, or invent a successful contact",
+    !dispositionSrc.includes("composeCustomerCommunication") &&
+      !dispositionSrc.includes("attemptCustomerSms") &&
+      !dispositionSrc.includes("sendTransactionalEmail") &&
+      !dispositionSrc.includes("recordMissedOrManualCall") &&
+      !dispositionSrc.includes("customerCommunication.create") &&
+      dispositionSrc.includes("contactClaimed: false") &&
+      formSrc.includes("Record handled") &&
+      formSrc.includes("disabled={pending}") &&
+      actionSrc.includes("recordReceptionistCallbackDisposition") &&
+      actionSrc.includes('revalidatePath("/communications/receptionist")'),
   );
   check(
     "Voice remains disconnected and no Twilio voice/number provisioning is added",
@@ -289,6 +334,21 @@ try {
     roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       roleHasCapability("ADMIN", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_COMMUNICATIONS),
+  );
+  check(
+    "Queue UI offers authorized disposition only for callback-needed phone items",
+    uiSrc.includes("item.canRecordDisposition") &&
+      uiSrc.includes("ReceptionistDispositionForm") &&
+      recoverySrc.includes("canRecordDisposition: phoneInteractionIsCallbackNeeded(row)") &&
+      recoverySrc.includes("canRecordDisposition: false") &&
+      pageSrc.includes("businessId={access.businessId}") &&
+      formSrc.includes('name="phoneInteractionId"') &&
+      formSrc.includes('name="businessId"'),
+  );
+  check(
+    "Closed phones leave attention even when kind is MISSED_CALL or a linked event exists",
+    recoverySrc.includes("if (phoneIsClosed(row)) return false") &&
+      recoverySrc.includes("if (phoneIsClosed(scanned)) continue"),
   );
 
   const missedPlan = planSpecialists({
@@ -1024,6 +1084,290 @@ try {
       inboundLinkedItem?.direction === "INBOUND" &&
       !recoverySrc.includes("payload.direction") &&
       !recoverySrc.includes('payload["direction"]'),
+  );
+  check(
+    "Known callback-needed queue item can record disposition; unknown missed without callback cannot",
+    knownItem?.canRecordDisposition === true &&
+      unknownItem?.canRecordDisposition === false &&
+      inboundItem?.canRecordDisposition === false,
+  );
+
+  console.log("\nDB — Authorized manual disposition leaves the owner queue");
+  const dispositionTenant = await seedBusiness("Disposition Recovery");
+  const dispositionForeign = await seedBusiness("Disposition Foreign");
+  const dispositionCustomer = await prisma.customer.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      name: "Disposition Known Caller",
+      phone: "5553219876",
+      email: "disposition-known@example.com",
+      smsConsentStatus: "UNKNOWN",
+    },
+  });
+  const knownCallback = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    customerId: dispositionCustomer.id,
+    callerPhone: "5553219876",
+    summary: "Known caller still needs a callback.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-known-${randomUUID()}`,
+  });
+  const unknownCallback = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5550001111",
+    summary: "Unknown caller still needs a callback.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-unknown-${randomUUID()}`,
+  });
+  const ordinaryMissed = await recordMissedOrManualCall(prisma, dispositionTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5550002222",
+    summary: "Missed call without callback needed stays in the scan unless disposed.",
+    callbackNeeded: false,
+    idempotencyKey: `disp-ordinary-${randomUUID()}`,
+  });
+  const escalatedCallback = await prisma.phoneInteraction.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      customerId: dispositionCustomer.id,
+      kind: "MISSED_CALL",
+      status: "CALLBACK_NEEDED",
+      direction: "INBOUND",
+      callerLast4: "9876",
+      summary: "Callback-needed phone with a linked escalation.",
+      callbackNeeded: true,
+      idempotencyKey: `disp-escalated-${randomUUID()}`,
+    },
+  });
+  await prisma.receptionistEvent.create({
+    data: {
+      businessId: dispositionTenant.business.id,
+      customerId: dispositionCustomer.id,
+      phoneInteractionId: escalatedCallback.id,
+      kind: "ESCALATION",
+      status: "ESCALATED",
+      provider: "none",
+      providerConnected: false,
+      payload: { summary: "Linked escalation must not keep a handled phone in queue." },
+      idempotencyKey: `disp-escalated-event-${randomUUID()}`,
+    },
+  });
+  const beforeUnknown = await prisma.phoneInteraction.findFirst({
+    where: { id: unknownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const commsBeforeDisposition = await prisma.customerCommunication.count({
+    where: { businessId: dispositionTenant.business.id },
+  });
+  const beforeCenter = await loadReceptionistRecoveryCenter(prisma, dispositionTenant.access);
+  const beforeCallbackCount = beforeCenter.recordedCallbackNeededCount;
+
+  let memberDispositionDenied = false;
+  try {
+    await recordReceptionistCallbackDisposition(prisma, dispositionTenant.memberAccess, {
+      phoneInteractionId: knownCallback.phoneInteractionId,
+    });
+  } catch (error) {
+    memberDispositionDenied = error instanceof ForbiddenError;
+  }
+  const memberCenter = await (async () => {
+    try {
+      await loadReceptionistRecoveryCenter(prisma, dispositionTenant.memberAccess);
+      return "loaded";
+    } catch (error) {
+      return error instanceof ForbiddenError ? "forbidden" : "other";
+    }
+  })();
+  const foreignDecision = await recordReceptionistCallbackDisposition(prisma, dispositionForeign.access, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const spoofedBrowser = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+    browserBusinessId: dispositionForeign.business.id,
+  });
+  const ordinaryDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: ordinaryMissed.phoneInteractionId,
+  });
+  const knownFirst = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.adminAccess, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const knownSecond = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.adminAccess, {
+    phoneInteractionId: knownCallback.phoneInteractionId,
+  });
+  const unknownDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: unknownCallback.phoneInteractionId,
+  });
+  const escalatedDecision = await recordReceptionistCallbackDisposition(prisma, dispositionTenant.access, {
+    phoneInteractionId: escalatedCallback.id,
+  });
+
+  const afterUnknown = await prisma.phoneInteraction.findFirst({
+    where: { id: unknownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterKnown = await prisma.phoneInteraction.findFirst({
+    where: { id: knownCallback.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterEscalated = await prisma.phoneInteraction.findFirst({
+    where: { id: escalatedCallback.id, businessId: dispositionTenant.business.id },
+  });
+  const afterOrdinary = await prisma.phoneInteraction.findFirst({
+    where: { id: ordinaryMissed.phoneInteractionId, businessId: dispositionTenant.business.id },
+  });
+  const afterCenter = await loadReceptionistRecoveryCenter(prisma, dispositionTenant.access);
+  const foreignCenter = await loadReceptionistRecoveryCenter(prisma, dispositionForeign.access);
+  const commsAfterDisposition = await prisma.customerCommunication.count({
+    where: { businessId: dispositionTenant.business.id },
+  });
+  const dispositionEvents = await prisma.receptionistEvent.findMany({
+    where: {
+      businessId: dispositionTenant.business.id,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const knownAction = afterKnown?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: afterKnown.followUpActionItemId, businessId: dispositionTenant.business.id },
+      })
+    : null;
+
+  check("MEMBER cannot record a receptionist disposition", memberDispositionDenied);
+  check("MEMBER still cannot load the office recovery queue", memberCenter === "forbidden");
+  check(
+    "Foreign tenant cannot dispose another tenant's callback-needed item",
+    foreignDecision.ok === false &&
+      foreignDecision.failureReason === RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON &&
+      foreignDecision.phoneInteractionId === null &&
+      !JSON.stringify(foreignDecision).includes(dispositionCustomer.name),
+  );
+  check(
+    "Browser businessId never authorizes a receptionist disposition",
+    spoofedBrowser.ok === false &&
+      spoofedBrowser.failureReason === RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+  );
+  check(
+    "A missed call without callback-needed cannot be closed by this writer",
+    ordinaryDecision.ok === false &&
+      ordinaryDecision.failureReason === RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON &&
+      afterOrdinary?.status === "LOGGED" &&
+      afterOrdinary.callbackNeeded === false,
+  );
+  check(
+    "ADMIN can record the canonical CLOSED disposition",
+    knownFirst.ok &&
+      knownFirst.reused === false &&
+      knownFirst.status === PHONE_INTERACTION_CLOSED_STATUS &&
+      knownFirst.callbackNeeded === false &&
+      afterKnown?.status === "CLOSED" &&
+      afterKnown.callbackNeeded === false &&
+      afterKnown.customerId === dispositionCustomer.id &&
+      afterKnown.kind === "MISSED_CALL",
+  );
+  check(
+    "Double-click reuses the same ReceptionistEvent and does not reopen or duplicate the write",
+    knownSecond.ok &&
+      knownSecond.reused === true &&
+      knownSecond.receptionistEventId === knownFirst.receptionistEventId &&
+      knownSecond.status === "CLOSED" &&
+      dispositionEvents.filter((row) => row.phoneInteractionId === knownCallback.phoneInteractionId).length ===
+        1 &&
+      dispositionEvents.find((row) => row.phoneInteractionId === knownCallback.phoneInteractionId)
+        ?.idempotencyKey === receptionistDispositionIdempotencyKey(knownCallback.phoneInteractionId),
+  );
+  check(
+    "Unknown-caller record is preserved and stays unknown",
+    unknownDecision.ok &&
+      afterUnknown?.id === beforeUnknown.id &&
+      afterUnknown.customerId === null &&
+      afterUnknown.status === "CLOSED" &&
+      afterUnknown.callbackNeeded === false &&
+      afterUnknown.kind === "MISSED_CALL" &&
+      afterUnknown.summary === beforeUnknown.summary &&
+      afterUnknown.callerLast4 === beforeUnknown.callerLast4,
+  );
+  check(
+    "Disposition does not invent a successful contact communication",
+    commsAfterDisposition === commsBeforeDisposition &&
+      dispositionEvents.every((row) => {
+        const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+        return (
+          row.status === RECEPTIONIST_MANUAL_DISPOSITION_STATUS &&
+          payload.contactClaimed === false &&
+          payload.channel === null
+        );
+      }),
+  );
+  check(
+    "Handled callback-needed items leave the owner queue, including phones with a linked escalation",
+    !afterCenter.queue.some((row) => row.id === knownCallback.phoneInteractionId) &&
+      !afterCenter.queue.some((row) => row.id === unknownCallback.phoneInteractionId) &&
+      !afterCenter.queue.some((row) => row.id === escalatedCallback.id) &&
+      escalatedDecision.ok &&
+      afterEscalated?.status === "CLOSED" &&
+      afterCenter.queue.some((row) => row.id === ordinaryMissed.phoneInteractionId) &&
+      afterCenter.recordedCallbackNeededCount === beforeCallbackCount - 3 &&
+      afterCenter.recordedMissedCallCount === beforeCenter.recordedMissedCallCount,
+  );
+  check(
+    "Linked callback task is marked DONE without claiming a send",
+    knownAction?.status === "DONE" &&
+      knownFirst.actionItemId === knownAction.id,
+  );
+  check(
+    "Foreign tenant queue and counts stay empty after another tenant's dispositions",
+    foreignCenter.queue.length === 0 &&
+      foreignCenter.recordedCallbackNeededCount === 0 &&
+      foreignCenter.recordedMissedCallCount === 0 &&
+      !JSON.stringify(foreignCenter).includes("Disposition Known Caller"),
+  );
+
+  console.log("\nDB — Simultaneous authorized decisions settle once");
+  const raceTenant = await seedBusiness("Disposition Race");
+  const racePhone = await recordMissedOrManualCall(prisma, raceTenant.access, {
+    kind: "MISSED_CALL",
+    callerPhone: "5558887777",
+    summary: "Two owners decide at the same time.",
+    callbackNeeded: true,
+    idempotencyKey: `disp-race-${randomUUID()}`,
+  });
+  const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+  const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+  const [raceLeft, raceRight] = await Promise.all([
+    recordReceptionistCallbackDisposition(raceClientA, raceTenant.access, {
+      phoneInteractionId: racePhone.phoneInteractionId,
+    }),
+    recordReceptionistCallbackDisposition(raceClientB, raceTenant.adminAccess, {
+      phoneInteractionId: racePhone.phoneInteractionId,
+    }),
+  ]);
+  await Promise.all([raceClientA.$disconnect(), raceClientB.$disconnect()]);
+  const racedPhone = await prisma.phoneInteraction.findFirst({
+    where: { id: racePhone.phoneInteractionId, businessId: raceTenant.business.id },
+  });
+  const racedEvents = await prisma.receptionistEvent.findMany({
+    where: {
+      businessId: raceTenant.business.id,
+      phoneInteractionId: racePhone.phoneInteractionId,
+      kind: RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+    },
+  });
+  const racedCenter = await loadReceptionistRecoveryCenter(prisma, raceTenant.access);
+  const racedAction = racedPhone?.followUpActionItemId
+    ? await prisma.businessActionItem.findFirst({
+        where: { id: racedPhone.followUpActionItemId, businessId: raceTenant.business.id },
+      })
+    : null;
+  check(
+    "Simultaneous dispositions both succeed and write CLOSED exactly once",
+    raceLeft.ok &&
+      raceRight.ok &&
+      raceLeft.receptionistEventId === raceRight.receptionistEventId &&
+      racedEvents.length === 1 &&
+      racedPhone?.status === "CLOSED" &&
+      racedPhone.callbackNeeded === false &&
+      racedPhone.customerId === null &&
+      racedAction?.status === "DONE" &&
+      !racedCenter.queue.some((row) => row.id === racePhone.phoneInteractionId) &&
+      [raceLeft.reused, raceRight.reused].filter(Boolean).length === 1,
   );
 } catch (error) {
   console.error(error);

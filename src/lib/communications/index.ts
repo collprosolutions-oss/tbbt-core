@@ -63,6 +63,19 @@ export {
   loadReceptionistRecoveryCenter,
 } from "@/lib/communications/receptionist-recovery";
 export {
+  PHONE_INTERACTION_CLOSED_STATUS,
+  RECEPTIONIST_DISPOSITION_FOREIGN_BUSINESS_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_CALLBACK_REASON,
+  RECEPTIONIST_DISPOSITION_NOT_FOUND_REASON,
+  RECEPTIONIST_MANUAL_DISPOSITION_KIND,
+  RECEPTIONIST_MANUAL_DISPOSITION_STATUS,
+  phoneInteractionIsCallbackNeeded,
+  phoneInteractionIsClosedDisposition,
+  receptionistDispositionIdempotencyKey,
+  receptionistDispositionLockKey,
+  recordReceptionistCallbackDisposition,
+} from "@/lib/communications/receptionist-disposition";
+export {
   isCommunicationAiAction,
   runCommunicationAssist,
 } from "@/lib/communications/ai";
