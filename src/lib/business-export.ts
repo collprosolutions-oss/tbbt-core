@@ -982,7 +982,7 @@ export async function buildBusinessExportZip(
           "fileSizeBytes",
           "createdAt",
         ],
-        asCsvRows(projectDocuments),
+        projectDocuments,
       ),
     },
     { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },

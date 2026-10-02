@@ -214,11 +214,17 @@ export function csvHeaderLine(headers: readonly string[]): string {
   return `${headers.map(toCsvCell).join(",")}\n`;
 }
 
-export function csvBody(headers: readonly string[], rows: Array<Record<string, unknown>>): string {
+export function csvBody(headers: readonly string[], rows: ReadonlyArray<object>): string {
   if (rows.length === 0) return "";
-  return `${rows.map((row) => headers.map((header) => toCsvCell(row[header])).join(",")).join("\n")}\n`;
+  return `${rows
+    .map((row) =>
+      headers
+        .map((header) => toCsvCell((row as Record<string, unknown>)[header]))
+        .join(","),
+    )
+    .join("\n")}\n`;
 }
 
-export function toCsv(headers: readonly string[], rows: Array<Record<string, unknown>>): string {
+export function toCsv(headers: readonly string[], rows: ReadonlyArray<object>): string {
   return `${csvHeaderLine(headers)}${csvBody(headers, rows)}`;
 }
