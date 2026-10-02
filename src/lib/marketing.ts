@@ -210,6 +210,261 @@ export const LEAD_SOURCE_TRACKED_MESSAGE =
 export const SOCIAL_MANUAL_COPY_MESSAGE =
   "No Facebook, Instagram, or Google account is connected. Copy approved text and post it yourself. TBBT will not mark this PUBLISHED.";
 
+export const SOCIAL_PUBLISH_DESTINATION_FACEBOOK = "FACEBOOK" as const;
+export const SOCIAL_PUBLISH_DESTINATION_INSTAGRAM = "INSTAGRAM" as const;
+export const SOCIAL_PUBLISH_DESTINATION_GOOGLE = "GOOGLE" as const;
+export const IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS = [SOCIAL_PUBLISH_DESTINATION_FACEBOOK] as const;
+export const DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS = [
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+] as const;
+export type ImplementedSocialPublishDestination =
+  (typeof IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS)[number];
+
+export const SOCIAL_PUBLISH_ATTEMPT_CLAIMED = "CLAIMED" as const;
+export const SOCIAL_PUBLISH_ATTEMPT_PUBLISHED = "PUBLISHED" as const;
+export const SOCIAL_PUBLISH_ATTEMPT_FAILED = "FAILED" as const;
+
+export const OWNER_SOCIAL_PUBLISH_MESSAGE =
+  "Publishing to Facebook requires the OWNER role. A DRAFT or planned day is not a publish. Instagram and Google stay disconnected.";
+
+export const FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
+  "Facebook Page is connected for explicit OWNER publish. Instagram and Google Business Profile are not connected.";
+
+export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
+  "Only OWNER-approved creator packages can be published. A DRAFT or planned day is not a publish.";
+
+export const SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
+  "Facebook is not connected for this business. TBBT will not post.";
+
+export const SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE =
+  "Instagram and Google publishing are not connected yet.";
+
+export const SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
+  "This package was already published to Facebook.";
+
+export const SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
+  "A Facebook publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
+
+export const SOCIAL_PUBLISH_FAILED_MESSAGE =
+  "Facebook publish failed. It was not marked PUBLISHED.";
+
+export const SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Facebook.";
+
+export const SOCIAL_PUBLISH_UNCONFIRMED_MS = 5 * 60 * 1000;
+export const SOCIAL_PUBLISH_ERROR_MAX_CHARS = 200;
+export const SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN = /EAA[A-Za-z0-9]+/g;
+
+export const SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
+  "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm.";
+
+export const SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
+  "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm before retrying.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED = "NOT_POSTED" as const;
+export const SOCIAL_PUBLISH_RESOLVE_POSTED = "POSTED" as const;
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE =
+  "Marked as not posted. You can retry. It was not labeled PUBLISHED.";
+
+export const SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Facebook.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE =
+  "This publish is still in progress. Confirm only after it is unconfirmed.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE =
+  "That Facebook publish attempt is not in this business.";
+
+export function sanitizeSocialPublishProviderError(
+  raw: string | null | undefined,
+  accessToken?: string | null,
+): string {
+  let text = (raw ?? "").replace(/\s+/g, " ").trim();
+  const token = accessToken?.trim();
+  if (token) {
+    text = text.split(token).join("[redacted]");
+    const encoded = encodeURIComponent(token);
+    if (encoded && encoded !== token) text = text.split(encoded).join("[redacted]");
+  }
+  text = text.replace(/access_token=[^&\s]+/gi, "access_token=[redacted]");
+  SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN.lastIndex = 0;
+  text = text.replace(SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN, "[redacted]");
+  if (text.length > SOCIAL_PUBLISH_ERROR_MAX_CHARS) {
+    text = text.slice(0, SOCIAL_PUBLISH_ERROR_MAX_CHARS);
+  }
+  return text;
+}
+
+export function isSocialPublishUnconfirmed(input: {
+  status?: string | null;
+  claimedAt?: Date | null;
+  failureLabel?: string | null;
+  now?: Date;
+  unconfirmedAfterMs?: number;
+}): boolean {
+  if (input.status !== SOCIAL_PUBLISH_ATTEMPT_CLAIMED) return false;
+  if (input.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE) return true;
+  if (!input.claimedAt) return false;
+  const now = input.now ?? new Date();
+  const windowMs = input.unconfirmedAfterMs ?? SOCIAL_PUBLISH_UNCONFIRMED_MS;
+  return now.getTime() - input.claimedAt.getTime() >= windowMs;
+}
+
+export function canResolveSocialPublishAttempt(input: {
+  role: string;
+  status?: string | null;
+  claimedAt?: Date | null;
+  failureLabel?: string | null;
+  now?: Date;
+}): boolean {
+  return input.role === "OWNER" && isSocialPublishUnconfirmed(input);
+}
+
+export const SOCIAL_PUBLISH_STALE_MESSAGE =
+  "This package changed while you were publishing. Refresh and try again.";
+
+export const SOCIAL_PUBLISH_SNAPSHOT_REQUIRED_MESSAGE =
+  "Publishing requires the current package snapshot. Refresh and try again.";
+
+export const SOCIAL_PUBLISH_EMPTY_MESSAGE =
+  "Approved text is required before publishing to Facebook.";
+
+export const SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
+  "Facebook publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
+
+export const SOCIAL_PUBLISH_PACKAGE_NOT_FOUND_MESSAGE =
+  "That creator package is not in this business.";
+
+export function isImplementedSocialPublishDestination(
+  value: string,
+): value is ImplementedSocialPublishDestination {
+  return (IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS as readonly string[]).includes(value);
+}
+
+export function isDisconnectedSocialPublishDestination(value: string) {
+  return (DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS as readonly string[]).includes(value);
+}
+
+export function canPublishMarketingToSocial(input: {
+  role: string;
+  status: string;
+  destination: string;
+  destinationConnected: boolean;
+  photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
+}): boolean {
+  return (
+    input.role === "OWNER" &&
+    input.status === "APPROVED" &&
+    isImplementedSocialPublishDestination(input.destination) &&
+    input.destinationConnected === true &&
+    studioPhotosEligible(input.photos)
+  );
+}
+
+export function socialPublishAttemptLiveKey(contentId: string, destination: string) {
+  return `${contentId}:${destination}`;
+}
+
+export function composeSocialPublishMessage(input: { caption: string; hashtags: string }) {
+  const caption = input.caption.trim();
+  const tags = formatHashtags(parseHashtags(input.hashtags));
+  if (!caption) return "";
+  return tags ? `${caption}\n\n${tags}` : caption;
+}
+
+export function socialPublishDisplay(
+  statusOrInput:
+    | string
+    | null
+    | undefined
+    | {
+        status?: string | null;
+        claimedAt?: Date | null;
+        failureLabel?: string | null;
+        now?: Date;
+      },
+): {
+  published: boolean;
+  unconfirmed: boolean;
+  inFlight: boolean;
+  label: string | null;
+} {
+  const input =
+    statusOrInput && typeof statusOrInput === "object"
+      ? statusOrInput
+      : { status: statusOrInput };
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
+    return {
+      published: true,
+      unconfirmed: false,
+      inFlight: false,
+      label: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+    };
+  }
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_FAILED) {
+    const label = input.failureLabel?.trim() || SOCIAL_PUBLISH_FAILED_MESSAGE;
+    return { published: false, unconfirmed: false, inFlight: false, label };
+  }
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
+    if (isSocialPublishUnconfirmed(input)) {
+      return {
+        published: false,
+        unconfirmed: true,
+        inFlight: false,
+        label: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+      };
+    }
+    return {
+      published: false,
+      unconfirmed: false,
+      inFlight: true,
+      label: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+    };
+  }
+  return { published: false, unconfirmed: false, inFlight: false, label: null };
+}
+
+export type MarketingSocialDestinationState = {
+  destination: string;
+  implemented: boolean;
+  connected: boolean;
+};
+
+export function presentMarketingSocialDestinations(connectedDestinations: readonly string[]): {
+  connected: boolean;
+  message: string;
+  manualCopy: string;
+  destinations: Record<"FACEBOOK" | "INSTAGRAM" | "GOOGLE", MarketingSocialDestinationState>;
+} {
+  const facebookConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_FACEBOOK);
+  return {
+    connected: facebookConnected,
+    message: facebookConnected
+      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+      : CHANNELS_DISCONNECTED_MESSAGE,
+    manualCopy: facebookConnected
+      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+      : SOCIAL_MANUAL_COPY_MESSAGE,
+    destinations: {
+      FACEBOOK: {
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        implemented: true,
+        connected: facebookConnected,
+      },
+      INSTAGRAM: {
+        destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+        implemented: false,
+        connected: false,
+      },
+      GOOGLE: {
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+        implemented: false,
+        connected: false,
+      },
+    },
+  };
+}
+
 export const COMING_NEXT_MESSAGE =
   "Coming next. This area is reserved for a later Marketing step and is not fabricating data.";
 

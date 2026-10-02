@@ -98,6 +98,7 @@ npm run test:referrals
 npm run test:financial-intelligence
 npm run test:marketing
 npm run test:marketing-owner-content-draft
+npm run test:marketing-social-publish
 npm run test:reviews
 npm run test:growth-department
 npm run test:reports

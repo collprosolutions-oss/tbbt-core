@@ -3,6 +3,7 @@ import { ContentStatusButton } from "@/components/marketing/content-status-butto
 import { StudioApprovalQueue } from "@/components/marketing/studio-approval-queue";
 import { CreateContentForm } from "@/components/marketing/create-content-form";
 import { ExportPackageButton } from "@/components/marketing/export-package-button";
+import { PublishSocialButton } from "@/components/marketing/publish-social-button";
 import { ReviewPacketButton } from "@/components/marketing/review-packet-button";
 import { PhotoPermissionButton } from "@/components/marketing/photo-permission-button";
 import { StudioContentCalendar } from "@/components/marketing/studio-content-calendar";
@@ -23,6 +24,7 @@ import { ActionForm } from "@/components/action-form";
 import {
   canDownloadMarketingReviewPacket,
   canExportCreatorPackage,
+  canPublishMarketingToSocial,
   canRequestOwnerMarketingContentDraft,
   COMING_NEXT_MESSAGE,
   CREATOR_PACKAGE_LIMITS_MESSAGE,
@@ -590,6 +592,25 @@ function ContentBody({
                   photos: row.photos,
                 })}
               />
+              {row.status === "APPROVED" ? (
+                <PublishSocialButton
+                  contentId={row.id}
+                  expectedUpdatedAt={row.updatedAt.toISOString()}
+                  canPublish={canPublishMarketingToSocial({
+                    role: viewerRole,
+                    status: row.status,
+                    destination: "FACEBOOK",
+                    destinationConnected: source.channels.destinations.FACEBOOK.connected,
+                    photos: row.photos,
+                  })}
+                  destinationConnected={source.channels.destinations.FACEBOOK.connected}
+                  attemptId={row.socialPublish.attemptId}
+                  attemptStatus={row.socialPublish.attemptStatus}
+                  attemptLabel={row.socialPublish.label}
+                  unconfirmed={row.socialPublish.unconfirmed}
+                  canResolve={row.socialPublish.canResolve}
+                />
+              ) : null}
             </CardContent>
           </Card>
         ))

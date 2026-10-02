@@ -31,8 +31,16 @@ import {
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
 import {
+  publishMarketingContentToSocial,
+  resolveMarketingSocialPublishAttempt,
+} from "@/lib/marketing-social-publish";
+import {
   MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
+  OWNER_SOCIAL_PUBLISH_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
+  SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+  SOCIAL_PUBLISH_ATTEMPT_FAILED,
+  SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
   STUDIO_APPROVED_INTERNAL_MESSAGE,
   STUDIO_PLANNED_DAY_SAVED_MESSAGE,
   STUDIO_RETURNED_MESSAGE,
@@ -72,6 +80,14 @@ export type MarketingReviewPacketState = {
   filename?: string;
   packetJson?: string;
   downloadNonce?: string;
+};
+
+export type MarketingSocialPublishState = {
+  error?: string;
+  message?: string;
+  status?: "CLAIMED" | "PUBLISHED" | "FAILED";
+  published?: boolean;
+  unconfirmed?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -295,6 +311,77 @@ export async function setStudioWeeklyReminderOwnerSmsAction(
     return { message: result.message };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That OWNER SMS destination could not be saved.") };
+  }
+}
+
+export async function publishMarketingContentToSocialAction(
+  _prev: MarketingSocialPublishState,
+  formData: FormData,
+): Promise<MarketingSocialPublishState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: OWNER_SOCIAL_PUBLISH_MESSAGE, published: false };
+    }
+    const result = await publishMarketingContentToSocial(prisma, access, {
+      contentId: readString(formData, "contentId"),
+      destination: readString(formData, "destination"),
+      expectedUpdatedAt: readString(formData, "expectedUpdatedAt"),
+    });
+    revalidateMarketing();
+    if (result.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED && result.published) {
+      return {
+        message: result.message,
+        status: result.status,
+        published: true,
+        unconfirmed: false,
+      };
+    }
+    return {
+      error: result.message,
+      message: result.message,
+      status:
+        result.status === SOCIAL_PUBLISH_ATTEMPT_FAILED
+          ? SOCIAL_PUBLISH_ATTEMPT_FAILED
+          : result.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED
+            ? SOCIAL_PUBLISH_ATTEMPT_CLAIMED
+            : result.status,
+      published: false,
+      unconfirmed: result.unconfirmed === true,
+    };
+  } catch (error) {
+    return {
+      error: marketingErrorMessage(error, "That Facebook publish could not be completed."),
+      published: false,
+    };
+  }
+}
+
+export async function resolveMarketingSocialPublishAttemptAction(
+  _prev: MarketingSocialPublishState,
+  formData: FormData,
+): Promise<MarketingSocialPublishState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: OWNER_SOCIAL_PUBLISH_MESSAGE, published: false };
+    }
+    const result = await resolveMarketingSocialPublishAttempt(prisma, access, {
+      attemptId: readString(formData, "attemptId"),
+      resolution: readString(formData, "resolution"),
+    });
+    revalidateMarketing();
+    return {
+      message: result.message,
+      status: result.status,
+      published: result.published,
+      unconfirmed: false,
+    };
+  } catch (error) {
+    return {
+      error: marketingErrorMessage(error, "That Facebook publish could not be confirmed."),
+      published: false,
+    };
   }
 }
 
