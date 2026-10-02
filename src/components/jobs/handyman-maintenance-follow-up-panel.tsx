@@ -139,7 +139,7 @@ export function HandymanMaintenanceFollowUpPanel({
                     followUpId: review.openFollowUp.id,
                   })}
                 >
-                  {HANDYMAN_MAINTENANCE_REVIEW_ACTION} reminder
+                  Review reminder
                 </Link>
               </Button>
             ) : null}

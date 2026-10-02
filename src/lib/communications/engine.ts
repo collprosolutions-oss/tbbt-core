@@ -202,6 +202,7 @@ export async function composeCustomerCommunication(
     const gate = await assertMaintenanceFollowUpComposeAllowed(db, access, {
       followUpId: relatedId,
       customerId: customer.id,
+      idempotencyKey: input.idempotencyKey,
     });
     if (!gate.ok) {
       return blocked(gate.reason, input.channel as CommunicationChannel);

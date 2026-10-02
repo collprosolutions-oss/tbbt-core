@@ -2,7 +2,7 @@
  * Read-only Handyman maintenance follow-up loaders. Mutation-free.
  *
  * Job review is OWNER/management. Owner-queue items are due/overdue
- * OPEN MAINTENANCE rows only. Aftercare, callbacks, and warranty cases
+ * OPEN MAINTENANCE rows only. aftercare, callbacks, and warranty cases
  * stay on their existing surfaces — this is not a second queue for
  * the same event.
  */

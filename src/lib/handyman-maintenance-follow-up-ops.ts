@@ -247,7 +247,7 @@ export async function cancelHandymanMaintenanceFollowUp(
 export async function assertMaintenanceFollowUpComposeAllowed(
   db: Db,
   access: { businessId: string; workspace: { role: string } },
-  input: { followUpId: string; customerId: string },
+  input: { followUpId: string; customerId: string; idempotencyKey?: string | null },
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const followUpId = input.followUpId.trim();
   if (!followUpId) return { ok: true };
@@ -276,6 +276,20 @@ export async function assertMaintenanceFollowUpComposeAllowed(
     return { ok: false, reason: HANDYMAN_MAINTENANCE_CANCELLED_MESSAGE };
   }
   if (row.status === "SENT") {
+    const key = input.idempotencyKey?.trim() ?? "";
+    if (key) {
+      const existing = await db.customerCommunication.findFirst({
+        where: {
+          businessId: access.businessId,
+          customerId: input.customerId,
+          relatedType: "CUSTOMER_FOLLOW_UP",
+          relatedId: row.id,
+          idempotencyKey: key,
+        },
+        select: { id: true },
+      });
+      if (existing) return { ok: true };
+    }
     return { ok: false, reason: HANDYMAN_MAINTENANCE_ALREADY_SENT_MESSAGE };
   }
   if (row.status !== "OPEN" && row.status !== "FAILED") {
