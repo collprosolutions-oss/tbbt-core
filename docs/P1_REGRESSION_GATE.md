@@ -37,11 +37,12 @@ Each command is `node scripts/run-p1-gate.mjs <domain>`.
 - Node. `package.json` runs `scripts/check-production-migrate.mjs`
   with plain `node`. Every other listed script runs with
   `node --experimental-strip-types`. The gate follows that.
-- `TZ=America/New_York` is forced on every child. Six known failures
-  that depend on that zone are all in `scripts/check-native-field-api.mjs`
-  (lines 1285, 1291, 1643, 1649, 2121, and 2127).
-  `scripts/check-time-cards.mjs` uses the same approved-week pattern;
-  those lines are not confirmed failures.
+- `TZ=America/New_York` is forced on every child. Native sign-in
+  throttle, Saturday same-week approval, and Field start proofs in
+  `scripts/check-native-field-api.mjs` and `scripts/check-time-cards.mjs`
+  were re-verified against that zone on current `origin/main` and pass.
+  The older line-number list in this paragraph is stale and must not be
+  treated as a current failure catalog.
 - `scripts/check-work-order-portal.mjs`,
   `scripts/check-client-portal-excellence.mjs`, and
   `scripts/check-change-orders.mjs` start `next start`. They need a

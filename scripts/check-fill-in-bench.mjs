@@ -61,12 +61,21 @@ const nav = readRepo("src/lib/nav.ts");
 
 console.log("\nSTATIC — Canonical model, no duplicate engine, no automatic side effects");
 
+const fillInBenchModel = (schema.match(/model FillInBenchWorker \{[\s\S]*?\n\}/) || [""])[0];
 check(
   "Fill-In Bench stays on the existing FillInBenchWorker model",
-  schema.includes("model FillInBenchWorker") &&
+  fillInBenchModel.includes("model FillInBenchWorker") &&
     !schema.includes("model BenchWorker") &&
     !schema.includes("model FillInBenchUser") &&
     schema.includes("A bench row is not a User or Membership"),
+);
+check(
+  "FillInBenchWorker has no public listing or marketplace fields",
+  fillInBenchModel.includes("model FillInBenchWorker") &&
+    !/bsosNetwork|publicProfile|publicName|optedIn|marketplace/i.test(fillInBenchModel) &&
+    [benchLib, benchOps, benchActions, benchForm].every(
+      (src) => !/bsosNetwork|publicProfile/.test(src),
+    ),
 );
 check(
   "Migration is additive only and does not create User/Membership rows",

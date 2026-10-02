@@ -78,9 +78,12 @@ const agent = readRepo("src/lib/workforce-agent.ts");
 const capacity = readRepo("src/lib/workforce-capacity.ts");
 const conflicts = readRepo("src/lib/workforce-conflicts.ts");
 const benchForm = readRepo("src/components/team/fill-in-bench-form.tsx");
+const benchLib = readRepo("src/lib/fill-in-bench.ts");
+const benchActions = readRepo("src/app/actions/fill-in-bench.ts");
 const teamPage = readRepo("src/app/(app)/team/page.tsx");
 const fieldPage = readRepo("src/app/field/page.tsx");
 const schema = readRepo("prisma/schema.prisma");
+const fillInBenchModel = (schema.match(/model FillInBenchWorker \{[\s\S]*?\n\}/) || [""])[0];
 const migration = readRepo("prisma/migrations/20260925220000_scheduling_workforce_intelligence/migration.sql");
 const fkMigration = readRepo("prisma/migrations/20260925230000_workforce_foreign_keys/migration.sql");
 const workforceData = readRepo("src/lib/workforce-data.ts");
@@ -114,8 +117,11 @@ check(
   benchForm.includes("Never published") &&
     teamPage.includes("never public") &&
     teamPage.includes("not a cross-business marketplace") &&
-    !schema.includes("bsosNetwork") &&
-    !schema.includes("publicProfile"),
+    fillInBenchModel.includes("model FillInBenchWorker") &&
+    !/bsosNetwork|publicProfile|publicName|optedIn|marketplace/i.test(fillInBenchModel) &&
+    [benchLib, benchActions, benchForm, workforceData, workforceOps].every(
+      (src) => !/bsosNetwork|publicProfile/.test(src),
+    ),
 );
 check(
   "MEMBER field home stays self-scoped",
