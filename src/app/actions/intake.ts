@@ -148,6 +148,7 @@ async function submitServiceRequestInner(
     intakeAnswers: parseIntakeAnswersField(formData),
     requestedTradeCode: readString(formData, "requestedTradeCode") || null,
     tenantIntakeSnapshotId: readString(formData, "tenantIntakeSnapshotId") || null,
+    websitePublishId: readString(formData, "websitePublishId") || null,
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",

@@ -65,6 +65,7 @@ const {
   addWebsiteGalleryItem,
   saveWebsiteSeoDraft,
   setReviewWebsiteSelected,
+  readReferencedWebsitePublishId,
   WebsitePublishError,
 } = await import("@/lib/website-engine");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
@@ -144,6 +145,8 @@ const copySrc = read("src/lib/website-engine/copy.ts");
 const slugSrc = read("src/lib/website-engine/slugs.ts");
 const intakeSrc = read("src/lib/public-intake.ts");
 const requestPage = read("src/app/r/[slug]/page.tsx");
+const requestFlow = read("src/components/public/request-flow.tsx");
+const intakeAction = read("src/app/actions/intake.ts");
 const servicesPage = read("src/app/hire/[slug]/services/page.tsx");
 const slugMigration = read("prisma/migrations/20260925191000_website_service_slug/migration.sql");
 const panel = read("src/components/settings/website-publish-panel.tsx");
@@ -301,6 +304,30 @@ check(
     !/resolveBusinessServiceArea\s*\(/.test(requestPage) &&
     !/listServiceAreas\s*\(/.test(requestPage) &&
     !/serviceArea\.findMany/.test(requestPage),
+);
+check(
+  "Opened hire forms pin the displayed WebsitePublish id for city qualification",
+  requestPage.includes("websitePublishId={view.publishId}") &&
+    publicView.includes("publishId: publish.id") &&
+    publicView.includes("publishId: null") &&
+    requestFlow.includes('formData.set("websitePublishId"') &&
+    intakeAction.includes('readString(formData, "websitePublishId")') &&
+    intakeSrc.includes("websitePublishId") &&
+    intakeSrc.includes("readReferencedWebsitePublishId") &&
+    intakeSrc.includes("loadOwnedWebsiteSnapshot") &&
+    intakeSrc.includes("referencedPublishInvalid") &&
+    snapshot.includes("readReferencedWebsitePublishId") &&
+    !schema
+      .slice(schema.indexOf("model ServiceRequest"), schema.indexOf("model IntakeConditionDraft"))
+      .includes("websitePublishId"),
+);
+check(
+  "Referenced WebsitePublish ids are validated, not trusted as authorization",
+  readReferencedWebsitePublishId(null).provided === false &&
+    readReferencedWebsitePublishId("").provided === false &&
+    readReferencedWebsitePublishId("pub_ok-1").publishId === "pub_ok-1" &&
+    readReferencedWebsitePublishId("not a valid id!").publishId == null &&
+    readReferencedWebsitePublishId("not a valid id!").provided === true,
 );
 check(
   "Sitemap catch falls back to CollPro only for CollPro or local-preview hosts",
@@ -909,6 +936,146 @@ try {
   check("Gallery snapshot uses the public website image", afterSecond?.snapshot?.gallery.some((row) => row.imageUrl === "/uploads/a-gallery.jpg") === true);
   const firstRow = await prisma.websitePublish.findUnique({ where: { id: first.id } });
   check("Old snapshot remains unchanged", parseWebsiteSnapshot(firstRow.snapshotJson).about.copy === frozenAbout);
+  const openedV1AfterRepublish = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Opened Before Republish",
+    email: `opened-v1-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0104",
+    address: "",
+    streetAddress: "14 Snapshot St",
+    city: "Sparks",
+    region: "NV",
+    postalCode: "89431",
+    notes: "Opened against the Reno-only published hire form.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    websitePublishId: first.id,
+  });
+  const openedV1AfterRepublishRow = openedV1AfterRepublish.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: openedV1AfterRepublish.requestId } })
+    : null;
+  const newV2AfterRepublish = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "New After Republish",
+    email: `new-v2-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0105",
+    address: "",
+    streetAddress: "15 Snapshot St",
+    city: "Sparks",
+    region: "NV",
+    postalCode: "89431",
+    notes: "Opened after the owner republished Sparks.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    websitePublishId: second.id,
+  });
+  const newV2AfterRepublishRow = newV2AfterRepublish.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: newV2AfterRepublish.requestId } })
+    : null;
+  const [racePublish, raceSubmit] = await Promise.all([
+    publishWebsite(prisma, accessA, { idempotencyKey: "pub-city-race" }),
+    createPublicServiceRequest(prisma, {
+      slug: businessA.slug,
+      name: "Race Opened Form",
+      email: `race-v1-${randomUUID().slice(0, 8)}@example.com`,
+      phone: "555-0106",
+      address: "",
+      streetAddress: "16 Snapshot St",
+      city: "Sparks",
+      region: "NV",
+      postalCode: "89431",
+      notes: "Submit raced a later owner publish.",
+      catalogItemIds: [handyService.id],
+      includeOther: false,
+      otherDescription: "",
+      measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+      intakeAnswers: { frequency: "ONE_TIME" },
+      websitePublishId: first.id,
+    }),
+  ]);
+  const raceSubmitRow = raceSubmit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: raceSubmit.requestId } })
+    : null;
+  const rereadDraftCity = draftCityRequest
+    ? await prisma.serviceRequest.findUnique({ where: { id: draftCityRequest.id } })
+    : null;
+  const rereadFirstPublish = await prisma.websitePublish.findUnique({ where: { id: first.id } });
+  const missingPublishSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Missing Publish",
+    email: `missing-pub-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0107",
+    address: "",
+    streetAddress: "17 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Unknown website publish id.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    websitePublishId: `missing_${randomUUID().replaceAll("-", "")}`,
+  });
+  const foreignPublishSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Foreign Publish",
+    email: `foreign-pub-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0108",
+    address: "",
+    streetAddress: "18 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Other-tenant website publish id.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+    websitePublishId: (
+      await publishWebsite(prisma, accessB, { idempotencyKey: "pub-b-city" })
+    ).id,
+  });
+  check(
+    "Already-opened hire form keeps the displayed publish cities after republish",
+    openedV1AfterRepublish.ok === true &&
+      openedV1AfterRepublishRow?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      openedV1AfterRepublishRow?.matchedServiceAreaId == null &&
+      afterSecond?.site.business.configuredCities?.includes("Sparks") === true,
+  );
+  check(
+    "New hire form after republish qualifies against the current published cities",
+    newV2AfterRepublish.ok === true &&
+      newV2AfterRepublishRow?.serviceAreaQualification === "IN_AREA" &&
+      newV2AfterRepublishRow?.matchedServiceAreaId === areaInactive.id,
+  );
+  check(
+    "Submit during a concurrent republish still uses the opened WebsitePublish cities",
+    raceSubmit.ok === true &&
+      raceSubmitRow?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      raceSubmitRow?.matchedServiceAreaId == null &&
+      racePublish.businessId === businessA.id &&
+      racePublish.id !== first.id,
+  );
+  check(
+    "Historical request city qualification is not rewritten by a later publish",
+    rereadDraftCity?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      rereadDraftCity?.matchedServiceAreaId == null &&
+      parseWebsiteSnapshot(rereadFirstPublish.snapshotJson).about.copy === frozenAbout &&
+      rereadFirstPublish.snapshotJson === firstRow.snapshotJson,
+  );
+  check(
+    "Missing or cross-tenant website publish refs fail closed",
+    missingPublishSubmit.ok === false && foreignPublishSubmit.ok === false,
+  );
 
   await expectError(
     "PRIVATE job/request photo cannot be added to gallery",

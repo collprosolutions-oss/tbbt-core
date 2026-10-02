@@ -171,6 +171,7 @@ export default async function PublicIntakePage({ params, searchParams }: PagePro
                   serviceArea={publicServiceAreaFromView(view)}
                   intakeSchemasByTrade={intakeSchemasByTrade}
                   publishedIntakeByTrade={publishedIntake.overlays}
+                  websitePublishId={view.publishId}
                   activeTrades={
                     site.business.activeTrades?.map((trade) => ({
                       code: trade.code,

@@ -511,3 +511,23 @@ export function parseWebsiteSnapshot(raw: string | unknown): PublishedWebsiteSna
 export function serializeWebsiteSnapshot(snapshot: PublishedWebsiteSnapshot) {
   return JSON.stringify(snapshot);
 }
+
+/**
+ * Browser-supplied WebsitePublish id from an already-open hire form.
+ * Empty/omitted means "use the current published pointer". A present
+ * but invalid value fails closed in the resolver — never authorization
+ * by itself, and never a live FK rewrite of historical requests.
+ */
+export function readReferencedWebsitePublishId(value: unknown): {
+  provided: boolean;
+  publishId: string | null;
+} {
+  if (value == null) return { provided: false, publishId: null };
+  if (typeof value !== "string") return { provided: true, publishId: null };
+  const publishId = value.trim();
+  if (!publishId) return { provided: false, publishId: null };
+  if (publishId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(publishId)) {
+    return { provided: true, publishId: null };
+  }
+  return { provided: true, publishId };
+}

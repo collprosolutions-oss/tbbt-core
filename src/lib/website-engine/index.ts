@@ -9,6 +9,7 @@ export {
   parseWebsiteSnapshot,
   serializeWebsiteSnapshot,
   publishedTradeTenantIntakeState,
+  readReferencedWebsitePublishId,
   WebsiteSnapshotError,
   type PublishedWebsiteSnapshot,
 } from "@/lib/website-engine/snapshot";
