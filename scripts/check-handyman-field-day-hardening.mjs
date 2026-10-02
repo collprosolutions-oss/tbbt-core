@@ -235,23 +235,26 @@ const deactivateFnSrc = teamSrc.slice(
   teamSrc.indexOf("export async function setTeamMemberActive"),
 );
 const activeOpsSrc = readRepo("src/lib/team-member-active-ops.ts");
+const writeActiveSrc = activeOpsSrc.slice(
+  activeOpsSrc.indexOf("export async function writeTeamMemberActive"),
+);
 const applyAssignSrc = assignOpsSrc.slice(
   assignOpsSrc.indexOf("export async function applyAssignedMembershipChangeInTransaction"),
 );
 check(
   "Deactivation uses the #251 lock order: reservation, then Jobs, then Membership",
   deactivateFnSrc.includes("writeTeamMemberActive") &&
-    activeOpsSrc.includes("lockBusinessScheduleReservation") &&
-    activeOpsSrc.includes("lockJobsForMembershipClockClose") &&
-    activeOpsSrc.includes("lockTenantOwnedMemberships") &&
-    activeOpsSrc.indexOf("lockBusinessScheduleReservation") <
-      activeOpsSrc.indexOf("lockJobsForMembershipClockClose") &&
-    activeOpsSrc.indexOf("lockJobsForMembershipClockClose") <
-      activeOpsSrc.indexOf("lockTenantOwnedMemberships") &&
-    activeOpsSrc.indexOf("lockTenantOwnedMemberships") <
-      activeOpsSrc.indexOf("closeRunningTimeForMembershipInTransaction") &&
-    activeOpsSrc.indexOf("closeRunningTimeForMembershipInTransaction") <
-      activeOpsSrc.indexOf("data: { active: input.active }") &&
+    writeActiveSrc.includes("lockBusinessScheduleReservation") &&
+    writeActiveSrc.includes("lockJobsForMembershipClockClose") &&
+    writeActiveSrc.includes("lockTenantOwnedMemberships") &&
+    writeActiveSrc.indexOf("lockBusinessScheduleReservation") <
+      writeActiveSrc.indexOf("lockJobsForMembershipClockClose") &&
+    writeActiveSrc.indexOf("lockJobsForMembershipClockClose") <
+      writeActiveSrc.indexOf("lockTenantOwnedMemberships") &&
+    writeActiveSrc.indexOf("lockTenantOwnedMemberships") <
+      writeActiveSrc.indexOf("closeRunningTimeForMembershipInTransaction") &&
+    writeActiveSrc.indexOf("closeRunningTimeForMembershipInTransaction") <
+      writeActiveSrc.indexOf("data: { active: input.active }") &&
     activeOpsSrc.includes("MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON"),
 );
 check(

@@ -109,6 +109,9 @@ const writeAssignSrc = assignOpsSrc.slice(
 const applyAssignSrc = assignOpsSrc.slice(
   assignOpsSrc.indexOf("export async function applyAssignedMembershipChangeInTransaction"),
 );
+const writeActiveSrc = activeOpsSrc.slice(
+  activeOpsSrc.indexOf("export async function writeTeamMemberActive"),
+);
 
 check(
   "Verifier reuses the disposable harness and local-database guard",
@@ -133,15 +136,15 @@ check(
 );
 check(
   "Deactivate lock order is reservation, then Jobs, then Memberships, then close time",
-  activeOpsSrc.includes("lockBusinessScheduleReservation") &&
-    activeOpsSrc.includes("lockJobsForMembershipClockClose") &&
-    activeOpsSrc.includes("lockTenantOwnedMemberships") &&
-    activeOpsSrc.indexOf("lockBusinessScheduleReservation") <
-      activeOpsSrc.indexOf("lockJobsForMembershipClockClose") &&
-    activeOpsSrc.indexOf("lockJobsForMembershipClockClose") <
-      activeOpsSrc.indexOf("lockTenantOwnedMemberships") &&
-    activeOpsSrc.indexOf("lockTenantOwnedMemberships") <
-      activeOpsSrc.indexOf("closeRunningTimeForMembershipInTransaction"),
+  writeActiveSrc.includes("lockBusinessScheduleReservation") &&
+    writeActiveSrc.includes("lockJobsForMembershipClockClose") &&
+    writeActiveSrc.includes("lockTenantOwnedMemberships") &&
+    writeActiveSrc.indexOf("lockBusinessScheduleReservation") <
+      writeActiveSrc.indexOf("lockJobsForMembershipClockClose") &&
+    writeActiveSrc.indexOf("lockJobsForMembershipClockClose") <
+      writeActiveSrc.indexOf("lockTenantOwnedMemberships") &&
+    writeActiveSrc.indexOf("lockTenantOwnedMemberships") <
+      writeActiveSrc.indexOf("closeRunningTimeForMembershipInTransaction"),
 );
 check(
   "Reassign lock order is reservation, then Job, then Memberships, then close time",
@@ -255,7 +258,8 @@ try {
     const customer = await prisma.customer.create({
       data: { businessId: business.id, name: `Customer ${label}` },
     });
-    const startedAt = new Date("2027-08-02T12:00:00.000Z");
+    const startedAt = new Date(Date.now() - 3_600_000);
+    const completedStartedAt = new Date(Date.now() - 86_400_000);
     const job = await prisma.job.create({
       data: {
         businessId: business.id,
@@ -284,7 +288,7 @@ try {
         customerId: customer.id,
         projectToken: randomUUID(),
         status: "COMPLETED",
-        scheduledAt: new Date("2027-08-01T12:00:00.000Z"),
+        scheduledAt: completedStartedAt,
         assignedMembershipId: worker.id,
       },
     });
@@ -295,7 +299,7 @@ try {
         jobId: completedJob.id,
         activityType: "JOB",
         status: "RUNNING",
-        startedAt: new Date("2027-08-01T12:00:00.000Z"),
+        startedAt: completedStartedAt,
         endedAt: null,
         source: "CLOCK",
       },
@@ -395,7 +399,7 @@ try {
         businessId: fixture.business.id,
         job: {
           id: fixture.job.id,
-          scheduledAt: new Date("2027-08-02T12:00:00.000Z"),
+          scheduledAt: fixture.job.scheduledAt,
           assignedMembershipId: fixture.worker.id,
           status: "IN_PROGRESS",
         },
