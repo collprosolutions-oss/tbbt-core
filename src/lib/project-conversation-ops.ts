@@ -297,25 +297,32 @@ export async function sendProjectConversationOwnerReply(
     return { ok: false, failureReason: PROJECT_CONVERSATION_ACTIVE_JOB_MESSAGE };
   }
 
-  const used = await countProjectConversationMessages(
-    db,
-    job.businessId,
-    job.id,
-  );
-  if (used >= MAX_PROJECT_CONVERSATION_MESSAGES) {
-    return { ok: false, failureReason: PROJECT_CONVERSATION_BOUND_MESSAGE };
-  }
+  return db.$transaction(async (tx) => {
+    const locked = await lockTenantOwnedJob(tx, job.businessId, job.id);
+    if (!locked || locked.businessId !== job.businessId) {
+      return { ok: false, failureReason: PROJECT_CONVERSATION_JOB_REQUIRED_MESSAGE };
+    }
 
-  return composeCustomerCommunication(db, access, {
-    customerId: job.customerId,
-    channel: input.channel,
-    purpose: PROJECT_CONVERSATION_PURPOSE,
-    subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
-    body,
-    relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
-    relatedId: job.id,
-    idempotencyKey: input.idempotencyKey,
-    browserBusinessId: input.browserBusinessId,
+    const used = await countProjectConversationMessages(
+      tx,
+      locked.businessId,
+      locked.id,
+    );
+    if (used >= MAX_PROJECT_CONVERSATION_MESSAGES) {
+      return { ok: false, failureReason: PROJECT_CONVERSATION_BOUND_MESSAGE };
+    }
+
+    return composeCustomerCommunication(tx, access, {
+      customerId: job.customerId,
+      channel: input.channel,
+      purpose: PROJECT_CONVERSATION_PURPOSE,
+      subject: input.subject?.trim() || PROJECT_CONVERSATION_SUBJECT,
+      body,
+      relatedType: PROJECT_CONVERSATION_RELATED_TYPE,
+      relatedId: job.id,
+      idempotencyKey: input.idempotencyKey,
+      browserBusinessId: input.browserBusinessId,
+    });
   });
 }
 

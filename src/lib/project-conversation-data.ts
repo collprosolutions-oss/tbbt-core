@@ -19,6 +19,7 @@ import {
   parseProjectConversationToken,
   projectConversationHandymanEligible,
 } from "@/lib/project-conversation";
+import { PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS } from "@/lib/portal-project-home";
 import { findLiveJobByProjectToken } from "@/lib/project-link-data";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -85,6 +86,7 @@ function conversationWhere(businessId: string, jobId: string) {
       {
         direction: "OUTBOUND",
         purpose: PROJECT_CONVERSATION_PURPOSE,
+        channel: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS] },
       },
     ],
   } satisfies Prisma.CustomerCommunicationWhereInput;

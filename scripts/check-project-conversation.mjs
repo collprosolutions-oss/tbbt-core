@@ -228,6 +228,18 @@ check(
     !portalPageSrc.includes("submitPortalProjectConversation("),
 );
 check(
+  "OWNER reply serializes the bound check under the job lock",
+  (() => {
+    const ownerReplySrc = opsSrc.slice(
+      opsSrc.indexOf("export async function sendProjectConversationOwnerReply"),
+    );
+    const lockIdx = ownerReplySrc.indexOf("lockTenantOwnedJob");
+    const countIdx = ownerReplySrc.indexOf("countProjectConversationMessages");
+    const composeIdx = ownerReplySrc.indexOf("composeCustomerCommunication");
+    return lockIdx >= 0 && countIdx > lockIdx && composeIdx > countIdx;
+  })(),
+);
+check(
   "Conversation is distinct from the callback request and stays job-scoped",
   portalPageSrc.includes("ProjectConversationCard") &&
     portalPageSrc.includes("callback-request") &&
@@ -251,6 +263,11 @@ check(
     jobPageSrc.includes("loadOwnerProjectConversationReview") &&
     PROJECT_CONVERSATION_PORTAL_WORKFLOW_MESSAGE.includes("opening this page does not send") &&
     ownerPanelSrc.includes("Opening this page does not send"),
+);
+check(
+  "Conversation reads keep SYSTEM/MANUAL/PHONE job updates out of both views",
+  dataSrc.includes("PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS") &&
+    dataSrc.includes("channel: { in: [...PORTAL_CUSTOMER_VISIBLE_MESSAGE_CHANNELS] }"),
 );
 check(
   "Inputs are bounded and HTML is escaped at the HTML boundary",
@@ -844,6 +861,50 @@ try {
       timeline.items.some((row) => row.id === ownerReply.communicationId && row.relatedId === activeA.job.id) &&
       timeline.items.some((row) => row.id === third.communicationId) &&
       timeline.items[0].id === third.communicationId,
+  );
+
+  console.log("\nINTERNAL CHANNELS — SYSTEM/MANUAL/PHONE JOB_UPDATE stay hidden");
+  const hiddenBodies = {
+    SYSTEM: "SYSTEM job update must stay hidden",
+    MANUAL: "MANUAL job update must stay hidden",
+    PHONE: "PHONE job update must stay hidden",
+  };
+  for (const [channel, body] of Object.entries(hiddenBodies)) {
+    await prisma.customerCommunication.create({
+      data: {
+        businessId: businessA.id,
+        customerId: activeA.customer.id,
+        direction: "OUTBOUND",
+        channel,
+        purpose: "JOB_UPDATE",
+        relatedType: "JOB",
+        relatedId: activeA.job.id,
+        idempotencyKey: `hidden:${channel}:${randomUUID()}`,
+        bodySnapshot: body,
+        status: "SENT",
+        provider: "test",
+      },
+    });
+  }
+  const portalAfterHidden = await loadPortalProjectConversationView(
+    prisma,
+    activeA.job.projectToken,
+  );
+  const ownerAfterHidden = await loadOwnerProjectConversationReview(
+    prisma,
+    ownerA,
+    activeA.job.id,
+  );
+  const hiddenBodyList = Object.values(hiddenBodies);
+  check(
+    "SYSTEM, MANUAL, and PHONE JOB_UPDATE rows stay hidden from portal and OWNER review",
+    hiddenBodyList.every(
+      (body) =>
+        !portalAfterHidden.messages.some((row) => row.body === body) &&
+        !(ownerAfterHidden?.messages.some((row) => row.body === body) ?? false),
+    ) &&
+      portalAfterHidden.messages.some((row) => row.id === first.communicationId) &&
+      ownerAfterHidden?.messages.some((row) => row.id === first.communicationId) === true,
   );
 
   console.log("\nCONCURRENT REPLIES — same key sends once; different keys stay ordered");
