@@ -28,10 +28,7 @@ import {
   type GoLiveDomainInput,
   type GoLiveInput,
 } from "@/lib/go-live";
-import {
-  goLiveDomainFromVerification,
-  verifyConfiguredWebsiteDomain,
-} from "@/lib/website-engine/domain-verification";
+import { verifyHostnameForBusiness } from "@/lib/website-engine/domain-verification";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -54,8 +51,22 @@ export async function loadGoLiveDomainState(
   db: Db,
   businessId: string,
 ): Promise<GoLiveDomainInput> {
-  const verification = await verifyConfiguredWebsiteDomain(db, businessId);
-  return goLiveDomainFromVerification(verification);
+  // Consider every binding (newest first), not only the latest row.
+  // Settings still shows the newest binding via verifyConfiguredWebsiteDomain.
+  const bindings = await db.websiteHostBinding.findMany({
+    where: { businessId },
+    select: { hostname: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  const verifications = await Promise.all(
+    bindings.map((row) => verifyHostnameForBusiness(db, businessId, row.hostname)),
+  );
+  return {
+    verifiedHostname: verifications.find((row) => row.state === "VERIFIED")?.hostname ?? null,
+    pendingHostname: verifications.find((row) => row.state === "PENDING")?.hostname ?? null,
+    unverifiedHostname: verifications.find((row) => row.state === "UNVERIFIED")?.hostname ?? null,
+    failedHostname: verifications.find((row) => row.state === "FAILED")?.hostname ?? null,
+  };
 }
 
 export async function loadGoLiveInput(db: Db, businessId: string): Promise<GoLiveInput> {

@@ -27,11 +27,13 @@ const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { classifyCustomDomain, goLiveCardById } = await import("@/lib/go-live");
 const {
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
   WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
   buildPublicSitemap,
   defaultWebsiteDomainDnsLookup,
   dnsRecordsPointAtTbbt,
   getWebsiteDomainDnsLookup,
+  isVercelDnsCname,
   loadWebsiteDomainVerification,
   publishWebsite,
   resetWebsiteDomainDnsLookup,
@@ -132,8 +134,8 @@ check(
   settingsPage.includes("loadWebsiteDomainVerification") &&
     settingsPage.includes('role === "OWNER"') &&
     settingsWorkspace.includes("WebsiteDomainVerificationCard") &&
-    goLiveData.includes("verifyConfiguredWebsiteDomain") &&
-    goLiveData.includes("goLiveDomainFromVerification"),
+    goLiveData.includes("websiteHostBinding.findMany") &&
+    goLiveData.includes("verifyHostnameForBusiness"),
 );
 check(
   "Public routing uses stored VERIFIED only and never live DNS",
@@ -145,9 +147,47 @@ check(
 check(
   "Display matching accepts Vercel apex A and project CNAMEs",
   dnsRecordsPointAtTbbt({ cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [...WEBSITE_DOMAIN_VERCEL_A_ADDRESSES],
+    }) &&
     dnsRecordsPointAtTbbt({ cnames: ["abc.vercel-dns-017.com"], addresses: [] }) &&
     dnsRecordsPointAtTbbt({ cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
+      addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+    }) &&
     !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }),
+);
+check(
+  "A single good record cannot verify a host that also has a hostile record",
+  !dnsRecordsPointAtTbbt({
+    cnames: [],
+    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0], "203.0.113.10"],
+  }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: ["evil.attacker.net"],
+      addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
+      addresses: ["203.0.113.10"],
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET, "evil.attacker.net"],
+      addresses: [],
+    }),
+);
+check(
+  "Lookalike vercel-dns suffixes do not match",
+  !isVercelDnsCname("notvercel-dns.com") &&
+    !isVercelDnsCname("cname.vercel-dns.com.attacker.net") &&
+    !isVercelDnsCname("abc.vercel-dns-017.com.attacker.net") &&
+    !dnsRecordsPointAtTbbt({ cnames: ["notvercel-dns.com"], addresses: [] }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: ["cname.vercel-dns.com.attacker.net"],
+      addresses: [],
+    }),
 );
 check(
   "Pending is a first-class verification state",
@@ -158,6 +198,40 @@ check(
     pendingHostname: "pending.example.test",
   }) === "PARTIAL",
 );
+
+console.log("\nUNIT — Default DNS lookup timeout");
+{
+  const hang = () => new Promise(() => {});
+  const started = Date.now();
+  const lookup = defaultWebsiteDomainDnsLookup("never-resolves.example.test", {
+    resolveCname: hang,
+    resolve4: hang,
+  });
+  lookup.catch(() => {});
+  const outcome = await Promise.race([
+    lookup.then(
+      () => ({ kind: "resolved" }),
+      (error) => ({
+        kind: "error",
+        code: error && typeof error === "object" && "code" in error ? String(error.code) : "",
+      }),
+    ),
+    new Promise((resolve) =>
+      setTimeout(
+        () => resolve({ kind: "watchdog" }),
+        WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS + 2000,
+      ),
+    ),
+  ]);
+  const elapsed = Date.now() - started;
+  check(
+    "defaultWebsiteDomainDnsLookup times out hanging resolvers with ETIMEOUT",
+    outcome.kind === "error" &&
+      outcome.code === "ETIMEOUT" &&
+      elapsed >= WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS - 250 &&
+      elapsed < WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS + 1500,
+  );
+}
 
 try {
   console.log("\nLIVE — Fake DNS, isolation, Pending, OWNER gate");
@@ -365,6 +439,46 @@ try {
     projectCname.state === "VERIFIED" && projectCname.hostname === hostA,
   );
 
+  dnsByHost.set(hostA, {
+    cnames: [],
+    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0], "203.0.113.10"],
+  });
+  const mixedA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Mixed good/bad A records do not verify",
+    mixedA.state === "FAILED" && mixedA.hostname === hostA,
+  );
+
+  dnsByHost.set(hostA, {
+    cnames: ["evil.attacker.net"],
+    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+  });
+  const attackerCname = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Attacker CNAME plus Vercel A does not verify",
+    attackerCname.state === "FAILED" && attackerCname.hostname === hostA,
+  );
+
+  dnsByHost.set(hostA, {
+    cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
+    addresses: ["203.0.113.10"],
+  });
+  const goodCnameBadA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Good CNAME plus bad A does not verify",
+    goodCnameBadA.state === "FAILED" && goodCnameBadA.hostname === hostA,
+  );
+
+  dnsByHost.set(hostA, {
+    cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET, "evil.attacker.net"],
+    addresses: [],
+  });
+  const mixedCnames = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Two CNAMEs with one bad do not verify",
+    mixedCnames.state === "FAILED" && mixedCnames.hostname === hostA,
+  );
+
   dnsByHost.set(hostA, { cnames: ["other-tenant.example.net"], addresses: [] });
   const failedA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
@@ -477,6 +591,12 @@ try {
   check(
     "UNVERIFIED stored binding never serves site or sitemap even when DNS matches",
     serveUnverified.kind === "unverified" && sitemapUnverified.length === 0,
+  );
+  const goLiveAllBindings = await loadGoLiveCenter(prisma, accessA);
+  check(
+    "Go-live stays LIVE when a newer UNVERIFIED binding exists beside a VERIFIED host",
+    goLiveCardById(goLiveAllBindings, "custom_domain")?.status === "LIVE" &&
+      JSON.stringify(goLiveAllBindings).includes(hostA),
   );
 
   timeoutHosts.add("*");

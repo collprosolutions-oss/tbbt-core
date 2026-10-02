@@ -118,15 +118,23 @@ async function withDnsTimeout<T>(work: Promise<T>): Promise<T> {
   }
 }
 
+export type WebsiteDomainNativeDnsResolvers = {
+  resolveCname: (hostname: string) => Promise<string[]>;
+  resolve4: (hostname: string) => Promise<string[]>;
+};
+
 export async function defaultWebsiteDomainDnsLookup(
   hostname: string,
+  resolvers: Partial<WebsiteDomainNativeDnsResolvers> = {},
 ): Promise<WebsiteDomainDnsRecords> {
   const host = normalizeHostname(hostname);
   if (!host) return { cnames: [], addresses: [] };
+  const lookupCname = resolvers.resolveCname ?? resolveCname;
+  const lookup4 = resolvers.resolve4 ?? resolve4;
   return withDnsTimeout(
     Promise.all([
-      lookupRecordList(() => resolveCname(host)),
-      lookupRecordList(() => resolve4(host)),
+      lookupRecordList(() => lookupCname(host)),
+      lookupRecordList(() => lookup4(host)),
     ]).then(([cnames, addresses]) => ({ cnames, addresses })),
   );
 }
@@ -171,15 +179,26 @@ export function isVercelApexAddress(value: string) {
   return (WEBSITE_DOMAIN_VERCEL_A_ADDRESSES as readonly string[]).includes(value.trim());
 }
 
+function cnamePointsAtTbbt(value: string) {
+  const host = normalizeDnsName(value);
+  if (!host) return false;
+  if (isVercelDnsCname(host)) return true;
+  return expectedWebsiteDomainCnameTargets().some(
+    (target) => host === target || host.endsWith(`.${target}`),
+  );
+}
+
 export function dnsRecordsPointAtTbbt(records: WebsiteDomainDnsRecords) {
-  const targets = expectedWebsiteDomainCnameTargets();
-  const cnameMatch = records.cnames.some((cname) => {
-    const value = normalizeDnsName(cname);
-    if (isVercelDnsCname(value)) return true;
-    return targets.some((target) => value === target || value.endsWith(`.${target}`));
-  });
-  if (cnameMatch) return true;
-  return records.addresses.some((address) => isVercelApexAddress(address));
+  const cnames = records.cnames.map(normalizeDnsName).filter(Boolean);
+  const addresses = records.addresses.map((address) => address.trim()).filter(Boolean);
+  if (cnames.length === 0 && addresses.length === 0) return false;
+  if (cnames.length > 0 && !cnames.every((cname) => cnamePointsAtTbbt(cname))) {
+    return false;
+  }
+  if (addresses.length > 0 && !addresses.every((address) => isVercelApexAddress(address))) {
+    return false;
+  }
+  return true;
 }
 
 export type WebsiteDomainVerification = {
@@ -259,6 +278,7 @@ export async function verifyConfiguredWebsiteDomain(
 
   const publishedSite = Boolean(business.publishedWebsiteId);
   const enteredWebsiteHostname = hostnameFromPublicWebsite(business.publicWebsite);
+  // Settings shows the newest binding. Go-live considers every binding.
   const binding = business.websiteHostBindings[0] ?? null;
   const hostname = binding?.hostname ? normalizeHostname(binding.hostname) : null;
 

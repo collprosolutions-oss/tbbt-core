@@ -95,6 +95,7 @@ export {
   WEBSITE_DOMAIN_VERIFICATION_LABELS,
   WEBSITE_DOMAIN_VERIFICATION_STATES,
   defaultWebsiteDomainDnsLookup,
+  type WebsiteDomainNativeDnsResolvers,
   expectedWebsiteDomainCnameTargets,
   dnsRecordsPointAtTbbt,
   goLiveDomainFromVerification,
