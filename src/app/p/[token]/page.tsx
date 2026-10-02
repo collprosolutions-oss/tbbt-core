@@ -71,6 +71,7 @@ import { loadPortalAdditionalWorkCatalog } from "@/lib/portal-additional-work";
 import { loadPortalJobCallbackView } from "@/lib/portal-job-callback-data";
 import { loadPortalProjectConversationView } from "@/lib/project-conversation-data";
 import {
+  JOB_CALLBACK_PORTAL_CLOSED_MESSAGE,
   JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
   portalJobCallbackCooldownMessage,
@@ -689,9 +690,27 @@ export default async function CustomerProjectPortalPage({
                 <CardTitle>Callback request</CardTitle>
                 <CardDescription>{JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE}</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 {callbackView.status === "already_requested" ? (
-                  <p className="text-sm">{JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE}</p>
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      {callbackView.customerVisibleStatusLabel}
+                      {callbackView.categoryLabel ? ` · ${callbackView.categoryLabel}` : ""}
+                    </p>
+                    <p className="whitespace-pre-wrap text-sm">{callbackView.description}</p>
+                    {callbackView.attachments.length > 0 ? (
+                      <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                        {callbackView.attachments.map((attachment) => (
+                          <li key={attachment.originalFilename}>
+                            {attachment.originalFilename}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <p className="text-sm">{JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE}</p>
+                  </div>
+                ) : callbackView.status === "closed" ? (
+                  <p className="text-sm">{JOB_CALLBACK_PORTAL_CLOSED_MESSAGE}</p>
                 ) : callbackView.status === "cooldown" ? (
                   <p className="text-sm">
                     {portalJobCallbackCooldownMessage(
@@ -699,7 +718,10 @@ export default async function CustomerProjectPortalPage({
                     )}
                   </p>
                 ) : (
-                  <RequestJobCallbackForm projectToken={token} />
+                  <RequestJobCallbackForm
+                    projectToken={token}
+                    attachableDocuments={callbackView.attachableDocuments}
+                  />
                 )}
               </CardContent>
             </Card>

@@ -9,6 +9,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
+  JOB_CALLBACK_CATEGORIES,
+  JOB_CALLBACK_CATEGORY_LABELS,
   JOB_CALLBACK_PREFERRED_CONTACT,
   JOB_CALLBACK_PREFERRED_CONTACT_LABELS,
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
@@ -17,7 +19,13 @@ import {
 
 const initialState: PortalJobCallbackActionState = {};
 
-export function RequestJobCallbackForm({ projectToken }: { projectToken: string }) {
+export function RequestJobCallbackForm({
+  projectToken,
+  attachableDocuments = [],
+}: {
+  projectToken: string;
+  attachableDocuments?: Array<{ id: string; originalFilename: string }>;
+}) {
   const [state, formAction, pending] = useActionState(
     requestPortalJobCallback,
     initialState,
@@ -36,6 +44,22 @@ export function RequestJobCallbackForm({ projectToken }: { projectToken: string 
           <AlertDescription>{state.message}</AlertDescription>
         </Alert>
       ) : null}
+      <div className="space-y-1">
+        <Label htmlFor="portal-callback-category">What kind of concern is this?</Label>
+        <select
+          id="portal-callback-category"
+          name="category"
+          className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+          defaultValue=""
+        >
+          <option value="">Choose one (optional)</option>
+          {JOB_CALLBACK_CATEGORIES.map((value) => (
+            <option key={value} value={value}>
+              {JOB_CALLBACK_CATEGORY_LABELS[value]}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="space-y-1">
         <Label htmlFor="portal-callback-description">What should we review?</Label>
         <textarea
@@ -64,9 +88,22 @@ export function RequestJobCallbackForm({ projectToken }: { projectToken: string 
           ))}
         </select>
       </div>
+      {attachableDocuments.length > 0 ? (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">
+            Attach a private document already on this project
+          </legend>
+          {attachableDocuments.map((document) => (
+            <label key={document.id} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="storedAssetIds" value={document.id} />
+              <span>{document.originalFilename}</span>
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
       <p className="text-xs text-muted-foreground">{JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE}</p>
       <Button type="submit" size="sm" disabled={pending}>
-        {pending ? "Sending…" : "Send callback request"}
+        {pending ? "Sending…" : "Send request"}
       </Button>
     </form>
   );

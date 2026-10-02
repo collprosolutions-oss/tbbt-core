@@ -1224,7 +1224,8 @@ export default async function JobPage({
             <CardTitle>Customer-reported callback</CardTitle>
             <CardDescription>
               OWNER record, review, and outcome for a customer-reported
-              callback on a completed same-business job. Shows recorded
+              callback on a completed same-business job. Customer-visible
+              status stays separate from private owner notes. Shows recorded
               warranty terms only. Does not invent coverage, create an
               invoice, schedule a job, or message the customer.
             </CardDescription>

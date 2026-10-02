@@ -14,6 +14,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { formatDateTime } from "@/lib/format";
 import type { JobCallbackReview } from "@/lib/job-callback-data";
 import {
+  JOB_CALLBACK_CATEGORIES,
+  JOB_CALLBACK_CATEGORY_LABELS,
   JOB_CALLBACK_OUTCOME_LABELS,
   JOB_CALLBACK_OUTCOMES,
   JOB_CALLBACK_REPORTED_VIA,
@@ -76,7 +78,13 @@ function WarrantyTerms({ review }: { review: JobCallbackReview }) {
   );
 }
 
-function RecordForm({ jobId }: { jobId: string }) {
+function RecordForm({
+  jobId,
+  attachableDocuments,
+}: {
+  jobId: string;
+  attachableDocuments: Array<{ id: string; originalFilename: string }>;
+}) {
   const [state, action, pending] = useActionState(recordJobCallbackAction, initialState);
   return (
     <form action={action} className="space-y-3">
@@ -99,6 +107,22 @@ function RecordForm({ jobId }: { jobId: string }) {
         </select>
       </div>
       <div className="space-y-1">
+        <Label htmlFor="job-callback-category">Issue type (optional)</Label>
+        <select
+          id="job-callback-category"
+          name="category"
+          className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+          defaultValue=""
+        >
+          <option value="">Not specified</option>
+          {JOB_CALLBACK_CATEGORIES.map((value) => (
+            <option key={value} value={value}>
+              {JOB_CALLBACK_CATEGORY_LABELS[value]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1">
         <Label htmlFor="job-callback-description">What the customer reported</Label>
         <textarea
           id="job-callback-description"
@@ -108,9 +132,30 @@ function RecordForm({ jobId }: { jobId: string }) {
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
         />
       </div>
+      <div className="space-y-1">
+        <Label htmlFor="job-callback-owner-notes">Private owner notes (optional)</Label>
+        <textarea
+          id="job-callback-owner-notes"
+          name="ownerNotes"
+          rows={3}
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+        />
+      </div>
+      {attachableDocuments.length > 0 ? (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">Attach a private document</legend>
+          {attachableDocuments.map((document) => (
+            <label key={document.id} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="storedAssetIds" value={document.id} />
+              <span>{document.originalFilename}</span>
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
       <p className="text-xs text-muted-foreground">
-        Records the report only. Does not create an invoice, schedule a job, or
-        message the customer.
+        Records the report only. Private notes stay hidden from the customer
+        project link. Does not create an invoice, schedule a job, or message
+        the customer.
       </p>
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Recording…" : "Record callback"}
@@ -125,6 +170,17 @@ function ReviewButton({ callbackId }: { callbackId: string }) {
     <form action={action} className="space-y-2">
       <input type="hidden" name="callbackId" value={callbackId} />
       <ActionAlerts state={state} />
+      <div className="space-y-1">
+        <Label htmlFor={`job-callback-review-notes-${callbackId}`}>
+          Private owner notes (optional)
+        </Label>
+        <textarea
+          id={`job-callback-review-notes-${callbackId}`}
+          name="ownerNotes"
+          rows={3}
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+        />
+      </div>
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : "Mark reviewed"}
       </Button>
@@ -168,6 +224,17 @@ function OutcomeForm({ callbackId }: { callbackId: string }) {
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
         />
       </div>
+      <div className="space-y-1">
+        <Label htmlFor={`job-callback-owner-notes-${callbackId}`}>
+          Private owner notes (optional)
+        </Label>
+        <textarea
+          id={`job-callback-owner-notes-${callbackId}`}
+          name="ownerNotes"
+          rows={3}
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+        />
+      </div>
       <p className="text-xs text-muted-foreground">
         Operational bookkeeping only. This is not a coverage or legal
         determination and does not invoice, schedule, or message the customer.
@@ -185,7 +252,12 @@ export function JobCallbackPanel({ review }: { review: JobCallbackReview }) {
       <p className="text-sm text-muted-foreground">{review.workflowMessage}</p>
       <WarrantyTerms review={review} />
 
-      {review.canRecord ? <RecordForm jobId={review.jobId} /> : null}
+      {review.canRecord ? (
+        <RecordForm
+          jobId={review.jobId}
+          attachableDocuments={review.attachableDocuments}
+        />
+      ) : null}
       {!review.eligible ? (
         <p className="text-sm text-muted-foreground">
           A customer-reported callback can only be recorded against a completed
@@ -210,6 +282,9 @@ export function JobCallbackPanel({ review }: { review: JobCallbackReview }) {
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge status={callback.status} />
                 <span className="text-xs text-muted-foreground">
+                  Customer-visible: {callback.customerVisibleStatusLabel}
+                </span>
+                <span className="text-xs text-muted-foreground">
                   {reportedViaLabel(callback.reportedVia)} · Recorded{" "}
                   {formatDateTime(callback.recordedAt)}
                   {callback.reportedVia === "PORTAL"
@@ -219,7 +294,25 @@ export function JobCallbackPanel({ review }: { review: JobCallbackReview }) {
                       : ""}
                 </span>
               </div>
+              {callback.categoryLabel ? (
+                <p className="text-xs text-muted-foreground">{callback.categoryLabel}</p>
+              ) : null}
               <p className="whitespace-pre-wrap">{callback.description}</p>
+              {callback.attachments.length > 0 ? (
+                <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                  {callback.attachments.map((attachment) => (
+                    <li key={attachment.id}>{attachment.originalFilename}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {callback.ownerNotes ? (
+                <div className="space-y-1 rounded-md border border-dashed p-2">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Private owner notes
+                  </p>
+                  <p className="whitespace-pre-wrap text-sm">{callback.ownerNotes}</p>
+                </div>
+              ) : null}
               {callback.outcome ? (
                 <p>
                   Outcome: {recordedCallbackOutcomeLabel(callback.outcome)}

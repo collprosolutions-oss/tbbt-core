@@ -18,6 +18,14 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readStringList(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 /**
  * Customer Project Portal callback request. Authorization is the Job's
  * unguessable projectToken only — never a browser-supplied
@@ -34,6 +42,8 @@ export async function requestPortalJobCallback(
       token,
       description: readString(formData, "description"),
       preferredContact: readString(formData, "preferredContact"),
+      category: readString(formData, "category"),
+      storedAssetIds: readStringList(formData, "storedAssetIds"),
     });
     if (!created.ok) {
       return { error: created.error };
