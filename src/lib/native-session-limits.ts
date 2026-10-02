@@ -21,6 +21,7 @@ import {
   TOTP_CHALLENGE_MINUTES,
 } from "@/lib/account-security";
 import { hashToken } from "@/lib/auth-crypto";
+import { utcTimestampSql } from "@/lib/utc-timestamp-sql";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -109,23 +110,33 @@ export function parseNativeSessionJson(text: string):
   return { ok: true, payload };
 }
 
-export async function nativePasswordThrottleIsLocked(db: Db, email: string) {
+export async function nativePasswordThrottleIsLocked(
+  db: Db,
+  email: string,
+  now: Date = new Date(),
+) {
   const subjectHash = nativePasswordSubjectHash(email);
-  const row = await db.nativeSignInThrottle.findUnique({
-    where: {
-      subjectHash_purpose: { subjectHash, purpose: NATIVE_PASSWORD_PURPOSE },
-    },
-  });
-  if (!row || row.expiresAt <= new Date()) {
-    return false;
-  }
+  const rows = await db.$queryRaw<Array<{ failedAttemptCount: number }>>`
+    SELECT "failedAttemptCount"
+    FROM "NativeSignInThrottle"
+    WHERE "subjectHash" = ${subjectHash}
+      AND "purpose" = ${NATIVE_PASSWORD_PURPOSE}
+      AND "expiresAt" > ${utcTimestampSql(now)}
+  `;
+  const row = rows[0];
+  if (!row) return false;
   return row.failedAttemptCount >= NATIVE_PASSWORD_MAX_ATTEMPTS;
 }
 
-export async function recordNativePasswordFailure(db: Db, email: string) {
+export async function recordNativePasswordFailure(
+  db: Db,
+  email: string,
+  options?: { now?: Date; windowMinutes?: number },
+) {
   const subjectHash = nativePasswordSubjectHash(email);
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + NATIVE_PASSWORD_WINDOW_MINUTES * 60 * 1000);
+  const now = options?.now ?? new Date();
+  const windowMinutes = options?.windowMinutes ?? NATIVE_PASSWORD_WINDOW_MINUTES;
+  const expiresAt = new Date(now.getTime() + windowMinutes * 60 * 1000);
 
   const rows = await db.$queryRaw<Array<{ failedAttemptCount: number }>>`
     INSERT INTO "NativeSignInThrottle" (
@@ -143,10 +154,10 @@ export async function recordNativePasswordFailure(db: Db, email: string) {
       ${subjectHash},
       ${NATIVE_PASSWORD_PURPOSE},
       1,
-      ${now},
-      ${expiresAt},
-      ${now},
-      ${now}
+      ${utcTimestampSql(now)},
+      ${utcTimestampSql(expiresAt)},
+      ${utcTimestampSql(now)},
+      ${utcTimestampSql(now)}
     )
     ON CONFLICT ("subjectHash", "purpose") DO UPDATE SET
       "failedAttemptCount" = CASE

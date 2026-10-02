@@ -10,7 +10,9 @@
  * the only locality definition. A non-local value refuses the run
  * before any child starts. The same alternate variables are removed
  * from the child environment. TZ=America/New_York is still set on the
- * child.
+ * child. The gate then SET timezone = 'UTC', ALTER ROLE CURRENT_USER
+ * SET timezone = 'UTC', and refuses to start unless a fresh connection
+ * reports SHOW timezone = UTC.
  *
  * Children run serially. package.json decides plain `node` versus
  * `node --experimental-strip-types`. TZ=America/New_York is forced.
@@ -37,6 +39,7 @@ import {
   localDatabaseEnvironmentProblem,
   scrubAlternateDatabaseEnv,
 } from "./lib/local-database-guard.mjs";
+import { assertPostgresSessionTimezoneUtc } from "./lib/postgres-session-timezone.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_CHILD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -455,6 +458,15 @@ async function runDomain(domain, options) {
     if (problem) {
       console.error(`P1 gate refused to start ${domain.id}.`);
       console.error(problem);
+      console.error("No child process was started.");
+      return 1;
+    }
+    try {
+      const shown = await assertPostgresSessionTimezoneUtc(process.env.DATABASE_URL, process.env);
+      console.log(`Postgres session timezone set and asserted UTC (SHOW timezone=${shown})`);
+    } catch (error) {
+      console.error(`P1 gate refused to start ${domain.id}.`);
+      console.error(error instanceof Error ? error.message : String(error));
       console.error("No child process was started.");
       return 1;
     }

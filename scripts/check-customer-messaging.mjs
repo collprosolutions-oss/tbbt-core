@@ -48,12 +48,16 @@ const testUrl = parsed.toString();
 assertLocalDatabaseUrl(testUrl, "customer-messaging test DATABASE_URL");
 process.env.DATABASE_URL = testUrl;
 process.env.NEXT_PUBLIC_APP_URL = "http://customer-messaging.test";
-delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
-delete process.env.VERCEL_ENV;
-delete process.env.TWILIO_ACCOUNT_SID;
-delete process.env.TWILIO_AUTH_TOKEN;
-delete process.env.TWILIO_MESSAGING_SERVICE_SID;
-delete process.env.TWILIO_FROM_NUMBER;
+function clearCustomerMessagingEnv() {
+  delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
+  delete process.env.TBBT_CUSTOMER_MESSAGING_WEBHOOK_SECRET;
+  delete process.env.VERCEL_ENV;
+  delete process.env.TWILIO_ACCOUNT_SID;
+  delete process.env.TWILIO_AUTH_TOKEN;
+  delete process.env.TWILIO_MESSAGING_SERVICE_SID;
+  delete process.env.TWILIO_FROM_NUMBER;
+}
+clearCustomerMessagingEnv();
 
 const push = spawnSync(
   "npx",
@@ -68,12 +72,7 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
-delete process.env.TBBT_CUSTOMER_MESSAGING_ADAPTER;
-delete process.env.VERCEL_ENV;
-delete process.env.TWILIO_ACCOUNT_SID;
-delete process.env.TWILIO_AUTH_TOKEN;
-delete process.env.TWILIO_MESSAGING_SERVICE_SID;
-delete process.env.TWILIO_FROM_NUMBER;
+clearCustomerMessagingEnv();
 
 const { REQUEST_SEND_DISCLAIMER } = await import("@/lib/reviews");
 const {
@@ -289,6 +288,7 @@ const settingsWorkspaceSrc = readFileSync(
 
 try {
   console.log("\nSTATIC — Provider architecture and isolation");
+  clearCustomerMessagingEnv();
   check(
     "Default environment is not a connected SMS provider",
     isCustomerMessagingConfigured() === false && isFakeCustomerMessagingAdapterEnabled() === false,
