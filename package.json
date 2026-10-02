@@ -99,6 +99,7 @@
     "test:p1-request-path-schema-scan": "node scripts/check-p1-request-path-schema-scan.mjs",
     "test:p1-revenue-integrity-business-isolation": "node --experimental-strip-types scripts/check-p1-revenue-integrity-business-isolation.mjs",
     "test:disposable-test-database": "node scripts/check-disposable-test-database.mjs",
+    "test:handyman-database-restore": "node --experimental-strip-types scripts/check-handyman-database-restore.mjs",
     "test:request-intake": "node --experimental-strip-types scripts/check-request-intake.mjs",
     "test:request-preferred-windows": "node --experimental-strip-types scripts/check-request-preferred-windows.mjs",
     "test:intake-conditionals": "node --experimental-strip-types scripts/check-intake-conditionals.mjs",
