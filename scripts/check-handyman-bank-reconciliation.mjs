@@ -104,6 +104,11 @@ check(
     reportsSrc.includes("asNumber(payment.amount)") &&
     reportsSrc.includes("asNumber(credit.amount)"),
 );
+check(
+  "sumTotals coerces invoice.total so the no-payments branch cannot concatenate Decimals",
+  /function sumTotals[\s\S]{0,180}sum \+ asNumber\(invoice\.total\)/.test(reportsSrc) &&
+    !/function sumTotals[\s\S]{0,180}sum \+ invoice\.total/.test(reportsSrc),
+);
 
 const { Prisma } = await import("@prisma/client");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
@@ -176,6 +181,34 @@ const decimalDue = outstandingRemaining(
 check(
   "Decimal deposit + partial + credit leaves $400 due, not $0",
   decimalDue.amount === 400 && decimalDue.count === 1,
+);
+
+function decimalSentInvoice(id, total) {
+  return {
+    id,
+    businessId: "biz-a",
+    status: "SENT",
+    total: new Prisma.Decimal(total),
+    paidAt: null,
+    createdAt: new Date("2026-03-15T16:00:00.000Z"),
+    customerId: "c1",
+    jobId: "job-1",
+    kind: INVOICE_KIND_ORIGINAL,
+    paymentMethod: null,
+    paymentReference: null,
+  };
+}
+const twoDecimalInvoices = outstandingRemaining([
+  decimalSentInvoice("inv-400", "400.00"),
+  decimalSentInvoice("inv-200", "200.00"),
+]);
+const twoDecimalRowSum = twoDecimalInvoices.rows.reduce((sum, row) => sum + row.balance, 0);
+check(
+  "two Decimal SENT invoices with no payments/credits due $600, not concatenated 400200",
+  twoDecimalInvoices.amount === 600 &&
+    twoDecimalInvoices.count === 2 &&
+    twoDecimalRowSum === 600 &&
+    twoDecimalInvoices.amount === twoDecimalRowSum,
 );
 
 const baseUrl = process.env.DATABASE_URL;

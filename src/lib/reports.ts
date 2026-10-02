@@ -461,7 +461,9 @@ function creditsOnInvoice(credits: readonly ReportInvoiceCredit[] | undefined, i
 }
 
 /** Remaining SENT balance after recorded payments and OWNER credits.
- * Amounts are coerced so Prisma Decimal rows from job-money loaders compose.
+ * Latent hardening: coerce Prisma Decimal totals so a raw-Decimal caller
+ * cannot concatenate or drop remaining due. Production loaders already
+ * coerce to number before this function.
  */
 export function outstandingRemaining(
   invoices: readonly ReportInvoice[],
@@ -502,7 +504,7 @@ export function expensesInRange(
 }
 
 export function sumTotals(invoices: readonly { total: number }[]): number {
-  return roundMoney(invoices.reduce((sum, invoice) => sum + invoice.total, 0));
+  return roundMoney(invoices.reduce((sum, invoice) => sum + asNumber(invoice.total), 0));
 }
 
 export function averageInvoiceValue(invoices: readonly { total: number }[]): number | null {
