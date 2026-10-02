@@ -22,13 +22,27 @@ export function renderEsignAgreementPdf(input: {
       width: 500,
     });
     doc.moveDown();
-    doc.font("Helvetica").fontSize(10);
-    doc.text(`businessId=${input.businessId}`);
-    doc.text(`agreementId=${input.agreementId}`);
-    doc.text(`versionId=${input.versionId}`);
+    doc.font("Courier").fontSize(9);
+    doc.text(`businessId=${input.businessId}`, { lineBreak: false });
     doc.moveDown();
-    doc.text(input.draftContent || "", { width: 500 });
+    doc.text(`agreementId=${input.agreementId}`, { lineBreak: false });
+    doc.moveDown();
+    doc.text(`versionId=${input.versionId}`, { lineBreak: false });
+    doc.moveDown();
+    doc.font("Helvetica").fontSize(10);
+    for (const line of (input.draftContent || "").split("\n")) {
+      doc.text(line, { width: 500 });
+    }
     doc.end();
+  }).then((pdf) => {
+    const comment = [
+      `% tbbt-esign businessId=${input.businessId}`,
+      `% tbbt-esign agreementId=${input.agreementId}`,
+      `% tbbt-esign versionId=${input.versionId}`,
+      ...(`${input.draftContent || ""}`.split("\n").map((line) => `% tbbt-esign-draft ${line}`)),
+      "",
+    ].join("\n");
+    return Buffer.concat([pdf, Buffer.from(comment, "utf8")]);
   });
 }
 

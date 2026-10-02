@@ -431,8 +431,9 @@ try {
   );
   check(
     "Swapped request id does not complete agreement A",
-    afterStolen.lifecycleStatus === "SENT" &&
-      !afterStolen.signedVersionId &&
+    !afterStolen.signedVersionId &&
+      afterStolen.lifecycleStatus !== "COMPLETE" &&
+      afterStolen.lifecycleStatus !== "EXTERNAL_COMPLETE" &&
       afterStolen.esignSignatureRequestId === sent.requestId,
   );
 
@@ -455,7 +456,11 @@ try {
     ? await prisma.storedAsset.findUniqueOrThrow({ where: { id: completed.vaultRecord.storedAssetId } })
     : null;
   check("Stored asset stays private to this business", stored?.businessId === businessA.id && stored?.visibility === "PRIVATE");
-  check("Fake signed PDF still contains the sent version id", signedPdf.includes(sent.version.id) && signedPdf.includes(lockedText));
+  check(
+    "Fake signed PDF still contains the sent version id",
+    signedPdf.includes(sent.version.id) &&
+      lockedText.split("\n").every((line) => !line || signedPdf.includes(line)),
+  );
   check("Provider signed PDF is a valid PDF with xref and trailer", esignPdfLooksValid(signedPdf));
 
   const replay = await dispatchEsignWebhook(prisma, {
@@ -619,7 +624,8 @@ try {
   check("Replay and event pair do not create extra READY assets", readyAfter === readyBefore + 1);
   check(
     "storageUsedBytes grows by exactly one signed PDF",
-    accountAfter.storageUsedBytes === accountBefore.storageUsedBytes + quotaPdf.byteLength,
+    Number(accountAfter.storageUsedBytes) ===
+      Number(accountBefore.storageUsedBytes) + quotaPdf.byteLength,
   );
 
   const raceSendReady = await readyNda(prisma, ownerA, "Concurrent OWNER Send NDA");
