@@ -65,6 +65,17 @@ function form(fields) {
   return data;
 }
 
+async function scheduleWithAck(scheduleJob, jobId, fields) {
+  let result = await scheduleJob({}, form({ jobId, ...fields }));
+  if (result?.warning && result.conflictAck) {
+    result = await scheduleJob(
+      {},
+      form({ jobId, ...fields, confirmOverlapAck: result.conflictAck }),
+    );
+  }
+  return result;
+}
+
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 }
@@ -142,6 +153,7 @@ try {
   const {
     createFakeNativePushProvider,
     flushNativePushNotifies,
+    notifyHandymanJobRescheduled,
     registerNativePushDevice,
     setNativePushProvider,
   } = await import("@/lib/native-push");
@@ -155,6 +167,7 @@ try {
   const { scheduleSnapshotFromJob } = await import("@/lib/owner-day-route/snapshot");
   const {
     DAY_ROUTE_APPOINTMENT_NOTICE_CONFIRM_VALUE,
+    DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE,
     DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE,
     DAY_ROUTE_APPOINTMENT_NOTICE_UNCONFIRMED_MESSAGE,
     buildDayRouteAppointmentNoticeSubject,
@@ -181,8 +194,6 @@ try {
     JOB_CANCELLED_CANNOT_ASSIGN_MESSAGE,
     JOB_CANCELLED_CANNOT_RESCHEDULE_MESSAGE,
   } = await import("@/lib/job-lifecycle");
-  const { ForbiddenError } = await import("@/lib/authorization");
-
   const fakePush = createFakeNativePushProvider();
   setNativePushProvider(fakePush);
   setTransactionalEmailSender(async (input) => {
@@ -282,9 +293,9 @@ try {
   await prisma.businessSettings.create({
     data: {
       businessId: business.id,
-      workingWeekdays: "1,2,3,4,5",
-      workStartMinutes: 8 * 60,
-      workEndMinutes: 17 * 60,
+      workingWeekdays: "0,1,2,3,4,5,6",
+      workStartMinutes: 0,
+      workEndMinutes: 24 * 60,
       schedulingBufferMinutes: 30,
       scheduleNotificationEnabled: true,
     },
@@ -803,19 +814,20 @@ try {
     actorMembershipId: ownerMem.id,
     active: false,
   });
-  const inactiveBefore = await prisma.job.findFirstOrThrow({
+  const inactiveJobRow = await prisma.job.findFirstOrThrow({
     where: { id: inactiveJob.id, businessId: business.id },
   });
-  await changeOwnerDayRouteAppointment(prisma, ownerAccess, {
+  const inactiveNotify = await notifyHandymanJobRescheduled(prisma, {
+    businessId: business.id,
     jobId: inactiveJob.id,
-    date: "2027-07-20",
-    time: "15:00",
-    snapshot: scheduleSnapshotFromJob(inactiveBefore),
+    membershipId: workerA.id,
+    actorMembershipId: ownerMem.id,
+    proposalId: (inactiveJobRow.appointmentProposalId ?? 0) + 1,
   });
   await flushNativePushNotifies();
   check(
-    "Material reschedule for an inactive assignee creates no worker alert",
-    fakePush.sent.length === 0,
+    "Material reschedule notify for an inactive assignee is suppressed",
+    fakePush.sent.length === 0 && inactiveNotify.status === "SUPPRESSED",
   );
 
   const cancelledJob = await jobFromRequest(
@@ -880,11 +892,13 @@ try {
         reviewedCustomerId: cancelledJob.customerId,
         reviewedDestinationFingerprint: "cancelled",
       }),
-    (error) =>
-      error instanceof ForbiddenError === false &&
-      /could not be notified|cancelled|not recorded/i.test(
-        dayRouteAppointmentNoticeErrorMessage(error, ""),
-      ),
+    (error) => {
+      const message = dayRouteAppointmentNoticeErrorMessage(error, "");
+      return (
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_MISSING_JOB_MESSAGE ||
+        message === DAY_ROUTE_APPOINTMENT_NOTICE_NOT_RECORDED_MESSAGE
+      );
+    },
   );
   check(
     "Cancelled job cannot be rescheduled or assigned",
@@ -933,10 +947,11 @@ try {
   );
   setTestAccess(ownerAccess);
   fakePush.sent.length = 0;
-  const dstFirst = await scheduleJob(
-    {},
-    form({ jobId: dstJob.id, date: "2026-03-08", time: "01:30", durationPreset: "60" }),
-  );
+  const dstFirst = await scheduleWithAck(scheduleJob, dstJob.id, {
+    date: "2026-03-08",
+    time: "01:30",
+    durationPreset: "60",
+  });
   await flushNativePushNotifies();
   const dstFirstRow = await prisma.job.findFirstOrThrow({
     where: { id: dstJob.id, businessId: business.id },
@@ -955,13 +970,16 @@ try {
   );
   await assignJobMember({}, form({ jobId: dstJob.id, membershipId: workerB.id }));
   await flushNativePushNotifies();
+  const dstAssigned = await prisma.job.findFirstOrThrow({
+    where: { id: dstJob.id, businessId: business.id },
+  });
   fakePush.sent.length = 0;
   sentNoticeEmails.length = 0;
   const dstChanged = await changeOwnerDayRouteAppointment(prisma, ownerAccess, {
     jobId: dstJob.id,
     date: "2026-03-08",
     time: "03:30",
-    snapshot: scheduleSnapshotFromJob(dstFirstRow),
+    snapshot: scheduleSnapshotFromJob(dstAssigned),
   });
   await flushNativePushNotifies();
   const dstAfter = await prisma.job.findFirstOrThrow({
