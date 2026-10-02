@@ -412,6 +412,27 @@ function assertStrictlyIncreasingIntents(intents: NativeTimeCardDraftIntent[]) {
   }
 }
 
+async function assertStartCloseDurationAllowed(
+  tx: Db,
+  access: NativeFieldAccess,
+  intendedAt: Date,
+) {
+  const running = await tx.timeEntry.findMany({
+    where: {
+      businessId: access.businessId,
+      membershipId: access.membershipId,
+      status: "RUNNING",
+      endedAt: null,
+    },
+    select: { startedAt: true },
+  });
+  for (const current of running) {
+    if (intendedAt.getTime() - current.startedAt.getTime() > TIME_CORRECTION_MAX_DURATION_MS) {
+      throw new TimeCardSyncError(NATIVE_TIME_CARD_DURATION_TOO_LONG);
+    }
+  }
+}
+
 async function assertStopDurationAllowed(
   tx: Db,
   access: NativeFieldAccess,
@@ -461,6 +482,7 @@ async function applyIntent(
     if (lifecycle.nextStatus && startJobRequiresCustomerConfirmation(current)) {
       throw new TimeCardSyncError(CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT);
     }
+    await assertStartCloseDurationAllowed(tx, access, intendedAt);
     const result = await startJobWithRunningTimeSafetyInTransaction(tx, {
       businessId: access.businessId,
       jobId,
@@ -496,6 +518,7 @@ async function applyIntent(
     ? "TRAVEL"
     : "MATERIAL_PICKUP";
   if (isStartAction(intent.action)) {
+    await assertStartCloseDurationAllowed(tx, access, intendedAt);
     const result = await startAssignedActivityTimeInTransaction(tx, {
       businessId: access.businessId,
       jobId,
@@ -560,9 +583,6 @@ export async function syncNativeAssignedTimeCardDraft(
   const now = options?.now ?? new Date();
   try {
     assertStrictlyIncreasingIntents(input.intents);
-    for (const intent of input.intents) {
-      assertSyncIntendedAt(new Date(intent.intendedAt), now);
-    }
   } catch (error) {
     return syncFailure(error);
   }

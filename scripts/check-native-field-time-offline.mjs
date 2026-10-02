@@ -49,6 +49,8 @@ const { formatDateInput, formatTimeInput, parseBusinessDateTimeInput, weekRange 
 );
 const {
   approveTimesheetWeek,
+  startAssignedActivityTime,
+  startJobWithRunningTimeSafety,
   START_EARLIER_THAN_RUNNING_ERROR,
   TIME_CORRECTION_FUTURE_SLACK_MS,
   TIME_CORRECTION_MAX_DURATION_MS,
@@ -416,6 +418,24 @@ const withStop = recordLocalTimeCardIntent({
   action: "STOP_JOB_TIME",
   now: new Date("2026-10-02T18:00:00.000Z"),
 });
+let localOutOfOrderError = null;
+try {
+  recordLocalTimeCardIntent({
+    scope,
+    snapshot: idle,
+    draft: withStop,
+    action: "START_TRAVEL",
+    now: new Date("2026-10-02T17:00:00.000Z"),
+  });
+} catch (error) {
+  localOutOfOrderError = error;
+}
+check(
+  "recordLocalTimeCardIntent refuses an intendedAt that is not after the previous tap",
+  localOutOfOrderError instanceof Error &&
+    localOutOfOrderError.message === TIME_CARD_DRAFT_SYNC_BEFORE_MORE_CHANGES &&
+    withStop.intents.length === 2,
+);
 check(
   "Assigned worker can record a local start intent",
   first?.intents.length === 1 &&
@@ -1275,6 +1295,325 @@ try {
   );
   await prisma.timeEntry.deleteMany({
     where: { jobId: longStopJob.id, businessId: businessA.id },
+  });
+
+  const equalRunningAt = new Date(clockNow.getTime() - 30 * 60 * 1000);
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: earlierRunningJob.id,
+    startedAt: equalRunningAt,
+  });
+  const equalStart = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    earlierStartJob.id,
+    syncPayload(earlierStartJob, memberMem.id, [
+      { action: "START_JOB", intendedAt: equalRunningAt.toISOString() },
+    ]),
+  );
+  const equalStartRows = await prisma.timeEntry.findMany({
+    where: { jobId: earlierStartJob.id, businessId: businessA.id },
+  });
+  const equalRunningAfter = await prisma.timeEntry.findMany({
+    where: { jobId: earlierRunningJob.id, businessId: businessA.id },
+  });
+  check(
+    "A start at the exact running startedAt is refused as earlier than time already running",
+    equalStart.ok === false &&
+      equalStart.status === 409 &&
+      equalStart.error === START_EARLIER_THAN_RUNNING_ERROR &&
+      equalStartRows.length === 0 &&
+      equalRunningAfter.length === 1 &&
+      equalRunningAfter[0].status === "RUNNING" &&
+      equalRunningAfter[0].endedAt === null,
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: earlierRunningJob.id, businessId: businessA.id },
+  });
+
+  const thirtyHoursAgo = new Date(clockNow.getTime() - 30 * 60 * 60 * 1000);
+  const forgottenJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Forgotten Live Job",
+    status: "IN_PROGRESS",
+  });
+  const liveStartJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Live Start After Forgotten",
+  });
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: forgottenJob.id,
+    startedAt: thirtyHoursAgo,
+  });
+  const liveJobStart = await startJobWithRunningTimeSafety(prisma, {
+    businessId: businessA.id,
+    jobId: liveStartJob.id,
+    actorMembershipId: memberMem.id,
+    startedAt: clockNow,
+  });
+  const forgottenAfterLive = await prisma.timeEntry.findMany({
+    where: { jobId: forgottenJob.id, businessId: businessA.id },
+  });
+  const liveStartRows = await prisma.timeEntry.findMany({
+    where: { jobId: liveStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "Live Start job closes a forgotten 30-hour running entry at the new start time",
+    liveJobStart.ok === true &&
+      forgottenAfterLive.length === 1 &&
+      forgottenAfterLive[0].status === "READY" &&
+      forgottenAfterLive[0].endedAt?.getTime() === clockNow.getTime() &&
+      liveStartRows.length === 1 &&
+      liveStartRows[0].status === "RUNNING" &&
+      liveStartRows[0].startedAt.getTime() === clockNow.getTime(),
+  );
+  await prisma.timeEntry.deleteMany({
+    where: {
+      id: { in: [...forgottenAfterLive, ...liveStartRows].map((row) => row.id) },
+    },
+  });
+
+  const forgottenTravelSource = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Forgotten Live Travel Source",
+    status: "IN_PROGRESS",
+  });
+  const liveTravelJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Live Travel After Forgotten",
+    status: "IN_PROGRESS",
+  });
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: forgottenTravelSource.id,
+    startedAt: thirtyHoursAgo,
+  });
+  const liveTravelStart = await startAssignedActivityTime(prisma, {
+    businessId: businessA.id,
+    jobId: liveTravelJob.id,
+    activityType: "TRAVEL",
+    actorMembershipId: memberMem.id,
+    startedAt: clockNow,
+  });
+  const forgottenTravelAfter = await prisma.timeEntry.findMany({
+    where: { jobId: forgottenTravelSource.id, businessId: businessA.id },
+  });
+  const liveTravelRows = await prisma.timeEntry.findMany({
+    where: { jobId: liveTravelJob.id, businessId: businessA.id },
+  });
+  check(
+    "Live Start travel closes a forgotten 30-hour running entry at the new start time",
+    liveTravelStart.ok === true &&
+      forgottenTravelAfter.length === 1 &&
+      forgottenTravelAfter[0].status === "READY" &&
+      forgottenTravelAfter[0].endedAt?.getTime() === clockNow.getTime() &&
+      liveTravelRows.length === 1 &&
+      liveTravelRows[0].activityType === "TRAVEL" &&
+      liveTravelRows[0].status === "RUNNING",
+  );
+  await prisma.timeEntry.deleteMany({
+    where: {
+      id: { in: [...forgottenTravelAfter, ...liveTravelRows].map((row) => row.id) },
+    },
+  });
+
+  const forgottenSyncJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Forgotten Sync Start Source",
+    status: "IN_PROGRESS",
+  });
+  const syncLongStartJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Sync Start After Forgotten",
+  });
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: forgottenSyncJob.id,
+    startedAt: thirtyHoursAgo,
+  });
+  const syncLongStart = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    syncLongStartJob.id,
+    syncPayload(syncLongStartJob, memberMem.id, [
+      { action: "START_JOB", intendedAt: clockNow.toISOString() },
+    ]),
+  );
+  const forgottenSyncAfter = await prisma.timeEntry.findMany({
+    where: { jobId: forgottenSyncJob.id, businessId: businessA.id },
+  });
+  const syncLongStartRows = await prisma.timeEntry.findMany({
+    where: { jobId: syncLongStartJob.id, businessId: businessA.id },
+  });
+  check(
+    "A sync START that would close a 30-hour running entry is refused with the correction message",
+    syncLongStart.ok === false &&
+      syncLongStart.status === 409 &&
+      syncLongStart.error === NATIVE_TIME_CARD_DURATION_TOO_LONG &&
+      forgottenSyncAfter.length === 1 &&
+      forgottenSyncAfter[0].status === "RUNNING" &&
+      forgottenSyncAfter[0].endedAt === null &&
+      syncLongStartRows.length === 0,
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: forgottenSyncJob.id, businessId: businessA.id },
+  });
+
+  const longTravelJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Long Travel Stop",
+    status: "IN_PROGRESS",
+  });
+  const longPickupJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Long Pickup Stop",
+    status: "IN_PROGRESS",
+  });
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: longTravelJob.id,
+    activityType: "TRAVEL",
+    startedAt: longStartedAt,
+  });
+  await createRunningEntry({
+    businessId: businessA.id,
+    membershipId: memberMem.id,
+    jobId: longPickupJob.id,
+    activityType: "MATERIAL_PICKUP",
+    startedAt: longStartedAt,
+  });
+  const longTravelStop = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    longTravelJob.id,
+    syncPayload(
+      longTravelJob,
+      memberMem.id,
+      [{ action: "STOP_TRAVEL", intendedAt: clockNow.toISOString() }],
+      {
+        travelTime: {
+          running: true,
+          startedAt: longStartedAt.toISOString(),
+          endedAt: null,
+        },
+      },
+    ),
+  );
+  const longPickupStop = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    longPickupJob.id,
+    syncPayload(
+      longPickupJob,
+      memberMem.id,
+      [{ action: "STOP_PICKUP", intendedAt: clockNow.toISOString() }],
+      {
+        pickupTime: {
+          running: true,
+          startedAt: longStartedAt.toISOString(),
+          endedAt: null,
+        },
+      },
+    ),
+  );
+  const longTravelRows = await prisma.timeEntry.findMany({
+    where: { jobId: longTravelJob.id, businessId: businessA.id },
+  });
+  const longPickupRows = await prisma.timeEntry.findMany({
+    where: { jobId: longPickupJob.id, businessId: businessA.id },
+  });
+  check(
+    "A TRAVEL sync stop longer than 24 hours is refused and leaves the running entry open",
+    longTravelStop.ok === false &&
+      longTravelStop.status === 409 &&
+      longTravelStop.error === NATIVE_TIME_CARD_DURATION_TOO_LONG &&
+      longTravelRows.length === 1 &&
+      longTravelRows[0].status === "RUNNING",
+  );
+  check(
+    "A PICKUP sync stop longer than 24 hours is refused and leaves the running entry open",
+    longPickupStop.ok === false &&
+      longPickupStop.status === 409 &&
+      longPickupStop.error === NATIVE_TIME_CARD_DURATION_TOO_LONG &&
+      longPickupRows.length === 1 &&
+      longPickupRows[0].status === "RUNNING",
+  );
+  await prisma.timeEntry.deleteMany({
+    where: {
+      jobId: { in: [longTravelJob.id, longPickupJob.id] },
+      businessId: businessA.id,
+    },
+  });
+
+  const futureSync = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    oldStartJob.id,
+    syncPayload(oldStartJob, memberMem.id, [
+      {
+        action: "START_JOB",
+        intendedAt: new Date(
+          clockNow.getTime() + TIME_CORRECTION_FUTURE_SLACK_MS + 1000,
+        ).toISOString(),
+      },
+    ]),
+  );
+  check(
+    "assertSyncIntendedAt refuses a sync start just outside the 5-minute future slack",
+    futureSync.ok === false &&
+      futureSync.status === 400 &&
+      futureSync.error === NATIVE_TIME_CARD_CHOOSE_INTENT,
+  );
+
+  const replayAgedJob = await createTimeJob({
+    businessId: businessA.id,
+    assignedMembershipId: memberMem.id,
+    customerName: "Aged Replay Canary",
+  });
+  const replayAgedAt = new Date(clockNow.getTime() - 60_000).toISOString();
+  const replayAgedPayload = syncPayload(replayAgedJob, memberMem.id, [
+    { action: "START_JOB", intendedAt: replayAgedAt },
+  ]);
+  const replayAgedFirst = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    replayAgedJob.id,
+    replayAgedPayload,
+  );
+  const replayAgedSecond = await syncNativeAssignedTimeCardDraft(
+    prisma,
+    memberAccess.access,
+    replayAgedJob.id,
+    replayAgedPayload,
+    { now: new Date(clockNow.getTime() + 25 * 60 * 60 * 1000) },
+  );
+  const replayAgedRows = await prisma.timeEntry.findMany({
+    where: { jobId: replayAgedJob.id, businessId: businessA.id },
+  });
+  check(
+    "An exact replay is alreadySynced before the 24-hour intendedAt age check",
+    replayAgedFirst.ok === true &&
+      replayAgedFirst.alreadySynced === false &&
+      replayAgedSecond.ok === true &&
+      replayAgedSecond.alreadySynced === true &&
+      replayAgedRows.length === 1,
+  );
+  await prisma.timeEntry.deleteMany({
+    where: { jobId: replayAgedJob.id, businessId: businessA.id },
   });
 
   const correctionStart = new Date(clockNow.getTime() - 8 * 60 * 60 * 1000);

@@ -2127,12 +2127,6 @@ async function ensureRunningAssignedActivityTimeInTransaction(
     if (input.startedAt.getTime() <= current.startedAt.getTime()) {
       throw new TimeCardError(START_EARLIER_THAN_RUNNING_ERROR);
     }
-    if (
-      input.startedAt.getTime() - current.startedAt.getTime() >
-      TIME_CORRECTION_MAX_DURATION_MS
-    ) {
-      throw new TimeCardError(TIME_CORRECTION_DURATION_TOO_LONG_ERROR);
-    }
     const previous = toAuditSnapshot(current);
     const closed = await db.timeEntry.update({
       where: { id: current.id },
