@@ -558,9 +558,9 @@ try {
     "Change-order approve/decline re-check Job.projectToken after FOR UPDATE",
     changeOrderOpsSrc.includes("lockTenantOwnedJob") &&
       changeOrderOpsSrc.includes("assertLiveLockedProjectToken") &&
-      changeOrderOpsSrc.indexOf("lockTenantOwnedJob") <
-        changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken") &&
-      changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken") <
+      changeOrderOpsSrc.indexOf("await lockTenantOwnedJob") <
+        changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+      changeOrderOpsSrc.indexOf("assertLiveLockedProjectToken(tx") <
         changeOrderOpsSrc.indexOf("changeOrder.updateMany") &&
       CUSTOMER_CHANGE_ORDER_UNAVAILABLE_ERROR === "This change order is not available.",
   );
@@ -568,9 +568,9 @@ try {
     "Additional-work submit re-checks Job.projectToken after FOR UPDATE",
     additionalWorkSrc.includes("lockTenantOwnedJob") &&
       additionalWorkSrc.includes("assertLiveLockedProjectToken") &&
-      additionalWorkSrc.indexOf("lockTenantOwnedJob") <
-        additionalWorkSrc.indexOf("assertLiveLockedProjectToken") &&
-      additionalWorkSrc.indexOf("assertLiveLockedProjectToken") <
+      additionalWorkSrc.indexOf("await lockTenantOwnedJob") <
+        additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") &&
+      additionalWorkSrc.indexOf("assertLiveLockedProjectToken(tx") <
         additionalWorkSrc.indexOf("additionalWorkRequest.create"),
   );
 
@@ -1168,7 +1168,7 @@ try {
   }
   const additionalWorkGrep = spawnSync(
     "grep",
-    ["-n", "businessId: job.businessId", "src/lib/additional-work-request.ts"],
+    ["-n", "businessId: locked.businessId", "src/lib/additional-work-request.ts"],
     { cwd: repoRoot.replace(/\/$/, ""), encoding: "utf8" },
   );
   check(
