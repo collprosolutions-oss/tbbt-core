@@ -27,6 +27,7 @@
     "test:customer-csv-import": "node --experimental-strip-types scripts/check-customer-csv-import.mjs",
     "test:customer-records-export": "node --experimental-strip-types scripts/check-customer-records-export.mjs",
     "test:owner-export-offboarding": "node --experimental-strip-types scripts/check-owner-export-offboarding.mjs",
+    "test:business-export-large-tenant": "node --experimental-strip-types scripts/check-business-export-large-tenant.mjs",
     "test:customer-layout": "node --experimental-strip-types scripts/check-customer-layout.mjs",
     "test:record-nav": "node --experimental-strip-types scripts/check-record-nav.mjs",
     "test:requests-page": "node --experimental-strip-types scripts/check-requests-page.mjs",

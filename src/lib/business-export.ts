@@ -18,11 +18,38 @@ import { VAULT_DOCUMENT_PURPOSE } from "@/lib/business-protection";
 import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
+import {
+  BusinessExportIncompleteError,
+  asCsvRows,
+  collectPagedRows,
+  exportPagedCsv,
+  headersOf,
+  resolveBusinessExportLimits,
+  type BusinessExportLimits,
+} from "@/lib/business-export-paging";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
-import { buildZipStore, toCsv } from "@/lib/zip-store";
+import {
+  ZipStoreLimitError,
+  ZipStoreWriter,
+  toCsv,
+} from "@/lib/zip-store";
 
 export const BUSINESS_EXPORT_AUDIT_AREA = "data-export" as const;
 export const BUSINESS_EXPORT_AUDIT_KEY = "businessExport" as const;
+export {
+  BUSINESS_EXPORT_INCOMPLETE_PREFIX,
+  BUSINESS_EXPORT_MAX_DOCUMENTS,
+  BUSINESS_EXPORT_MAX_DOCUMENT_BYTES,
+  BUSINESS_EXPORT_MAX_ROWS_PER_COLLECTION,
+  BUSINESS_EXPORT_MAX_ZIP_BYTES,
+  BUSINESS_EXPORT_PAGE_SIZE,
+  BusinessExportIncompleteError,
+  collectPagedRows,
+  exportPagedCsv,
+  resolveBusinessExportLimits,
+  streamPagedRows,
+} from "@/lib/business-export-paging";
+export type { BusinessExportLimits } from "@/lib/business-export-paging";
 
 const SECRET_KEY_PATTERN =
   /(password|tokenhash|totpsecret|totppending|secret|apikey|credential)/i;
@@ -53,6 +80,7 @@ export type BusinessExportResult = {
 
 export type BusinessExportOptions = {
   provider?: StorageProvider;
+  limits?: Partial<BusinessExportLimits>;
 };
 
 export function safeExportFilename(original: string | null | undefined, fallback: string): string {
@@ -130,429 +158,551 @@ export async function buildBusinessExportZip(
     throw new Error("Business not found.");
   }
 
-  const [
-    customers,
-    properties,
-    requests,
-    estimates,
-    jobs,
-    invoices,
-    payments,
-    expenses,
-    timeEntries,
-    reviews,
-    reviewRequests,
-    campaigns,
-    serviceAreas,
-    settings,
-    members,
-    followUps,
-    referralRequests,
-    marketingContents,
-    settingsAudit,
-    websitePublishes,
-    websiteGallery,
-    websiteLocalDrafts,
-    vaultRecords,
-    agreements,
-    agreementVersions,
-    protectionAudit,
-    protectionAcks,
-  ] = await Promise.all([
-    prisma.customer.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        smsConsentStatus: true,
-        firstLeadSource: true,
-        firstCampaignId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.property.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        label: true,
-        addressLine1: true,
-        addressLine2: true,
-        city: true,
-        region: true,
-        postalCode: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.serviceRequest.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        propertyId: true,
-        status: true,
-        summary: true,
-        leadSource: true,
-        campaignId: true,
-        matchedServiceAreaId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.estimate.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        propertyId: true,
-        serviceRequestId: true,
-        status: true,
-        total: true,
-        campaignId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.job.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        propertyId: true,
-        estimateId: true,
-        status: true,
-        scheduledAt: true,
-        assignedMembershipId: true,
-        campaignId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.invoice.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        jobId: true,
-        kind: true,
-        status: true,
-        total: true,
-        paidAt: true,
-        paymentMethod: true,
-        paymentReference: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    }),
-    prisma.payment.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        invoiceId: true,
-        jobId: true,
-        purpose: true,
-        amount: true,
-        method: true,
-        receivedAt: true,
-        note: true,
-        createdAt: true,
-      },
-      orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
-    }),
-    prisma.expense.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        vendor: true,
-        description: true,
-        amount: true,
-        category: true,
-        occurredOn: true,
-        jobId: true,
-        customerId: true,
-        paymentMethod: true,
-        taxCategory: true,
-        reimbursementStatus: true,
-        reviewStatus: true,
-        voidedAt: true,
-        createdAt: true,
-      },
-      orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
-    }),
-    prisma.timeEntry.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        membershipId: true,
-        jobId: true,
-        activityType: true,
-        note: true,
-        source: true,
-        startedAt: true,
-        endedAt: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.review.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        rating: true,
-        platform: true,
-        reviewText: true,
-        websiteSelected: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.reviewRequest.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        jobId: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.marketingCampaign.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        name: true,
-        sourceKey: true,
-        status: true,
-        notes: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.serviceArea.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        kind: true,
-        label: true,
-        city: true,
-        region: true,
-        postalCode: true,
-        enabled: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.businessSettings.findUnique({
-      where: { businessId },
-    }),
-    prisma.membership.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        role: true,
-        active: true,
-        createdAt: true,
-        user: { select: { name: true, email: true } },
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.customerFollowUp.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        jobId: true,
-        status: true,
-        sentAt: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.referralRequest.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        customerId: true,
-        jobId: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.marketingContent.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        campaignId: true,
-        title: true,
-        status: true,
-        channelIntent: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.settingsAuditLog.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        settingArea: true,
-        settingKey: true,
-        previousValue: true,
-        newValue: true,
-        changedAt: true,
-      },
-      orderBy: { changedAt: "asc" },
-    }),
-    prisma.websitePublish.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        versionNumber: true,
-        status: true,
-        schemaVersion: true,
-        snapshotJson: true,
-        summary: true,
-        publishedAt: true,
-        sourcePublishId: true,
-      },
-      orderBy: { versionNumber: "asc" },
-    }),
-    prisma.websiteGalleryItem.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        storedAssetId: true,
-        title: true,
-        caption: true,
-        sortOrder: true,
-        catalogItemId: true,
-        createdAt: true,
-      },
-      orderBy: { sortOrder: "asc" },
-    }),
-    prisma.websiteLocalPageDraft.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        serviceAreaId: true,
-        catalogItemId: true,
-        draftCopy: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.businessVaultRecord.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        title: true,
-        category: true,
-        issuer: true,
-        counterparty: true,
-        effectiveOn: true,
-        expiresOn: true,
-        recordStatus: true,
-        persistedExpiryState: true,
-        notes: true,
-        storedAssetId: true,
-        createdAt: true,
-        updatedAt: true,
-        storedAsset: {
-          select: {
-            id: true,
-            businessId: true,
-            originalFilename: true,
-            mimeType: true,
-            visibility: true,
-            status: true,
-            fileSizeBytes: true,
-            purpose: true,
-            category: true,
-            storageKey: true,
-            deletedAt: true,
-            storageAccount: {
-              select: { bucketName: true },
+  const limits = resolveBusinessExportLimits(options?.limits);
+  const page = { collection: "", limits };
+
+  const customers = await collectPagedRows(
+    (args) =>
+      prisma.customer.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          smsConsentStatus: true,
+          firstLeadSource: true,
+          firstCampaignId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "customers" },
+  );
+  const propertiesCsv = await exportPagedCsv(
+    (args) =>
+      prisma.property.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          label: true,
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          region: true,
+          postalCode: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "properties" },
+  );
+  const requestsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.serviceRequest.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          propertyId: true,
+          status: true,
+          summary: true,
+          leadSource: true,
+          campaignId: true,
+          matchedServiceAreaId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "requests" },
+  );
+  const estimatesCsv = await exportPagedCsv(
+    (args) =>
+      prisma.estimate.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          propertyId: true,
+          serviceRequestId: true,
+          status: true,
+          total: true,
+          campaignId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    {
+      ...page,
+      collection: "estimates",
+      mapRow: (row) => ({
+        ...row,
+        total: exportEstimateTotal(row.total),
+      }),
+    },
+  );
+  const jobs = await collectPagedRows(
+    (args) =>
+      prisma.job.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          propertyId: true,
+          estimateId: true,
+          status: true,
+          scheduledAt: true,
+          assignedMembershipId: true,
+          campaignId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "jobs" },
+  );
+  const invoices = await collectPagedRows(
+    (args) =>
+      prisma.invoice.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          jobId: true,
+          kind: true,
+          status: true,
+          total: true,
+          paidAt: true,
+          paymentMethod: true,
+          paymentReference: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "invoices" },
+  );
+  const payments = await collectPagedRows(
+    (args) =>
+      prisma.payment.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          invoiceId: true,
+          jobId: true,
+          purpose: true,
+          amount: true,
+          method: true,
+          receivedAt: true,
+          note: true,
+          createdAt: true,
+        },
+        orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "payments" },
+  );
+  const expenses = await collectPagedRows(
+    (args) =>
+      prisma.expense.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          vendor: true,
+          description: true,
+          amount: true,
+          category: true,
+          occurredOn: true,
+          jobId: true,
+          customerId: true,
+          paymentMethod: true,
+          taxCategory: true,
+          reimbursementStatus: true,
+          reviewStatus: true,
+          voidedAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "expenses" },
+  );
+  const timeEntriesCsv = await exportPagedCsv(
+    (args) =>
+      prisma.timeEntry.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          membershipId: true,
+          jobId: true,
+          activityType: true,
+          note: true,
+          source: true,
+          startedAt: true,
+          endedAt: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "time-entries" },
+  );
+  const reviewsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.review.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          rating: true,
+          platform: true,
+          reviewText: true,
+          websiteSelected: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "reviews" },
+  );
+  const reviewRequestsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.reviewRequest.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          jobId: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "review-requests" },
+  );
+  const campaignsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.marketingCampaign.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          name: true,
+          sourceKey: true,
+          status: true,
+          notes: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "campaigns" },
+  );
+  const serviceAreasCsv = await exportPagedCsv(
+    (args) =>
+      prisma.serviceArea.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          kind: true,
+          label: true,
+          city: true,
+          region: true,
+          postalCode: true,
+          enabled: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "service-areas" },
+  );
+  const settings = await prisma.businessSettings.findUnique({
+    where: { businessId },
+  });
+  const membersCsv = await exportPagedCsv(
+    (args) =>
+      prisma.membership.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          role: true,
+          active: true,
+          createdAt: true,
+          user: { select: { name: true, email: true } },
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    {
+      ...page,
+      collection: "members",
+      headers: ["id", "name", "email", "role", "active", "createdAt"],
+      mapRow: (member) => ({
+        id: member.id,
+        name: member.user.name,
+        email: member.user.email,
+        role: member.role,
+        active: member.active,
+        createdAt: member.createdAt,
+      }),
+    },
+  );
+  const followUpsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.customerFollowUp.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          jobId: true,
+          status: true,
+          sentAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "follow-ups" },
+  );
+  const referralRequestsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.referralRequest.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          customerId: true,
+          jobId: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "referral-requests" },
+  );
+  const marketingContentsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.marketingContent.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          campaignId: true,
+          title: true,
+          status: true,
+          channelIntent: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "marketing-content" },
+  );
+  const settingsAuditCsv = await exportPagedCsv(
+    (args) =>
+      prisma.settingsAuditLog.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          settingArea: true,
+          settingKey: true,
+          previousValue: true,
+          newValue: true,
+          changedAt: true,
+        },
+        orderBy: [{ changedAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "settings-audit" },
+  );
+  const websitePublishes = await collectPagedRows(
+    (args) =>
+      prisma.websitePublish.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          versionNumber: true,
+          status: true,
+          schemaVersion: true,
+          snapshotJson: true,
+          summary: true,
+          publishedAt: true,
+          sourcePublishId: true,
+        },
+        orderBy: [{ versionNumber: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "website-publishes" },
+  );
+  const websiteGalleryCsv = await exportPagedCsv(
+    (args) =>
+      prisma.websiteGalleryItem.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          storedAssetId: true,
+          title: true,
+          caption: true,
+          sortOrder: true,
+          catalogItemId: true,
+          createdAt: true,
+        },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "website-gallery" },
+  );
+  const websiteLocalDraftsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.websiteLocalPageDraft.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          serviceAreaId: true,
+          catalogItemId: true,
+          draftCopy: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "website-local-drafts" },
+  );
+  const vaultRecords = await collectPagedRows(
+    (args) =>
+      prisma.businessVaultRecord.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          title: true,
+          category: true,
+          issuer: true,
+          counterparty: true,
+          effectiveOn: true,
+          expiresOn: true,
+          recordStatus: true,
+          persistedExpiryState: true,
+          notes: true,
+          storedAssetId: true,
+          createdAt: true,
+          updatedAt: true,
+          storedAsset: {
+            select: {
+              id: true,
+              businessId: true,
+              originalFilename: true,
+              mimeType: true,
+              visibility: true,
+              status: true,
+              fileSizeBytes: true,
+              purpose: true,
+              category: true,
+              storageKey: true,
+              deletedAt: true,
+              storageAccount: {
+                select: { bucketName: true },
+              },
             },
           },
         },
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.businessAgreement.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        agreementType: true,
-        title: true,
-        counterparty: true,
-        lifecycleStatus: true,
-        signingMode: true,
-        effectiveOn: true,
-        expiresOn: true,
-        signedVersionId: true,
-        vaultRecordId: true,
-        completedAt: true,
-        completedByMembershipId: true,
-        completionNotes: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.businessAgreementVersion.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        agreementId: true,
-        versionNumber: true,
-        representationStatus: true,
-        answersJson: true,
-        draftContent: true,
-        riskReviewJson: true,
-        lockedAt: true,
-        createdAt: true,
-      },
-      orderBy: [{ agreementId: "asc" }, { versionNumber: "asc" }],
-    }),
-    prisma.businessProtectionAuditLog.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        action: true,
-        vaultRecordId: true,
-        agreementId: true,
-        previousValue: true,
-        newValue: true,
-        changedAt: true,
-      },
-      orderBy: { changedAt: "asc" },
-    }),
-    prisma.businessProtectionAcknowledgment.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        kind: true,
-        statement: true,
-        acknowledgedAt: true,
-        membershipId: true,
-      },
-      orderBy: { acknowledgedAt: "asc" },
-    }),
-  ]);
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "business-vault" },
+  );
+  const agreementsCsv = await exportPagedCsv(
+    (args) =>
+      prisma.businessAgreement.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          agreementType: true,
+          title: true,
+          counterparty: true,
+          lifecycleStatus: true,
+          signingMode: true,
+          effectiveOn: true,
+          expiresOn: true,
+          signedVersionId: true,
+          vaultRecordId: true,
+          completedAt: true,
+          completedByMembershipId: true,
+          completionNotes: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "business-agreements" },
+  );
+  const agreementVersions = await collectPagedRows(
+    (args) =>
+      prisma.businessAgreementVersion.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          agreementId: true,
+          versionNumber: true,
+          representationStatus: true,
+          answersJson: true,
+          draftContent: true,
+          riskReviewJson: true,
+          lockedAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ agreementId: "asc" }, { versionNumber: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "business-agreement-versions" },
+  );
+  const protectionAuditCsv = await exportPagedCsv(
+    (args) =>
+      prisma.businessProtectionAuditLog.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          action: true,
+          vaultRecordId: true,
+          agreementId: true,
+          previousValue: true,
+          newValue: true,
+          changedAt: true,
+        },
+        orderBy: [{ changedAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "business-protection-audit" },
+  );
+  const protectionAcksCsv = await exportPagedCsv(
+    (args) =>
+      prisma.businessProtectionAcknowledgment.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          kind: true,
+          statement: true,
+          acknowledgedAt: true,
+          membershipId: true,
+        },
+        orderBy: [{ acknowledgedAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "business-protection-acknowledgments" },
+  );
 
   const safeSettings = settings
     ? Object.fromEntries(
@@ -568,6 +718,7 @@ export async function buildBusinessExportZip(
   let documentExportError = storage.error;
   let exportedDocumentCount = 0;
   let missingDocumentCount = 0;
+  let exportedDocumentBytes = 0;
 
   for (const record of vaultRecords) {
     const asset = record.storedAsset;
@@ -614,6 +765,19 @@ export async function buildBusinessExportZip(
       if (!object?.body?.byteLength) {
         throw new Error("The stored vault document could not be read from the storage provider.");
       }
+      if (exportedDocumentCount >= limits.maxDocuments) {
+        throw new BusinessExportIncompleteError(
+          "vault-documents",
+          `vault-documents has more than ${limits.maxDocuments} READY private files.`,
+        );
+      }
+      const nextDocumentBytes = exportedDocumentBytes + object.body.byteLength;
+      if (nextDocumentBytes > limits.maxDocumentBytes) {
+        throw new BusinessExportIncompleteError(
+          "vault-documents",
+          `vault-documents would exceed ${limits.maxDocumentBytes} exported bytes.`,
+        );
+      }
       const exportedFilename = uniqueExportPath(
         usedDocumentNames,
         `vault-documents/${record.id}-${safeExportFilename(asset.originalFilename, "vault-document")}`,
@@ -622,6 +786,7 @@ export async function buildBusinessExportZip(
         name: exportedFilename,
         data: Buffer.from(object.body),
       });
+      exportedDocumentBytes = nextDocumentBytes;
       exportedDocumentCount += 1;
       documentManifest.push({
         vaultRecordId: record.id,
@@ -631,6 +796,9 @@ export async function buildBusinessExportZip(
         status: "exported",
       });
     } catch (error) {
+      if (error instanceof BusinessExportIncompleteError) {
+        throw error;
+      }
       missingDocumentCount += 1;
       const reason =
         error instanceof Error
@@ -655,84 +823,105 @@ export async function buildBusinessExportZip(
         ? "complete"
         : "partial";
 
-  const [saasSubscription, productAddons, productGrants, invoiceCredits, projectDocuments] =
-    await Promise.all([
-    prisma.businessSaasSubscription.findUnique({
-      where: { businessId },
-      select: {
-        planCode: true,
-        status: true,
-        founderEligible: true,
-        founderConvertedAt: true,
-        founderEligibilityEndedAt: true,
-        trialStartedAt: true,
-        trialEndsAt: true,
-        legacyExempt: true,
-        cancelAtPeriodEnd: true,
-        currentPeriodEnd: true,
-      },
-    }),
-    prisma.businessProductAddon.findMany({
-      where: { businessId },
-      select: {
-        addonCode: true,
-        status: true,
-        quantity: true,
-        source: true,
-        grantedAt: true,
-        revokedAt: true,
-      },
-    }),
-    prisma.businessProductGrant.findMany({
-      where: { businessId },
-      select: {
-        grantType: true,
-        code: true,
-        quantity: true,
-        status: true,
-        source: true,
-        note: true,
-        grantedAt: true,
-        revokedAt: true,
-      },
-    }),
-    prisma.invoiceCredit.findMany({
-      where: { businessId },
-      select: {
-        id: true,
-        invoiceId: true,
-        customerId: true,
-        amount: true,
-        reason: true,
-        recordedByMembershipId: true,
-        createdAt: true,
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    }),
-    prisma.storedAsset.findMany({
-      where: {
-        businessId,
-        category: "DOCUMENT",
-        purpose: PROJECT_DOCUMENT_PURPOSE,
-        visibility: "PRIVATE",
-        status: "READY",
-        deletedAt: null,
-        publicPath: null,
-      },
-      select: {
-        id: true,
-        jobId: true,
-        customerId: true,
-        originalFilename: true,
-        mimeType: true,
-        visibility: true,
-        status: true,
-        fileSizeBytes: true,
-        createdAt: true,
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    }),
-  ]);
+  const saasSubscription = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId },
+    select: {
+      planCode: true,
+      status: true,
+      founderEligible: true,
+      founderConvertedAt: true,
+      founderEligibilityEndedAt: true,
+      trialStartedAt: true,
+      trialEndsAt: true,
+      legacyExempt: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: true,
+    },
+  });
+  const productAddons = await collectPagedRows(
+    (args) =>
+      prisma.businessProductAddon.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          addonCode: true,
+          status: true,
+          quantity: true,
+          source: true,
+          grantedAt: true,
+          revokedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "product-addons" },
+  );
+  const productGrants = await collectPagedRows(
+    (args) =>
+      prisma.businessProductGrant.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          grantType: true,
+          code: true,
+          quantity: true,
+          status: true,
+          source: true,
+          note: true,
+          grantedAt: true,
+          revokedAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "product-grants" },
+  );
+  const invoiceCredits = await collectPagedRows(
+    (args) =>
+      prisma.invoiceCredit.findMany({
+        where: { businessId },
+        select: {
+          id: true,
+          invoiceId: true,
+          customerId: true,
+          amount: true,
+          reason: true,
+          recordedByMembershipId: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "invoice-credits" },
+  );
+  const projectDocuments = await collectPagedRows(
+    (args) =>
+      prisma.storedAsset.findMany({
+        where: {
+          businessId,
+          category: "DOCUMENT",
+          purpose: PROJECT_DOCUMENT_PURPOSE,
+          visibility: "PRIVATE",
+          status: "READY",
+          deletedAt: null,
+          publicPath: null,
+        },
+        select: {
+          id: true,
+          jobId: true,
+          customerId: true,
+          originalFilename: true,
+          mimeType: true,
+          visibility: true,
+          status: true,
+          fileSizeBytes: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        ...args,
+      }),
+    { ...page, collection: "project-documents" },
+  );
   const accountingSource: AccountingExportSource = {
     businessId: business.id,
     businessName: business.name,
@@ -748,12 +937,9 @@ export async function buildBusinessExportZip(
     customers: customers.map((customer) => ({ id: customer.id, name: customer.name })),
     jobs: jobs.map((job) => ({ id: job.id })),
   };
-  const estimateRows = estimates.map((row) => ({
-    ...row,
-    total: exportEstimateTotal(row.total),
-  }));
 
-  const files = [
+  const zip = new ZipStoreWriter({ maxBytes: limits.maxZipBytes });
+  const files: Array<{ name: string; data: string | Buffer }> = [
     {
       name: "manifest.json",
       data: JSON.stringify(
@@ -763,42 +949,25 @@ export async function buildBusinessExportZip(
           businessName: business.name,
           slug: business.slug,
           note:
-            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. invoices.csv, payments.csv, expenses.csv, and invoice-credits.csv are recorded TBBT truth for an accountant: Payment rows are never inferred from PAID invoice status, InvoiceCredit rows reduce Amount Remaining, and voided expenses are omitted. This ZIP is not size-capped; it loads every matching tenant row into memory.",
+            "Tenant-scoped export. Password hashes, session tokens, TOTP secrets, and setup/reset tokens are omitted. invoices.csv, payments.csv, expenses.csv, and invoice-credits.csv are recorded TBBT truth for an accountant: Payment rows are never inferred from PAID invoice status, InvoiceCredit rows reduce Amount Remaining, and voided expenses are omitted. Matching rows are read in bounded pages. If this workspace is too large to export safely, the download fails instead of omitting records or writing a partial ZIP.",
           documentExport,
           documentExportError: documentExportError ?? null,
           exportedDocumentCount,
           missingDocumentCount,
+          pageSize: limits.pageSize,
+          maxRowsPerCollection: limits.maxRowsPerCollection,
         },
         null,
         2,
       ),
     },
-    { name: "business.csv", data: toCsv(Object.keys(business), [business]) },
-    {
-      name: "members.csv",
-      data: toCsv(
-        ["id", "name", "email", "role", "active", "createdAt"],
-        members.map((member) => ({
-          id: member.id,
-          name: member.user.name,
-          email: member.user.email,
-          role: member.role,
-          active: member.active,
-          createdAt: member.createdAt,
-        })),
-      ),
-    },
-    { name: "customers.csv", data: toCsv(headersOf(customers), customers) },
-    { name: "properties.csv", data: toCsv(headersOf(properties), properties) },
-    { name: "requests.csv", data: toCsv(headersOf(requests), requests) },
-    {
-      name: "estimates.csv",
-      data: toCsv(
-        headersOf(estimateRows),
-        estimateRows,
-      ),
-    },
-    { name: "jobs.csv", data: toCsv(headersOf(jobs), jobs) },
+    { name: "business.csv", data: toCsv(Object.keys(business), asCsvRows([business])) },
+    { name: "members.csv", data: membersCsv },
+    { name: "customers.csv", data: toCsv(headersOf(customers), asCsvRows(customers)) },
+    { name: "properties.csv", data: propertiesCsv },
+    { name: "requests.csv", data: requestsCsv },
+    { name: "estimates.csv", data: estimatesCsv },
+    { name: "jobs.csv", data: toCsv(headersOf(jobs), asCsvRows(jobs)) },
     {
       name: "project-documents.csv",
       data: toCsv(
@@ -813,7 +982,7 @@ export async function buildBusinessExportZip(
           "fileSizeBytes",
           "createdAt",
         ],
-        projectDocuments,
+        asCsvRows(projectDocuments),
       ),
     },
     { name: "invoices.csv", data: accountingInvoicesCsv(accountingSource) },
@@ -842,19 +1011,19 @@ export async function buildBusinessExportZip(
         })),
       ),
     },
-    { name: "time-entries.csv", data: toCsv(headersOf(timeEntries), timeEntries) },
-    { name: "reviews.csv", data: toCsv(headersOf(reviews), reviews) },
-    { name: "review-requests.csv", data: toCsv(headersOf(reviewRequests), reviewRequests) },
-    { name: "campaigns.csv", data: toCsv(headersOf(campaigns), campaigns) },
-    { name: "marketing-content.csv", data: toCsv(headersOf(marketingContents), marketingContents) },
-    { name: "service-areas.csv", data: toCsv(headersOf(serviceAreas), serviceAreas) },
-    { name: "follow-ups.csv", data: toCsv(headersOf(followUps), followUps) },
-    { name: "referral-requests.csv", data: toCsv(headersOf(referralRequests), referralRequests) },
+    { name: "time-entries.csv", data: timeEntriesCsv },
+    { name: "reviews.csv", data: reviewsCsv },
+    { name: "review-requests.csv", data: reviewRequestsCsv },
+    { name: "campaigns.csv", data: campaignsCsv },
+    { name: "marketing-content.csv", data: marketingContentsCsv },
+    { name: "service-areas.csv", data: serviceAreasCsv },
+    { name: "follow-ups.csv", data: followUpsCsv },
+    { name: "referral-requests.csv", data: referralRequestsCsv },
     {
       name: "settings.csv",
       data: toCsv(Object.keys(safeSettings), [safeSettings]),
     },
-    { name: "settings-audit.csv", data: toCsv(headersOf(settingsAudit), settingsAudit) },
+    { name: "settings-audit.csv", data: settingsAuditCsv },
     {
       name: "website-publishes.json",
       data: JSON.stringify(
@@ -872,10 +1041,10 @@ export async function buildBusinessExportZip(
         2,
       ),
     },
-    { name: "website-gallery.csv", data: toCsv(headersOf(websiteGallery), websiteGallery) },
+    { name: "website-gallery.csv", data: websiteGalleryCsv },
     {
       name: "website-local-drafts.csv",
-      data: toCsv(headersOf(websiteLocalDrafts), websiteLocalDrafts),
+      data: websiteLocalDraftsCsv,
     },
     {
       name: "business-vault.csv",
@@ -922,7 +1091,7 @@ export async function buildBusinessExportZip(
         })),
       ),
     },
-    { name: "business-agreements.csv", data: toCsv(headersOf(agreements), agreements) },
+    { name: "business-agreements.csv", data: agreementsCsv },
     {
       name: "business-agreement-versions.json",
       data: JSON.stringify(
@@ -937,11 +1106,11 @@ export async function buildBusinessExportZip(
     },
     {
       name: "business-protection-audit.csv",
-      data: toCsv(headersOf(protectionAudit), protectionAudit),
+      data: protectionAuditCsv,
     },
     {
       name: "business-protection-acknowledgments.csv",
-      data: toCsv(headersOf(protectionAcks), protectionAcks),
+      data: protectionAcksCsv,
     },
     {
       name: "commercial-entitlement.json",
@@ -957,8 +1126,24 @@ export async function buildBusinessExportZip(
           legacyExempt: saasSubscription?.legacyExempt ?? null,
           cancelAtPeriodEnd: saasSubscription?.cancelAtPeriodEnd ?? null,
           currentPeriodEnd: saasSubscription?.currentPeriodEnd ?? null,
-          addons: productAddons,
-          grants: productGrants,
+          addons: productAddons.map((row) => ({
+            addonCode: row.addonCode,
+            status: row.status,
+            quantity: row.quantity,
+            source: row.source,
+            grantedAt: row.grantedAt,
+            revokedAt: row.revokedAt,
+          })),
+          grants: productGrants.map((row) => ({
+            grantType: row.grantType,
+            code: row.code,
+            quantity: row.quantity,
+            status: row.status,
+            source: row.source,
+            note: row.note,
+            grantedAt: row.grantedAt,
+            revokedAt: row.revokedAt,
+          })),
           omitted:
             "Stripe secret keys, webhook secrets, provider credentials, and internal price configuration are not exported.",
         },
@@ -989,18 +1174,25 @@ export async function buildBusinessExportZip(
     ...documentFiles,
   ];
 
+  try {
+    for (const file of files) {
+      zip.add(file);
+    }
+  } catch (error) {
+    if (error instanceof ZipStoreLimitError) {
+      throw new BusinessExportIncompleteError("zip", error.message);
+    }
+    throw error;
+  }
+
   return {
     filename: `tbbt-export-${business.slug}-${date}.zip`,
-    bytes: buildZipStore(files),
+    bytes: zip.finalize(),
     documentExport,
     documentExportError,
     exportedDocumentCount,
     missingDocumentCount,
   };
-}
-
-function headersOf(rows: Array<Record<string, unknown>>): string[] {
-  return rows[0] ? Object.keys(rows[0]) : ["id"];
 }
 
 function exportEstimateTotal(value: Prisma.Decimal | number | string): string {
@@ -1052,6 +1244,11 @@ export type BusinessExportDownloadResult =
       ok: false;
       status: 403;
       error: "Forbidden";
+    }
+  | {
+      ok: false;
+      status: 413;
+      error: string;
     };
 
 export async function runBusinessExportDownload(
@@ -1062,15 +1259,22 @@ export async function runBusinessExportDownload(
   if (!canExportBusinessData(access.workspace.role)) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
-  const exported = await buildBusinessExportZip(prisma, access.businessId, options);
-  await recordBusinessExportAudit(prisma, access, exported);
-  return {
-    ok: true,
-    status: 200,
-    filename: exported.filename,
-    contentType: "application/zip",
-    body: exported.bytes,
-  };
+  try {
+    const exported = await buildBusinessExportZip(prisma, access.businessId, options);
+    await recordBusinessExportAudit(prisma, access, exported);
+    return {
+      ok: true,
+      status: 200,
+      filename: exported.filename,
+      contentType: "application/zip",
+      body: exported.bytes,
+    };
+  } catch (error) {
+    if (error instanceof BusinessExportIncompleteError || error instanceof ZipStoreLimitError) {
+      return { ok: false, status: 413, error: error.message };
+    }
+    throw error;
+  }
 }
 
 function safeJson(value: string | null) {
