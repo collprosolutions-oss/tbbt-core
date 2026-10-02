@@ -502,6 +502,15 @@ try {
       !zipText.includes(projectToken) &&
       !zipText.includes("%PDF"),
   );
+  const zipPath = join(tmpdir(), `owner-export-${randomUUID()}.zip`);
+  writeFileSync(zipPath, ownerBusiness.body);
+  const unzipTest = spawnSync("unzip", ["-t", "-qq", zipPath], { encoding: "utf8" });
+  const unzipList = spawnSync("unzip", ["-Z", "-1", zipPath], { encoding: "utf8" });
+  unlinkSync(zipPath);
+  check(
+    "unzip -t accepts the OWNER business ZIP and lists project-documents.csv",
+    unzipTest.status === 0 && (unzipList.stdout ?? "").split(/\r?\n/).includes("project-documents.csv"),
+  );
 
   const ownerCustomer = await runCustomerRecordsExportDownload(prisma, ownerAccessA, {
     customerId: customerA.id,
