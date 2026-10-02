@@ -9,6 +9,7 @@
  * not schedule posts, publish to Instagram, or call Google. Tests must
  * inject a fake provider and never reach this fetch.
  */
+import { sanitizeSocialPublishProviderError } from "@/lib/marketing";
 import { FACEBOOK_SOCIAL_PUBLISHING_PROVIDER } from "@/lib/social-publishing/config";
 import type {
   SocialPublishInput,
@@ -41,11 +42,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function providerErrorMessage(payload: unknown, fallback: string) {
+function providerErrorMessage(payload: unknown, fallback: string, accessToken?: string) {
   const record = asRecord(payload);
   const error = asRecord(record?.error);
   const message = typeof error?.message === "string" ? error.message.trim() : "";
-  return message || fallback;
+  return sanitizeSocialPublishProviderError(message || fallback, accessToken);
 }
 
 export function facebookPageFeedUrl(pageId: string) {
@@ -87,16 +88,21 @@ export function createFacebookSocialPublishingProvider(
         return {
           ok: false,
           status: "FAILED",
-          error: providerErrorMessage(payload, "Facebook rejected the post."),
+          outcome: "rejected",
+          error: providerErrorMessage(payload, "Facebook rejected the post.", input.accessToken),
         };
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return { ok: false, status: "FAILED", error: "Facebook publish timed out." };
-        }
+        const timedOut = error instanceof Error && error.name === "AbortError";
+        const raw = timedOut
+          ? "Facebook publish timed out."
+          : error instanceof Error
+            ? error.message
+            : "Facebook publish failed.";
         return {
           ok: false,
-          status: "FAILED",
-          error: error instanceof Error ? error.message : "Facebook publish failed.",
+          status: "UNKNOWN",
+          outcome: "unknown",
+          error: sanitizeSocialPublishProviderError(raw, input.accessToken) || raw,
         };
       } finally {
         clearTimeout(timer);

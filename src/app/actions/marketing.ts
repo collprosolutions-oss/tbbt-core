@@ -30,11 +30,15 @@ import {
   planStudioPublicationDay,
   updateMarketingStudioPackage,
 } from "@/lib/marketing-ops";
-import { publishMarketingContentToSocial } from "@/lib/marketing-social-publish";
+import {
+  publishMarketingContentToSocial,
+  resolveMarketingSocialPublishAttempt,
+} from "@/lib/marketing-social-publish";
 import {
   MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
   OWNER_SOCIAL_PUBLISH_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
+  SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
   STUDIO_APPROVED_INTERNAL_MESSAGE,
@@ -83,6 +87,7 @@ export type MarketingSocialPublishState = {
   message?: string;
   status?: "CLAIMED" | "PUBLISHED" | "FAILED";
   published?: boolean;
+  unconfirmed?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -329,17 +334,52 @@ export async function publishMarketingContentToSocialAction(
         message: result.message,
         status: result.status,
         published: true,
+        unconfirmed: false,
       };
     }
     return {
       error: result.message,
       message: result.message,
-      status: result.status === SOCIAL_PUBLISH_ATTEMPT_FAILED ? SOCIAL_PUBLISH_ATTEMPT_FAILED : result.status,
+      status:
+        result.status === SOCIAL_PUBLISH_ATTEMPT_FAILED
+          ? SOCIAL_PUBLISH_ATTEMPT_FAILED
+          : result.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED
+            ? SOCIAL_PUBLISH_ATTEMPT_CLAIMED
+            : result.status,
       published: false,
+      unconfirmed: result.unconfirmed === true,
     };
   } catch (error) {
     return {
       error: marketingErrorMessage(error, "That Facebook publish could not be completed."),
+      published: false,
+    };
+  }
+}
+
+export async function resolveMarketingSocialPublishAttemptAction(
+  _prev: MarketingSocialPublishState,
+  formData: FormData,
+): Promise<MarketingSocialPublishState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: OWNER_SOCIAL_PUBLISH_MESSAGE, published: false };
+    }
+    const result = await resolveMarketingSocialPublishAttempt(prisma, access, {
+      attemptId: readString(formData, "attemptId"),
+      resolution: readString(formData, "resolution"),
+    });
+    revalidateMarketing();
+    return {
+      message: result.message,
+      status: result.status,
+      published: result.published,
+      unconfirmed: false,
+    };
+  } catch (error) {
+    return {
+      error: marketingErrorMessage(error, "That Facebook publish could not be confirmed."),
       published: false,
     };
   }

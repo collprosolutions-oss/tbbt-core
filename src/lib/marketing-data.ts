@@ -14,7 +14,9 @@ import {
   LEAD_SOURCE_TRACKED_MESSAGE,
   LEAD_SOURCE_UNTRACKED_MESSAGE,
   PERFORMANCE_UNAVAILABLE_MESSAGE,
+  canResolveSocialPublishAttempt,
   presentMarketingSocialDestinations,
+  sanitizeSocialPublishProviderError,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
   socialPublishDisplay,
   STUDIO_APPROVAL_QUEUE_LIMIT,
@@ -327,7 +329,13 @@ export async function loadMarketingSource(
         content.id,
         SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
       );
-      const display = socialPublishDisplay(attempt?.status);
+      const display = socialPublishDisplay({
+        status: attempt?.status,
+        claimedAt: attempt?.claimedAt,
+        failureLabel: attempt?.failureLabel,
+        now,
+      });
+      const label = display.label ? sanitizeSocialPublishProviderError(display.label) : display.label;
       return {
         id: content.id,
         contentType: content.contentType,
@@ -353,9 +361,19 @@ export async function loadMarketingSource(
         })),
         socialPublish: {
           destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          attemptId: attempt?.id ?? null,
           attemptStatus: attempt?.status ?? null,
           published: display.published,
-          label: attempt?.status === "FAILED" ? attempt.failureLabel || display.label : display.label,
+          unconfirmed: display.unconfirmed,
+          inFlight: display.inFlight,
+          canResolve: canResolveSocialPublishAttempt({
+            role: viewerRole ?? "",
+            status: attempt?.status,
+            claimedAt: attempt?.claimedAt,
+            failureLabel: attempt?.failureLabel,
+            now,
+          }),
+          label,
           providerPostId: display.published ? attempt?.providerPostId ?? null : null,
         },
       };

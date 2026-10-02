@@ -604,8 +604,11 @@ function ContentBody({
                     photos: row.photos,
                   })}
                   destinationConnected={source.channels.destinations.FACEBOOK.connected}
+                  attemptId={row.socialPublish.attemptId}
                   attemptStatus={row.socialPublish.attemptStatus}
                   attemptLabel={row.socialPublish.label}
+                  unconfirmed={row.socialPublish.unconfirmed}
+                  canResolve={row.socialPublish.canResolve}
                 />
               ) : null}
             </CardContent>

@@ -28,7 +28,13 @@ export type SocialPublishInput = {
 
 export type SocialPublishResult = {
   ok: boolean;
-  status: "PUBLISHED" | "FAILED";
+  /**
+   * PUBLISHED: definite Graph success.
+   * FAILED: definite Graph rejection (HTTP response with an error).
+   * UNKNOWN: timeout or network error — Facebook may have posted.
+   */
+  status: "PUBLISHED" | "FAILED" | "UNKNOWN";
+  outcome?: "rejected" | "unknown";
   providerPostId?: string;
   error?: string;
 };

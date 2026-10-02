@@ -36,6 +36,7 @@ const {
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+  SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
   SOCIAL_PUBLISH_DESTINATION_GOOGLE,
@@ -46,9 +47,20 @@ const {
   SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
   SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
   SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+  SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_POSTED,
+  SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
   SOCIAL_PUBLISH_STALE_MESSAGE,
+  SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+  SOCIAL_PUBLISH_UNCONFIRMED_MS,
   canPublishMarketingToSocial,
+  canResolveSocialPublishAttempt,
   composeSocialPublishMessage,
+  sanitizeSocialPublishProviderError,
+  socialPublishAttemptLiveKey,
   socialPublishDisplay,
 } = await import("@/lib/marketing");
 const { MarketingError } = await import("@/lib/marketing-ops");
@@ -61,9 +73,11 @@ const {
 const {
   missingMarketingSocialPublishSchema,
   publishMarketingContentToSocial,
+  resolveMarketingSocialPublishAttempt,
 } = await import("@/lib/marketing-social-publish");
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 const { createFakeSocialPublishingProvider } = await import("@/lib/social-publishing/fake");
+const { createFacebookSocialPublishingProvider } = await import("@/lib/social-publishing/facebook");
 const {
   FACEBOOK_GRAPH_API_HOST,
   FACEBOOK_GRAPH_API_VERSION,
@@ -89,8 +103,23 @@ const dataSrc = readSrc("src/lib/marketing-data.ts");
 const migrationSql = readSrc(
   "prisma/migrations/20261002182000_marketing_social_publish/migration.sql",
 );
-const claimFnSrc = opsSrc.slice(opsSrc.indexOf("async function claimSocialPublishAttempt"));
-const publishFnSrc = opsSrc.slice(opsSrc.indexOf("export async function publishMarketingContentToSocial"));
+const leakNeedle = (value) =>
+  typeof value === "string" && (/EAA[A-Za-z0-9]+/.test(value) || value.includes("fake-page-token"));
+
+function createReleaseBarrier(count) {
+  let released;
+  const gate = new Promise((resolve) => {
+    released = resolve;
+  });
+  let arrived = 0;
+  return {
+    wait() {
+      arrived += 1;
+      if (arrived >= count) released();
+      return gate;
+    },
+  };
+}
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -125,6 +154,9 @@ if (push.status !== 0) {
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const raceClientA = new PrismaClient({ datasourceUrl: testUrl });
+const raceClientB = new PrismaClient({ datasourceUrl: testUrl });
+const raceClientC = new PrismaClient({ datasourceUrl: testUrl });
 
 let failures = 0;
 function check(label, condition) {
@@ -201,13 +233,6 @@ try {
   if (previousVercel != null) process.env.VERCEL_ENV = previousVercel;
   delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
   check(
-    "Claim writes CLAIMED before the provider is called",
-    publishFnSrc.indexOf("claimSocialPublishAttempt") < publishFnSrc.indexOf("provider.publish") &&
-      publishFnSrc.includes("beforeProvider") &&
-      claimFnSrc.includes('status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED') &&
-      claimFnSrc.includes("liveKey"),
-  );
-  check(
     "Ops fail closed without request-time DDL",
     opsSrc.includes("missingMarketingSocialPublishSchema") &&
       !opsSrc.includes("$executeRawUnsafe") &&
@@ -261,9 +286,50 @@ try {
     socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_FAILED).published === false &&
       socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_FAILED).label === SOCIAL_PUBLISH_FAILED_MESSAGE &&
       socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_CLAIMED).published === false &&
+      socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_CLAIMED).inFlight === true &&
       socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_CLAIMED).label === SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE &&
       socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_PUBLISHED).published === true &&
       socialPublishDisplay(SOCIAL_PUBLISH_ATTEMPT_PUBLISHED).label === SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  );
+  const agedClaimedAt = new Date(Date.now() - SOCIAL_PUBLISH_UNCONFIRMED_MS - 1000);
+  const agedDisplay = socialPublishDisplay({
+    status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+    claimedAt: agedClaimedAt,
+  });
+  check(
+    "Aged CLAIMED is Unconfirmed, not in-flight PUBLISHED",
+    agedDisplay.published === false &&
+      agedDisplay.unconfirmed === true &&
+      agedDisplay.inFlight === false &&
+      agedDisplay.label === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
+      canResolveSocialPublishAttempt({
+        role: "OWNER",
+        status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+        claimedAt: agedClaimedAt,
+      }) === true &&
+      canResolveSocialPublishAttempt({
+        role: "ADMIN",
+        status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+        claimedAt: agedClaimedAt,
+      }) === false,
+  );
+  check(
+    "Sanitizer redacts the Page token and EAA tokens and caps length",
+    sanitizeSocialPublishProviderError(
+      `invalid token fake-page-token and EAAGCopiedTokenXYZ ${"x".repeat(300)}`,
+      "fake-page-token",
+    ) ===
+      sanitizeSocialPublishProviderError(
+        `invalid token [redacted] and [redacted] ${"x".repeat(300)}`,
+      ) &&
+      !sanitizeSocialPublishProviderError(
+        `invalid token fake-page-token and EAAGCopiedTokenXYZ`,
+        "fake-page-token",
+      ).includes("fake-page-token") &&
+      !/EAA[A-Za-z0-9]+/.test(
+        sanitizeSocialPublishProviderError("Graph error EAAGCopiedTokenXYZ", "unused"),
+      ) &&
+      sanitizeSocialPublishProviderError(`token EAAGCopiedTokenXYZ ${"n".repeat(400)}`).length === 200,
   );
   check(
     "Missing schema detector stays scoped to social publish tables",
@@ -293,7 +359,11 @@ try {
       buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_FACEBOOK") &&
       actionSrc.includes("publishMarketingContentToSocial") &&
       buttonSrc.includes("SOCIAL_PUBLISH_PUBLISHED_MESSAGE") &&
-      buttonSrc.includes("SOCIAL_PUBLISH_FAILED_MESSAGE"),
+      buttonSrc.includes("SOCIAL_PUBLISH_FAILED_MESSAGE") &&
+      buttonSrc.includes("Not posted, allow retry") &&
+      buttonSrc.includes("It posted") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE") &&
+      actionSrc.includes("resolveMarketingSocialPublishAttempt"),
   );
   check(
     "Page loader never selects an access token",
@@ -312,6 +382,55 @@ try {
     "Caption plus hashtags compose the Facebook message",
     composeSocialPublishMessage({ caption: "Work completed.", hashtags: "Reno" }) ===
       "Work completed.\n\n#Reno",
+  );
+
+  const graphToken = "EAAGPageTokenLeakXYZ999";
+  const graphRejected = await createFacebookSocialPublishingProvider(async () => ({
+    ok: false,
+    status: 400,
+    async json() {
+      return { error: { message: `Invalid OAuth access token ${graphToken}` } };
+    },
+  })).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+    pageId: "111",
+    accessToken: graphToken,
+    message: "hello",
+  });
+  const abortError = new Error("The operation was aborted.");
+  abortError.name = "AbortError";
+  const graphTimeout = await createFacebookSocialPublishingProvider(async () => {
+    throw abortError;
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+    pageId: "111",
+    accessToken: graphToken,
+    message: "hello",
+  });
+  const graphNetwork = await createFacebookSocialPublishingProvider(async () => {
+    throw new Error(`fetch failed ${graphToken}`);
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+    pageId: "111",
+    accessToken: graphToken,
+    message: "hello",
+  });
+  check(
+    "Graph HTTP rejection is FAILED/rejected and redacts the Page token",
+    graphRejected.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      graphRejected.outcome === "rejected" &&
+      graphRejected.ok === false &&
+      !graphRejected.error.includes(graphToken) &&
+      graphRejected.error.includes("[redacted]"),
+  );
+  check(
+    "Graph timeout or network error is UNKNOWN and keeps the token out",
+    graphTimeout.status === "UNKNOWN" &&
+      graphTimeout.outcome === "unknown" &&
+      graphNetwork.status === "UNKNOWN" &&
+      graphNetwork.outcome === "unknown" &&
+      !graphTimeout.error.includes(graphToken) &&
+      !graphNetwork.error.includes(graphToken),
   );
 
   const businessA = await prisma.business.create({
@@ -866,12 +985,457 @@ try {
     where: { id: thrown.attemptId, businessId: businessA.id },
   });
   check(
-    "Provider throw is recorded FAILED and not PUBLISHED",
-    thrown.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+    "Provider throw is unconfirmed and keeps liveKey",
+    thrown.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
       thrown.published === false &&
-      thrownRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
-      thrownRow.liveKey == null &&
+      thrown.unconfirmed === true &&
+      thrown.message === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
+      thrownRow?.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
+      thrownRow.liveKey === socialPublishAttemptLiveKey(throwApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK) &&
+      thrownRow.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
       throwing.published.length === 0,
+  );
+
+  console.log("\nTEST — Claim is written before the provider is called");
+  const claimApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Claim before provider",
+  });
+  const claimProvider = createFakeSocialPublishingProvider();
+  let claimedBeforeProvider = false;
+  const claimed = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: claimApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: claimApproved.updatedAt,
+    },
+    {
+      provider: claimProvider,
+      beforeProvider: async () => {
+        const row = await prisma.marketingSocialPublishAttempt.findFirst({
+          where: { contentId: claimApproved.id, businessId: businessA.id },
+        });
+        claimedBeforeProvider =
+          row?.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
+          row.liveKey === socialPublishAttemptLiveKey(claimApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK);
+      },
+    },
+  );
+  check(
+    "Claim writes CLAIMED before the provider is called",
+    claimedBeforeProvider === true &&
+      claimed.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      claimProvider.callCount === 1,
+  );
+
+  console.log("\nTEST — Token-bearing provider errors are redacted");
+  const leakApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Token leak post",
+  });
+  const leakToken = "EAAGFakePageTokenLeak999xyz";
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: businessA.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      },
+    },
+    data: { accessToken: leakToken },
+  });
+  const leaking = createFakeSocialPublishingProvider();
+  leaking.setLeakNext(true);
+  const leaked = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: leakApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: leakApproved.updatedAt,
+    },
+    { provider: leaking },
+  );
+  const leakedRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: leaked.attemptId, businessId: businessA.id },
+  });
+  const leakSource = await loadMarketingSource(prisma, businessA.id, new Date(), "OWNER");
+  const leakLoaded = leakSource.contents.find((row) => row.id === leakApproved.id);
+  const leakHaystack = [
+    leaked.message,
+    leaked.failureLabel,
+    leakedRow?.providerError,
+    leakedRow?.failureLabel,
+    leakLoaded?.socialPublish.label,
+    JSON.stringify(leakSource),
+  ];
+  check(
+    "Token-bearing provider error never appears in DB rows, return value, or loadMarketingSource",
+    leaked.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      leaked.published === false &&
+      leakedRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      leakHaystack.every((value) => value == null || !leakNeedle(String(value))) &&
+      String(leakedRow?.providerError ?? "").includes("[redacted]") &&
+      String(leaked.failureLabel ?? "").includes("[redacted]"),
+  );
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: businessA.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      },
+    },
+    data: { accessToken: "fake-page-token" },
+  });
+
+  console.log("\nTEST — Unknown outcome and aged CLAIMED recovery");
+  const unknownApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Unknown outcome post",
+  });
+  const unknowning = createFakeSocialPublishingProvider();
+  unknowning.setUnknownNext(true);
+  const unknownResult = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: unknownApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: unknownApproved.updatedAt,
+    },
+    { provider: unknowning },
+  );
+  const unknownRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: unknownResult.attemptId, businessId: businessA.id },
+  });
+  check(
+    "Timeout/unknown outcome stays CLAIMED with liveKey",
+    unknownResult.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
+      unknownResult.unconfirmed === true &&
+      unknownResult.message === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
+      unknownRow?.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
+      unknownRow.liveKey ===
+        socialPublishAttemptLiveKey(unknownApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK) &&
+      unknownRow.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
+      unknowning.published.length === 0,
+  );
+  const unknownRetry = createFakeSocialPublishingProvider();
+  await expectError(
+    "CLAIMED unknown outcome refuses retry until resolved",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: unknownApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: unknownApproved.updatedAt,
+        },
+        { provider: unknownRetry },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE &&
+      unknownRetry.callCount === 0,
+  );
+  const resolvedUnknown = await resolveMarketingSocialPublishAttempt(prisma, ownerA, {
+    attemptId: unknownResult.attemptId,
+    resolution: SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+  });
+  const resolvedUnknownRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: unknownResult.attemptId, businessId: businessA.id },
+  });
+  check(
+    "OWNER Not posted, allow retry clears liveKey and marks FAILED",
+    resolvedUnknown.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      resolvedUnknown.published === false &&
+      resolvedUnknown.message === SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE &&
+      resolvedUnknownRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      resolvedUnknownRow.liveKey == null,
+  );
+
+  const agedApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Aged claimed post",
+  });
+  const agedClaimedAtRow = new Date(Date.now() - SOCIAL_PUBLISH_UNCONFIRMED_MS - 1500);
+  const agedAttempt = await prisma.marketingSocialPublishAttempt.create({
+    data: {
+      businessId: businessA.id,
+      contentId: agedApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+      claimedAt: agedClaimedAtRow,
+      expectedContentUpdatedAt: agedApproved.updatedAt,
+      destinationPageId: "111222333",
+      liveKey: socialPublishAttemptLiveKey(agedApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK),
+      createdByMembershipId: ownerMem.id,
+    },
+  });
+  const agedSource = await loadMarketingSource(prisma, businessA.id, new Date(), "OWNER");
+  const agedLoaded = agedSource.contents.find((row) => row.id === agedApproved.id);
+  const adminAgedSource = await loadMarketingSource(prisma, businessA.id, new Date(), "ADMIN");
+  const adminAgedLoaded = adminAgedSource.contents.find((row) => row.id === agedApproved.id);
+  check(
+    "Aged CLAIMED is Unconfirmed in loadMarketingSource for OWNER resolve",
+    agedLoaded?.socialPublish.attemptStatus === SOCIAL_PUBLISH_ATTEMPT_CLAIMED &&
+      agedLoaded.socialPublish.unconfirmed === true &&
+      agedLoaded.socialPublish.inFlight === false &&
+      agedLoaded.socialPublish.canResolve === true &&
+      agedLoaded.socialPublish.label === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE &&
+      adminAgedLoaded?.socialPublish.unconfirmed === true &&
+      adminAgedLoaded.socialPublish.canResolve === false,
+  );
+  const agedRetry = createFakeSocialPublishingProvider();
+  await expectError(
+    "Aged CLAIMED refuses another publish until confirmed",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: agedApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: agedApproved.updatedAt,
+        },
+        { provider: agedRetry },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE &&
+      agedRetry.callCount === 0,
+  );
+  await expectError(
+    "ADMIN cannot resolve an unconfirmed attempt",
+    () =>
+      resolveMarketingSocialPublishAttempt(prisma, adminA, {
+        attemptId: agedAttempt.id,
+        resolution: SOCIAL_PUBLISH_RESOLVE_POSTED,
+      }),
+    (error) => error instanceof MarketingError && error.message === OWNER_SOCIAL_PUBLISH_MESSAGE,
+  );
+  await expectError(
+    "Business B cannot resolve A's unconfirmed attempt",
+    () =>
+      resolveMarketingSocialPublishAttempt(prisma, ownerB, {
+        attemptId: agedAttempt.id,
+        resolution: SOCIAL_PUBLISH_RESOLVE_POSTED,
+      }),
+    (error) => error instanceof Error,
+  );
+  const freshClaimed = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Fresh claimed not ready",
+  });
+  const freshAttempt = await prisma.marketingSocialPublishAttempt.create({
+    data: {
+      businessId: businessA.id,
+      contentId: freshClaimed.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+      claimedAt: new Date(),
+      expectedContentUpdatedAt: freshClaimed.updatedAt,
+      destinationPageId: "111222333",
+      liveKey: socialPublishAttemptLiveKey(freshClaimed.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK),
+      createdByMembershipId: ownerMem.id,
+    },
+  });
+  await expectError(
+    "Fresh CLAIMED cannot be resolved yet",
+    () =>
+      resolveMarketingSocialPublishAttempt(prisma, ownerA, {
+        attemptId: freshAttempt.id,
+        resolution: SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+      }),
+    (error) =>
+      error instanceof MarketingError && error.message === SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE,
+  );
+  const agedPostedApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Aged claimed posted",
+  });
+  const agedPostedAttempt = await prisma.marketingSocialPublishAttempt.create({
+    data: {
+      businessId: businessA.id,
+      contentId: agedPostedApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+      claimedAt: new Date(Date.now() - SOCIAL_PUBLISH_UNCONFIRMED_MS - 2000),
+      expectedContentUpdatedAt: agedPostedApproved.updatedAt,
+      destinationPageId: "111222333",
+      liveKey: socialPublishAttemptLiveKey(agedPostedApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK),
+      createdByMembershipId: ownerMem.id,
+    },
+  });
+  const markedPosted = await resolveMarketingSocialPublishAttempt(prisma, ownerA, {
+    attemptId: agedPostedAttempt.id,
+    resolution: SOCIAL_PUBLISH_RESOLVE_POSTED,
+  });
+  const markedPostedRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: agedPostedAttempt.id, businessId: businessA.id },
+  });
+  check(
+    "OWNER It posted marks aged CLAIMED as PUBLISHED and keeps liveKey",
+    markedPosted.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      markedPosted.published === true &&
+      markedPosted.message === SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE &&
+      markedPostedRow?.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      markedPostedRow.liveKey ===
+        socialPublishAttemptLiveKey(agedPostedApproved.id, SOCIAL_PUBLISH_DESTINATION_FACEBOOK),
+  );
+  const agedRetryAfterNotPosted = await resolveMarketingSocialPublishAttempt(prisma, ownerA, {
+    attemptId: agedAttempt.id,
+    resolution: SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+  });
+  const retriedAfterResolve = createFakeSocialPublishingProvider();
+  const retriedAged = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: agedApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: agedApproved.updatedAt,
+    },
+    { provider: retriedAfterResolve },
+  );
+  check(
+    "Retry works after Not posted, allow retry",
+    agedRetryAfterNotPosted.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      retriedAged.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      retriedAged.published === true &&
+      retriedAfterResolve.callCount === 1,
+  );
+  await expectError(
+    "Missing attempt cannot be resolved",
+    () =>
+      resolveMarketingSocialPublishAttempt(prisma, ownerA, {
+        attemptId: "missing-attempt",
+        resolution: SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+      }),
+    (error) =>
+      error instanceof MarketingError && error.message === SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+  );
+
+  console.log("\nTEST — Two-connection liveKey race");
+  async function runConnectionRace(clients, content, extraDeps = {}) {
+    const provider = createFakeSocialPublishingProvider();
+    provider.setDelayMs(80);
+    const barrier = createReleaseBarrier(clients.length);
+    const results = await Promise.allSettled(
+      clients.map((client) =>
+        publishMarketingContentToSocial(
+          client,
+          ownerA,
+          {
+            contentId: content.id,
+            destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+            expectedUpdatedAt: content.updatedAt,
+          },
+          { provider, beforeClaimCreate: () => barrier.wait(), ...extraDeps },
+        ),
+      ),
+    );
+    const attempts = await prisma.marketingSocialPublishAttempt.findMany({
+      where: { contentId: content.id, businessId: businessA.id },
+    });
+    return { provider, results, attempts };
+  }
+
+  let twoWayFailures = 0;
+  for (let round = 0; round < 50; round += 1) {
+    const raceApproved = await approvePackage(prisma, ownerA, adminA, {
+      ...packageInput,
+      title: `Two-way race ${round}`,
+    });
+    const raced = await runConnectionRace([raceClientA, raceClientB], raceApproved);
+    const fulfilled = raced.results.filter((row) => row.status === "fulfilled");
+    const publishedAttempts = raced.attempts.filter((row) => row.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED);
+    if (
+      raced.provider.callCount !== 1 ||
+      fulfilled.length !== 1 ||
+      raced.attempts.length !== 1 ||
+      publishedAttempts.length !== 1
+    ) {
+      twoWayFailures += 1;
+    }
+  }
+  check(
+    "50-round two-connection race: one provider call, one fulfilled result, one attempt",
+    twoWayFailures === 0,
+  );
+
+  const threeApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Three-way race",
+  });
+  const threeWay = await runConnectionRace([raceClientA, raceClientB, raceClientC], threeApproved);
+  const threeFulfilled = threeWay.results.filter((row) => row.status === "fulfilled");
+  check(
+    "3-way race: one provider call, one fulfilled result, one attempt",
+    threeWay.provider.callCount === 1 &&
+      threeFulfilled.length === 1 &&
+      threeWay.attempts.length === 1 &&
+      threeWay.attempts[0].status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+  );
+
+  const claimedRetryApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "CLAIMED retry refusal",
+  });
+  const claimedRetryProvider = createFakeSocialPublishingProvider();
+  claimedRetryProvider.setDelayMs(60);
+  let releaseClaimedRetry;
+  const holdClaimedRetry = new Promise((resolve) => {
+    releaseClaimedRetry = resolve;
+  });
+  const claimedRetryFirst = publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: claimedRetryApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+      expectedUpdatedAt: claimedRetryApproved.updatedAt,
+    },
+    { provider: claimedRetryProvider, beforeProvider: () => holdClaimedRetry },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const claimedRetrySecond = createFakeSocialPublishingProvider();
+  await expectError(
+    "CLAIMED in-flight retry is refused before another provider call",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: claimedRetryApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+          expectedUpdatedAt: claimedRetryApproved.updatedAt,
+        },
+        { provider: claimedRetrySecond },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE &&
+      claimedRetrySecond.callCount === 0,
+  );
+  releaseClaimedRetry();
+  const claimedRetryResult = await claimedRetryFirst;
+  check(
+    "In-flight claim still publishes once after retry refusal",
+    claimedRetryResult.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      claimedRetryProvider.callCount === 1,
+  );
+
+  const omitApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Omit liveKey race",
+  });
+  const omitRace = await runConnectionRace([raceClientA, raceClientB], omitApproved, { omitLiveKey: true });
+  const omitFulfilled = omitRace.results.filter((row) => row.status === "fulfilled");
+  check(
+    "Race test fails when liveKey is omitted (two provider calls and two attempt rows)",
+    omitRace.provider.callCount >= 2 && omitFulfilled.length >= 2 && omitRace.attempts.length >= 2,
   );
 
   console.log(
@@ -882,7 +1446,12 @@ try {
 } finally {
   if (previousFake == null) delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
   else process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER = previousFake;
-  await prisma.$disconnect();
+  await Promise.all([
+    prisma.$disconnect(),
+    raceClientA.$disconnect(),
+    raceClientB.$disconnect(),
+    raceClientC.$disconnect(),
+  ]);
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {
     await cleanup.$executeRawUnsafe(

@@ -251,6 +251,70 @@ export const SOCIAL_PUBLISH_FAILED_MESSAGE =
 
 export const SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Facebook.";
 
+export const SOCIAL_PUBLISH_UNCONFIRMED_MS = 5 * 60 * 1000;
+export const SOCIAL_PUBLISH_ERROR_MAX_CHARS = 200;
+export const SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN = /EAA[A-Za-z0-9]+/g;
+
+export const SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
+  "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm.";
+
+export const SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
+  "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm before retrying.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED = "NOT_POSTED" as const;
+export const SOCIAL_PUBLISH_RESOLVE_POSTED = "POSTED" as const;
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE =
+  "Marked as not posted. You can retry. It was not labeled PUBLISHED.";
+
+export const SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Facebook.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE =
+  "This publish is still in progress. Confirm only after it is unconfirmed.";
+
+export const SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE =
+  "That Facebook publish attempt is not in this business.";
+
+export function sanitizeSocialPublishProviderError(
+  raw: string | null | undefined,
+  accessToken?: string | null,
+): string {
+  let text = (raw ?? "").replace(/\s+/g, " ").trim();
+  const token = accessToken?.trim();
+  if (token) text = text.split(token).join("[redacted]");
+  SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN.lastIndex = 0;
+  text = text.replace(SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN, "[redacted]");
+  if (text.length > SOCIAL_PUBLISH_ERROR_MAX_CHARS) {
+    text = text.slice(0, SOCIAL_PUBLISH_ERROR_MAX_CHARS);
+  }
+  return text;
+}
+
+export function isSocialPublishUnconfirmed(input: {
+  status?: string | null;
+  claimedAt?: Date | null;
+  failureLabel?: string | null;
+  now?: Date;
+  unconfirmedAfterMs?: number;
+}): boolean {
+  if (input.status !== SOCIAL_PUBLISH_ATTEMPT_CLAIMED) return false;
+  if (input.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE) return true;
+  if (!input.claimedAt) return false;
+  const now = input.now ?? new Date();
+  const windowMs = input.unconfirmedAfterMs ?? SOCIAL_PUBLISH_UNCONFIRMED_MS;
+  return now.getTime() - input.claimedAt.getTime() >= windowMs;
+}
+
+export function canResolveSocialPublishAttempt(input: {
+  role: string;
+  status?: string | null;
+  claimedAt?: Date | null;
+  failureLabel?: string | null;
+  now?: Date;
+}): boolean {
+  return input.role === "OWNER" && isSocialPublishUnconfirmed(input);
+}
+
 export const SOCIAL_PUBLISH_STALE_MESSAGE =
   "This package changed while you were publishing. Refresh and try again.";
 
@@ -303,20 +367,56 @@ export function composeSocialPublishMessage(input: { caption: string; hashtags: 
   return tags ? `${caption}\n\n${tags}` : caption;
 }
 
-export function socialPublishDisplay(status: string | null | undefined): {
+export function socialPublishDisplay(
+  statusOrInput:
+    | string
+    | null
+    | undefined
+    | {
+        status?: string | null;
+        claimedAt?: Date | null;
+        failureLabel?: string | null;
+        now?: Date;
+      },
+): {
   published: boolean;
+  unconfirmed: boolean;
+  inFlight: boolean;
   label: string | null;
 } {
-  if (status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
-    return { published: true, label: SOCIAL_PUBLISH_PUBLISHED_MESSAGE };
+  const input =
+    statusOrInput && typeof statusOrInput === "object"
+      ? statusOrInput
+      : { status: statusOrInput };
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
+    return {
+      published: true,
+      unconfirmed: false,
+      inFlight: false,
+      label: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+    };
   }
-  if (status === SOCIAL_PUBLISH_ATTEMPT_FAILED) {
-    return { published: false, label: SOCIAL_PUBLISH_FAILED_MESSAGE };
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_FAILED) {
+    const label = input.failureLabel?.trim() || SOCIAL_PUBLISH_FAILED_MESSAGE;
+    return { published: false, unconfirmed: false, inFlight: false, label };
   }
-  if (status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
-    return { published: false, label: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE };
+  if (input.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
+    if (isSocialPublishUnconfirmed(input)) {
+      return {
+        published: false,
+        unconfirmed: true,
+        inFlight: false,
+        label: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+      };
+    }
+    return {
+      published: false,
+      unconfirmed: false,
+      inFlight: true,
+      label: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+    };
   }
-  return { published: false, label: null };
+  return { published: false, unconfirmed: false, inFlight: false, label: null };
 }
 
 export type MarketingSocialDestinationState = {

@@ -20,6 +20,7 @@ import {
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+  SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
   SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
@@ -29,12 +30,22 @@ import {
   SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
   SOCIAL_PUBLISH_PACKAGE_NOT_FOUND_MESSAGE,
   SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
+  SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE,
+  SOCIAL_PUBLISH_RESOLVE_POSTED,
+  SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
   SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
   SOCIAL_PUBLISH_SNAPSHOT_REQUIRED_MESSAGE,
   SOCIAL_PUBLISH_STALE_MESSAGE,
+  SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+  canResolveSocialPublishAttempt,
   composeSocialPublishMessage,
   isDisconnectedSocialPublishDestination,
   isImplementedSocialPublishDestination,
+  isSocialPublishUnconfirmed,
+  sanitizeSocialPublishProviderError,
   socialPublishAttemptLiveKey,
   studioPhotosEligible,
 } from "@/lib/marketing";
@@ -53,6 +64,10 @@ export type MarketingSocialPublishDeps = {
   provider?: SocialPublishingProvider;
   /** Test hook. Runs after the attempt is claimed and before the provider. */
   beforeProvider?: () => Promise<void>;
+  /** Test hook. Runs after the in-flight pre-check and before the claim create. */
+  beforeClaimCreate?: () => Promise<void>;
+  /** Test hook. Omits liveKey so the unique guard can be proven. */
+  omitLiveKey?: boolean;
 };
 
 export type MarketingSocialPublishResult = {
@@ -62,8 +77,21 @@ export type MarketingSocialPublishResult = {
   status: "CLAIMED" | "PUBLISHED" | "FAILED";
   published: boolean;
   posted: boolean;
+  unconfirmed: boolean;
   failureLabel: string | null;
   providerPostId: string | null;
+  message: string;
+};
+
+export type ResolveMarketingSocialPublishInput = {
+  attemptId: string;
+  resolution: string;
+};
+
+export type ResolveMarketingSocialPublishResult = {
+  attemptId: string;
+  status: "PUBLISHED" | "FAILED";
+  published: boolean;
   message: string;
 };
 
@@ -120,9 +148,21 @@ function requireOwnerSocialPublish(access: BusinessAccess) {
   requireBusinessRole(access, "OWNER");
 }
 
-function safeFailureLabel(detail?: string | null) {
-  const trimmed = detail?.trim();
-  return trimmed ? `${SOCIAL_PUBLISH_FAILED_MESSAGE} ${trimmed}` : SOCIAL_PUBLISH_FAILED_MESSAGE;
+function safeProviderError(detail?: string | null, accessToken?: string | null) {
+  return sanitizeSocialPublishProviderError(detail, accessToken) || null;
+}
+
+function safeFailureLabel(detail?: string | null, accessToken?: string | null) {
+  const sanitized = sanitizeSocialPublishProviderError(detail, accessToken);
+  const composed = sanitized ? `${SOCIAL_PUBLISH_FAILED_MESSAGE} ${sanitized}` : SOCIAL_PUBLISH_FAILED_MESSAGE;
+  return sanitizeSocialPublishProviderError(composed, accessToken) || SOCIAL_PUBLISH_FAILED_MESSAGE;
+}
+
+function isUnknownProviderResult(result: {
+  status?: string;
+  outcome?: string;
+}) {
+  return result.status === "UNKNOWN" || result.outcome === "unknown";
 }
 
 export async function loadMarketingSocialDestinations(db: Db, businessId: string) {
@@ -148,6 +188,7 @@ export async function loadMarketingSocialPublishAttempts(db: Db, businessId: str
         destination: true,
         status: true,
         failureLabel: true,
+        claimedAt: true,
         providerPostId: true,
         publishedAt: true,
         createdAt: true,
@@ -173,6 +214,7 @@ async function recordAttemptResult(
     providerPostId?: string | null;
     providerError?: string | null;
     failureLabel?: string;
+    accessToken?: string | null;
   },
 ) {
   const published = result.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED;
@@ -186,13 +228,57 @@ async function recordAttemptResult(
     data: {
       status: result.status,
       providerPostId: result.providerPostId ?? null,
-      providerError: result.providerError ?? null,
-      failureLabel: published ? "" : (result.failureLabel ?? SOCIAL_PUBLISH_FAILED_MESSAGE),
+      providerError: published ? null : safeProviderError(result.providerError, result.accessToken),
+      failureLabel: published
+        ? ""
+        : sanitizeSocialPublishProviderError(
+            result.failureLabel ?? safeFailureLabel(result.providerError, result.accessToken),
+            result.accessToken,
+          ) || SOCIAL_PUBLISH_FAILED_MESSAGE,
       publishedAt: published ? new Date() : null,
       liveKey: published ? undefined : null,
     },
   });
   return updated.count === 1;
+}
+
+async function recordUnknownOutcome(
+  db: Db,
+  attempt: { id: string; businessId: string; claimedAt: Date },
+  result: { providerError?: string | null; accessToken?: string | null },
+) {
+  const updated = await db.marketingSocialPublishAttempt.updateMany({
+    where: {
+      id: attempt.id,
+      businessId: attempt.businessId,
+      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+      claimedAt: attempt.claimedAt,
+    },
+    data: {
+      providerError: safeProviderError(result.providerError, result.accessToken),
+      failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+    },
+  });
+  return updated.count === 1;
+}
+
+function unknownPublishResult(claimed: {
+  contentId: string;
+  destination: string;
+  id: string;
+}): MarketingSocialPublishResult {
+  return {
+    contentId: claimed.contentId,
+    destination: claimed.destination,
+    attemptId: claimed.id,
+    status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+    published: false,
+    posted: false,
+    unconfirmed: true,
+    failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+    providerPostId: null,
+    message: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+  };
 }
 
 export type PublishMarketingContentToSocialInput = {
@@ -236,11 +322,16 @@ export async function publishMarketingContentToSocial(
   };
 
   try {
-    claimed = await claimSocialPublishAttempt(db, access, {
-      contentId: input.contentId,
-      destination,
-      expectedUpdatedAt,
-    });
+    claimed = await claimSocialPublishAttempt(
+      db,
+      access,
+      {
+        contentId: input.contentId,
+        destination,
+        expectedUpdatedAt,
+      },
+      deps,
+    );
   } catch (error) {
     if (missingMarketingSocialPublishSchema(error)) {
       throw new MarketingError(SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE);
@@ -251,7 +342,13 @@ export async function publishMarketingContentToSocial(
   if (deps?.beforeProvider) await deps.beforeProvider();
 
   const provider = deps?.provider ?? getSocialPublishingProvider();
-  let providerResult: { ok: boolean; status: "PUBLISHED" | "FAILED"; providerPostId?: string; error?: string };
+  let providerResult: {
+    ok: boolean;
+    status: "PUBLISHED" | "FAILED" | "UNKNOWN";
+    outcome?: "rejected" | "unknown";
+    providerPostId?: string;
+    error?: string;
+  };
   try {
     providerResult = await provider.publish({
       destination,
@@ -260,31 +357,28 @@ export async function publishMarketingContentToSocial(
       message: claimed.message,
     });
   } catch (error) {
-    const failureLabel = safeFailureLabel(error instanceof Error ? error.message : null);
-    await recordAttemptResult(db, claimed, {
-      status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
+    await recordUnknownOutcome(db, claimed, {
       providerError: error instanceof Error ? error.message : "provider threw",
-      failureLabel,
+      accessToken: claimed.accessToken,
     });
-    return {
-      contentId: claimed.contentId,
-      destination: claimed.destination,
-      attemptId: claimed.id,
-      status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
-      published: false,
-      posted: false,
-      failureLabel,
-      providerPostId: null,
-      message: failureLabel,
-    };
+    return unknownPublishResult(claimed);
+  }
+
+  if (isUnknownProviderResult(providerResult)) {
+    await recordUnknownOutcome(db, claimed, {
+      providerError: providerResult.error ?? "provider outcome unknown",
+      accessToken: claimed.accessToken,
+    });
+    return unknownPublishResult(claimed);
   }
 
   if (!providerResult.ok || providerResult.status !== SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
-    const failureLabel = safeFailureLabel(providerResult.error);
+    const failureLabel = safeFailureLabel(providerResult.error, claimed.accessToken);
     await recordAttemptResult(db, claimed, {
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
       providerError: providerResult.error ?? "provider rejected",
       failureLabel,
+      accessToken: claimed.accessToken,
     });
     return {
       contentId: claimed.contentId,
@@ -293,6 +387,7 @@ export async function publishMarketingContentToSocial(
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
       published: false,
       posted: false,
+      unconfirmed: false,
       failureLabel,
       providerPostId: null,
       message: failureLabel,
@@ -302,6 +397,7 @@ export async function publishMarketingContentToSocial(
   const recorded = await recordAttemptResult(db, claimed, {
     status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
     providerPostId: providerResult.providerPostId ?? null,
+    accessToken: claimed.accessToken,
   });
   if (!recorded) {
     return {
@@ -311,9 +407,10 @@ export async function publishMarketingContentToSocial(
       status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
       published: false,
       posted: false,
-      failureLabel: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+      unconfirmed: true,
+      failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
       providerPostId: null,
-      message: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+      message: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
     };
   }
 
@@ -324,9 +421,111 @@ export async function publishMarketingContentToSocial(
     status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
     published: true,
     posted: true,
+    unconfirmed: false,
     failureLabel: null,
     providerPostId: providerResult.providerPostId ?? null,
     message: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  };
+}
+
+export async function resolveMarketingSocialPublishAttempt(
+  db: Db,
+  access: BusinessAccess,
+  input: ResolveMarketingSocialPublishInput,
+): Promise<ResolveMarketingSocialPublishResult> {
+  requireOwnerSocialPublish(access);
+
+  const resolution = input.resolution.trim();
+  if (resolution !== SOCIAL_PUBLISH_RESOLVE_NOT_POSTED && resolution !== SOCIAL_PUBLISH_RESOLVE_POSTED) {
+    throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE);
+  }
+
+  let attempt: {
+    id: string;
+    businessId: string;
+    status: string;
+    claimedAt: Date;
+    failureLabel: string;
+  } | null;
+  try {
+    attempt = await db.marketingSocialPublishAttempt.findFirst({
+      where: { id: input.attemptId.trim(), ...access.scope },
+      select: {
+        id: true,
+        businessId: true,
+        status: true,
+        claimedAt: true,
+        failureLabel: true,
+      },
+    });
+  } catch (error) {
+    if (missingMarketingSocialPublishSchema(error)) {
+      throw new MarketingError(SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE);
+    }
+    throw error;
+  }
+  if (!attempt) {
+    throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE);
+  }
+  access.assertOwned(attempt);
+  if (
+    !canResolveSocialPublishAttempt({
+      role: access.workspace.role,
+      status: attempt.status,
+      claimedAt: attempt.claimedAt,
+      failureLabel: attempt.failureLabel,
+    })
+  ) {
+    throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE);
+  }
+
+  if (resolution === SOCIAL_PUBLISH_RESOLVE_POSTED) {
+    const updated = await db.marketingSocialPublishAttempt.updateMany({
+      where: {
+        id: attempt.id,
+        businessId: access.businessId,
+        status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+      },
+      data: {
+        status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+        publishedAt: new Date(),
+        failureLabel: "",
+        providerError: null,
+      },
+    });
+    if (updated.count !== 1) {
+      throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE);
+    }
+    return {
+      attemptId: attempt.id,
+      status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
+      published: true,
+      message: SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
+    };
+  }
+
+  const updated = await db.marketingSocialPublishAttempt.updateMany({
+    where: {
+      id: attempt.id,
+      businessId: access.businessId,
+      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
+    },
+    data: {
+      status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
+      liveKey: null,
+      publishedAt: null,
+      failureLabel: SOCIAL_PUBLISH_FAILED_MESSAGE,
+      providerError: null,
+    },
+  });
+  if (updated.count !== 1) {
+    throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE);
+  }
+  return {
+    attemptId: attempt.id,
+    status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
+    published: false,
+    message: SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE,
   };
 }
 
@@ -338,6 +537,7 @@ async function claimSocialPublishAttempt(
     destination: typeof SOCIAL_PUBLISH_DESTINATION_FACEBOOK;
     expectedUpdatedAt: Date;
   },
+  deps?: MarketingSocialPublishDeps,
 ) {
   const content = access.assertOwned(
     await db.marketingContent.findFirst({
@@ -398,8 +598,14 @@ async function claimSocialPublishAttempt(
     throw new MarketingError(SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE);
   }
   if (existing?.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
-    throw new MarketingError(SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE);
+    throw new MarketingError(
+      isSocialPublishUnconfirmed(existing)
+        ? SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE
+        : SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+    );
   }
+
+  if (deps?.beforeClaimCreate) await deps.beforeClaimCreate();
 
   const claimedAt = new Date();
   try {
@@ -412,7 +618,7 @@ async function claimSocialPublishAttempt(
         claimedAt,
         expectedContentUpdatedAt: content.updatedAt,
         destinationPageId: destinationRow.pageId.trim(),
-        liveKey: socialPublishAttemptLiveKey(content.id, input.destination),
+        liveKey: deps?.omitLiveKey ? undefined : socialPublishAttemptLiveKey(content.id, input.destination),
         createdByMembershipId: access.workspace.membership.id,
       },
     });
@@ -440,6 +646,10 @@ async function claimSocialPublishAttempt(
     if (blocker?.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
       throw new MarketingError(SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE);
     }
-    throw new MarketingError(SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE);
+    throw new MarketingError(
+      blocker && isSocialPublishUnconfirmed(blocker)
+        ? SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE
+        : SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+    );
   }
 }

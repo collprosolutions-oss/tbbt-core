@@ -3140,7 +3140,7 @@ model MarketingSocialPublishAttempt {
   /// contentId:destination while CLAIMED or PUBLISHED. Null after FAILED.
   liveKey                  String?
   providerPostId           String?
-  /// Raw provider error. Server-side only.
+  /// Sanitized provider error. Server-side only — tokens are redacted.
   providerError            String?
   failureLabel             String    @default("")
   publishedAt              DateTime?
