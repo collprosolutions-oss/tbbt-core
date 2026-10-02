@@ -32,6 +32,13 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export const WEBSITE_DOMAIN_DNS_CNAME_TARGET = "cname.vercel-dns.com";
 
+/** Public Vercel apex A records used for display matching only. */
+export const WEBSITE_DOMAIN_VERCEL_A_ADDRESSES = ["76.76.21.21", "76.76.21.22"] as const;
+
+export const WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS = 3000;
+
+const VERCEL_PROJECT_DNS_CNAME = /^[a-z0-9-]+\.vercel-dns-\d+\.com$/;
+
 export const WEBSITE_DOMAIN_VERIFICATION_STATES = [
   "NOT_CONFIGURED",
   "PENDING",
@@ -95,16 +102,33 @@ async function lookupRecordList(
   }
 }
 
+async function withDnsTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error("DNS lookup timed out");
+      (error as { code?: string }).code = "ETIMEOUT";
+      reject(error);
+    }, WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function defaultWebsiteDomainDnsLookup(
   hostname: string,
 ): Promise<WebsiteDomainDnsRecords> {
   const host = normalizeHostname(hostname);
   if (!host) return { cnames: [], addresses: [] };
-  const [cnames, addresses] = await Promise.all([
-    lookupRecordList(() => resolveCname(host)),
-    lookupRecordList(() => resolve4(host)),
-  ]);
-  return { cnames, addresses };
+  return withDnsTimeout(
+    Promise.all([
+      lookupRecordList(() => resolveCname(host)),
+      lookupRecordList(() => resolve4(host)),
+    ]).then(([cnames, addresses]) => ({ cnames, addresses })),
+  );
 }
 
 let injectedDnsLookup: WebsiteDomainDnsLookup | null = null;
@@ -134,12 +158,28 @@ export function expectedWebsiteDomainCnameTargets() {
   return [...targets];
 }
 
+export function isVercelDnsCname(value: string) {
+  const host = normalizeDnsName(value);
+  if (!host) return false;
+  if (host === WEBSITE_DOMAIN_DNS_CNAME_TARGET || host.endsWith(".vercel-dns.com")) {
+    return true;
+  }
+  return VERCEL_PROJECT_DNS_CNAME.test(host);
+}
+
+export function isVercelApexAddress(value: string) {
+  return (WEBSITE_DOMAIN_VERCEL_A_ADDRESSES as readonly string[]).includes(value.trim());
+}
+
 export function dnsRecordsPointAtTbbt(records: WebsiteDomainDnsRecords) {
   const targets = expectedWebsiteDomainCnameTargets();
-  return records.cnames.some((cname) => {
+  const cnameMatch = records.cnames.some((cname) => {
     const value = normalizeDnsName(cname);
+    if (isVercelDnsCname(value)) return true;
     return targets.some((target) => value === target || value.endsWith(`.${target}`));
   });
+  if (cnameMatch) return true;
+  return records.addresses.some((address) => isVercelApexAddress(address));
 }
 
 export type WebsiteDomainVerification = {
@@ -192,10 +232,8 @@ async function readDnsRecords(hostname: string): Promise<
   }
 }
 
-function classifyDns(records: WebsiteDomainDnsRecords): "match" | "mismatch" | "pending" {
+function classifyDns(records: WebsiteDomainDnsRecords): "match" | "mismatch" {
   if (dnsRecordsPointAtTbbt(records)) return "match";
-  if (records.cnames.length > 0) return "mismatch";
-  if (records.addresses.length > 0) return "pending";
   return "mismatch";
 }
 
@@ -338,17 +376,6 @@ async function verifyBoundHostname(binding: {
   }
 
   const dnsState = classifyDns(dns.records);
-  if (dnsState === "pending") {
-    return verification({
-      hostname,
-      enteredWebsiteHostname,
-      state: "PENDING",
-      detail: `Custom host ${hostname} verification is Pending because DNS ownership could not be completed.`,
-      publishedSite,
-      bindingStatus: binding.status,
-      bindingBusinessId: binding.businessId,
-    });
-  }
   if (dnsState === "mismatch") {
     return verification({
       hostname,

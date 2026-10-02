@@ -2,9 +2,9 @@
  * Public host → Business resolution boundary.
  *
  * Verified custom domains are the only future non-CollPro hostname
- * mapping. UNVERIFIED, unknown, and other-tenant hosts never authorize.
- * Stored VERIFIED still does not route until read-only DNS/host
- * verification matches this business and its published site.
+ * mapping. UNVERIFIED bindings never authorize. Routing uses the stored
+ * WebsiteHostBinding.status only. DNS verification is display-only
+ * (Settings / go-live) and is not consulted here.
  * This module does not provision DNS or mark a hostname verified.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -18,10 +18,7 @@ import {
 import { getAppUrl } from "@/lib/mail";
 import { getTenantAppOrigin } from "@/lib/tenant-app-url";
 import { firstHeaderHost } from "@/lib/vercel-app-host";
-import {
-  normalizeHostname,
-  verifyHostnameForBusiness,
-} from "@/lib/website-engine/domain-verification";
+import { normalizeHostname } from "@/lib/website-engine/domain-verification";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -73,10 +70,6 @@ export async function resolvePublicHost(
     });
     if (!binding) return { kind: "unknown" };
     if (binding.status !== "VERIFIED") return { kind: "unverified" };
-    const ownership = await verifyHostnameForBusiness(db, binding.businessId, hostname);
-    if (ownership.state !== "VERIFIED" || ownership.bindingBusinessId !== binding.businessId) {
-      return { kind: "unverified" };
-    }
     return {
       kind: "tenant",
       slug: binding.business.slug,

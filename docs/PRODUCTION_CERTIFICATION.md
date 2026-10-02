@@ -42,7 +42,7 @@ Do not invent passing browser results. The isolated harness is
 - Provider failure must not delete core records (review / referral rows stay SENT).
 - Password recovery: `/forgot-password`, `/reset-password/[token]`.
 - R2 website uploads: `R2_*` in `.env.example`. Field job photos use private R2. Legacy historical job-photo rows may still store a Vercel Blob URL for read-only rendering.
-- Website publishing: Settings → Website Publish. `npm run test:website-engine` covers snapshot isolation, rollback, multi-trade publication, and SEO/sitemap. OWNER-visible custom-domain verification is read-only (`npm run test:website-domain-verification`); it checks DNS/host ownership against that business and its published site and shows Pending when the check cannot be completed. It does not edit DNS or publish.
+- Website publishing: Settings → Website Publish. `npm run test:website-engine` covers snapshot isolation, rollback, multi-trade publication, and SEO/sitemap. OWNER-visible custom-domain verification is read-only and display-only (`npm run test:website-domain-verification`); it checks DNS/host ownership against that business and its published site and shows Pending when the lookup fails or there is no published site. Public routing still uses stored `WebsiteHostBinding.status === VERIFIED` only. Display matching accepts Vercel CNAME targets and apex A `76.76.21.21` / `76.76.21.22`. It does not edit DNS, publish, or live-check DNS on public requests.
 - Resend: unset `RESEND_API_KEY` / `EMAIL_FROM` is NOT_CONFIGURED, not a fake send.
 
 ## Explicit blockers

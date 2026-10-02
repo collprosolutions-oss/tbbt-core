@@ -66,9 +66,6 @@ const {
   saveWebsiteSeoDraft,
   setReviewWebsiteSelected,
   WebsitePublishError,
-  resetWebsiteDomainDnsLookup,
-  setWebsiteDomainDnsLookup,
-  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
 } = await import("@/lib/website-engine");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { publicCanonicalUrl } = await import("@/lib/public-site-seo");
@@ -248,8 +245,8 @@ check(
     hosts.includes('kind: "unknown"') &&
     hosts.includes("resolvePublicRoot") &&
     hosts.includes("authorizedPublicOrigin") &&
-    hosts.includes("verifyHostnameForBusiness") &&
-    hosts.includes('ownership.state !== "VERIFIED"') &&
+    hosts.includes("DNS verification is display-only") &&
+    !hosts.includes("verifyHostnameForBusiness") &&
     !hosts.includes("businessId:") === false,
 );
 check(
@@ -262,8 +259,7 @@ check(
     domainVerificationSrc.includes('"OWNER"') &&
     domainVerificationUi.includes("Read-only OWNER check") &&
     settingsPage.includes("loadWebsiteDomainVerification") &&
-    settingsWorkspace.includes("WebsiteDomainVerificationCard") &&
-    sitemapBuilder.includes("view.site.business.id !== resolved.businessId"),
+    settingsWorkspace.includes("WebsiteDomainVerificationCard"),
 );
 check(
   "Stable websiteSlug is additive and unique within a business",
@@ -1115,10 +1111,6 @@ try {
       !JSON.stringify(reView.snapshot).includes("stripeSecret"),
   );
 
-  setWebsiteDomainDnsLookup(async (hostname) => ({
-    cnames: hostname.endsWith(".example.test") ? [WEBSITE_DOMAIN_DNS_CNAME_TARGET] : [],
-    addresses: [],
-  }));
   const hostAName = `alpha-${randomUUID().slice(0, 8)}.example.test`;
   const hostBName = `beta-${randomUUID().slice(0, 8)}.example.test`;
   await prisma.websiteHostBinding.create({
@@ -1615,7 +1607,6 @@ try {
   failed += 1;
   console.error("FAIL - website engine live suite", error);
 } finally {
-  resetWebsiteDomainDnsLookup();
   await prisma.$disconnect();
 }
 

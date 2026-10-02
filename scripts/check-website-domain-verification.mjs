@@ -27,7 +27,11 @@ const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { classifyCustomDomain, goLiveCardById } = await import("@/lib/go-live");
 const {
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
   buildPublicSitemap,
+  defaultWebsiteDomainDnsLookup,
+  dnsRecordsPointAtTbbt,
+  getWebsiteDomainDnsLookup,
   loadWebsiteDomainVerification,
   publishWebsite,
   resetWebsiteDomainDnsLookup,
@@ -132,10 +136,18 @@ check(
     goLiveData.includes("goLiveDomainFromVerification"),
 );
 check(
-  "Unknown and other-tenant hosts fail closed before sitemap/site",
-  hostsSrc.includes("verifyHostnameForBusiness") &&
-    sitemapSrc.includes("view.site.business.id !== resolved.businessId") &&
-    sitemapSrc.includes("return []"),
+  "Public routing uses stored VERIFIED only and never live DNS",
+  hostsSrc.includes('status !== "VERIFIED"') &&
+    !hostsSrc.includes("verifyHostnameForBusiness") &&
+    !hostsSrc.includes("setWebsiteDomainDnsLookup") &&
+    !sitemapSrc.includes("verifyHostnameForBusiness"),
+);
+check(
+  "Display matching accepts Vercel apex A and project CNAMEs",
+  dnsRecordsPointAtTbbt({ cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] }) &&
+    dnsRecordsPointAtTbbt({ cnames: ["abc.vercel-dns-017.com"], addresses: [] }) &&
+    dnsRecordsPointAtTbbt({ cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] }) &&
+    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }),
 );
 check(
   "Pending is a first-class verification state",
@@ -149,6 +161,20 @@ check(
 
 try {
   console.log("\nLIVE — Fake DNS, isolation, Pending, OWNER gate");
+  let dnsLookups = 0;
+  const dnsByHost = new Map();
+  const timeoutHosts = new Set();
+  setWebsiteDomainDnsLookup(async (hostname) => {
+    dnsLookups += 1;
+    if (timeoutHosts.has("*") || timeoutHosts.has(hostname)) throw timeoutError();
+    if (dnsByHost.has(hostname)) return dnsByHost.get(hostname);
+    return { cnames: [], addresses: [] };
+  });
+  check(
+    "Fake DNS is injected before any LIVE lookup",
+    getWebsiteDomainDnsLookup() !== defaultWebsiteDomainDnsLookup && dnsLookups === 0,
+  );
+
   const userA = await prisma.user.create({
     data: { name: "Owner A", email: `dv-a-${randomUUID()}@example.com`, passwordHash: "x" },
   });
@@ -194,6 +220,47 @@ try {
   const accessAdmin = makeAccess(businessA.id, adminA.id, "ADMIN");
   const accessMember = makeAccess(businessA.id, memberA.id, "MEMBER");
 
+  const businessTyped = await prisma.business.create({
+    data: {
+      name: "Typed Only",
+      slug: `typed-dv-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+      publicWebsite: "https://typed-only.example.test",
+    },
+  });
+  const typedLookupsBefore = dnsLookups;
+  const typedOnly = await verifyConfiguredWebsiteDomain(prisma, businessTyped.id);
+  check(
+    "Typed publicWebsite URL with no binding is not VERIFIED",
+    typedOnly.state === "NOT_CONFIGURED" &&
+      typedOnly.state !== "VERIFIED" &&
+      typedOnly.enteredWebsiteHostname === "typed-only.example.test" &&
+      typedOnly.hostname === "typed-only.example.test" &&
+      typedOnly.bindingBusinessId === null &&
+      dnsLookups === typedLookupsBefore,
+  );
+
+  const businessPendingPub = await prisma.business.create({
+    data: {
+      name: "Pending Publish",
+      slug: `pend-dv-${randomUUID().slice(0, 8)}`,
+      tradeCode: "HANDYMAN",
+    },
+  });
+  const hostPendingPub = `pending-pub-${randomUUID().slice(0, 8)}.example.test`;
+  await prisma.websiteHostBinding.create({
+    data: { businessId: businessPendingPub.id, hostname: hostPendingPub, status: "VERIFIED" },
+  });
+  dnsByHost.set(hostPendingPub, pointingDns());
+  const noPublish = await verifyConfiguredWebsiteDomain(prisma, businessPendingPub.id);
+  check(
+    "No published site stays Pending after DNS matches",
+    noPublish.state === "PENDING" &&
+      noPublish.publishedSite === false &&
+      noPublish.hostname === hostPendingPub &&
+      noPublish.detail.includes("published site"),
+  );
+
   await activateBusinessTradeOp(prisma, accessA, "HANDYMAN");
   await activateBusinessTradeOp(prisma, accessB, "HANDYMAN");
   await prisma.serviceCatalogItem.create({
@@ -226,20 +293,19 @@ try {
   await prisma.websiteHostBinding.create({
     data: { businessId: businessB.id, hostname: hostB, status: "VERIFIED" },
   });
+  dnsByHost.set(hostA, { cnames: [], addresses: [] });
+  dnsByHost.set(hostB, pointingDns());
+  dnsByHost.set(hostUnknown, { cnames: [], addresses: [] });
 
-  const beforeDns = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  const beforeMatch = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
-    "Typed website URL alone is never verified",
-    beforeDns.enteredWebsiteHostname === "typed-only.example.test" &&
-      beforeDns.hostname === hostA &&
-      beforeDns.state !== "VERIFIED",
+    "Typed website URL on a bound host is still not verified from text",
+    beforeMatch.enteredWebsiteHostname === "typed-only.example.test" &&
+      beforeMatch.hostname === hostA &&
+      beforeMatch.state !== "VERIFIED",
   );
 
-  setWebsiteDomainDnsLookup(async (hostname) => {
-    if (hostname === hostA || hostname === hostB) return pointingDns();
-    if (hostname === hostUnknown) return { cnames: [], addresses: [] };
-    throw timeoutError();
-  });
+  dnsByHost.set(hostA, pointingDns());
 
   const matchedUnverified = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
@@ -268,9 +334,7 @@ try {
       verifiedA.readOnly === true,
   );
 
-  setWebsiteDomainDnsLookup(async () => {
-    throw timeoutError();
-  });
+  timeoutHosts.add("*");
   const pendingA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
     "DNS timeout is Pending and never connected",
@@ -279,31 +343,37 @@ try {
       pendingA.hostname === hostA &&
       pendingA.detail.includes("Pending"),
   );
-
-  setWebsiteDomainDnsLookup(async () => ({
-    cnames: [],
-    addresses: ["203.0.113.10"],
-  }));
-  const pendingAOnly = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  timeoutHosts.clear();
+  dnsByHost.set(hostA, { cnames: [], addresses: ["203.0.113.10"] });
+  const unknownApex = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
-    "A-only records cannot complete verification",
-    pendingAOnly.state === "PENDING",
+    "Unknown A-only records fail instead of staying Pending",
+    unknownApex.state === "FAILED" && unknownApex.hostname === hostA,
   );
 
-  setWebsiteDomainDnsLookup(async () => ({
-    cnames: ["other-tenant.example.net"],
-    addresses: [],
-  }));
+  dnsByHost.set(hostA, { cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] });
+  const apexA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Vercel apex A record can complete display verification",
+    apexA.state === "VERIFIED" && apexA.hostname === hostA,
+  );
+
+  dnsByHost.set(hostA, { cnames: ["abc.vercel-dns-017.com"], addresses: [] });
+  const projectCname = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
+  check(
+    "Project-specific Vercel CNAME can complete display verification",
+    projectCname.state === "VERIFIED" && projectCname.hostname === hostA,
+  );
+
+  dnsByHost.set(hostA, { cnames: ["other-tenant.example.net"], addresses: [] });
   const failedA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
     "Wrong CNAME fails verification for A",
     failedA.state === "FAILED" && failedA.hostname === hostA,
   );
 
-  setWebsiteDomainDnsLookup(async (hostname) => {
-    if (hostname === hostA || hostname === hostB) return pointingDns();
-    return { cnames: [], addresses: [] };
-  });
+  dnsByHost.set(hostA, pointingDns());
+  dnsByHost.set(hostB, pointingDns());
   const otherTenant = await verifyHostnameForBusiness(prisma, businessA.id, hostB);
   check(
     "Another tenant host cannot verify as A",
@@ -357,20 +427,14 @@ try {
       !JSON.stringify(goLiveB).includes(hostA),
   );
 
-  setWebsiteDomainDnsLookup(async () => {
-    throw timeoutError();
-  });
+  timeoutHosts.add("*");
   const pendingGoLive = await loadGoLiveCenter(prisma, accessA);
   check(
     "Go-live shows Pending when DNS cannot complete",
     goLiveCardById(pendingGoLive, "custom_domain")?.status === "PARTIAL" &&
       /Pending/.test(goLiveCardById(pendingGoLive, "custom_domain")?.currentState ?? ""),
   );
-
-  setWebsiteDomainDnsLookup(async (hostname) => {
-    if (hostname === hostA || hostname === hostB) return pointingDns();
-    return { cnames: [], addresses: [] };
-  });
+  timeoutHosts.clear();
   const serveA = await resolvePublicHost(prisma, hostA);
   const serveB = await resolvePublicHost(prisma, hostB);
   const serveUnknown = await resolvePublicHost(prisma, hostUnknown);
@@ -385,6 +449,14 @@ try {
   );
   check("Unknown host never serves a site", serveUnknown.kind === "unknown");
   check("Host B cannot be treated as A's published site", serveBAsA.state === "FAILED");
+
+  const hostUnverified = `unverified-${randomUUID().slice(0, 8)}.example.test`;
+  await prisma.websiteHostBinding.create({
+    data: { businessId: businessA.id, hostname: hostUnverified, status: "UNVERIFIED" },
+  });
+  dnsByHost.set(hostUnverified, pointingDns());
+  const serveUnverified = await resolvePublicHost(prisma, hostUnverified);
+  const sitemapUnverified = await buildPublicSitemap(prisma, hostUnverified);
 
   const sitemapA = await buildPublicSitemap(prisma, hostA);
   const sitemapB = await buildPublicSitemap(prisma, hostB);
@@ -402,15 +474,27 @@ try {
       !sitemapB.some((entry) => entry.url.includes(hostA) || entry.url.includes(businessA.slug)),
   );
   check("Unknown host sitemap is empty", sitemapUnknown.length === 0);
+  check(
+    "UNVERIFIED stored binding never serves site or sitemap even when DNS matches",
+    serveUnverified.kind === "unverified" && sitemapUnverified.length === 0,
+  );
 
-  setWebsiteDomainDnsLookup(async () => {
-    throw timeoutError();
-  });
+  timeoutHosts.add("*");
   const pendingRoot = await resolvePublicRoot(prisma, hostA);
   const pendingSitemap = await buildPublicSitemap(prisma, hostA);
+  const pendingDisplay = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
-    "Pending DNS never serves the tenant site or sitemap",
-    pendingRoot.kind === "unknown" && pendingSitemap.length === 0,
+    "Stored VERIFIED still serves site and sitemap when display DNS is Pending",
+    pendingRoot.kind === "site" &&
+      pendingRoot.slug === businessA.slug &&
+      pendingSitemap.length > 0 &&
+      pendingSitemap.every((entry) => entry.url.startsWith(`https://${hostA}`)) &&
+      pendingDisplay.state === "PENDING",
+  );
+  timeoutHosts.clear();
+  check(
+    "Suite never fell back to the real DNS resolver",
+    getWebsiteDomainDnsLookup() !== defaultWebsiteDomainDnsLookup && dnsLookups > 0,
   );
 
   const bindingCount = await prisma.websiteHostBinding.count();

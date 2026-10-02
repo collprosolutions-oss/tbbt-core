@@ -152,6 +152,6 @@ Public customer sites use:
 - Before the first publish, `/hire/[slug]` and `/r/[slug]` still assemble from live Business / catalog / image / service-area rows. CollPro stays on this path until it publishes.
 - After the first publish, owner drafts do not appear on the public site until the next Publish.
 - Rollback copies a historical snapshot into a new version. Old rows stay immutable.
-- `WebsiteHostBinding` is the custom-domain boundary. `UNVERIFIED`, unknown, and other-tenant hosts never route. OWNER Settings shows a read-only DNS/host verification state (Pending when the check cannot be completed). Typing a website URL does not mark a domain connected. This repo does not purchase domains or provision DNS.
+- `WebsiteHostBinding` is the custom-domain boundary. Public routing uses the stored `VERIFIED` status only. `UNVERIFIED`, unknown, and other-tenant hosts never route. OWNER Settings / go-live show a read-only DNS/host verification state (Pending when the lookup fails or there is no published site). Display matching accepts the Vercel CNAME family (`cname.vercel-dns.com`, `*.vercel-dns.com`, `*.vercel-dns-NNN.com`) and apex A `76.76.21.21` / `76.76.21.22`. Typing a website URL does not mark a domain connected. This repo does not purchase domains or provision DNS.
 
 Certification checklist: `docs/PRODUCTION_CERTIFICATION.md`.

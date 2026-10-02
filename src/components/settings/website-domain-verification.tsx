@@ -19,8 +19,10 @@ export function WebsiteDomainVerificationCard({
         <div>
           <p className="font-medium">Custom domain verification</p>
           <p className="text-xs text-muted-foreground">
-            Read-only OWNER check. This does not change DNS, publish the website, or
-            mark a typed website URL as connected.
+            Read-only OWNER check. Accepts a Vercel CNAME, project
+            vercel-dns target, or apex A at 76.76.21.21 / 76.76.21.22. This
+            does not change DNS, publish the website, or mark a typed website
+            URL as connected. Public routing still uses the stored host status.
           </p>
         </div>
         <Badge variant={statusVariant(verification.state)}>{verification.label}</Badge>
