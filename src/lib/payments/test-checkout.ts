@@ -96,6 +96,12 @@ export function fakeTestCheckoutSuccessHref(session: FakeCheckoutSession) {
   return applyCheckoutSessionId(session.successUrl, session.id);
 }
 
+/** Same-origin return URLs when the fake adapter is on. Production ignores this. */
+export function fakeTestCheckoutAppUrl(request: Request): string | undefined {
+  if (!isFakePaymentsAdapterEnabled()) return undefined;
+  return new URL(request.url).origin;
+}
+
 export async function completeFakeTestCheckout(
   sessionId: string,
 ): Promise<FakeCheckoutSession> {

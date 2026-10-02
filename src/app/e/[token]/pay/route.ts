@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createCustomerDepositCheckout, PaymentError } from "@/lib/payments";
+import { fakeTestCheckoutAppUrl } from "@/lib/payments/test-checkout";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(
@@ -8,7 +9,9 @@ export async function POST(
 ) {
   const { token } = await params;
   try {
-    const session = await createCustomerDepositCheckout(prisma, token);
+    const session = await createCustomerDepositCheckout(prisma, token, undefined, {
+      appUrl: fakeTestCheckoutAppUrl(_request),
+    });
     return NextResponse.redirect(session.url, 303);
   } catch (error) {
     if (error instanceof PaymentError) {
