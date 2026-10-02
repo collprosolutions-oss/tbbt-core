@@ -204,7 +204,7 @@ await withDisposableTestDatabase(
       setCustomerMessagingProvider,
       twilioRequestSignature,
     } = await import("@/lib/customer-messaging");
-    const { createFakeTransactionalEmailSender } = await import("@/lib/mail");
+    const { createFakeTransactionalEmailSender } = await import("@/lib/mail-fake");
 
     const fakeSms = createFakeCustomerMessagingProvider();
     const fakeEmail = createFakeTransactionalEmailSender();
