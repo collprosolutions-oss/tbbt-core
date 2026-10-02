@@ -646,7 +646,13 @@ try {
       .every((line) => !line.includes("businessId") || line.includes("job.business.id")),
   );
   check("pay route does not read amount from the request", !/searchParams|formData|json\(\)|amount/.test(payRouteSrc.replace(/createCustomerInvoiceCheckout[\s\S]+/, "")));
-  check("pay route creates checkout from the token only", payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token)"));
+  check(
+    "pay route creates checkout from the token only",
+    payRouteSrc.includes("createCustomerInvoiceCheckout(prisma, token") &&
+      payRouteSrc.includes("fakeTestCheckoutAppUrl") &&
+      !payRouteSrc.includes("invoiceId") &&
+      !payRouteSrc.includes("businessId"),
+  );
   check("webhook verifies the Stripe signature", webhookStack.includes("constructStripeWebhookEvent"));
   check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
   const paymentEventsSrc = readFileSync(
