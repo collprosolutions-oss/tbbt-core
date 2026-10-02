@@ -6,9 +6,11 @@
  * same-business structured address (street, city, state, ZIP). Order is
  * recorded appointment time, then job id. This does not optimize travel,
  * geocode, or invent ETAs. Job-detail Directions stays on
- * `directionsUrl` / `directionsHref`.
+ * `directionsUrl` / `directionsHref`, gated by the same-business
+ * display guard so a foreign property street cannot leak.
  */
 import type { FieldJob } from "@/lib/field-jobs";
+import { directionsUrl } from "@/lib/directions";
 import { formatAddress } from "@/lib/format";
 import {
   OWNER_DAY_ROUTE_EXCLUDED_HEADING,
@@ -146,6 +148,32 @@ export function nativeAssignedJobDisplayAddress(
   if (!owned) return null;
   const formatted = formatAddress(owned);
   return formatted.trim() ? formatted : null;
+}
+
+/**
+ * Per-job Directions for an assigned job. Same-business rows keep the
+ * existing `directionsUrl` (street-only is enough). Foreign or missing
+ * properties stay hidden so a corrupt cross-tenant link cannot leak
+ * the other business's street.
+ */
+export function nativeAssignedJobDirectionsHref(
+  property: NativeAssignedJobDisplayProperty | null | undefined,
+  businessId: string,
+): string | null {
+  if (nativeAssignedJobDisplayAddress(property, businessId) == null) {
+    return null;
+  }
+  return directionsUrl(
+    property
+      ? {
+          addressLine1: property.addressLine1,
+          addressLine2: property.addressLine2,
+          city: property.city,
+          region: property.region,
+          postalCode: property.postalCode,
+        }
+      : null,
+  );
 }
 
 /** Maps waypoints are joined with `|`; a literal pipe would become an extra stop. */
