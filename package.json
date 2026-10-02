@@ -131,6 +131,7 @@
     "test:founder-handyman-operations": "node --experimental-strip-types scripts/check-founder-handyman-operations.mjs",
     "test:saas-operating": "node --experimental-strip-types scripts/check-saas-operating-enforcement.mjs",
     "test:saas-lifecycle": "node --experimental-strip-types scripts/check-saas-subscription-lifecycle.mjs",
+    "test:owner-signup-billing-path": "node --experimental-strip-types scripts/check-owner-signup-billing-path.mjs",
     "test:transactional-state-races": "node --experimental-strip-types scripts/check-transactional-state-races.mjs",
     "test:public-intake-identity": "node --experimental-strip-types scripts/check-public-intake-identity.mjs",
     "test:business-timezone": "node --experimental-strip-types scripts/check-business-timezone.mjs",
