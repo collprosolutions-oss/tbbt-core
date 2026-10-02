@@ -29,11 +29,13 @@ import {
 } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { FounderRegion } from "@/components/founder-design/region";
+import { RequestPreferredWindowsList } from "@/components/requests/request-preferred-windows";
 import {
   RequestContactActions,
   RequestIdentityReviewBadge,
   RequestIdentityReviewNotice,
 } from "@/components/requests/request-follow-up";
+import type { OwnerPreferredWindowsView } from "@/lib/request-preferred-windows";
 import {
   REQUESTS_MOBILE_SHEET_QUERY,
   requestMobileSheetShouldOpen,
@@ -72,6 +74,7 @@ export type RequestListItem = {
   estimate: { id: string; status: string; totalLabel: string } | null;
   recordNavItems: RecordNavItem[];
   serviceAreaNote: string | null;
+  preferredWindows?: OwnerPreferredWindowsView | null;
 };
 
 /**
@@ -409,6 +412,9 @@ function RequestDetailsPanel({ request }: { request: RequestListItem | null }) {
         <DetailField icon={FileText} label="Description">
           {request.description || request.summary || "No description provided."}
         </DetailField>
+        {request.preferredWindows ? (
+          <RequestPreferredWindowsList preferredWindows={request.preferredWindows} />
+        ) : null}
         {request.workAreaLabels.length > 0 ? (
           <DetailField label="Customer work-area answers">
             <ul className="space-y-1">

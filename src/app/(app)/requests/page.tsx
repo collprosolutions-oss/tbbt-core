@@ -39,6 +39,7 @@ import {
   requestedWorkSummary,
 } from "@/lib/service-request-work";
 import { requestIdentityReviewContext } from "@/lib/request-follow-up";
+import { preferredWindowsFromOwnedRequest } from "@/lib/request-preferred-windows-data";
 import {
   formatWorkAreaIntakeLabels,
   parseWorkAreaIntake,
@@ -333,6 +334,11 @@ export default async function RequestsPage({
           : request.serviceAreaQualification === "IN_AREA"
             ? "This lead matched an enabled service area."
             : null,
+      preferredWindows: preferredWindowsFromOwnedRequest({
+        businessId: access.businessId,
+        requestBusinessId: request.businessId,
+        description: request.description,
+      }),
     };
   });
 

@@ -81,6 +81,11 @@ import {
 } from "@/lib/public-request-trade";
 import { DEFAULT_TRADE, isConfiguredTrade } from "@/lib/trades";
 import { claimPublicIntakeSubmission } from "@/lib/public-intake-submission";
+import {
+  appendPreferredWindowsToDescription,
+  normalizePreferredWindowsInput,
+  parsePreferredWindowDrafts,
+} from "@/lib/request-preferred-windows";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
 export const PUBLIC_REQUEST_PHOTO_UNAVAILABLE =
@@ -209,14 +214,26 @@ export type PublicIntakeInput = {
     customerId: string;
     repeatVisitSourceJobId?: string | null;
   } | null;
+  /**
+   * Optional Handyman preferred days or time windows. Requests, not
+   * bookings. Client-supplied timezones are ignored.
+   */
+  preferredWindows?: unknown;
+  /** Ignored. Business timezone is server-resolved. */
+  preferredWindowsTimeZone?: string | null;
 };
 
 export type PublicIntakeDb = {
   business: {
     findUnique: (args: {
       where: { slug: string };
-      select: { id: true; tradeCode?: true; publishedWebsiteId?: true };
-    }) => Promise<{ id: string; tradeCode?: string; publishedWebsiteId?: string | null } | null>;
+      select: { id: true; tradeCode?: true; publishedWebsiteId?: true; timezone?: true };
+    }) => Promise<{
+      id: string;
+      tradeCode?: string;
+      publishedWebsiteId?: string | null;
+      timezone?: string | null;
+    } | null>;
   };
   websitePublish?: {
     findFirst: (args: {
@@ -560,13 +577,18 @@ async function resolveIntakePublishedSnapshot(
   safeSlug: string,
   websitePublishId?: string | null,
 ): Promise<{
-  business: { id: string; tradeCode?: string; publishedWebsiteId?: string | null };
+  business: {
+    id: string;
+    tradeCode?: string;
+    publishedWebsiteId?: string | null;
+    timezone?: string | null;
+  };
   publishedSnapshot: PublishedWebsiteSnapshot | null;
   referencedPublishInvalid?: boolean;
 } | null> {
   const business = await db.business.findUnique({
     where: { slug: safeSlug },
-    select: { id: true, tradeCode: true, publishedWebsiteId: true },
+    select: { id: true, tradeCode: true, publishedWebsiteId: true, timezone: true },
   });
   if (!business) return null;
 
@@ -876,6 +898,14 @@ async function createPublicServiceRequestInner(
   if (repeatVisitSourceJobId && requestTradeCode !== "CLEANING") {
     return { ok: false, error: PUBLIC_INTAKE_GENERIC_ERROR };
   }
+  const preferredWindows = normalizePreferredWindowsInput({
+    drafts: parsePreferredWindowDrafts(input.preferredWindows),
+    business,
+    tradeCode: requestTradeCode,
+  });
+  if (!preferredWindows.ok) {
+    return preferredWindows;
+  }
   const referencedIntake = await resolveReferencedTenantIntakeSnapshot(db, {
     businessId: business.id,
     tradeCode: requestTradeCode,
@@ -1132,14 +1162,18 @@ async function createPublicServiceRequestInner(
         }
       }
 
+      const requestDescription = identityReview
+        ? appendIntakeIdentityReview(
+            appendPreferredWindowsToDescription(description, preferredWindows.record),
+            identityReview,
+          )
+        : appendPreferredWindowsToDescription(description, preferredWindows.record);
       const request = await tx.serviceRequest.create({
         data: {
           businessId: business.id,
           customerId: customer.id,
           propertyId,
-          description: identityReview
-            ? appendIntakeIdentityReview(description, identityReview)
-            : description,
+          description: requestDescription,
           summary,
           serviceCatalogItemId: firstCatalogId,
           leadSource,

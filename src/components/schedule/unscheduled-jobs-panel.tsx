@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ScheduleJobForm } from "@/components/jobs/schedule-job-form";
 import { formatAddress } from "@/lib/format";
 import type { AvailabilitySnapshot } from "@/lib/availability";
+import type { OwnerPreferredWindowsView } from "@/lib/request-preferred-windows";
 
 export type UnscheduledJobLite = {
   id: string;
@@ -22,6 +23,7 @@ export type UnscheduledJobLite = {
     postalCode: string | null;
   } | null;
   unpaidDepositWarning?: string | null;
+  preferredWindows?: OwnerPreferredWindowsView | null;
 };
 
 /**
@@ -83,6 +85,7 @@ export function UnscheduledJobsPanel({
                   isScheduled={false}
                   unpaidDepositWarning={job.unpaidDepositWarning}
                   availability={availability}
+                  preferredWindows={job.preferredWindows}
                 />
               </div>
             ))}

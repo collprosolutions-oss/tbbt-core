@@ -18,6 +18,8 @@ import {
 } from "@/lib/availability";
 import { formatISODateInTimeZone, formatZonedTimeInput } from "@/lib/business-timezone";
 import { DURATION_PRESETS, parseDurationMinutes } from "@/lib/job-schedule";
+import { RequestPreferredWindowsList } from "@/components/requests/request-preferred-windows";
+import type { OwnerPreferredWindowsView } from "@/lib/request-preferred-windows";
 import { WORKFORCE_PROGRESSIONS, WORKFORCE_SKILLS, formatProgression } from "@/lib/workforce";
 
 const initialState: JobActionState = {};
@@ -35,6 +37,7 @@ export function ScheduleJobForm({
   requiredSkills = [],
   requiredProgression = "",
   appointmentNote,
+  preferredWindows,
 }: {
   jobId: string;
   date: string;
@@ -48,6 +51,7 @@ export function ScheduleJobForm({
   requiredSkills?: string[];
   requiredProgression?: string;
   appointmentNote?: string | null;
+  preferredWindows?: OwnerPreferredWindowsView | null;
 }) {
   const [state, formAction, pending] = useActionState(
     scheduleJob,
@@ -145,6 +149,15 @@ export function ScheduleJobForm({
           <AlertTitle>Customer was not notified</AlertTitle>
           <AlertDescription>{state.notificationWarning}</AlertDescription>
         </Alert>
+      ) : null}
+      {preferredWindows ? (
+        <RequestPreferredWindowsList
+          preferredWindows={preferredWindows}
+          onUse={(window) => {
+            setDateValue(window.localDate);
+            if (window.startLocal) setTimeValue(window.startLocal);
+          }}
+        />
       ) : null}
       {availability ? (
         <div className="space-y-1 rounded-lg border border-dashed p-3 text-sm">

@@ -28,6 +28,7 @@ import { telHref } from "@/lib/directions";
 import { lineItemTitle } from "@/lib/estimate-line-scope";
 import { FounderRegion } from "@/components/founder-design/region";
 import type { AvailabilitySnapshot } from "@/lib/availability";
+import type { OwnerPreferredWindowsView } from "@/lib/request-preferred-windows";
 import { cn } from "@/lib/utils";
 
 export type JobChangeOrderSummary = {
@@ -73,6 +74,7 @@ export type JobListItem = {
   unpaidDepositWarning?: string | null;
   appointmentConfirmed: boolean;
   appointmentConfirmationLabel: string | null;
+  preferredWindows?: OwnerPreferredWindowsView | null;
 };
 
 function initials(name: string) {
@@ -429,6 +431,7 @@ function JobDetailsPanel({
               isScheduled={isScheduled}
               unpaidDepositWarning={job.unpaidDepositWarning}
               availability={availability}
+              preferredWindows={job.preferredWindows}
             />
           )}
         </div>
