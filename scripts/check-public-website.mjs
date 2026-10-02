@@ -1073,21 +1073,42 @@ try {
         where: { slug: "collpro-reno" },
         select: { id: true, slug: true, name: true },
       });
+      const business =
+        existing ??
+        (await appDb.business.create({
+          data: {
+            name: "CollPro Reno Handyman Services",
+            slug: "collpro-reno",
+            tradeCode: "HANDYMAN",
+          },
+        }));
       if (existing) {
         console.log("  HTTP fixture — APP_URL database already has slug collpro-reno");
-        return existing;
+      } else {
+        console.log(
+          "  HTTP fixture — created slug collpro-reno on the APP_URL database (compatibility public path; no publish)",
+        );
       }
-      const created = await appDb.business.create({
-        data: {
-          name: "CollPro Reno Handyman Services",
-          slug: "collpro-reno",
-          tradeCode: "HANDYMAN",
-        },
+      const offered = await appDb.serviceCatalogItem.count({
+        where: { businessId: business.id, active: true },
       });
-      console.log(
-        "  HTTP fixture — created slug collpro-reno on the APP_URL database (compatibility public path; no publish)",
-      );
-      return created;
+      if (offered === 0) {
+        await appDb.serviceCatalogItem.create({
+          data: {
+            businessId: business.id,
+            name: "Door Adjustment",
+            category: "Doors & Locks",
+            pricingMode: "STARTING_AT",
+            price: new Prisma.Decimal(75),
+            active: true,
+            tradeCode: "HANDYMAN",
+          },
+        });
+        console.log(
+          "  HTTP fixture — added one active Handyman catalog item so /services renders Selected Work",
+        );
+      }
+      return business;
     } finally {
       await appDb.$disconnect();
     }
