@@ -67,6 +67,7 @@ const {
 } = await import("@/lib/job-callback");
 const { loadJobCallbackReview } = await import("@/lib/job-callback-data");
 const {
+  JOB_CALLBACK_CORE_SELECT,
   jobCallbackErrorMessage,
   jobCallbackTestHooks,
   recordCustomerReportedCallback,
@@ -274,9 +275,19 @@ check(
     !missingJobCallbackIssueSchema(new Error("Can't reach database server")) &&
     dataSrc.includes("if (missingJobCallbackIssueSchema(error)) return empty") &&
     portalDataSrc.includes("if (missingJobCallbackIssueSchema(error))") &&
-    opsSrc.includes("if (missingJobCallbackIssueSchema(error)) return") &&
     jobCallbackErrorMessage({ code: "P2021" }, "fallback") ===
       JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+);
+check(
+  "No-extras writes never touch new columns; extras map P2021/P2022 only when used",
+  opsSrc.includes("select: JOB_CALLBACK_CORE_SELECT") &&
+    portalOpsSrc.includes("select: JOB_CALLBACK_CORE_SELECT") &&
+    opsSrc.includes("usedIssueExtensions") &&
+    portalOpsSrc.includes("usedIssueExtensions") &&
+    opsSrc.includes("usedIssueExtensions && missingJobCallbackIssueSchema(error)") &&
+    portalOpsSrc.includes("usedIssueExtensions && missingJobCallbackIssueSchema(error)") &&
+    !/if \(missingJobCallbackIssueSchema\(error\)\) return;/.test(opsSrc) &&
+    !/if \(!missingJobCallbackIssueSchema\(error\)\) throw error;/.test(portalOpsSrc),
 );
 check(
   "Customers have exactly one portal form; Work Order keeps one OWNER panel",
@@ -297,8 +308,9 @@ check(
     !navSrc.includes("Customer issue"),
 );
 check(
-  "loadOwnedCallback refuses a missing id with a not-found error",
-  opsSrc.includes("JOB_CALLBACK_UNKNOWN_MESSAGE") &&
+  "loadOwnedCallback scopes by businessId so foreign and missing ids look the same",
+  opsSrc.includes("where: { id: callbackId, ...access.scope }") &&
+    opsSrc.includes("JOB_CALLBACK_UNKNOWN_MESSAGE") &&
     opsSrc.includes("if (!row)") &&
     opsSrc.includes("throw new JobCallbackError(JOB_CALLBACK_UNKNOWN_MESSAGE)"),
 );
@@ -805,6 +817,29 @@ try {
       }),
     (error) => error.message === JOB_CALLBACK_UNKNOWN_MESSAGE,
   );
+  const betaCallback = await recordCustomerReportedCallback(prisma, ownerB, {
+    jobId: completedB.id,
+    description: "Beta customer called about the latch.",
+    reportedVia: "PHONE",
+  });
+  await expectThrow(
+    "Alpha cannot review a real Beta callback",
+    () => reviewCustomerReportedCallback(prisma, ownerA, { callbackId: betaCallback.id }),
+    (error) => error.message === JOB_CALLBACK_UNKNOWN_MESSAGE,
+  );
+  await expectThrow(
+    "Alpha cannot record an outcome on a real Beta callback",
+    () =>
+      recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+        callbackId: betaCallback.id,
+        outcome: "RECORDED_ONLY",
+      }),
+    (error) => error.message === JOB_CALLBACK_UNKNOWN_MESSAGE,
+  );
+  check(
+    "Foreign and nonexistent callback ids refuse with the same not-found message",
+    JOB_CALLBACK_UNKNOWN_MESSAGE === "That callback could not be found.",
+  );
 
   console.log("\nATTACHMENTS — existing private storage only");
   await expectThrow(
@@ -1056,6 +1091,215 @@ try {
 } finally {
   if (session) {
     await session.cleanup();
+  }
+}
+
+console.log("\nPREVIEW SAFETY — writes without 20261002180000 still work");
+let previewSession;
+try {
+  previewSession = await openDisposableTestDatabase({
+    databaseUrl: baseUrl,
+    namePrefix: "tbbt_job_callback_preview",
+    setProcessEnv: true,
+  });
+  const preview = previewSession.prisma;
+  await preview.$executeRawUnsafe(`ALTER TABLE "JobCallback" DROP COLUMN IF EXISTS "category"`);
+  await preview.$executeRawUnsafe(`ALTER TABLE "JobCallback" DROP COLUMN IF EXISTS "ownerNotes"`);
+  await preview.$executeRawUnsafe(`DROP TABLE IF EXISTS "JobCallbackAttachment"`);
+  const leftover = await preview.$queryRaw`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'JobCallback'
+      AND column_name IN ('category', 'ownerNotes')
+  `;
+  check(
+    "Preview schema has JobCallback without the reserved migration columns",
+    leftover.length === 0,
+  );
+
+  const previewSuffix = randomUUID().slice(0, 8);
+  async function seedPreviewJob(token) {
+    const ownerUser = await preview.user.create({
+      data: {
+        name: "Preview Owen",
+        email: `preview-owner-${randomUUID().slice(0, 8)}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const business = await preview.business.create({
+      data: {
+        name: "Preview Co",
+        slug: `preview-cb-${randomUUID().slice(0, 8)}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const membership = await preview.membership.create({
+      data: { userId: ownerUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const customer = await preview.customer.create({
+      data: {
+        businessId: business.id,
+        name: "Preview Customer",
+        email: `preview-cust-${randomUUID().slice(0, 6)}@example.com`,
+      },
+    });
+    const request = await preview.serviceRequest.create({
+      data: { businessId: business.id, customerId: customer.id, description: "Done" },
+    });
+    const estimate = await preview.estimate.create({
+      data: {
+        businessId: business.id,
+        customerId: customer.id,
+        serviceRequestId: request.id,
+        status: "APPROVED",
+        publicToken: randomUUID(),
+        total: 100,
+      },
+    });
+    const job = await preview.job.create({
+      data: {
+        businessId: business.id,
+        customerId: customer.id,
+        estimateId: estimate.id,
+        status: "COMPLETED",
+        projectToken: token,
+      },
+    });
+    return {
+      job,
+      access: makeAccess(business.id, "OWNER", membership.id, ownerUser.id),
+    };
+  }
+
+  const noExtras = await seedPreviewJob(`preview-none-${previewSuffix}`);
+  const portalJob = await seedPreviewJob(`preview-portal-${previewSuffix}`);
+  const extrasJob = await seedPreviewJob(`preview-extras-${previewSuffix}`);
+  const extrasReviewJob = await seedPreviewJob(`preview-review-${previewSuffix}`);
+
+  const recorded = await recordCustomerReportedCallback(preview, noExtras.access, {
+    jobId: noExtras.job.id,
+    description: "Owner recorded without extras.",
+    reportedVia: "PHONE",
+  });
+  check(
+    "OWNER record without extras succeeds when the issue migration is absent",
+    recorded.status === "RECORDED" && recorded.jobId === noExtras.job.id,
+  );
+  const reviewed = await reviewCustomerReportedCallback(preview, noExtras.access, {
+    callbackId: recorded.id,
+  });
+  const reviewEvents = await preview.jobCallbackEvent.count({
+    where: { callbackId: recorded.id, eventType: "REVIEWED" },
+  });
+  check(
+    "OWNER review without extras writes a REVIEWED event on the preview schema",
+    reviewed.callback.status === "UNDER_REVIEW" && reviewEvents === 1,
+  );
+  const outcomed = await recordCustomerReportedCallbackOutcome(preview, noExtras.access, {
+    callbackId: recorded.id,
+    outcome: "RECORDED_ONLY",
+  });
+  const outcomeEvents = await preview.jobCallbackEvent.count({
+    where: { callbackId: recorded.id, eventType: "OUTCOME_RECORDED" },
+  });
+  check(
+    "OWNER outcome without extras writes an OUTCOME_RECORDED event on the preview schema",
+    outcomed.callback.status === "OUTCOME_RECORDED" &&
+      outcomed.callback.outcome === "RECORDED_ONLY" &&
+      outcomeEvents === 1,
+  );
+
+  const portalNone = await submitPortalJobCallback(preview, {
+    token: portalJob.job.projectToken,
+    description: "Portal submit without extras.",
+    preferredContact: "PHONE",
+  });
+  check(
+    "Portal submit without extras succeeds when the issue migration is absent",
+    portalNone.ok === true && portalNone.alreadyExists === false,
+  );
+
+  await expectThrow(
+    "OWNER record with extras is unavailable on the preview schema",
+    () =>
+      recordCustomerReportedCallback(preview, extrasJob.access, {
+        jobId: extrasJob.job.id,
+        description: "Should not land.",
+        reportedVia: "PHONE",
+        category: "QUALITY_CONCERN",
+      }),
+    (error) =>
+      error.name === "JobCallbackError" &&
+      error.message === JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+  );
+  const extrasPortal = await submitPortalJobCallback(preview, {
+    token: extrasJob.job.projectToken,
+    description: "Portal extras should fail closed.",
+    preferredContact: "EMAIL",
+    category: "DAMAGE",
+  });
+  check(
+    "Portal submit with extras returns a clean unavailable message",
+    extrasPortal.ok === false && extrasPortal.error === JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+  );
+  const extrasRows = await preview.jobCallback.count({
+    where: { jobId: extrasJob.job.id },
+  });
+  check(
+    "Failed extras writes do not leave a queue row on the preview schema",
+    extrasRows === 0,
+  );
+
+  const previewOpen = await recordCustomerReportedCallback(preview, extrasReviewJob.access, {
+    jobId: extrasReviewJob.job.id,
+    description: "No-extras record so review/outcome extras can be tried.",
+    reportedVia: "TEXT",
+  });
+  await expectThrow(
+    "OWNER review with extras is unavailable on the preview schema",
+    () =>
+      reviewCustomerReportedCallback(preview, extrasReviewJob.access, {
+        callbackId: previewOpen.id,
+        ownerNotes: "Should not persist.",
+      }),
+    (error) => error.message === JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+  );
+  const reviewStillRecorded = await preview.jobCallback.findFirst({
+    where: { id: previewOpen.id },
+    select: JOB_CALLBACK_CORE_SELECT,
+  });
+  const reviewEventAfterFail = await preview.jobCallbackEvent.count({
+    where: { callbackId: previewOpen.id, eventType: "REVIEWED" },
+  });
+  check(
+    "Failed extras review does not abort into 25P02 or write a REVIEWED event",
+    reviewStillRecorded?.status === "RECORDED" && reviewEventAfterFail === 0,
+  );
+  const reviewedClean = await reviewCustomerReportedCallback(preview, extrasReviewJob.access, {
+    callbackId: previewOpen.id,
+  });
+  await expectThrow(
+    "OWNER outcome with extras is unavailable on the preview schema",
+    () =>
+      recordCustomerReportedCallbackOutcome(preview, extrasReviewJob.access, {
+        callbackId: previewOpen.id,
+        outcome: "RECORDED_ONLY",
+        ownerNotes: "Should not persist.",
+      }),
+    (error) => error.message === JOB_CALLBACK_UNAVAILABLE_MESSAGE,
+  );
+  const outcomeEventAfterFail = await preview.jobCallbackEvent.count({
+    where: { callbackId: previewOpen.id, eventType: "OUTCOME_RECORDED" },
+  });
+  check(
+    "Failed extras outcome leaves the callback under review with no outcome event",
+    reviewedClean.callback.status === "UNDER_REVIEW" && outcomeEventAfterFail === 0,
+  );
+} catch (error) {
+  console.error(error);
+  failed += 1;
+} finally {
+  if (previewSession) {
+    await previewSession.cleanup();
   }
 }
 

@@ -43,6 +43,7 @@ const {
   JOB_CALLBACK_OWNER_ONLY_MESSAGE,
   JOB_CALLBACK_OWNER_WORKFLOW_MESSAGE,
   JOB_CALLBACK_REVIEW_FIRST_MESSAGE,
+  JOB_CALLBACK_UNKNOWN_MESSAGE,
   JOB_CALLBACK_WARRANTY_DISCLAIMER,
   jobCallbackWriteAllowed,
 } = await import("@/lib/job-callback");
@@ -669,7 +670,7 @@ try {
   await expectThrow(
     "Alpha cannot review Beta callback",
     () => reviewCustomerReportedCallback(prisma, ownerA, { callbackId: betaRecorded.id }),
-    (error) => /not in the authorized business/i.test(error.message ?? ""),
+    (error) => error.message === JOB_CALLBACK_UNKNOWN_MESSAGE,
   );
 
   console.log("\nWARRANTY — display recorded terms only");

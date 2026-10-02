@@ -30,6 +30,7 @@ import {
   parsePortalProjectToken,
 } from "@/lib/job-callback";
 import {
+  JOB_CALLBACK_CORE_SELECT,
   countBusinessCommunications,
   countBusinessInvoices,
   countBusinessJobs,
@@ -122,6 +123,7 @@ export async function submitPortalJobCallback(
   }
   const category = parseJobCallbackCategory(input.category);
   const storedAssetIds = parseJobCallbackAttachmentIds(input.storedAssetIds);
+  const usedIssueExtensions = Boolean(category || storedAssetIds.length);
   const storedDescription = formatPortalCallbackDescription(description, preferredContact);
 
   try {
@@ -205,35 +207,29 @@ export async function submitPortalJobCallback(
           status: "RECORDED",
           recordedByMembershipId: owner.id,
         },
+        select: JOB_CALLBACK_CORE_SELECT,
       });
       if (category) {
-        try {
-          await tx.jobCallback.update({
-            where: { id: created.id },
-            data: { category },
-          });
-        } catch (error) {
-          if (!missingJobCallbackIssueSchema(error)) throw error;
-        }
+        await tx.jobCallback.update({
+          where: { id: created.id },
+          data: { category },
+          select: JOB_CALLBACK_CORE_SELECT,
+        });
       }
       if (documents.length > 0) {
-        try {
-          const byId = new Map(documents.map((row) => [row.id, row]));
-          await tx.jobCallbackAttachment.createMany({
-            data: storedAssetIds.map((id) => {
-              const document = byId.get(id);
-              return {
-                businessId: locked.businessId,
-                jobId: locked.id,
-                callbackId: created.id,
-                storedAssetId: id,
-                originalFilename: document?.originalFilename ?? "document",
-              };
-            }),
-          });
-        } catch (error) {
-          if (!missingJobCallbackIssueSchema(error)) throw error;
-        }
+        const byId = new Map(documents.map((row) => [row.id, row]));
+        await tx.jobCallbackAttachment.createMany({
+          data: storedAssetIds.map((id) => {
+            const document = byId.get(id);
+            return {
+              businessId: locked.businessId,
+              jobId: locked.id,
+              callbackId: created.id,
+              storedAssetId: id,
+              originalFilename: document?.originalFilename ?? "document",
+            };
+          }),
+        });
       }
       await tx.jobCallbackEvent.create({
         data: {
@@ -246,9 +242,9 @@ export async function submitPortalJobCallback(
           payload: JSON.stringify({
             source: "PORTAL",
             preferredContact,
-            category: category ?? null,
             descriptionLength: storedDescription.length,
-            attachmentCount: documents.length,
+            ...(category ? { category } : {}),
+            ...(documents.length > 0 ? { attachmentCount: documents.length } : {}),
           }),
         },
       });
@@ -281,7 +277,7 @@ export async function submitPortalJobCallback(
         };
       }
     }
-    if (missingJobCallbackIssueSchema(error)) {
+    if (usedIssueExtensions && missingJobCallbackIssueSchema(error)) {
       return { ok: false, error: JOB_CALLBACK_UNAVAILABLE_MESSAGE };
     }
     throw error;

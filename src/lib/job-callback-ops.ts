@@ -72,14 +72,17 @@ export const jobCallbackTestHooks: {
   afterJobLock?: (input: { jobId: string; kind: string }) => Promise<void> | void;
 } = {};
 
-function rethrowCallbackWriteError(error: unknown): never {
+function rethrowCallbackWriteError(
+  error: unknown,
+  usedIssueExtensions = false,
+): never {
   if (error instanceof JobCallbackError || error instanceof ForbiddenError) {
     throw error;
   }
   if (error instanceof Error && error.name === "ForbiddenError") {
     throw error;
   }
-  if (missingJobCallbackIssueSchema(error)) {
+  if (usedIssueExtensions && missingJobCallbackIssueSchema(error)) {
     throw new JobCallbackError(JOB_CALLBACK_UNAVAILABLE_MESSAGE);
   }
   throw error;
@@ -100,7 +103,7 @@ function eventPayload(input: Record<string, unknown>) {
   return JSON.stringify(input);
 }
 
-const JOB_CALLBACK_CORE_SELECT = {
+export const JOB_CALLBACK_CORE_SELECT = {
   id: true,
   businessId: true,
   jobId: true,
@@ -141,7 +144,7 @@ async function loadOwnedCallback(
     throw new JobCallbackError(JOB_CALLBACK_UNKNOWN_MESSAGE);
   }
   const row = await db.jobCallback.findFirst({
-    where: { id: callbackId },
+    where: { id: callbackId, ...access.scope },
     select: JOB_CALLBACK_CORE_SELECT,
   });
   if (!row) {
@@ -223,20 +226,15 @@ async function writeCallbackAttachments(
   },
 ) {
   if (input.documents.length === 0) return;
-  try {
-    await tx.jobCallbackAttachment.createMany({
-      data: input.documents.map((document) => ({
-        businessId: input.businessId,
-        jobId: input.jobId,
-        callbackId: input.callbackId,
-        storedAssetId: document.id,
-        originalFilename: document.originalFilename,
-      })),
-    });
-  } catch (error) {
-    if (missingJobCallbackIssueSchema(error)) return;
-    throw error;
-  }
+  await tx.jobCallbackAttachment.createMany({
+    data: input.documents.map((document) => ({
+      businessId: input.businessId,
+      jobId: input.jobId,
+      callbackId: input.callbackId,
+      storedAssetId: document.id,
+      originalFilename: document.originalFilename,
+    })),
+  });
 }
 
 async function applyCallbackIssueFields(
@@ -246,17 +244,13 @@ async function applyCallbackIssueFields(
 ) {
   const data: { category?: string; ownerNotes?: string } = {};
   if (fields.category) data.category = fields.category;
-  if (fields.ownerNotes !== undefined) data.ownerNotes = fields.ownerNotes;
+  if (fields.ownerNotes) data.ownerNotes = fields.ownerNotes;
   if (Object.keys(data).length === 0) return;
-  try {
-    await tx.jobCallback.update({
-      where: { id: callbackId },
-      data,
-    });
-  } catch (error) {
-    if (missingJobCallbackIssueSchema(error)) return;
-    throw error;
-  }
+  await tx.jobCallback.update({
+    where: { id: callbackId },
+    data,
+    select: JOB_CALLBACK_CORE_SELECT,
+  });
 }
 
 export async function countBusinessInvoices(db: Db, businessId: string) {
@@ -306,6 +300,7 @@ export async function recordCustomerReportedCallback(
   }
   const ownerNotes = parseJobCallbackOwnerNotes(input.ownerNotes);
   const storedAssetIds = parseJobCallbackAttachmentIds(input.storedAssetIds);
+  const usedIssueExtensions = Boolean(category || ownerNotes || storedAssetIds.length);
 
   try {
     return await db.$transaction(async (tx) => {
@@ -341,14 +336,19 @@ export async function recordCustomerReportedCallback(
           status: "RECORDED",
           recordedByMembershipId: actorMembershipId(access),
         },
+        select: JOB_CALLBACK_CORE_SELECT,
       });
-      await applyCallbackIssueFields(tx, created.id, { category, ownerNotes });
-      await writeCallbackAttachments(tx, {
-        businessId: access.businessId,
-        jobId: locked.id,
-        callbackId: created.id,
-        documents,
-      });
+      if (category || ownerNotes) {
+        await applyCallbackIssueFields(tx, created.id, { category, ownerNotes });
+      }
+      if (documents.length > 0) {
+        await writeCallbackAttachments(tx, {
+          businessId: access.businessId,
+          jobId: locked.id,
+          callbackId: created.id,
+          documents,
+        });
+      }
       await tx.jobCallbackEvent.create({
         data: {
           businessId: access.businessId,
@@ -359,9 +359,9 @@ export async function recordCustomerReportedCallback(
           actorMembershipId: actorMembershipId(access),
           payload: eventPayload({
             reportedVia,
-            category: category ?? null,
             descriptionLength: description.length,
-            attachmentCount: documents.length,
+            ...(category ? { category } : {}),
+            ...(documents.length > 0 ? { attachmentCount: documents.length } : {}),
           }),
         },
       });
@@ -374,7 +374,7 @@ export async function recordCustomerReportedCallback(
     ) {
       throw new JobCallbackError(JOB_CALLBACK_ALREADY_OPEN_MESSAGE);
     }
-    rethrowCallbackWriteError(error);
+    rethrowCallbackWriteError(error, usedIssueExtensions);
   }
 }
 
@@ -397,71 +397,77 @@ export async function reviewCustomerReportedCallback(
     throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
   }
 
-  const updated = await db.$transaction(async (tx) => {
-    await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "review" });
-    const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
-    if (!locked || locked.businessId !== access.businessId) {
-      throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
-    }
-    await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "review" });
-    const current = access.assertOwned(
-      await tx.jobCallback.findFirst({
-        where: { id: callback.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-    );
-    if (current.status === "UNDER_REVIEW") {
-      return { callback: current, unchanged: true as const };
-    }
-    if (current.status !== "RECORDED") {
-      throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
-    }
-
-    const now = new Date();
-    const write = await tx.jobCallback.updateMany({
-      where: { id: current.id, businessId: access.businessId, status: "RECORDED" },
-      data: {
-        status: "UNDER_REVIEW",
-        reviewedAt: now,
-        reviewedByMembershipId: actorMembershipId(access),
-      },
-    });
-    if (write.count !== 1) {
-      const latest = access.assertOwned(
-        await tx.jobCallback.findFirst({
-        where: { id: current.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-      );
-      if (latest.status === "UNDER_REVIEW") {
-        return { callback: latest, unchanged: true as const };
+  try {
+    return await db.$transaction(async (tx) => {
+      await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "review" });
+      const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
+      if (!locked || locked.businessId !== access.businessId) {
+        throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
       }
-      throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
-    }
-    await applyCallbackIssueFields(tx, current.id, { ownerNotes });
-    await tx.jobCallbackEvent.create({
-      data: {
-        businessId: access.businessId,
-        callbackId: current.id,
-        eventType: "REVIEWED",
-        fromStatus: "RECORDED",
-        toStatus: "UNDER_REVIEW",
-        actorMembershipId: actorMembershipId(access),
-        payload: eventPayload({ notesLength: ownerNotes.length }),
-      },
-    });
-    return {
-      callback: access.assertOwned(
+      await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "review" });
+      const current = access.assertOwned(
         await tx.jobCallback.findFirst({
-        where: { id: current.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-      ),
-      unchanged: false as const,
-    };
-  });
+          where: { id: callback.id, businessId: access.businessId },
+          select: JOB_CALLBACK_CORE_SELECT,
+        }),
+      );
+      if (current.status === "UNDER_REVIEW") {
+        return { callback: current, unchanged: true as const };
+      }
+      if (current.status !== "RECORDED") {
+        throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
+      }
 
-  return updated;
+      const now = new Date();
+      const write = await tx.jobCallback.updateMany({
+        where: { id: current.id, businessId: access.businessId, status: "RECORDED" },
+        data: {
+          status: "UNDER_REVIEW",
+          reviewedAt: now,
+          reviewedByMembershipId: actorMembershipId(access),
+        },
+      });
+      if (write.count !== 1) {
+        const latest = access.assertOwned(
+          await tx.jobCallback.findFirst({
+            where: { id: current.id, businessId: access.businessId },
+            select: JOB_CALLBACK_CORE_SELECT,
+          }),
+        );
+        if (latest.status === "UNDER_REVIEW") {
+          return { callback: latest, unchanged: true as const };
+        }
+        throw new JobCallbackError(JOB_CALLBACK_NOT_REVIEWABLE_MESSAGE);
+      }
+      if (ownerNotes) {
+        await applyCallbackIssueFields(tx, current.id, { ownerNotes });
+      }
+      await tx.jobCallbackEvent.create({
+        data: {
+          businessId: access.businessId,
+          callbackId: current.id,
+          eventType: "REVIEWED",
+          fromStatus: "RECORDED",
+          toStatus: "UNDER_REVIEW",
+          actorMembershipId: actorMembershipId(access),
+          ...(ownerNotes
+            ? { payload: eventPayload({ notesLength: ownerNotes.length }) }
+            : {}),
+        },
+      });
+      return {
+        callback: access.assertOwned(
+          await tx.jobCallback.findFirst({
+            where: { id: current.id, businessId: access.businessId },
+            select: JOB_CALLBACK_CORE_SELECT,
+          }),
+        ),
+        unchanged: false as const,
+      };
+    });
+  } catch (error) {
+    rethrowCallbackWriteError(error, Boolean(ownerNotes));
+  }
 }
 
 function sameRecordedOutcome(
@@ -504,85 +510,91 @@ export async function recordCustomerReportedCallbackOutcome(
     throw new JobCallbackError(JOB_CALLBACK_REVIEW_FIRST_MESSAGE);
   }
 
-  return db.$transaction(async (tx) => {
-    await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "outcome" });
-    const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
-    if (!locked || locked.businessId !== access.businessId) {
-      throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
-    }
-    await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "outcome" });
-    const current = access.assertOwned(
-      await tx.jobCallback.findFirst({
-        where: { id: callback.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-    );
-    if (current.status === "OUTCOME_RECORDED") {
-      if (sameRecordedOutcome(current, outcome, notes)) {
-        return { callback: current, unchanged: true as const };
+  try {
+    return await db.$transaction(async (tx) => {
+      await jobCallbackTestHooks.beforeJobLock?.({ jobId: callback.jobId, kind: "outcome" });
+      const locked = await lockTenantOwnedJob(tx, access.businessId, callback.jobId);
+      if (!locked || locked.businessId !== access.businessId) {
+        throw new JobCallbackError(JOB_CALLBACK_JOB_REQUIRED_MESSAGE);
       }
-      throw new JobCallbackError(JOB_CALLBACK_OUTCOME_ALREADY_RECORDED_MESSAGE);
-    }
-    if (current.status !== "UNDER_REVIEW") {
-      throw new JobCallbackError(JOB_CALLBACK_REVIEW_FIRST_MESSAGE);
-    }
-
-    const now = new Date();
-    const write = await tx.jobCallback.updateMany({
-      where: {
-        id: current.id,
-        businessId: access.businessId,
-        status: "UNDER_REVIEW",
-      },
-      data: {
-        status: "OUTCOME_RECORDED",
-        outcome,
-        outcomeNotes: notes || null,
-        outcomeAt: now,
-        outcomeByMembershipId: actorMembershipId(access),
-      },
-    });
-    if (write.count !== 1) {
-      const latest = access.assertOwned(
+      await jobCallbackTestHooks.afterJobLock?.({ jobId: locked.id, kind: "outcome" });
+      const current = access.assertOwned(
         await tx.jobCallback.findFirst({
-        where: { id: current.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-      );
-      if (
-        latest.status === "OUTCOME_RECORDED" &&
-        sameRecordedOutcome(latest, outcome, notes)
-      ) {
-        return { callback: latest, unchanged: true as const };
-      }
-      throw new JobCallbackError(JOB_CALLBACK_OUTCOME_ALREADY_RECORDED_MESSAGE);
-    }
-    await applyCallbackIssueFields(tx, current.id, { ownerNotes });
-    await tx.jobCallbackEvent.create({
-      data: {
-        businessId: access.businessId,
-        callbackId: current.id,
-        eventType: "OUTCOME_RECORDED",
-        fromStatus: "UNDER_REVIEW",
-        toStatus: "OUTCOME_RECORDED",
-        actorMembershipId: actorMembershipId(access),
-        payload: eventPayload({
-          outcome,
-          notesLength: notes.length,
-          ownerNotesLength: ownerNotes.length,
+          where: { id: callback.id, businessId: access.businessId },
+          select: JOB_CALLBACK_CORE_SELECT,
         }),
-      },
+      );
+      if (current.status === "OUTCOME_RECORDED") {
+        if (sameRecordedOutcome(current, outcome, notes)) {
+          return { callback: current, unchanged: true as const };
+        }
+        throw new JobCallbackError(JOB_CALLBACK_OUTCOME_ALREADY_RECORDED_MESSAGE);
+      }
+      if (current.status !== "UNDER_REVIEW") {
+        throw new JobCallbackError(JOB_CALLBACK_REVIEW_FIRST_MESSAGE);
+      }
+
+      const now = new Date();
+      const write = await tx.jobCallback.updateMany({
+        where: {
+          id: current.id,
+          businessId: access.businessId,
+          status: "UNDER_REVIEW",
+        },
+        data: {
+          status: "OUTCOME_RECORDED",
+          outcome,
+          outcomeNotes: notes || null,
+          outcomeAt: now,
+          outcomeByMembershipId: actorMembershipId(access),
+        },
+      });
+      if (write.count !== 1) {
+        const latest = access.assertOwned(
+          await tx.jobCallback.findFirst({
+            where: { id: current.id, businessId: access.businessId },
+            select: JOB_CALLBACK_CORE_SELECT,
+          }),
+        );
+        if (
+          latest.status === "OUTCOME_RECORDED" &&
+          sameRecordedOutcome(latest, outcome, notes)
+        ) {
+          return { callback: latest, unchanged: true as const };
+        }
+        throw new JobCallbackError(JOB_CALLBACK_OUTCOME_ALREADY_RECORDED_MESSAGE);
+      }
+      if (ownerNotes) {
+        await applyCallbackIssueFields(tx, current.id, { ownerNotes });
+      }
+      await tx.jobCallbackEvent.create({
+        data: {
+          businessId: access.businessId,
+          callbackId: current.id,
+          eventType: "OUTCOME_RECORDED",
+          fromStatus: "UNDER_REVIEW",
+          toStatus: "OUTCOME_RECORDED",
+          actorMembershipId: actorMembershipId(access),
+          payload: eventPayload({
+            outcome,
+            notesLength: notes.length,
+            ...(ownerNotes ? { ownerNotesLength: ownerNotes.length } : {}),
+          }),
+        },
+      });
+      return {
+        callback: access.assertOwned(
+          await tx.jobCallback.findFirst({
+            where: { id: current.id, businessId: access.businessId },
+            select: JOB_CALLBACK_CORE_SELECT,
+          }),
+        ),
+        unchanged: false as const,
+      };
     });
-    return {
-      callback: access.assertOwned(
-        await tx.jobCallback.findFirst({
-        where: { id: current.id, businessId: access.businessId },
-        select: JOB_CALLBACK_CORE_SELECT,
-      }),
-      ),
-      unchanged: false as const,
-    };
-  });
+  } catch (error) {
+    rethrowCallbackWriteError(error, Boolean(ownerNotes));
+  }
 }
 
 export function callbackIsOpen(status: string) {
