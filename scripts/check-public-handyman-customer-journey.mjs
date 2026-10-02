@@ -74,6 +74,9 @@ const { loadInvoiceDocumentForProjectToken } = await import(
 const { createFakePaymentProvider, FAKE_STRIPE_TEST_CHECKOUT_PATH } = await import(
   "@/lib/payments/fake"
 );
+const { recordInvoiceCheckoutSession } = await import(
+  "@/lib/payments/checkout-session-record"
+);
 const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
   "@/lib/public-website-paths"
 );
@@ -87,6 +90,9 @@ const { ProjectMilestonesList } = await import(
 );
 const { createElement } = await import("react");
 const { renderToStaticMarkup } = await import("react-dom/server");
+
+process.env.TZ = "UTC";
+process.env.PGTZ = "UTC";
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -116,6 +122,18 @@ function makeAccess(businessId, role, membershipId) {
       return assertBusinessRecord(record, businessId);
     },
   };
+}
+
+function exportedFunctionSource(src, name) {
+  const markers = [`export async function ${name}`, `export function ${name}`];
+  let start = -1;
+  for (const marker of markers) {
+    start = src.indexOf(marker);
+    if (start >= 0) break;
+  }
+  if (start < 0) return "";
+  const next = src.indexOf("\nexport ", start + 1);
+  return next < 0 ? src.slice(start) : src.slice(start, next);
 }
 
 function form(fields) {
@@ -181,7 +199,9 @@ check(
     payDeposit.includes("OnceSubmitButton") &&
     payDeposit.includes("if (pending)") &&
     onceSubmit.includes("setPending(true)") &&
-    onceSubmit.includes("window.setTimeout(() => setPending(true), 0)"),
+    onceSubmit.includes("window.setTimeout(() => setPending(true), 0)") &&
+    onceSubmit.includes('window.addEventListener("pageshow"') &&
+    onceSubmit.includes("event.persisted"),
 );
 check(
   "Fake Stripe checkout stays on the local test page",
@@ -214,16 +234,28 @@ check(
     testCheckoutLib.includes("applyVerifiedCheckoutPayment") &&
     testCheckoutLib.includes("isFakePaymentsAdapterEnabled()"),
 );
+const requireFakeTestCheckoutSrc = exportedFunctionSource(
+  testCheckoutLib,
+  "requireFakeTestCheckoutSession",
+);
+const fakeTestCheckoutAppUrlSrc = exportedFunctionSource(
+  testCheckoutLib,
+  "fakeTestCheckoutAppUrl",
+);
 check(
-  "Test-checkout complete and cancel require the fake adapter",
-  testCheckoutLib.includes("if (!isFakePaymentsAdapterEnabled()") &&
+  "requireFakeTestCheckoutSession 404s unless the fake adapter is on",
+  requireFakeTestCheckoutSrc.includes(
+    "if (!isFakePaymentsAdapterEnabled() || !isFakeCheckoutSessionId(sessionId))",
+  ) &&
+    requireFakeTestCheckoutSrc.includes("notFound()") &&
     read("src/app/payments/test-checkout/[sessionId]/complete/route.ts").includes(
       "completeFakeTestCheckout",
     ) &&
     read("src/app/payments/test-checkout/[sessionId]/cancel/route.ts").includes(
       "requireFakeTestCheckoutSession",
     ) &&
-    read("src/lib/payments/config.ts").includes('process.env.VERCEL_ENV === "production"'),
+    read("src/lib/payments/config.ts").includes('process.env.VERCEL_ENV === "production"') &&
+    !fakeTestCheckoutAppUrlSrc.includes("requireFakeTestCheckoutSession"),
 );
 check(
   "Mobile portal and estimate stay single-column, then widen",
@@ -259,7 +291,7 @@ await withDisposableTestDatabase(
     databaseUrl: baseUrl,
     namePrefix: "tbbt_public_handyman_journey",
     setProcessEnv: true,
-    timeoutMs: 180_000,
+    timeoutMs: 240_000,
   },
   async ({ prisma, testUrl }) => {
     const suffix = randomUUID().slice(0, 8);
@@ -822,46 +854,101 @@ await withDisposableTestDatabase(
     }
 
     const PORT = 43891;
-    const APP_URL = `http://127.0.0.1:${PORT}`;
-    async function waitForServer(timeoutMs) {
-      const deadline = Date.now() + timeoutMs;
+    const SAFETY_PORT = 43892;
+    async function startJourneyHttp(port, extraEnv = {}) {
+      const APP_URL = `http://127.0.0.1:${port}`;
+      const serverProcess = spawn(
+        "node_modules/.bin/next",
+        ["start", "--hostname", "127.0.0.1", "--port", String(port)],
+        {
+          cwd: repoRoot,
+          env: {
+            ...process.env,
+            TZ: "UTC",
+            PGTZ: "UTC",
+            DATABASE_URL: testUrl,
+            NODE_ENV: "production",
+            NEXT_PUBLIC_APP_URL: APP_URL,
+            TBBT_CUSTOMER_MESSAGING_ADAPTER: "fake",
+            TBBT_SAAS_BILLING_ADAPTER: "fake",
+            ...extraEnv,
+          },
+          stdio: "pipe",
+        },
+      );
+      let serverOutput = "";
+      serverProcess.stdout.on("data", (chunk) => (serverOutput += chunk.toString()));
+      serverProcess.stderr.on("data", (chunk) => (serverOutput += chunk.toString()));
+      const deadline = Date.now() + 30_000;
+      let up = false;
       while (Date.now() < deadline) {
         try {
           const res = await fetch(`${APP_URL}/sign-in`, { redirect: "manual" });
-          if (res.status < 500) return true;
+          if (res.status < 500) {
+            up = true;
+            break;
+          }
         } catch {
           /* not up yet */
         }
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
-      return false;
+      return {
+        APP_URL,
+        get serverOutput() {
+          return serverOutput;
+        },
+        up,
+        async stop() {
+          serverProcess.kill("SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        },
+      };
     }
 
-    const serverProcess = spawn(
-      "node_modules/.bin/next",
-      ["start", "--hostname", "127.0.0.1", "--port", String(PORT)],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          DATABASE_URL: testUrl,
-          NODE_ENV: "production",
-          TBBT_PAYMENTS_ADAPTER: "fake",
-          TBBT_FAKE_PAYMENT_READY_ACCOUNTS: accountId,
-          NEXT_PUBLIC_APP_URL: APP_URL,
-          TBBT_CUSTOMER_MESSAGING_ADAPTER: "fake",
-          TBBT_SAAS_BILLING_ADAPTER: "fake",
-        },
-        stdio: "pipe",
-      },
-    );
-    let serverOutput = "";
-    serverProcess.stdout.on("data", (chunk) => (serverOutput += chunk.toString()));
-    serverProcess.stderr.on("data", (chunk) => (serverOutput += chunk.toString()));
+    async function assertTestCheckoutCannotMarkPaid({
+      appUrl,
+      sessionId,
+      jobId,
+      businessId,
+      label,
+    }) {
+      const page = await fetch(
+        `${appUrl}${FAKE_STRIPE_TEST_CHECKOUT_PATH}/${sessionId}`,
+        { redirect: "manual" },
+      );
+      const complete = await fetch(
+        `${appUrl}${FAKE_STRIPE_TEST_CHECKOUT_PATH}/${sessionId}/complete`,
+        { method: "POST", redirect: "manual" },
+      );
+      const cancel = await fetch(
+        `${appUrl}${FAKE_STRIPE_TEST_CHECKOUT_PATH}/${sessionId}/cancel`,
+        { method: "POST", redirect: "manual" },
+      );
+      const invoice = await prisma.invoice.findFirst({
+        where: { jobId, businessId },
+        select: { status: true },
+      });
+      const payments = await prisma.payment.count({
+        where: { jobId, businessId },
+      });
+      check(`${label}: GET page is 404`, page.status === 404);
+      check(`${label}: POST complete is 404`, complete.status === 404);
+      check(`${label}: POST cancel is 404`, cancel.status === 404);
+      check(
+        `${label}: invoice stays SENT with 0 payments`,
+        invoice?.status === "SENT" && payments === 0,
+      );
+    }
+
+    const server = await startJourneyHttp(PORT, {
+      TBBT_PAYMENTS_ADAPTER: "fake",
+      TBBT_FAKE_PAYMENT_READY_ACCOUNTS: accountId,
+    });
+    const APP_URL = server.APP_URL;
     try {
-      const up = await waitForServer(30_000);
-      if (!up) {
-        console.error("Server did not start in time. Output so far:\n" + serverOutput);
+      if (!server.up) {
+        console.error("Server did not start in time. Output so far:\n" + server.serverOutput);
         failed += 1;
         return;
       }
@@ -1036,10 +1123,84 @@ await withDisposableTestDatabase(
       );
       check("Unknown test-checkout session is not found", staleCheckout.status === 404);
     } finally {
-      if (failed > 0 && serverOutput) {
-        console.error("next start output:\n" + serverOutput.slice(-4000));
+      if (failed > 0 && server.serverOutput) {
+        console.error("next start output:\n" + server.serverOutput.slice(-4000));
       }
-      serverProcess.kill("SIGTERM");
+      await server.stop();
+    }
+
+    console.log("\nHTTP — Test-checkout is 404 when the fake adapter is off");
+    const lockedJob = await prisma.job.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        propertyId: propertyA.id,
+        projectToken: randomUUID(),
+        status: "COMPLETED",
+      },
+    });
+    const lockedInvoice = await prisma.invoice.create({
+      data: {
+        businessId: businessA.id,
+        customerId: customerA.id,
+        jobId: lockedJob.id,
+        total: new Prisma.Decimal("66.00"),
+        status: "SENT",
+      },
+    });
+    const lockedSessionId = `cs_test_locked_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    await recordInvoiceCheckoutSession(prisma, {
+      businessId: businessA.id,
+      invoiceId: lockedInvoice.id,
+      stripeSessionId: lockedSessionId,
+      amountCents: 6600,
+    });
+
+    const adapterOff = await startJourneyHttp(SAFETY_PORT, {
+      TBBT_PAYMENTS_ADAPTER: "",
+    });
+    try {
+      if (!adapterOff.up) {
+        console.error(
+          "Adapter-off server did not start in time. Output so far:\n" + adapterOff.serverOutput,
+        );
+        failed += 1;
+        return;
+      }
+      await assertTestCheckoutCannotMarkPaid({
+        appUrl: adapterOff.APP_URL,
+        sessionId: lockedSessionId,
+        jobId: lockedJob.id,
+        businessId: businessA.id,
+        label: "Adapter unset",
+      });
+    } finally {
+      await adapterOff.stop();
+    }
+
+    const productionFake = await startJourneyHttp(SAFETY_PORT, {
+      TBBT_PAYMENTS_ADAPTER: "fake",
+      TBBT_FAKE_PAYMENT_READY_ACCOUNTS: accountId,
+      VERCEL_ENV: "production",
+    });
+    try {
+      if (!productionFake.up) {
+        console.error(
+          "Production-fake server did not start in time. Output so far:\n" +
+            productionFake.serverOutput,
+        );
+        failed += 1;
+        return;
+      }
+      await assertTestCheckoutCannotMarkPaid({
+        appUrl: productionFake.APP_URL,
+        sessionId: lockedSessionId,
+        jobId: lockedJob.id,
+        businessId: businessA.id,
+        label: "Fake adapter + VERCEL_ENV=production",
+      });
+    } finally {
+      await productionFake.stop();
     }
   },
 );

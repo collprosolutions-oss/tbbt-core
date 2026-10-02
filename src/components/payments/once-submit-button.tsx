@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 
 /**
  * Customer checkout / deposit submit. The first tap disables the button
@@ -15,6 +15,14 @@ export function OnceSubmitButton({
   ...props
 }: ComponentProps<"button"> & { pendingLabel: string }) {
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    function onPageShow(event: PageTransitionEvent) {
+      if (event.persisted) setPending(false);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   return (
     <button

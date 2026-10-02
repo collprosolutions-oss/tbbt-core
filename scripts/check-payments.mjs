@@ -728,7 +728,9 @@ try {
       providerSrc.includes("getFakePaymentProvider") &&
       testCheckoutSrc.includes("findInvoiceCheckoutSession") &&
       testCheckoutSrc.includes("applyVerifiedCheckoutPayment") &&
-      testCheckoutSrc.includes("isFakePaymentsAdapterEnabled()"),
+      testCheckoutSrc.includes(
+        "if (!isFakePaymentsAdapterEnabled() || !isFakeCheckoutSessionId(sessionId))",
+      ),
   );
   check(
     "Stripe adapter does not honor the local fake ready-account allowlist",
