@@ -106,9 +106,9 @@ check(
     dayRouteOpsSrc.includes("DAY_ROUTE_APPOINTMENT_CANCELLED_MESSAGE") &&
     dayRouteOpsSrc.includes("afterDayRouteAppointmentRead") &&
     dayRouteOpsSrc.includes("jobScheduleRefusalMessage") &&
-    dayRouteOpsSrc.indexOf("afterDayRouteAppointmentRead") <
-      dayRouteOpsSrc.indexOf("lockTenantOwnedJob") &&
-    dayRouteOpsSrc.indexOf("lockTenantOwnedJob") <
+    dayRouteOpsSrc.lastIndexOf("afterDayRouteAppointmentRead") <
+      dayRouteOpsSrc.lastIndexOf("lockTenantOwnedJob") &&
+    dayRouteOpsSrc.lastIndexOf("lockTenantOwnedJob") <
       dayRouteOpsSrc.lastIndexOf("jobScheduleRefusalMessage") &&
     jobPageSrc.includes("Cancelled jobs keep their saved appointment") &&
     jobsWorkspaceSrc.includes("A cancelled job cannot be assigned.") &&
