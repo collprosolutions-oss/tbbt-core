@@ -6,7 +6,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
-import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { formatISODate } from "@/lib/schedule";
 import { canWriteEquipmentRegister, requireEquipmentRead } from "@/lib/equipment/access";
 import {
@@ -118,7 +118,7 @@ export async function loadEquipmentRegister(
       db.expense.findMany({
         where: {
           businessId: access.businessId,
-          ...ACTIVE_EXPENSE_WHERE,
+          ...REPORTED_EXPENSE_WHERE,
           category: { in: Object.values(EQUIPMENT_PURCHASE_CATEGORIES) },
           equipmentItem: null,
         },

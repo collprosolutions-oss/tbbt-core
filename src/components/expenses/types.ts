@@ -38,6 +38,7 @@ export type ExpenseListItem = {
   customerName: string | null;
   hasReceipt: boolean;
   hasPrivateReceipt: boolean;
+  receiptStoredAssetId: string | null;
   receiptHref: string | null;
   legacyReceiptHref: string | null;
   reimbursable: boolean;
@@ -49,6 +50,7 @@ export type ExpenseListItem = {
   taxCategory: string | null;
   reviewStatus: string;
   reviewLabel: string;
+  updatedAtValue: string | null;
   recurring: boolean;
   recurringNote: string | null;
   mileageMilesValue: string;
@@ -101,6 +103,8 @@ export type ExpenseWorkspaceData = {
   filters: ExpenseFilterChip[];
   storageConfigured: boolean;
   canChangeReceipts: boolean;
+  canExtractReceipts: boolean;
+  aiExtractAvailable: boolean;
   defaultDate: string;
   page: number;
   totalPages: number;

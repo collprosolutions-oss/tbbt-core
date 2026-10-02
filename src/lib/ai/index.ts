@@ -42,4 +42,8 @@ export {
   isAiAttemptId,
   shouldRotateAiAttemptId,
 } from "@/lib/ai/types";
+export {
+  requestExpenseReceiptExtraction,
+  confirmExpenseReceiptDraft,
+} from "@/lib/expense-receipt-extract-ops";
 export type { WritingAction, AiRunResult, StructuredAiOutput, CitedFact } from "@/lib/ai/types";

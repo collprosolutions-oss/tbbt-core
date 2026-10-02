@@ -206,7 +206,7 @@ export async function loadPurchaseListBoard(
         include: {
           supplier: { select: { id: true, name: true, preferred: true, locationDescription: true } },
           material: { select: { id: true, name: true, lastKnownCost: true, unit: true } },
-          expense: { select: { id: true, amount: true, voidedAt: true } },
+          expense: { select: { id: true, amount: true, voidedAt: true, reviewStatus: true } },
         },
         orderBy: { createdAt: "asc" },
       },
@@ -843,9 +843,9 @@ export async function updatePurchaseOrderStatus(
 
 export function purchaseItemActualCostNumber(item: {
   actualCost: Prisma.Decimal | null;
-  expense: { amount: Prisma.Decimal; voidedAt: Date | null } | null;
+  expense: { amount: Prisma.Decimal; voidedAt: Date | null; reviewStatus?: string | null } | null;
 }) {
-  if (item.expense && !item.expense.voidedAt) {
+  if (item.expense && !item.expense.voidedAt && item.expense.reviewStatus !== "DRAFT") {
     return asMoneyNumber(item.expense.amount);
   }
   return asMoneyNumber(item.actualCost);

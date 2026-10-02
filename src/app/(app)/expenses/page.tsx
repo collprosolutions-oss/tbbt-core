@@ -16,10 +16,14 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { isAiProviderConnected } from "@/lib/ai/config";
 import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   ACTIVE_EXPENSE_WHERE,
+  EXPENSE_REVIEW_LABELS,
+  REPORTED_EXPENSE_WHERE,
+  isExpenseReviewStatus,
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABELS,
   REIMBURSEMENT_STATUS_LABELS,
@@ -160,7 +164,7 @@ export default async function ExpensesPage({
     ...jobWhere,
     ...vendorWhere,
   };
-  const summaryWhere = { ...access.scope, ...ACTIVE_EXPENSE_WHERE, ...rangeWhere };
+  const summaryWhere = { ...access.scope, ...REPORTED_EXPENSE_WHERE, ...rangeWhere };
 
   const horizonStart = startOfDay(now, timeZone);
   const horizonEnd = addDays(horizonStart, 30, timeZone);
@@ -228,14 +232,14 @@ export default async function ExpensesPage({
     prisma.expense.aggregate({
       where: {
         ...access.scope,
-        ...ACTIVE_EXPENSE_WHERE,
+        ...REPORTED_EXPENSE_WHERE,
         occurredOn: { gte: horizonStart, lt: horizonEnd },
       },
       _sum: { amount: true },
       _count: { _all: true },
     }),
     prisma.expense.findMany({
-      where: { ...access.scope, ...ACTIVE_EXPENSE_WHERE, vendor: { not: null } },
+      where: { ...access.scope, ...REPORTED_EXPENSE_WHERE, vendor: { not: null } },
       select: { vendor: true },
       distinct: ["vendor"],
       orderBy: { vendor: "asc" },
@@ -344,6 +348,7 @@ export default async function ExpensesPage({
       customerName: expense.customer?.name ?? null,
       hasPrivateReceipt: Boolean(expense.receiptStoredAssetId),
       hasReceipt: Boolean(expense.receiptStoredAssetId || expense.receiptUrl),
+      receiptStoredAssetId: expense.receiptStoredAssetId,
       receiptHref: expenseReceiptHref(expense.receiptStoredAssetId),
       legacyReceiptHref: !expense.receiptStoredAssetId
         ? legacyExpenseReceiptHref(expense.receiptUrl)
@@ -358,7 +363,10 @@ export default async function ExpensesPage({
       paymentMethodLabel: paymentMethodLabel(expense.paymentMethod),
       taxCategory: expense.taxCategory,
       reviewStatus: expense.reviewStatus,
-      reviewLabel: expense.reviewStatus,
+      reviewLabel: isExpenseReviewStatus(expense.reviewStatus)
+        ? EXPENSE_REVIEW_LABELS[expense.reviewStatus]
+        : expense.reviewStatus,
+      updatedAtValue: expense.updatedAt.toISOString(),
       recurring: expense.recurring,
       recurringNote: expense.recurringNote,
       mileageMilesValue: expense.mileageMiles != null ? String(asMoneyNumber(expense.mileageMiles)) : "",
@@ -466,6 +474,8 @@ export default async function ExpensesPage({
     filters,
     storageConfigured: isBusinessStorageConfigured(),
     canChangeReceipts: roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS),
+    canExtractReceipts: roleHasCapability(access.workspace.role, CAPABILITIES.MANAGE_EXPENSE_RECEIPTS),
+    aiExtractAvailable: isAiProviderConnected(),
     defaultDate: formatISODate(now, timeZone),
     page,
     totalPages,

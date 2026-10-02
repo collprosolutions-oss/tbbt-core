@@ -8,7 +8,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError } from "@/lib/authorization";
-import { ACTIVE_EXPENSE_WHERE } from "@/lib/expenses";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import {
   equipmentActorMembershipId,
   requireEquipmentWrite,
@@ -172,7 +172,7 @@ async function loadMatchingPurchaseExpense(
     where: {
       id,
       businessId: access.businessId,
-      ...ACTIVE_EXPENSE_WHERE,
+      ...REPORTED_EXPENSE_WHERE,
     },
     select: {
       id: true,

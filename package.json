@@ -75,6 +75,7 @@
     "test:expenses": "node --experimental-strip-types scripts/check-expenses.mjs",
     "test:equipment-register": "node --experimental-strip-types scripts/check-equipment-register.mjs",
     "test:expense-receipts": "node --experimental-strip-types scripts/check-expense-receipts.mjs",
+    "test:expense-receipt-extract": "node --experimental-strip-types scripts/check-expense-receipt-extract.mjs",
     "test:accounting-export": "node --experimental-strip-types scripts/check-accounting-export.mjs",
     "test:job-money-reconciliation": "node --experimental-strip-types scripts/check-job-money-reconciliation.mjs",
     "test:job-property-export": "node --experimental-strip-types scripts/check-job-property-export.mjs",

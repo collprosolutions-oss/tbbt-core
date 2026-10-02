@@ -395,7 +395,11 @@ export async function reviewExpense(
   input: { expenseId: string; reviewStatus: string },
 ) {
   await requireExpenseMutation(db, access);
-  if (!isExpenseReviewStatus(input.reviewStatus) || input.reviewStatus === "RECORDED") {
+  if (
+    !isExpenseReviewStatus(input.reviewStatus) ||
+    input.reviewStatus === "RECORDED" ||
+    input.reviewStatus === "DRAFT"
+  ) {
     throw new ExpenseError("Choose Approve or Flag.");
   }
   const reviewStatus: ExpenseReviewStatus = input.reviewStatus;
@@ -407,6 +411,9 @@ export async function reviewExpense(
       }),
     ),
   );
+  if (expense.reviewStatus === "DRAFT") {
+    throw new ExpenseError("Confirm this receipt draft before approving or flagging it.");
+  }
 
   return db.expense.update({
     where: { id: expense.id },

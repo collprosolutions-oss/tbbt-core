@@ -41,7 +41,7 @@ export async function linkPurchaseItemToExpense(
       include: {
         purchaseList: true,
         supplier: { select: { name: true } },
-        expense: { select: { id: true, amount: true, voidedAt: true, businessId: true } },
+        expense: { select: { id: true, amount: true, voidedAt: true, businessId: true, reviewStatus: true } },
       },
     }),
   );
@@ -80,6 +80,9 @@ export async function linkPurchaseItemToExpense(
     );
     if (expense.voidedAt) {
       throw new MaterialsError("A voided expense cannot be the actual material cost.");
+    }
+    if (expense.reviewStatus === "DRAFT") {
+      throw new MaterialsError("A draft expense cannot be the actual material cost until the owner confirms it.");
     }
     const already = await db.materialPurchaseListItem.findFirst({
       where: { expenseId: expense.id, businessId: access.businessId, NOT: { id: item.id } },
@@ -219,12 +222,14 @@ export async function listMaterialActualCostLinks(
       ...(input?.jobId ? { purchaseList: { jobId: input.jobId } } : {}),
     },
     include: {
-      expense: { select: { id: true, amount: true, voidedAt: true } },
+      expense: { select: { id: true, amount: true, voidedAt: true, reviewStatus: true } },
       purchaseList: { select: { jobId: true } },
     },
   });
   return rows.flatMap((row) => {
-    if (!row.expense || row.expense.voidedAt || !row.expenseId) return [];
+    if (!row.expense || row.expense.voidedAt || row.expense.reviewStatus === "DRAFT" || !row.expenseId) {
+      return [];
+    }
     return [
       {
         purchaseListItemId: row.id,
@@ -240,9 +245,9 @@ export async function listMaterialActualCostLinks(
 
 export function financialMaterialCost(item: {
   actualCost: { toString(): string } | null;
-  expense: { amount: { toString(): string }; voidedAt: Date | null } | null;
+  expense: { amount: { toString(): string }; voidedAt: Date | null; reviewStatus?: string | null } | null;
 }) {
-  if (item.expense && !item.expense.voidedAt) {
+  if (item.expense && !item.expense.voidedAt && item.expense.reviewStatus !== "DRAFT") {
     return { amount: asMoneyNumber(item.expense.amount), source: "EXPENSE" as const };
   }
   return { amount: null, source: "UNLINKED_OPERATIONAL" as const };

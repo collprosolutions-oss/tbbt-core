@@ -16,6 +16,7 @@ import {
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog";
 import { requireOperatingProductCapability } from "@/lib/product-entitlements";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
+import { REPORTED_EXPENSE_WHERE } from "@/lib/expenses";
 import { asNumber } from "@/lib/reports";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -127,7 +128,7 @@ export async function reviewRecurringExpensePattern(
   }
 
   const expenses = await db.expense.findMany({
-    where: { businessId: access.businessId },
+    where: { businessId: access.businessId, ...REPORTED_EXPENSE_WHERE },
     select: {
       id: true,
       description: true,

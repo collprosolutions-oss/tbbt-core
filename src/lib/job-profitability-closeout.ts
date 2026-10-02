@@ -84,6 +84,7 @@ export type CloseoutMaterialItem = {
     jobId: string | null;
     amount: number;
     voidedAt: Date | null;
+    reviewStatus?: string | null;
     category: string;
   } | null;
 };
@@ -350,12 +351,14 @@ function materialsExpected(
 }
 
 /**
- * Same rule as financialMaterialCost(): only a linked non-voided Expense
- * is counted financial material cost. Unlinked operational actualCost is
- * not recorded cost.
+ * Same rule as financialMaterialCost(): only a linked non-voided,
+ * non-draft Expense is counted financial material cost. Unlinked
+ * operational actualCost is not recorded cost.
  */
 function materialFinancialAmount(item: CloseoutMaterialItem): number | null {
-  if (item.expense && !item.expense.voidedAt) return item.expense.amount;
+  if (item.expense && !item.expense.voidedAt && item.expense.reviewStatus !== "DRAFT") {
+    return item.expense.amount;
+  }
   return null;
 }
 

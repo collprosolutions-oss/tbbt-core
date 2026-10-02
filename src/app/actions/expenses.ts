@@ -25,11 +25,36 @@ import {
   updateExpense,
   voidExpense,
 } from "@/lib/expense-ops";
+import {
+  confirmExpenseReceiptDraft,
+  requestExpenseReceiptExtraction,
+  receiptExtractErrorMessage,
+} from "@/lib/expense-receipt-extract-ops";
+import {
+  EXPENSE_RECEIPT_EXTRACT_UNAVAILABLE_MESSAGE,
+  centsToMoneyString,
+  type ExpenseReceiptExtractStatus,
+} from "@/lib/expense-receipt-extract";
 import { prisma } from "@/lib/prisma";
 
 export type ExpenseActionState = {
   error?: string;
   message?: string;
+};
+
+export type ExpenseExtractActionState = {
+  error?: string;
+  message?: string;
+  status?: ExpenseReceiptExtractStatus;
+  inProgress?: boolean;
+  vendor?: string | null;
+  occurredOn?: string | null;
+  amount?: string | null;
+  tax?: string | null;
+  expenseId?: string;
+  updatedAt?: string;
+  confirmable?: boolean;
+  lowConfidence?: boolean;
 };
 
 function readString(formData: FormData, key: string) {
@@ -258,5 +283,68 @@ export async function removeExpenseReceiptAction(
     return { message: "Receipt removed." };
   } catch (error) {
     return { error: expenseErrorMessage(error, "Could not remove that receipt.") };
+  }
+}
+
+export async function extractExpenseReceiptAction(
+  _prev: ExpenseExtractActionState,
+  formData: FormData,
+): Promise<ExpenseExtractActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await requestExpenseReceiptExtraction(prisma, access, {
+      storedAssetId: readString(formData, "storedAssetId"),
+      receiptText: readString(formData, "receiptText") || undefined,
+      attemptId: readString(formData, "attemptId"),
+    });
+    if (result.expenseId) revalidateExpenses();
+    if (result.status === "PENDING") {
+      return { message: result.message, status: result.status, inProgress: true };
+    }
+    if (result.status === "UNAVAILABLE") {
+      return {
+        message: result.message || EXPENSE_RECEIPT_EXTRACT_UNAVAILABLE_MESSAGE,
+        status: "UNAVAILABLE",
+      };
+    }
+    return {
+      message: result.message,
+      status: result.status,
+      vendor: result.fields.vendor,
+      occurredOn: result.fields.occurredOn,
+      amount: result.fields.amountCents != null ? centsToMoneyString(result.fields.amountCents) : null,
+      tax: result.fields.taxCents != null ? centsToMoneyString(result.fields.taxCents) : null,
+      expenseId: result.expenseId,
+      updatedAt: result.updatedAt,
+      confirmable: result.confirmable,
+      lowConfidence: result.lowConfidence,
+    };
+  } catch (error) {
+    return { error: receiptExtractErrorMessage(error, "That receipt could not be extracted.") };
+  }
+}
+
+export async function confirmExpenseReceiptDraftAction(
+  _prev: ExpenseActionState,
+  formData: FormData,
+): Promise<ExpenseActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const expenseId = readString(formData, "expenseId");
+    const expectedUpdatedAt = readString(formData, "expectedUpdatedAt");
+    const expectedAmount = readString(formData, "expectedAmount");
+    if (!expenseId) return { error: "That expense could not be found." };
+    if (!expectedUpdatedAt || !expectedAmount) {
+      return { error: "Retry that request from the form." };
+    }
+    const result = await confirmExpenseReceiptDraft(prisma, access, {
+      expenseId,
+      expectedUpdatedAt,
+      expectedAmount,
+    });
+    revalidateExpenses();
+    return { message: result.message };
+  } catch (error) {
+    return { error: receiptExtractErrorMessage(error, "That receipt draft could not be confirmed.") };
   }
 }
