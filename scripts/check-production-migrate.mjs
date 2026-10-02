@@ -2016,8 +2016,8 @@ check(
     esignSignatureRequestIdMigration.includes('ADD COLUMN IF NOT EXISTS "esignSendingClaimedAt"') &&
     esignSignatureRequestIdMigration.includes("Reserved timestamp 20261002193000") &&
     localNames.includes("20261002193000_esign_signature_request_id") &&
-    localNames.includes("20261002050000_job_project_link") &&
-    localNames.indexOf("20261002050000_job_project_link") <
+    localNames.includes("20261002192000_native_push_alerts") &&
+    localNames.indexOf("20261002192000_native_push_alerts") <
       localNames.indexOf("20261002193000_esign_signature_request_id"),
 );
 
