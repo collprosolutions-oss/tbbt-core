@@ -29,13 +29,7 @@ import {
 } from "@/lib/mail";
 import { buildTeamInviteEmail } from "@/lib/team-mail";
 import { prisma } from "@/lib/prisma";
-import {
-  MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
-  TimeCardError,
-  closeRunningTimeForMembershipInTransaction,
-  isTimeCardError,
-  timeCardErrorMessage,
-} from "@/lib/time-card-ops";
+import { writeTeamMemberActive } from "@/lib/team-member-active-ops";
 
 export type TeamActionState = {
   error?: string;
@@ -226,6 +220,9 @@ export async function addTeamMember(
  * src/app/actions/auth.ts applies the same filter, so this one flag is
  * the complete enforcement point -- there is no separate session
  * revocation step needed.
+ *
+ * The write itself lives in writeTeamMemberActive so deactivate uses
+ * the same reservation → Job → Membership lock order as assignment.
  */
 export async function setTeamMemberActive(
   _prev: TeamActionState,
@@ -253,40 +250,14 @@ export async function setTeamMemberActive(
     return { error: "That team member could not be found." };
   }
 
-  try {
-    await prisma.$transaction(async (tx) => {
-      // Same Membership row exactActiveMembershipHeld locks. Take it
-      // first so a worker start cannot open RUNNING time after this
-      // read and before active=false commits.
-      await tx.$queryRaw`
-        SELECT id FROM "Membership"
-        WHERE id = ${membership.id}
-          AND "businessId" = ${access.businessId}
-        FOR UPDATE
-      `;
-      if (!active) {
-        await closeRunningTimeForMembershipInTransaction(tx, {
-          businessId: access.businessId,
-          membershipId: membership.id,
-          actorMembershipId: access.workspace.membership.id,
-          reason: MEMBERSHIP_DEACTIVATED_TIME_CLOSED_REASON,
-        });
-      }
-      await tx.membership.update({
-        where: { id: membership.id },
-        data: { active },
-      });
-    });
-  } catch (error) {
-    if (isTimeCardError(error) || error instanceof TimeCardError) {
-      return {
-        error: timeCardErrorMessage(
-          error,
-          "That team member could not be updated while approved time is still running.",
-        ),
-      };
-    }
-    throw error;
+  const written = await writeTeamMemberActive(prisma, {
+    businessId: access.businessId,
+    membershipId: membership.id,
+    actorMembershipId: access.workspace.membership.id,
+    active,
+  });
+  if (written?.error) {
+    return { error: written.error };
   }
 
   revalidatePath("/team");

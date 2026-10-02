@@ -459,9 +459,9 @@ try {
   check(
     "Clock and completion writes recheck exact active membership in the write transaction",
     clockInFnSrc.includes("afterInitialRead") &&
-      clockInFnSrc.includes("exactActiveMembershipHeld") &&
+      clockInFnSrc.includes("lockJobThenActorMembership") &&
       clockOutFnSrc.includes("afterInitialRead") &&
-      clockOutFnSrc.includes("exactActiveMembershipHeld") &&
+      clockOutFnSrc.includes("lockJobThenActorMembership") &&
       completeInTxSrc.includes("exactActiveMembershipHeld") &&
       completeInTxSrc.indexOf("lockTenantOwnedJob") <
         completeInTxSrc.indexOf("exactActiveMembershipHeld"),
