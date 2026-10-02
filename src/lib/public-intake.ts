@@ -396,6 +396,12 @@ export type PublicIntakeTx = {
       select: { id: true; serviceCatalogItemId: true };
     }) => Promise<Array<{ id: string; serviceCatalogItemId: string | null }>>;
   };
+  serviceArea?: {
+    findFirst: (args: {
+      where: { id: string; businessId: string };
+      select: { id: true };
+    }) => Promise<{ id: string } | null>;
+  };
   serviceRequestPhoto: {
     createMany: (args: {
       data: Array<{
@@ -431,6 +437,23 @@ export function readIntakeCatalogIds(rawIds: string[]) {
   return rawIds
     .map((value) => value.trim())
     .filter((value) => value && value !== OTHER_SERVICE_VALUE);
+}
+
+async function liveMatchedServiceAreaId(
+  tx: PublicIntakeTx,
+  businessId: string,
+  areaId: string | null | undefined,
+): Promise<string | null> {
+  if (!areaId) return null;
+  try {
+    const row = await tx.serviceArea?.findFirst?.({
+      where: { id: areaId, businessId },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveIntakePublishedSnapshot(
@@ -977,7 +1000,11 @@ async function createPublicServiceRequestInner(
           landingPagePath,
           localPageSlug,
           serviceAreaQualification: qualification.qualification,
-          matchedServiceAreaId: qualification.matchedAreaId,
+          matchedServiceAreaId: await liveMatchedServiceAreaId(
+            tx,
+            business.id,
+            qualification.matchedAreaId,
+          ),
           tradeCode: requestTradeCode,
           intakeSchemaKey: intakeSchema.key,
           intakeSchemaVersion: intakeSchema.version,

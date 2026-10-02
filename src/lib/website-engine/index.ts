@@ -50,6 +50,11 @@ export {
   viewHomeMetadata,
 } from "@/lib/website-engine/seo";
 export {
+  buildPublicSitemap,
+  usesCollProSitemapFallback,
+  type PublicSitemapEntry,
+} from "@/lib/website-engine/sitemap";
+export {
   allocateUniqueServiceSlugs,
   allocateUnusedWebsiteSlug,
   ensureCatalogWebsiteSlugs,

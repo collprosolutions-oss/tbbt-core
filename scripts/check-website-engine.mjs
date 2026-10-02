@@ -54,6 +54,8 @@ const {
   snapshotServiceAreaRecords,
   publicServiceAreaFromView,
   absolutePublicSitemapUrl,
+  buildPublicSitemap,
+  usesCollProSitemapFallback,
   publishWebsiteFromForm,
   rollbackWebsiteFromForm,
   publishedLocalBusinessDescription,
@@ -67,6 +69,7 @@ const {
 } = await import("@/lib/website-engine");
 const { createPublicServiceRequest } = await import("@/lib/public-intake");
 const { publicCanonicalUrl } = await import("@/lib/public-site-seo");
+const { publicIndexableSitemapPaths } = await import("@/lib/public-site");
 const { DECORATIVE_WALL_PANELING_TITLE } = await import(
   "@/lib/estimate-calculators/decorative-wall-paneling"
 );
@@ -148,6 +151,7 @@ const hireHome = read("src/app/hire/[slug]/page.tsx");
 const collproHome = read("src/app/page.tsx");
 const serviceDetail = read("src/app/hire/[slug]/services/[serviceSlug]/page.tsx");
 const sitemap = read("src/app/sitemap.ts");
+const sitemapBuilder = read("src/lib/website-engine/sitemap.ts");
 const robotsSrc = read("src/app/robots.ts");
 const serviceAreaPage = read("src/app/hire/[slug]/service-area/page.tsx");
 const contactPage = read("src/app/hire/[slug]/contact/page.tsx");
@@ -216,12 +220,15 @@ check(
   "Service detail, sitemap, and export are wired",
   serviceDetail.includes("publicServiceFromView") &&
     serviceDetail.includes("application/ld+json") &&
-    sitemap.includes("publishedSitemapPaths") &&
-    sitemap.includes("publicIndexableSitemapPaths") &&
-    sitemap.includes("absolutePublicSitemapUrl") &&
-    sitemap.includes("isLocalPreviewDefaultHost") &&
+    sitemap.includes("buildPublicSitemap") &&
     sitemap.includes("force-dynamic") &&
     sitemap.includes('runtime = "nodejs"') &&
+    sitemapBuilder.includes("publishedSitemapPaths") &&
+    sitemapBuilder.includes("publicIndexableSitemapPaths") &&
+    sitemapBuilder.includes("absolutePublicSitemapUrl") &&
+    sitemapBuilder.includes("isCollProPublicHost") &&
+    sitemapBuilder.includes("isLocalPreviewDefaultHost") &&
+    sitemapBuilder.includes("usesCollProSitemapFallback") &&
     robotsSrc.includes("sitemap.xml") &&
     serviceAreaPage.includes("publicOriginForSlug") &&
     serviceAreaPage.includes("view.snapshot") &&
@@ -271,6 +278,28 @@ check(
     requestPage.includes("snapshotIntakeSchemasByTrade") &&
     requestPage.includes("loadPublicWebsiteIntakeOverlays") &&
     requestPage.includes("publicServiceAreaFromView"),
+);
+check(
+  "Hire form page reads the published snapshot, not live service areas",
+  /serviceArea=\{publicServiceAreaFromView\(view\)\}/.test(requestPage) &&
+    !/resolveBusinessServiceArea\s*\(/.test(requestPage) &&
+    !/listServiceAreas\s*\(/.test(requestPage) &&
+    !/serviceArea\.findMany/.test(requestPage),
+);
+check(
+  "Sitemap catch falls back to CollPro only for CollPro or local-preview hosts",
+  sitemapBuilder.includes("catch") &&
+    sitemapBuilder.includes("usesCollProSitemapFallback(host)") &&
+    sitemapBuilder.includes("isCollProPublicHost") &&
+    sitemapBuilder.includes("isLocalPreviewDefaultHost") &&
+    /return \[\]/.test(sitemapBuilder) &&
+    !sitemap.includes("COLLPRO_RENO_SLUGS"),
+);
+check(
+  "matchedServiceAreaId is written only when the live ServiceArea row exists",
+  intakeSrc.includes("liveMatchedServiceAreaId") &&
+    intakeSrc.includes("tx.serviceArea") &&
+    /matchedServiceAreaId:\s*await liveMatchedServiceAreaId/.test(intakeSrc),
 );
 check(
   "Publish/rollback forms send a stable client attempt id",
@@ -466,7 +495,7 @@ try {
       enabled: true,
     },
   });
-  await prisma.serviceArea.create({
+  const areaPostal = await prisma.serviceArea.create({
     data: {
       businessId: businessA.id,
       kind: "POSTAL",
@@ -643,6 +672,57 @@ try {
     "Published snapshot freezes postal service areas",
     afterFirst?.snapshot?.serviceAreas.some((row) => row.kind === "POSTAL" && row.postalCode === "89501") === true &&
       snapshotServiceAreaRecords(afterFirst.snapshot).some((row) => row.postalCode === "89501") === true,
+  );
+  const liveAreaSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Live Area Match",
+    email: `live-area-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0102",
+    address: "",
+    streetAddress: "12 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89431",
+    notes: "Live Reno row still exists.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+  });
+  const liveAreaRequest = liveAreaSubmit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: liveAreaSubmit.requestId } })
+    : null;
+  check(
+    "matchedServiceAreaId is kept when the live ServiceArea row still exists",
+    liveAreaSubmit.ok === true && liveAreaRequest?.matchedServiceAreaId === areaA.id,
+  );
+  await prisma.serviceArea.delete({ where: { id: areaPostal.id } });
+  const goneAreaSubmit = await createPublicServiceRequest(prisma, {
+    slug: businessA.slug,
+    name: "Gone Area Match",
+    email: `gone-area-${randomUUID().slice(0, 8)}@example.com`,
+    phone: "555-0103",
+    address: "",
+    streetAddress: "13 Snapshot St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Postal row was deleted after publish.",
+    catalogItemIds: [handyService.id],
+    includeOther: false,
+    otherDescription: "",
+    measurements: [{ catalogItemId: handyService.id, width: "40", height: "24", unit: "IN" }],
+    intakeAnswers: { frequency: "ONE_TIME" },
+  });
+  const goneAreaRequest = goneAreaSubmit.ok
+    ? await prisma.serviceRequest.findUnique({ where: { id: goneAreaSubmit.requestId } })
+    : null;
+  check(
+    "Submit still creates a request when the snapshotted ServiceArea row is gone",
+    goneAreaSubmit.ok === true &&
+      goneAreaRequest?.serviceAreaQualification === "IN_AREA" &&
+      goneAreaRequest?.matchedServiceAreaId == null,
   );
   const homeCanonical = snapshotPageMetadata({
     snapshot: afterFirst.snapshot,
@@ -1069,6 +1149,129 @@ try {
     "Sitemap host isolation keeps tenant A URLs on host A",
     sitemapA.every((url) => url.startsWith(`https://${hostAName}`)) &&
       !sitemapA.some((url) => url.includes(hostBVerifiedName) || url.includes(businessB.slug)),
+  );
+
+  const handlerSitemapA = await buildPublicSitemap(prisma, hostAName);
+  const handlerUrlsA = handlerSitemapA.map((entry) => entry.url);
+  check(
+    "Published-tenant sitemap handler lists only that tenant's absolute published pages",
+    handlerSitemapA.length > 0 &&
+      handlerUrlsA.every((url) => /^https:\/\//i.test(url) && url.startsWith(`https://${hostAName}`)) &&
+      handlerUrlsA.some((url) => url === `https://${hostAName}/`) &&
+      handlerUrlsA.some((url) => url.includes(`/hire/${businessA.slug}/in/reno/`)) &&
+      !handlerUrlsA.some((url) => url.includes("/in/sparks/")) &&
+      !handlerUrlsA.some((url) => url.includes(businessB.slug) || url.includes("collproreno") || url.startsWith("/")),
+  );
+
+  const tenantQ = await prisma.business.create({
+    data: { name: "Tenant Q Sitemap", slug: `q-we-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const userQ = await prisma.user.create({
+    data: { name: "Owner Q", email: `we-q-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const memQ = await prisma.membership.create({
+    data: { userId: userQ.id, businessId: tenantQ.id, role: "OWNER" },
+  });
+  const accessQ = makeAccess(tenantQ.id, memQ.id);
+  await activateBusinessTradeOp(prisma, accessQ, "HANDYMAN");
+  await prisma.serviceCatalogItem.create({
+    data: {
+      businessId: tenantQ.id,
+      name: "Q Fence Repair",
+      category: "Fencing",
+      tradeCode: "HANDYMAN",
+      active: true,
+    },
+  });
+  await prisma.serviceArea.create({
+    data: {
+      businessId: tenantQ.id,
+      kind: "CITY",
+      label: "Sparks",
+      city: "Sparks",
+      region: "NV",
+      enabled: true,
+    },
+  });
+  await publishWebsite(prisma, accessQ, { idempotencyKey: "pub-q-sitemap" });
+  const hostQName = `q-${randomUUID().slice(0, 8)}.example.test`;
+  await prisma.websiteHostBinding.create({
+    data: { businessId: tenantQ.id, hostname: hostQName, status: "VERIFIED" },
+  });
+  const publishedQ = await loadPublicWebsiteView(tenantQ.slug, prisma);
+  const qCurrent = await prisma.business.findUnique({
+    where: { id: tenantQ.id },
+    select: { publishedWebsiteId: true },
+  });
+  const qPublishRow = qCurrent?.publishedWebsiteId
+    ? await prisma.websitePublish.findFirst({
+        where: { id: qCurrent.publishedWebsiteId, businessId: tenantQ.id },
+      })
+    : null;
+  const qHealthy = await buildPublicSitemap(prisma, hostQName);
+  check(
+    "Tenant Q published sitemap stays on its verified host",
+    publishedQ?.source === "snapshot" &&
+      Boolean(qPublishRow?.id) &&
+      qHealthy.length > 0 &&
+      qHealthy.every((entry) => entry.url.startsWith(`https://${hostQName}`)) &&
+      qHealthy.some((entry) => entry.url.includes(`/hire/${tenantQ.slug}/in/sparks/`)) &&
+      !qHealthy.some((entry) => entry.url.includes("collproreno") || entry.url.includes(businessA.slug)),
+  );
+  if (qPublishRow?.id) {
+    await prisma.websitePublish.update({
+      where: { id: qPublishRow.id },
+      data: { snapshotJson: "{not-a-website-snapshot" },
+    });
+  }
+  const qCorrupt = await buildPublicSitemap(prisma, hostQName);
+  check(
+    "Tenant-host sitemap load failure returns [] and never CollPro URLs",
+    Boolean(qPublishRow?.id) &&
+      qCorrupt.length === 0 &&
+      !qCorrupt.some((entry) => /collproreno|\/hire\/collpro-reno/i.test(entry.url)),
+  );
+
+  const throwingSitemapDb = {
+    websiteHostBinding: {
+      findFirst: async () => {
+        throw new Error("forced sitemap load failure");
+      },
+    },
+    business: {
+      findUnique: async () => {
+        throw new Error("forced sitemap load failure");
+      },
+    },
+    websitePublish: {
+      findFirst: async () => {
+        throw new Error("forced sitemap load failure");
+      },
+    },
+  };
+  const collproFailed = await buildPublicSitemap(throwingSitemapDb, "www.collproreno.com");
+  const collproFailedUrls = collproFailed.map((entry) => entry.url);
+  const collproFallbackOrigin = authorizedPublicOrigin(
+    { kind: "collpro", slug: "collpro-reno" },
+    "www.collproreno.com",
+  );
+  const expectedCollproFallback = publicIndexableSitemapPaths("collpro-reno").map((path) =>
+    absolutePublicSitemapUrl("collpro-reno", path, collproFallbackOrigin),
+  );
+  check(
+    "CollPro host sitemap load failure still returns the CollPro fallback",
+    usesCollProSitemapFallback("www.collproreno.com") === true &&
+      usesCollProSitemapFallback(hostQName) === false &&
+      collproFailedUrls.length === expectedCollproFallback.length &&
+      expectedCollproFallback.every((url) => collproFailedUrls.includes(url)) &&
+      collproFailedUrls.every((url) => /^https?:\/\//i.test(url)) &&
+      !collproFailedUrls.some((url) => url.includes(hostQName) || url.includes(tenantQ.slug)),
+  );
+  const tenantThrow = await buildPublicSitemap(throwingSitemapDb, hostQName);
+  check(
+    "Tenant host plus throwing db returns [] rather than CollPro pages",
+    tenantThrow.length === 0 &&
+      !tenantThrow.some((entry) => /collproreno|\/hire\/collpro-reno/i.test(entry.url)),
   );
 
   const [c1, c2] = await Promise.all([
