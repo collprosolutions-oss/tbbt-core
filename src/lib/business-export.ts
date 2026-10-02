@@ -19,9 +19,15 @@ import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documen
 import { resolveStorageProvider } from "@/lib/business-storage/service";
 import type { StorageProvider } from "@/lib/business-storage/types";
 import {
+  BUSINESS_EXPORT_INCOMPLETE_PREFIX,
+  BUSINESS_EXPORT_INCOMPLETE_SUFFIX,
+  BUSINESS_EXPORT_TX_MAX_WAIT_MS,
+  BUSINESS_EXPORT_TX_TIMEOUT_MS,
   BusinessExportIncompleteError,
   asCsvRows,
+  businessExportTestHooks,
   collectPagedRows,
+  createExportByteBudget,
   exportPagedCsv,
   headersOf,
   resolveBusinessExportLimits,
@@ -38,18 +44,24 @@ export const BUSINESS_EXPORT_AUDIT_AREA = "data-export" as const;
 export const BUSINESS_EXPORT_AUDIT_KEY = "businessExport" as const;
 export {
   BUSINESS_EXPORT_INCOMPLETE_PREFIX,
+  BUSINESS_EXPORT_INCOMPLETE_SUFFIX,
   BUSINESS_EXPORT_MAX_DOCUMENTS,
   BUSINESS_EXPORT_MAX_DOCUMENT_BYTES,
   BUSINESS_EXPORT_MAX_ROWS_PER_COLLECTION,
   BUSINESS_EXPORT_MAX_ZIP_BYTES,
   BUSINESS_EXPORT_PAGE_SIZE,
+  BUSINESS_EXPORT_TX_MAX_WAIT_MS,
+  BUSINESS_EXPORT_TX_TIMEOUT_MS,
   BusinessExportIncompleteError,
+  businessExportTestHooks,
   collectPagedRows,
   exportPagedCsv,
   resolveBusinessExportLimits,
   streamPagedRows,
 } from "@/lib/business-export-paging";
 export type { BusinessExportLimits } from "@/lib/business-export-paging";
+
+type BusinessExportDb = PrismaClient | Prisma.TransactionClient;
 
 const SECRET_KEY_PATTERN =
   /(password|tokenhash|totpsecret|totppending|secret|apikey|credential)/i;
@@ -132,6 +144,30 @@ export async function buildBusinessExportZip(
   businessId: string,
   options?: BusinessExportOptions,
 ): Promise<BusinessExportResult> {
+  const limits = resolveBusinessExportLimits(options?.limits);
+  const isolation = businessExportTestHooks.isolationLevel ?? "RepeatableRead";
+  if (isolation === "none") {
+    return buildBusinessExportZipFromDb(prisma, businessId, options, limits);
+  }
+  return prisma.$transaction(
+    (tx) => buildBusinessExportZipFromDb(tx, businessId, options, limits),
+    {
+      isolationLevel:
+        isolation === "ReadCommitted"
+          ? Prisma.TransactionIsolationLevel.ReadCommitted
+          : Prisma.TransactionIsolationLevel.RepeatableRead,
+      maxWait: BUSINESS_EXPORT_TX_MAX_WAIT_MS,
+      timeout: BUSINESS_EXPORT_TX_TIMEOUT_MS,
+    },
+  );
+}
+
+async function buildBusinessExportZipFromDb(
+  prisma: BusinessExportDb,
+  businessId: string,
+  options: BusinessExportOptions | undefined,
+  limits: BusinessExportLimits,
+): Promise<BusinessExportResult> {
   const business = await prisma.business.findUnique({
     where: { id: businessId },
     select: {
@@ -158,8 +194,12 @@ export async function buildBusinessExportZip(
     throw new Error("Business not found.");
   }
 
-  const limits = resolveBusinessExportLimits(options?.limits);
-  const page = { collection: "", limits };
+  const budget = createExportByteBudget(limits.maxZipBytes);
+  const page = { collection: "", limits, budget };
+
+  function chargeFile(name: string, data: string | Buffer) {
+    budget.add(name, Buffer.byteLength(typeof data === "string" ? data : data));
+  }
 
   const customers = await collectPagedRows(
     (args) =>
@@ -788,6 +828,7 @@ export async function buildBusinessExportZip(
       });
       exportedDocumentBytes = nextDocumentBytes;
       exportedDocumentCount += 1;
+      budget.add("vault-documents", object.body.byteLength);
       documentManifest.push({
         vaultRecordId: record.id,
         storedAssetId: asset.id,
@@ -1176,6 +1217,7 @@ export async function buildBusinessExportZip(
 
   try {
     for (const file of files) {
+      chargeFile(file.name, file.data);
       zip.add(file);
     }
   } catch (error) {
@@ -1273,8 +1315,22 @@ export async function runBusinessExportDownload(
     if (error instanceof BusinessExportIncompleteError || error instanceof ZipStoreLimitError) {
       return { ok: false, status: 413, error: error.message };
     }
+    if (isExportSnapshotConflict(error)) {
+      return {
+        ok: false,
+        status: 413,
+        error: `${BUSINESS_EXPORT_INCOMPLETE_PREFIX} the RepeatableRead snapshot conflicted with a concurrent writer. ${BUSINESS_EXPORT_INCOMPLETE_SUFFIX}`,
+      };
+    }
     throw error;
   }
+}
+
+function isExportSnapshotConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? String(error.code) : "";
+  const message = "message" in error ? String(error.message) : "";
+  return code === "P2034" || code === "40001" || /could not serialize|serialization failure/i.test(message);
 }
 
 function safeJson(value: string | null) {

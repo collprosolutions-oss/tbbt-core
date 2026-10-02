@@ -26,6 +26,7 @@ const {
   BUSINESS_EXPORT_INCOMPLETE_PREFIX,
   BUSINESS_EXPORT_PAGE_SIZE,
   BusinessExportIncompleteError,
+  businessExportTestHooks,
   collectPagedRows,
   runBusinessExportDownload,
 } = await import("@/lib/business-export");
@@ -145,6 +146,18 @@ function zipFile(files, name) {
   return files.find((file) => file.name === name) ?? null;
 }
 
+function csvIds(bytes, fileName, idHeader = "id") {
+  const files = readZipStoreFiles(bytes);
+  return parseCsv(zipFile(files, fileName)?.data.toString("utf8") ?? "").records.map(
+    (row) => row[idHeader],
+  );
+}
+
+function resetExportHooks() {
+  delete businessExportTestHooks.afterPage;
+  delete businessExportTestHooks.isolationLevel;
+}
+
 function readZipCrcs(bytes) {
   const buf = Buffer.from(bytes);
   const entries = [];
@@ -199,13 +212,18 @@ check(
   pagingSrc.includes("export async function streamPagedRows") &&
     pagingSrc.includes("take: pageSize + 1") &&
     pagingSrc.includes("BusinessExportIncompleteError") &&
+    pagingSrc.includes("estimated retained export bytes") &&
     businessExportSrc.includes("collectPagedRows") &&
     businessExportSrc.includes("exportPagedCsv") &&
     businessExportSrc.includes("ZipStoreWriter") &&
     businessExportSrc.includes("status: 413") &&
+    businessExportSrc.includes("prisma.$transaction") &&
+    businessExportSrc.includes("Prisma.TransactionIsolationLevel.RepeatableRead") &&
+    businessExportSrc.includes("timeout: BUSINESS_EXPORT_TX_TIMEOUT_MS") &&
     !businessExportSrc.includes("not size-capped") &&
     !settingsSrc.includes("not size-capped") &&
     !settingsWorkspaceSrc.includes("not size-capped") &&
+    settingsSrc.includes("RepeatableRead snapshot") &&
     packageSrc.includes("test:business-export-large-tenant"),
 );
 check(
@@ -684,6 +702,269 @@ try {
       readZipStoreFiles(utf8Zip)[0]?.name === "café.csv",
   );
 
+  console.log("\nCONCURRENCY — second-connection cursor delete, churn, and occurredOn edit");
+  const writer = session.createClient();
+  const raceOwner = await prisma.user.create({
+    data: { name: "Race", email: `race-${randomUUID()}@example.com`, passwordHash: "hashed-race" },
+  });
+
+  async function makeRaceBusiness(slugPrefix) {
+    const business = await prisma.business.create({
+      data: {
+        name: slugPrefix,
+        slug: `${slugPrefix}-${randomUUID().slice(0, 8)}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: raceOwner.id, businessId: business.id, role: "OWNER" },
+    });
+    return { business, access: makeAccess(business.id, "OWNER", membership.id) };
+  }
+
+  const raceLimits = {
+    pageSize: 5,
+    maxRowsPerCollection: 5_000,
+    maxZipBytes: 8 * 1024 * 1024,
+    maxDocumentBytes: 1024 * 1024,
+    maxDocuments: 20,
+  };
+
+  async function seedRaceCustomers(businessId, count, namePrefix) {
+    await prisma.customer.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        businessId,
+        name: `${namePrefix} ${String(index + 1).padStart(2, "0")}`,
+      })),
+    });
+    return prisma.customer.findMany({
+      where: { businessId, name: { startsWith: `${namePrefix} ` } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+  }
+
+  const cursorRace = await makeRaceBusiness("cursor-race");
+  const cursorCustomers = await seedRaceCustomers(cursorRace.business.id, 23, "Cursor");
+  const cursorVictim = cursorCustomers[4];
+  let deletedCursorId = null;
+  businessExportTestHooks.afterPage = async ({ collection, pages, lastId }) => {
+    if (collection === "customers" && pages === 1 && lastId) {
+      deletedCursorId = lastId;
+      await writer.customer.delete({ where: { id: lastId } });
+    }
+  };
+  const cursorSnap = await runBusinessExportDownload(prisma, cursorRace.access, { limits: raceLimits });
+  const cursorIds = cursorSnap.ok ? csvIds(cursorSnap.body, "customers.csv") : [];
+  const cursorLive = await prisma.customer.count({ where: { businessId: cursorRace.business.id } });
+  check(
+    "Deleting the page-1 cursor from a second connection still exports every snapshot customer",
+    cursorSnap.ok === true &&
+      deletedCursorId === cursorVictim.id &&
+      cursorLive === 22 &&
+      cursorIds.length === 23 &&
+      cursorIds.filter((id, index) => cursorIds.indexOf(id) === index).length === 23 &&
+      cursorIds.includes(cursorVictim.id),
+  );
+  resetExportHooks();
+
+  const cursorBrokenBiz = await makeRaceBusiness("cursor-broken");
+  const brokenCustomers = await seedRaceCustomers(cursorBrokenBiz.business.id, 23, "BrokenCursor");
+  const brokenVictim = brokenCustomers[4];
+  businessExportTestHooks.isolationLevel = "none";
+  businessExportTestHooks.afterPage = async ({ collection, pages, lastId }) => {
+    if (collection === "customers" && pages === 1 && lastId) {
+      await writer.customer.delete({ where: { id: lastId } });
+    }
+  };
+  const cursorBroken = await runBusinessExportDownload(prisma, cursorBrokenBiz.access, {
+    limits: raceLimits,
+  });
+  const brokenIds = cursorBroken.ok ? csvIds(cursorBroken.body, "customers.csv") : [];
+  check(
+    "Reverting the RepeatableRead snapshot drops the remaining customers after a cursor delete",
+    cursorBroken.ok === true &&
+      brokenVictim.id === brokenCustomers[4].id &&
+      brokenIds.length === 5 &&
+      brokenIds.includes(brokenVictim.id) &&
+      !brokenIds.includes(brokenCustomers[5].id),
+  );
+  resetExportHooks();
+
+  const churnRace = await makeRaceBusiness("churn-race");
+  const churnCustomers = await seedRaceCustomers(churnRace.business.id, 80, "Snap");
+  const originalChurnIds = new Set(churnCustomers.map((row) => row.id));
+  let stopChurn = false;
+  let churnCycles = 0;
+  let churnStarted = false;
+  let churnTask = Promise.resolve();
+  async function churnOnce(businessId, originalIds) {
+    const victims = await writer.customer.findMany({
+      where: { businessId, id: { in: [...originalIds] } },
+      take: 4,
+      orderBy: { id: "desc" },
+    });
+    for (const victim of victims) {
+      await writer.customer.delete({ where: { id: victim.id } }).catch(() => undefined);
+    }
+    await writer.customer.createMany({
+      data: Array.from({ length: 4 }, () => ({
+        businessId,
+        name: `Inserted ${randomUUID()}`,
+      })),
+    });
+    churnCycles += 1;
+  }
+  businessExportTestHooks.afterPage = async ({ collection, pages }) => {
+    if (collection !== "customers" || pages !== 1 || churnStarted) return;
+    churnStarted = true;
+    await churnOnce(churnRace.business.id, originalChurnIds);
+    churnTask = (async () => {
+      while (!stopChurn) {
+        await churnOnce(churnRace.business.id, originalChurnIds);
+      }
+    })();
+  };
+  const churnSnap = await runBusinessExportDownload(prisma, churnRace.access, {
+    limits: { ...raceLimits, pageSize: 8 },
+  });
+  stopChurn = true;
+  await churnTask;
+  const churnIds = churnSnap.ok ? csvIds(churnSnap.body, "customers.csv") : [];
+  const insertedExported = churnIds.filter((id) => !originalChurnIds.has(id));
+  const missingOriginal = [...originalChurnIds].filter((id) => !churnIds.includes(id));
+  check(
+    "Sustained second-connection delete/insert does not skip or invent snapshot customers",
+    churnSnap.ok === true &&
+      churnCycles > 0 &&
+      churnIds.length === 80 &&
+      missingOriginal.length === 0 &&
+      insertedExported.length === 0 &&
+      new Set(churnIds).size === 80,
+  );
+  resetExportHooks();
+
+  const churnBrokenBiz = await makeRaceBusiness("churn-broken");
+  const churnBrokenCustomers = await seedRaceCustomers(churnBrokenBiz.business.id, 80, "Loose");
+  const brokenOriginal = new Set(churnBrokenCustomers.map((row) => row.id));
+  stopChurn = false;
+  churnCycles = 0;
+  churnStarted = false;
+  churnTask = Promise.resolve();
+  businessExportTestHooks.isolationLevel = "none";
+  businessExportTestHooks.afterPage = async ({ collection, pages }) => {
+    if (collection !== "customers" || pages !== 1 || churnStarted) return;
+    churnStarted = true;
+    await churnOnce(churnBrokenBiz.business.id, brokenOriginal);
+    churnTask = (async () => {
+      while (!stopChurn) {
+        await churnOnce(churnBrokenBiz.business.id, brokenOriginal);
+      }
+    })();
+  };
+  const churnBroken = await runBusinessExportDownload(prisma, churnBrokenBiz.access, {
+    limits: { ...raceLimits, pageSize: 8 },
+  });
+  stopChurn = true;
+  await churnTask;
+  const churnBrokenIds = churnBroken.ok ? csvIds(churnBroken.body, "customers.csv") : [];
+  const churnBrokenMissing = [...brokenOriginal].filter((id) => !churnBrokenIds.includes(id));
+  check(
+    "Reverting the snapshot loses original customers under the same delete/insert writer",
+    churnBroken.ok === true &&
+      churnCycles > 0 &&
+      (churnBrokenMissing.length > 0 || churnBrokenIds.length !== 80),
+  );
+  resetExportHooks();
+
+  const expenseRace = await makeRaceBusiness("expense-race");
+  const expenseRows = await prisma.expense.createManyAndReturn({
+    data: Array.from({ length: 8 }, (_, index) => ({
+      businessId: expenseRace.business.id,
+      occurredOn: new Date(Date.UTC(2026, 0, index + 1)),
+      description: `Expense ${index + 1}`,
+      amount: "5.00",
+      category: "MATERIALS",
+    })),
+  });
+  const orderedExpenses = [...expenseRows].sort((a, b) => {
+    const byDate = a.occurredOn.getTime() - b.occurredOn.getTime();
+    return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+  });
+  businessExportTestHooks.afterPage = async ({ collection, pages }) => {
+    if (collection !== "expenses" || pages !== 1) return;
+    await writer.expense.update({
+      where: { id: orderedExpenses[1].id },
+      data: { occurredOn: new Date(Date.UTC(2026, 0, 20)) },
+    });
+    await writer.expense.update({
+      where: { id: orderedExpenses[6].id },
+      data: { occurredOn: new Date(Date.UTC(2025, 11, 1)) },
+    });
+  };
+  const expenseSnap = await runBusinessExportDownload(prisma, expenseRace.access, {
+    limits: { ...raceLimits, pageSize: 3 },
+  });
+  const expenseIds = expenseSnap.ok ? csvIds(expenseSnap.body, "expenses.csv", "Expense ID") : [];
+  check(
+    "Editing expense occurredOn mid-export does not duplicate or skip snapshot expenses",
+    expenseSnap.ok === true &&
+      expenseIds.length === 8 &&
+      new Set(expenseIds).size === 8 &&
+      orderedExpenses.every((row) => expenseIds.includes(row.id)),
+  );
+  resetExportHooks();
+
+  const expenseBrokenBiz = await makeRaceBusiness("expense-broken");
+  const expenseBrokenRows = await prisma.expense.createManyAndReturn({
+    data: Array.from({ length: 8 }, (_, index) => ({
+      businessId: expenseBrokenBiz.business.id,
+      occurredOn: new Date(Date.UTC(2026, 0, index + 1)),
+      description: `Loose expense ${index + 1}`,
+      amount: "5.00",
+      category: "MATERIALS",
+    })),
+  });
+  const orderedBrokenExpenses = [...expenseBrokenRows].sort((a, b) => {
+    const byDate = a.occurredOn.getTime() - b.occurredOn.getTime();
+    return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+  });
+  businessExportTestHooks.isolationLevel = "none";
+  businessExportTestHooks.afterPage = async ({ collection, pages }) => {
+    if (collection !== "expenses" || pages !== 1) return;
+    await writer.expense.update({
+      where: { id: orderedBrokenExpenses[1].id },
+      data: { occurredOn: new Date(Date.UTC(2026, 0, 20)) },
+    });
+    await writer.expense.update({
+      where: { id: orderedBrokenExpenses[6].id },
+      data: { occurredOn: new Date(Date.UTC(2025, 11, 1)) },
+    });
+  };
+  const expenseBroken = await runBusinessExportDownload(prisma, expenseBrokenBiz.access, {
+    limits: { ...raceLimits, pageSize: 3 },
+  });
+  const expenseBrokenIds = expenseBroken.ok
+    ? csvIds(expenseBroken.body, "expenses.csv", "Expense ID")
+    : [];
+  const expenseDup = expenseBrokenIds.filter((id) => id === orderedBrokenExpenses[1].id).length;
+  check(
+    "Reverting the snapshot duplicates or skips an expense after occurredOn is edited",
+    expenseBroken.ok === true &&
+      (expenseDup !== 1 || !expenseBrokenIds.includes(orderedBrokenExpenses[6].id)),
+  );
+  resetExportHooks();
+
+  const auditsAfterRaces = await prisma.settingsAuditLog.count({
+    where: {
+      settingKey: BUSINESS_EXPORT_AUDIT_KEY,
+      businessId: { in: [cursorRace.business.id, churnRace.business.id, expenseRace.business.id] },
+    },
+  });
+  check(
+    "Successful snapshot races still write one audit row each and never write one for a 413",
+    auditsAfterRaces === 3,
+  );
+
   console.log("\nMUTATION — a silent slice would hide overflow");
   const mutatedPager = pagingSrc.replace(
     "if (nextCount > maxRows || (hasMore && nextCount === maxRows)) {",
@@ -694,11 +975,22 @@ try {
     mutatedPager.includes("if (false && (nextCount > maxRows") &&
       !mutatedPager.includes("if (nextCount > maxRows || (hasMore && nextCount === maxRows)) {"),
   );
+  const mutatedSnapshot = businessExportSrc.replace(
+    "Prisma.TransactionIsolationLevel.RepeatableRead",
+    "Prisma.TransactionIsolationLevel.ReadCommitted",
+  );
+  check(
+    "Removing RepeatableRead is a detectable source mutation",
+    !mutatedSnapshot.includes("Prisma.TransactionIsolationLevel.RepeatableRead") &&
+      businessExportSrc.includes("isolation === \"none\"") &&
+      businessExportSrc.includes("prisma.$transaction"),
+  );
 } catch (error) {
   failures += 1;
   console.error("FAIL - unexpected large-tenant export test error");
   console.error(error);
 } finally {
+  resetExportHooks();
   await session.cleanup();
 }
 

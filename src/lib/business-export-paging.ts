@@ -12,6 +12,22 @@ export const BUSINESS_EXPORT_MAX_ROWS_PER_COLLECTION = 50_000;
 export const BUSINESS_EXPORT_MAX_ZIP_BYTES = 256 * 1024 * 1024;
 export const BUSINESS_EXPORT_MAX_DOCUMENT_BYTES = 128 * 1024 * 1024;
 export const BUSINESS_EXPORT_MAX_DOCUMENTS = 2_000;
+export const BUSINESS_EXPORT_TX_TIMEOUT_MS = 120_000;
+export const BUSINESS_EXPORT_TX_MAX_WAIT_MS = 10_000;
+
+export type BusinessExportIsolationLevel = "RepeatableRead" | "ReadCommitted" | "none";
+
+export type BusinessExportPageHookInfo = {
+  collection: string;
+  pages: number;
+  count: number;
+  lastId: string | null;
+};
+
+export const businessExportTestHooks: {
+  afterPage?: (info: BusinessExportPageHookInfo) => void | Promise<void>;
+  isolationLevel?: BusinessExportIsolationLevel;
+} = {};
 
 export const BUSINESS_EXPORT_INCOMPLETE_PREFIX =
   "Business export cannot complete safely:";
@@ -46,6 +62,42 @@ export function defaultBusinessExportLimits(): BusinessExportLimits {
     maxZipBytes: BUSINESS_EXPORT_MAX_ZIP_BYTES,
     maxDocumentBytes: BUSINESS_EXPORT_MAX_DOCUMENT_BYTES,
     maxDocuments: BUSINESS_EXPORT_MAX_DOCUMENTS,
+  };
+}
+
+export type ExportByteBudget = {
+  readonly used: number;
+  readonly maxBytes: number;
+  add(collection: string, bytes: number): void;
+};
+
+export function estimateExportRowBytes(row: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(row), "utf8");
+  } catch {
+    return 512;
+  }
+}
+
+export function createExportByteBudget(maxBytes: number): ExportByteBudget {
+  let used = 0;
+  return {
+    get used() {
+      return used;
+    },
+    get maxBytes() {
+      return maxBytes;
+    },
+    add(collection: string, bytes: number) {
+      const next = used + Math.max(0, bytes);
+      if (next > maxBytes) {
+        throw new BusinessExportIncompleteError(
+          collection,
+          `${collection} would exceed ${maxBytes} estimated retained export bytes.`,
+        );
+      }
+      used = next;
+    },
   };
 }
 
@@ -102,6 +154,8 @@ export async function streamPagedRows<T extends { id: string }>(
     collection: string;
     limits: BusinessExportLimits;
     consume: (rows: readonly T[]) => void | Promise<void>;
+    budget?: ExportByteBudget;
+    retain?: "rows" | "none";
   },
 ): Promise<StreamPagedRowsResult> {
   assertSafeLimits(options.collection, options.limits);
@@ -127,9 +181,22 @@ export async function streamPagedRows<T extends { id: string }>(
       );
     }
     if (rows.length > 0) {
+      if (options.budget && options.retain === "rows") {
+        for (const row of rows) {
+          options.budget.add(options.collection, estimateExportRowBytes(row));
+        }
+      }
       await options.consume(rows);
     }
     count = nextCount;
+    if (businessExportTestHooks.afterPage) {
+      await businessExportTestHooks.afterPage({
+        collection: options.collection,
+        pages,
+        count,
+        lastId: rows[rows.length - 1]?.id ?? null,
+      });
+    }
     if (!hasMore) {
       return { count, pages };
     }
@@ -149,12 +216,15 @@ export async function collectPagedRows<T extends { id: string }>(
   options: {
     collection: string;
     limits: BusinessExportLimits;
+    budget?: ExportByteBudget;
   },
 ): Promise<T[]> {
   const items: T[] = [];
   await streamPagedRows(findMany, {
     collection: options.collection,
     limits: options.limits,
+    budget: options.budget,
+    retain: "rows",
     consume: (rows) => {
       items.push(...rows);
     },
@@ -178,6 +248,7 @@ export async function exportPagedCsv<T extends { id: string }>(
     limits: BusinessExportLimits;
     headers?: string[];
     mapRow?: (row: T) => Record<string, unknown>;
+    budget?: ExportByteBudget;
   },
 ): Promise<string> {
   let headers = options.headers;
@@ -185,6 +256,7 @@ export async function exportPagedCsv<T extends { id: string }>(
   await streamPagedRows(findMany, {
     collection: options.collection,
     limits: options.limits,
+    retain: "none",
     consume: (rows) => {
       const mapped = options.mapRow
         ? rows.map(options.mapRow)
@@ -192,8 +264,14 @@ export async function exportPagedCsv<T extends { id: string }>(
       if (!headers) {
         headers = headersOf(mapped);
       }
-      chunks.push(csvBody(headers, mapped));
+      const body = csvBody(headers, mapped);
+      options.budget?.add(options.collection, Buffer.byteLength(body, "utf8"));
+      chunks.push(body);
     },
   });
-  return `${csvHeaderLine(headers ?? ["id"])}${chunks.join("")}`;
+  const csv = `${csvHeaderLine(headers ?? ["id"])}${chunks.join("")}`;
+  if (chunks.length === 0) {
+    options.budget?.add(options.collection, Buffer.byteLength(csv, "utf8"));
+  }
+  return csv;
 }
