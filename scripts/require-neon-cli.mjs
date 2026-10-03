@@ -2,9 +2,10 @@
  * Operator / CI gate: Neon CLI must be 4.9.0+ before any hosted
  * `neon branches` restore or verify command.
  *
- * Fail-closed on a missing binary, unreadable output, or older version.
- * Set NEON_CLI_VERSION_TEXT to inject `neon --version` text in tests
- * (does not spawn neon).
+ * Fail-closed on a missing binary, non-zero `neon --version`,
+ * unreadable stdout, or an older / 4.9.0-prerelease version.
+ * Parses stdout only. Stderr is ignored. There is no env override
+ * that skips the live binary.
  *
  *   node scripts/require-neon-cli.mjs
  */
@@ -12,36 +13,29 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  evaluateNeonCliVersion,
+  evaluateNeonCliVersionProcess,
   neonCliVersionGuardMessage,
 } from "./lib/neon-cli-version.mjs";
 
-export function readNeonCliVersionText({
-  env = process.env,
+export function readNeonCliVersionProcess({
   spawn = spawnSync,
+  env = process.env,
 } = {}) {
-  if (Object.prototype.hasOwnProperty.call(env, "NEON_CLI_VERSION_TEXT")) {
-    return { text: env.NEON_CLI_VERSION_TEXT ?? "", source: "env" };
-  }
   const result = spawn("neon", ["--version"], {
     encoding: "utf8",
     timeout: 15_000,
+    env,
   });
-  if (result.error) {
-    if (result.error.code === "ENOENT") {
-      return { text: "", source: "missing-binary" };
-    }
-    return { text: result.error.message ?? "", source: "spawn-error" };
-  }
   return {
-    text: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
-    source: "neon --version",
+    error: result.error ?? null,
     status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
   };
 }
 
-export function assertNeonCliVersion(text) {
-  const decision = evaluateNeonCliVersion(text);
+export function assertNeonCliVersionProcess(processResult) {
+  const decision = evaluateNeonCliVersionProcess(processResult);
   if (!decision.ok) {
     const error = new Error(neonCliVersionGuardMessage(decision));
     error.name = "NeonCliVersionRefusedError";
@@ -51,8 +45,8 @@ export function assertNeonCliVersion(text) {
 }
 
 function main() {
-  const read = readNeonCliVersionText();
-  const decision = evaluateNeonCliVersion(read.text);
+  const processResult = readNeonCliVersionProcess();
+  const decision = evaluateNeonCliVersionProcess(processResult);
   if (!decision.ok) {
     console.error(neonCliVersionGuardMessage(decision));
     process.exit(1);

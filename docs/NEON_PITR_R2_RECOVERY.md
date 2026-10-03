@@ -136,10 +136,12 @@ orphaned objects.
 2. **Confirm** the Free history window still covers `T`. On Free,
    anything older than 6 hours / 1 GB is unrecoverable. Do not lengthen
    retention.
-3. **Require Neon CLI 4.9.0+** (`neon --version` or
-   `node scripts/require-neon-cli.mjs`) before any `neon branches`
-   restore or verify command. `--no-secrets` needs 4.9.0. If the CLI is
-   missing or older, upgrade first and retry; stop otherwise.
+3. **Require Neon CLI 4.9.0+** with
+   `node scripts/require-neon-cli.mjs` before any `neon` command.
+   `--no-secrets` needs 4.9.0. A bare `neon --version` is not the gate.
+   If the CLI is missing or older, upgrade first and retry; stop
+   otherwise. Every pasteable block below aborts when the script exits
+   non-zero.
 4. **Discover `$ROOT_BRANCH`**: the project's default root from
    `neon branches list --output json` (`.default == true`). Do not
    assume the name `production`.
@@ -184,22 +186,25 @@ still lacks write rights. It is the substitute for a live restore.
 
 ### 4.2 When Neon read is granted
 
-Run the version gate **before** any `neon branches` restore or verify
-command. `--no-secrets` needs Neon CLI **4.9.0** or newer.
-
-```bash
-neon --version
-node scripts/require-neon-cli.mjs
-```
-
-`require-neon-cli.mjs` fail-closes on a missing binary, unreadable
-output, or a version older than 4.9.0 (including `4.9.0` pre-releases
-such as `4.9.0-beta.1`). Prefixed strings such as `v4.9.0` or
-`neon 4.10.0` are accepted when the numeric version meets the floor.
-If the CLI is missing or older: **upgrade first, then retry. Stop
+Run `node scripts/require-neon-cli.mjs` **before** any `neon` command.
+`--no-secrets` needs Neon CLI **4.9.0** or newer. The script fail-closes
+on a missing binary, a non-zero `neon --version`, unreadable stdout, or
+a version older than 4.9.0 (including `4.9.0` pre-releases such as
+`4.9.0-beta.1`). A single anchored stdout line such as `v4.9.0` or
+`neon 4.10.0` is accepted when the numeric version meets the floor.
+Banner lines, stderr, and path-prefixed strings are not versions. If
+the CLI is missing or older: **upgrade first, then retry. Stop
 otherwise.** Do not continue to `neon branches create` / `restore`.
 
+Every pasteable block starts with the guard and aborts the shell when
+it fails (`return` inside a function, `exit` otherwise):
+
 ```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+```
+
+```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
 # Replace PROJECT with the decrypted database_NEON_PROJECT_ID or the
 # Console id for empty-cherry-05140338. Do not paste secrets into git.
 # Table output omits history_retention_seconds — use JSON.
@@ -211,6 +216,7 @@ neon projects get "$PROJECT" --output json
 neon branches list --project-id "$PROJECT" --output json
 ROOT_BRANCH=$(neon branches list --project-id "$PROJECT" --output json \
   | jq -r '[.[] | select(.default == true) | .name] | unique | .[]')
+: "${ROOT_BRANCH:?discover the project's default root first}"
 # Exactly one default root. Do not assume the name production.
 # --parent "$T" forks that default root at T. If ROOT_BRANCH is empty
 # or more than one line, stop and do not guess.
@@ -224,17 +230,14 @@ A bare `neon connection-string` always prints the role password
 that command in `$(…)` / command substitution — that puts the password
 on the next argv and in shell history.
 
-To open the **verify** branch without printing secrets into history or
-logs, let the CLI start psql (no `$(…)` wrap, no `set -x`, no paste
-into tickets):
+Time Travel against the default root (only after `$ROOT_BRANCH` is set).
+An omitted or empty branch argument means Neon’s **default** root —
+never run `connection-string` without a non-empty branch:
 
 ```bash
-neon connection-string "$VERIFY_NAME" --project-id "$PROJECT" --psql
-```
-
-Time Travel against the default root (only after `$ROOT_BRANCH` is set):
-
-```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+: "${ROOT_BRANCH:?discover the project's default root first}"
+: "${T:?record incident time T first}"
 neon connection-string "${ROOT_BRANCH}@${T}" --project-id "$PROJECT" --psql
 ```
 
@@ -252,8 +255,21 @@ separate timestamp option — an ignored unknown flag would fork HEAD.
 (documented on `neon projects create`, CLI 4.9.0+). Pass it on create
 so `connection_uris` are not printed.
 
+Define and validate `VERIFY_NAME` **before** any command that uses it.
+It must be non-empty, not equal to `$ROOT_BRANCH`, and must not be the
+project default. An empty `connection-string` branch argument targets
+the default root.
+
 ```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+: "${ROOT_BRANCH:?discover the project's default root first}"
+: "${T:?record incident time T first}"
 VERIFY_NAME="tbbt-pitr-verify-$(date -u +%Y%m%dT%H%M%SZ)"
+: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
+if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
+  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
+  exit 1
+fi
 neon branches create \
   --name "$VERIFY_NAME" \
   --project-id "$PROJECT" \
@@ -262,28 +278,53 @@ neon branches create \
 ```
 
 Before any verification SQL, confirm the branch was cut at `T`, not
-HEAD. Table output for `branches get` does not show
-`parent_timestamp` — use JSON, and print only those fields (create
-JSON can include passwords):
+HEAD, and is **not** the default root. Table output for `branches get`
+does not show `parent_timestamp` — use JSON, and print only those
+fields (create JSON can include passwords):
 
 ```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
+: "${ROOT_BRANCH:?}"
+if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
+  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
+  exit 1
+fi
 neon branches get "$VERIFY_NAME" --project-id "$PROJECT" --output json \
-  | jq '{id, name, parent_id, parent_timestamp, parent_lsn}'
+  | jq '{id, name, parent_id, parent_timestamp, parent_lsn, default}'
 ```
 
-`parent_timestamp` must equal `T` (same RFC 3339 instant). If it is
-missing, null, or a later/HEAD time, delete the branch and stop. Do
+`parent_timestamp` must equal `T` (same RFC 3339 instant). `default`
+must be false. If either check fails, delete the branch and stop. Do
 not verify against the wrong state.
+
+To open the **verify** branch without printing secrets into history or
+logs, let the CLI start psql (no `$(…)` wrap, no `set -x`, no paste
+into tickets). Only after `VERIFY_NAME` is set and validated:
+
+```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
+: "${ROOT_BRANCH:?}"
+if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
+  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
+  exit 1
+fi
+neon connection-string "$VERIFY_NAME" --project-id "$PROJECT" --psql
+```
 
 Connect to **that** branch only. Drop it after the decision. Creating
 this branch is copy-on-write; it is not an in-place Production restore.
 
-Do **not** run:
+Do **not** Instant-restore the default root here. The only pasteable
+restore is section 8 after a recorded GO:
 
 ```bash
+node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
 # FORBIDDEN until GO — overwrites the default root ($ROOT_BRANCH).
 # Discover the real default first; do not hard-code the name production.
-neon branches restore "$ROOT_BRANCH" "^self@${T}" --preserve-under-name "${ROOT_BRANCH}_old_${T}"
+echo "Forbidden until a recorded GO. Stop." >&2
+exit 1
 ```
 
 ### 4.3 When founder read-only Postgres is granted
@@ -585,9 +626,8 @@ Record the decision before anyone touches the Production root.
 - A `--preserve-under-name` backup name is chosen
   (`${ROOT_BRANCH}_old_<utc>`). Do not hard-code the branch name
   `production`.
-- Neon CLI is 4.9.0 or newer (`neon --version` /
-  `node scripts/require-neon-cli.mjs`). If older or missing: upgrade
-  first, stop otherwise.
+- Neon CLI is 4.9.0 or newer (`node scripts/require-neon-cli.mjs`).
+  If older or missing: upgrade first, stop otherwise.
 - Preview owners know the shared `DATABASE_URL` will drop connections.
 
 ### NO-GO — any of these
@@ -623,6 +663,10 @@ Record the decision before anyone touches the Production root.
    backup name:
 
    ```bash
+   node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+   : "${ROOT_BRANCH:?discover the project's default root first}"
+   : "${PROJECT:?}"
+   : "${T:?record incident time T first}"
    # $ROOT_BRANCH is the project's real default (section 4.2), not a
    # hard-coded production name.
    neon branches restore "$ROOT_BRANCH" "^self@${T}" \
