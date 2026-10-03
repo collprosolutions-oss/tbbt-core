@@ -9,6 +9,7 @@ import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { isNativeFieldApiPath } from "@/lib/native-field-api-path";
 import { isStudioWeeklyReminderCronPath } from "@/lib/studio-weekly-reminder-cron-path";
 import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
+import { isEsignWebhookPath } from "@/lib/esign/webhook-path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -77,7 +78,13 @@ export function proxy(request: NextRequest) {
 
   // `/` is always the public website. A signed-in owner still reaches
   // /dashboard by going there directly; the session must not hijack Home.
-  if (isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname) || isCustomerMessagingWebhookPath(pathname) || isVoiceWebhookPath(pathname)) {
+  if (
+    isPublicWebsitePath(pathname) ||
+    isStripeWebhookPath(pathname) ||
+    isCustomerMessagingWebhookPath(pathname) ||
+    isVoiceWebhookPath(pathname) ||
+    isEsignWebhookPath(pathname)
+  ) {
     // Vercel may set x-forwarded-host to the primary production domain
     // (www.collproreno.com) while the browser Origin is the custom host
     // (www.tbbtool.com). Next.js Server Action CSRF then aborts with
@@ -110,6 +117,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/cron/|api/native/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/esign/webhook|api/cron/|api/native/).*)",
   ],
 };

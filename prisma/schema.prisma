@@ -5305,8 +5305,12 @@ model BusinessAgreement {
   vaultRecordId                         String?
   effectiveOn                           String?
   expiresOn                             String?
-  /// NOT_CONNECTED | EXTERNAL_SIGNATURE | MANUAL_UPLOAD | PROVIDER_READY
+  /// NOT_CONNECTED | EXTERNAL_SIGNATURE | MANUAL_UPLOAD | PROVIDER_READY | SENDING
   signingMode                           String    @default("NOT_CONNECTED")
+  /// Provider signature_request_id bound at OWNER Send. Required on webhook.
+  esignSignatureRequestId               String?
+  /// When OWNER Send claimed SENDING. Used to expire a stuck claim.
+  esignSendingClaimedAt                 DateTime?
   completedByMembershipId               String?
   completedAt                           DateTime?
   completionNotes                       String?
@@ -5333,6 +5337,7 @@ model BusinessAgreement {
   ownerReviewedBy   Membership?                 @relation("AgreementOwnerReview", fields: [ownerReviewedByMembershipId], references: [id], onDelete: SetNull)
   auditLogs         BusinessProtectionAuditLog[]
 
+  @@unique([businessId, esignSignatureRequestId])
   @@index([businessId, lifecycleStatus])
   @@index([businessId, agreementType])
   @@index([vaultRecordId])
@@ -5353,6 +5358,8 @@ model BusinessAgreementVersion {
   createdByMembershipId  String
   createdAt              DateTime  @default(now())
   lockedAt               DateTime?
+  /// Provider signature_request_id for this exact locked version.
+  esignSignatureRequestId String?
 
   business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
   agreement   BusinessAgreement @relation("AgreementVersions", fields: [agreementId], references: [id], onDelete: Cascade)
@@ -5362,6 +5369,7 @@ model BusinessAgreementVersion {
   createdBy   Membership        @relation("AgreementVersionCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
 
   @@unique([agreementId, versionNumber])
+  @@unique([businessId, esignSignatureRequestId])
   @@index([businessId, agreementId])
 }
 

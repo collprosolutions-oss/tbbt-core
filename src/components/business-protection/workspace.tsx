@@ -12,6 +12,8 @@ import {
   markAgreementOwnerReviewedAction,
   markAgreementReadyAction,
   markAgreementSentAction,
+  sendAgreementForEsignAction,
+  cancelStuckEsignSendAction,
   saveAgreementAnswersAction,
   saveAgreementDraftContentAction,
   updateVaultRecordAction,
@@ -44,6 +46,7 @@ import {
   isHighRiskAgreement,
   type AgreementType,
 } from "@/lib/business-protection-agreements";
+import { ESIGN_CANCEL_STUCK_SEND_WARNING } from "@/lib/business-protection-esign";
 import { selectedAgreementRisk, type ProtectionWorkspace } from "@/lib/business-protection-data";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -425,6 +428,7 @@ function AgreementPanel({
           canFinalize={canFinalize}
           canRecordOwnerReview={canRecordOwnerReview}
           esignMessage={source.esign.message}
+          esignReady={source.esign.providerStatus === "PROVIDER_READY"}
         />
       ) : (
         <Card>
@@ -445,6 +449,7 @@ function AgreementDetail({
   canFinalize,
   canRecordOwnerReview,
   esignMessage,
+  esignReady,
 }: {
   selected: NonNullable<ProtectionWorkspace["selectedAgreement"]>;
   current: NonNullable<ProtectionWorkspace["selectedAgreement"]>["versions"][number];
@@ -453,6 +458,7 @@ function AgreementDetail({
   canFinalize: boolean;
   canRecordOwnerReview: boolean;
   esignMessage: string;
+  esignReady: boolean;
 }) {
   const [answerState, answerAction, answerPending] = useActionState(saveAgreementAnswersAction, initial);
   const [draftState, draftAction, draftPending] = useActionState(generateAgreementDraftAction, initial);
@@ -461,12 +467,19 @@ function AgreementDetail({
   const [legalState, legalAction, legalPending] = useActionState(acknowledgeAgreementLegalReviewAction, initial);
   const [readyState, readyAction, readyPending] = useActionState(markAgreementReadyAction, initial);
   const [sentState, sentAction, sentPending] = useActionState(markAgreementSentAction, initial);
+  const [esignSendState, esignSendAction, esignSendPending] = useActionState(sendAgreementForEsignAction, initial);
+  const [esignCancelState, esignCancelAction, esignCancelPending] = useActionState(
+    cancelStuckEsignSendAction,
+    initial,
+  );
   const [completeState, completeAction, completePending] = useActionState(completeAgreementAction, initial);
   const [aiState, aiAction, aiPending] = useActionState(agreementAssistAction, initial);
   const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
   const [completionAttemptKey, setCompletionAttemptKey] = useState(() => crypto.randomUUID());
+  const [esignSendAttemptKey, setEsignSendAttemptKey] = useState(() => crypto.randomUUID());
   const aiWasPending = useRef(false);
   const completeWasPending = useRef(false);
+  const esignSendWasPending = useRef(false);
   const highRisk = isHighRiskAgreement(selected.agreementType as AgreementType);
   const locked = Boolean(current.lockedAt) || current.representationStatus === "SIGNED_FINAL";
   useEffect(() => {
@@ -482,6 +495,13 @@ function AgreementDetail({
     }
     completeWasPending.current = completePending;
   }, [completePending, completeState.agreementId, completeState.error]);
+
+  useEffect(() => {
+    if (esignSendWasPending.current && !esignSendPending && esignSendState.agreementId && !esignSendState.error) {
+      setEsignSendAttemptKey(crypto.randomUUID());
+    }
+    esignSendWasPending.current = esignSendPending;
+  }, [esignSendPending, esignSendState.agreementId, esignSendState.error]);
 
   return (
     <div className="space-y-4">
@@ -604,9 +624,52 @@ function AgreementDetail({
           <FormMessage state={readyState} />
           <FormMessage state={sentState} />
 
+          {esignReady && canFinalize && selected.lifecycleStatus !== "SIGNED" ? (
+            <form action={esignSendAction} className="space-y-2 rounded-md border border-border p-3">
+              <input type="hidden" name="agreementId" value={selected.id} />
+              <input type="hidden" name="sendAttemptKey" value={esignSendAttemptKey} />
+              <div className="text-sm font-medium">Owner send for e-sign</div>
+              <p className="text-xs text-muted-foreground">
+                Sends this locked version through the connected adapter. The signed file binds to this
+                exact business, agreement, and version. Later edits do not rewrite it.
+              </p>
+              <Field
+                id="signerName"
+                label="Signer name"
+                defaultValue={selected.counterparty ?? current.answers.counterparty ?? ""}
+                required
+              />
+              <Field id="signerEmail" label="Signer email" type="email" required />
+              <Button
+                type="submit"
+                disabled={
+                  esignSendPending ||
+                  selected.lifecycleStatus === "COMPLETE" ||
+                  selected.lifecycleStatus === "EXTERNAL_COMPLETE" ||
+                  current.representationStatus === "SIGNED_FINAL"
+                }
+              >
+                Send locked version for e-sign
+              </Button>
+              <FormMessage state={esignSendState} />
+            </form>
+          ) : null}
+
+          {esignReady && canFinalize && selected.signingMode === "SENDING" ? (
+            <form action={esignCancelAction} className="space-y-2 rounded-md border border-amber-600/40 p-3">
+              <input type="hidden" name="agreementId" value={selected.id} />
+              <div className="text-sm font-medium">Stuck e-sign send</div>
+              <p className="text-xs text-muted-foreground">{ESIGN_CANCEL_STUCK_SEND_WARNING}</p>
+              <Button type="submit" variant="outline" disabled={esignCancelPending}>
+                Cancel stuck e-sign send
+              </Button>
+              <FormMessage state={esignCancelState} />
+            </form>
+          ) : null}
+
           <div className="space-y-2 rounded-md border border-dashed border-border p-3">
             <p className="text-sm">{esignMessage}</p>
-            <p className="text-xs text-muted-foreground">{NO_FAKE_ESIGN_MESSAGE}</p>
+            {!esignReady ? <p className="text-xs text-muted-foreground">{NO_FAKE_ESIGN_MESSAGE}</p> : null}
             {canFinalize ? (
               <form action={completeAction} className="space-y-2">
                 <input type="hidden" name="agreementId" value={selected.id} />

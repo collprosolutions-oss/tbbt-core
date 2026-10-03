@@ -671,17 +671,35 @@ function supplierCard(): GoLiveCard {
 }
 
 function esignCard(): GoLiveCard {
+  const status = classifyEsign();
+  if (status === "READY") {
+    return {
+      id: "esign",
+      label: "E-sign",
+      group: "OPTIONAL_PLANNED",
+      status,
+      requirement: "OPTIONAL",
+      currentState:
+        "A connected e-sign adapter is configured. OWNER Send can lock a version and create a provider request. Webhooks must verify.",
+      whatWorks:
+        "The owner can send a locked agreement version. Manual upload, external completion, and legal-review warnings stay available.",
+      whatDoesNot:
+        "TBBT does not invent a digital signature. Form completion cannot mark provider-signed. Production never uses the fake adapter.",
+      ownerNextAction: "Send a ready agreement from Business Protection as the owner.",
+      settingsHref: "/business-protection?area=agreements",
+    };
+  }
   return {
     id: "esign",
     label: "E-sign",
     group: "OPTIONAL_PLANNED",
-    status: classifyEsign(),
+    status,
     requirement: "OPTIONAL",
-    currentState: "E-sign is a disconnected placeholder.",
+    currentState: "E-sign credentials are not configured.",
     whatWorks: "You can still record an external signature or upload a signed file in Business Protection.",
     whatDoesNot: "No live e-sign provider is connected. TBBT will not invent a digital signature.",
-    ownerNextAction: "No e-sign connection is available from this page.",
-    settingsHref: "/settings?section=documents",
+    ownerNextAction: "Set DROPBOX_SIGN_API_KEY to connect Dropbox Sign. Do not set the fake adapter in production.",
+    settingsHref: "/business-protection?area=agreements",
   };
 }
 

@@ -317,8 +317,13 @@ check(
   "Auth proxy matcher excludes the Stripe webhook so Stripe POSTs are not redirected",
   proxySrc.includes("isStripeWebhookPath") &&
     proxySrc.includes("api/stripe/webhook") &&
-    proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)") &&
-    proxySrc.includes("isCustomerMessagingWebhookPath(pathname)"),
+    proxySrc.includes("isCustomerMessagingWebhookPath(pathname)") &&
+    proxySrc.includes("isEsignWebhookPath"),
+);
+check(
+  "Auth proxy matcher excludes the e-sign webhook so Dropbox Sign POSTs are not redirected",
+  proxySrc.includes("api/esign/webhook") &&
+    proxySrc.includes("isEsignWebhookPath(pathname)"),
 );
 check("Services page does not repeat a pre-footer quote CTA",
   !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&

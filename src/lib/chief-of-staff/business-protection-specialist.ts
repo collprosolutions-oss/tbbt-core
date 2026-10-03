@@ -46,6 +46,7 @@ import {
 } from "@/lib/business-protection-agreements";
 import {
   ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,
+  esignProviderMessage,
   resolveEsignProviderStatus,
   type EsignProviderStatus,
 } from "@/lib/business-protection-esign";
@@ -1015,7 +1016,7 @@ export async function loadBusinessProtectionProjection(input: {
     agreementScopeLoaded: loadAgreementScope,
     esign: {
       providerStatus: resolveEsignProviderStatus(),
-      message: ESIGN_PROVIDER_NOT_CONNECTED_MESSAGE,
+      message: esignProviderMessage(),
     },
     canReadDeep: loadRows,
     targetedVaultUnauthorized: targets.targetedVaultUnauthorized,
