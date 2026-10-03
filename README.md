@@ -137,7 +137,8 @@ private-file **metadata**; it does not recreate R2 bytes.
 disposable filesystem fixture. Restored `StoredAsset` references must
 resolve to the expected bytes; missing or mismatched objects are
 reported. The drill never reads or writes production R2. See
-`docs/DATABASE_RESTORE.md`.
+`docs/DATABASE_RESTORE.md`. Hosted Neon PITR plus private R2 recovery is
+`docs/NEON_PITR_R2_RECOVERY.md` — not that localhost drill.
 
 The isolated native field app lives in `apps/native`. It is not a WebView of the website. See `docs/NATIVE_FIELD.md`.
 

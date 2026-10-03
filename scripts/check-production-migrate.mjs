@@ -4,8 +4,24 @@
  * Run with:
  *   node scripts/check-production-migrate.mjs
  */
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  bashSyntaxResults,
+  hostedRecoveryVerifyNameSafety,
+  neonInvokingBlocks,
+  REQUIRED_CHECKS,
+  runGatingMatrix,
+  runSection42Flow,
+} from "./lib/hosted-recovery-runbook-check.mjs";
+import {
+  evaluateNeonCliVersion,
+  evaluateNeonCliVersionProcess,
+  MIN_NEON_CLI_VERSION,
+} from "./lib/neon-cli-version.mjs";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
@@ -2152,6 +2168,335 @@ check(
   failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).failClosed === true &&
     failClosedRequiredSchema({ present: false, name: "Business.publicPhone" }).ok === false &&
     failClosedRequiredSchema({ present: true, name: "Business.publicPhone" }).ok === true,
+);
+
+const hostedRecovery = readFileSync(
+  new URL("../docs/NEON_PITR_R2_RECOVERY.md", import.meta.url),
+  "utf8",
+);
+check(
+  "Hosted Neon PITR + private R2 runbook is documentation-only and not the localhost drill",
+  hostedRecovery.includes("store_2ie8U4PWbJ5J3agg") &&
+    hostedRecovery.includes("empty-cherry-05140338") &&
+    hostedRecovery.includes("planProductionMigrateDeploy") &&
+    hostedRecovery.includes("HeadObject") &&
+    hostedRecovery.includes("Rollback decision") &&
+    hostedRecovery.includes("TBBT_FOUNDER_PRODUCTION_READONLY_DATABASE_URL") &&
+    hostedRecovery.includes("collpro-s-projects5") &&
+    hostedRecovery.includes("businesses/") &&
+    hostedRecovery.includes("docs/DATABASE_RESTORE.md") &&
+    hostedRecovery.includes("not the localhost") &&
+    !hostedRecovery.includes("pg_dump --dbname"),
+);
+check(
+  "Hosted recovery runbook forbids Production restore, retention changes, and customer-byte copies",
+  hostedRecovery.includes("Forbidden until a recorded GO decision") &&
+    hostedRecovery.includes("history_retention_seconds") &&
+    hostedRecovery.includes("GetObject") &&
+    hostedRecovery.includes("NO-GO"),
+);
+check(
+  "Hosted recovery runbook uses documented Neon --parent timestamp and confirms parent_timestamp",
+  hostedRecovery.includes('--parent "$T"') &&
+    hostedRecovery.includes("parent_timestamp") &&
+    hostedRecovery.includes("neon projects get \"$PROJECT\" --output json") &&
+    hostedRecovery.includes("--no-secrets") &&
+    hostedRecovery.includes("unrecoverable") &&
+    hostedRecovery.includes("lifecycle") &&
+    !hostedRecovery.includes("--timestamp \"$T\"") &&
+    !hostedRecovery.includes("--parent production") &&
+    !hostedRecovery.includes("135 local") &&
+    !hostedRecovery.includes("20261002193000_esign_signature_request_id"),
+);
+check(
+  "Hosted recovery runbook gates Neon CLI 4.9.0+ and discovers $ROOT_BRANCH before restore",
+  hostedRecovery.includes("4.9.0") &&
+    hostedRecovery.includes("scripts/require-neon-cli.mjs") &&
+    hostedRecovery.includes(
+      "node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1",
+    ) &&
+    hostedRecovery.includes("$ROOT_BRANCH") &&
+    hostedRecovery.includes('.default == true') &&
+    hostedRecovery.includes("Upgrade first") &&
+    hostedRecovery.includes("--psql") &&
+    hostedRecovery.includes('neon connection-string "$VERIFY_NAME"') &&
+    hostedRecovery.includes("command substitution") &&
+    hostedRecovery.includes("$(…)") &&
+    hostedRecovery.includes("${VERIFY_NAME//[[:space:]]/}") &&
+    hostedRecovery.includes("${PROJECT//[[:space:]]/}") &&
+    hostedRecovery.includes("${ROOT_BRANCH//[[:space:]]/}") &&
+    hostedRecovery.includes("ROOT_BRANCH must be a single default root") &&
+    !hostedRecovery.includes("${ROOT_BRANCH:?") &&
+    !hostedRecovery.includes("${VERIFY_NAME:?") &&
+    !hostedRecovery.includes("${PROJECT:?") &&
+    !hostedRecovery.includes("${T:?") &&
+    !hostedRecovery.includes('psql "$(neon connection-string') &&
+    !hostedRecovery.includes("neon branches restore production") &&
+    !hostedRecovery.includes('restore production "^self'),
+);
+
+const requireNeonCliPath = fileURLToPath(new URL("./require-neon-cli.mjs", import.meta.url));
+const requireNeonCliSrc = readFileSync(requireNeonCliPath, "utf8");
+const neonCliVersionSrc = readFileSync(
+  new URL("./lib/neon-cli-version.mjs", import.meta.url),
+  "utf8",
+);
+
+function fencedBashBlocks(markdown) {
+  return [...markdown.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
+}
+
+function uncommentedBashLines(block) {
+  return block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+function lineCallsNeon(line) {
+  return /(?:^|[;&|]\s*)neon\s/.test(line) || /\$\(\s*neon\s/.test(line);
+}
+
+function lineIsGuard(line) {
+  return line === "node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1";
+}
+
+const neonBashBlocks = fencedBashBlocks(hostedRecovery).filter((block) =>
+  uncommentedBashLines(block).some(lineCallsNeon),
+);
+check(
+  "Every pasteable neon block starts with require-neon-cli.mjs and aborts on failure",
+  neonBashBlocks.length >= 5 &&
+    neonBashBlocks.every((block) => {
+      const lines = uncommentedBashLines(block);
+      const guardIdx = lines.findIndex(lineIsGuard);
+      const neonIdx = lines.findIndex(lineCallsNeon);
+      return guardIdx === 0 && neonIdx > 0;
+    }) &&
+    !fencedBashBlocks(hostedRecovery).some((block) =>
+      uncommentedBashLines(block).some((line) => line === "neon --version"),
+    ),
+);
+
+check(
+  "VERIFY_NAME is assigned and fail-closed before branches create/get and connection-string",
+  hostedRecoveryVerifyNameSafety(hostedRecovery) === true &&
+    !requireNeonCliSrc.includes("NEON_CLI_VERSION_TEXT") &&
+    !neonCliVersionSrc.includes("NEON_CLI_VERSION_TEXT"),
+);
+const assignAfterCreate = hostedRecovery
+  .replace(/^\s*VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"\n/m, "")
+  .replace(/--no-secrets\n/, '--no-secrets\nVERIFY_NAME="tbbt-pitr-verify-late"\n');
+const assignAfterGet = hostedRecovery
+  .replace(/^\s*VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"\n/m, "")
+  .replace(
+    /neon branches get "\$VERIFY_NAME"/,
+    'neon branches get "$VERIFY_NAME"\nVERIFY_NAME="tbbt-pitr-verify-late"',
+  );
+const emptyVerifyAssign = hostedRecovery.replace(
+  /VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"/,
+  'VERIFY_NAME=""',
+);
+check(
+  "VERIFY_NAME assigned after branches create or get, or as empty, fails the suite",
+  hostedRecoveryVerifyNameSafety(assignAfterCreate) === false &&
+    hostedRecoveryVerifyNameSafety(assignAfterGet) === false &&
+    hostedRecoveryVerifyNameSafety(emptyVerifyAssign) === false,
+);
+check(
+  "Removing any one interactive abort check fails the VERIFY_NAME safety suite",
+  REQUIRED_CHECKS.every(
+    (line) => hostedRecoveryVerifyNameSafety(hostedRecovery.replaceAll(line, "")) === false,
+  ),
+);
+
+const bashSyntax = bashSyntaxResults(hostedRecovery);
+check(
+  "Every fenced bash block in the hosted recovery runbook parses under bash -n",
+  bashSyntax.length >= 8 && bashSyntax.every((entry) => entry.ok === true),
+);
+
+const section42Flow = runSection42Flow(hostedRecovery);
+check(
+  "Section 4.2 flow with a 4.9.0 neon shim sets VERIFY_NAME before get/connection-string and forbids restore",
+  section42Flow.flowStatus === 0 &&
+    section42Flow.expectedSequence === true &&
+    section42Flow.verifyNameBeforeGetAndConn === true &&
+    section42Flow.emptyBranchArgs.length === 0 &&
+    section42Flow.forbiddenStatus !== 0 &&
+    section42Flow.forbiddenRanRestore === false,
+);
+
+const gatingMatrix = runGatingMatrix(hostedRecovery);
+const neonBlocks = neonInvokingBlocks(hostedRecovery);
+check(
+  "Every neon-invoking block lists the expected gating variables",
+  neonBlocks.length >= 6 &&
+    neonBlocks.some((block) => block.discovery && block.vars.includes("PROJECT")) &&
+    neonBlocks.some(
+      (block) =>
+        block.block.includes("neon branches restore") &&
+        block.vars.includes("T") &&
+        block.vars.includes("PROJECT") &&
+        block.vars.includes("ROOT_BRANCH"),
+    ) &&
+    neonBlocks.some(
+      (block) =>
+        block.block.includes("neon branches create") &&
+        block.vars.includes("DEFAULT_BRANCH") &&
+        block.vars.includes("T") &&
+        !block.vars.includes("VERIFY_NAME"),
+    ),
+);
+check(
+  "Every neon-invoking block aborts on unset/empty/space/tab in all five shell modes",
+  gatingMatrix.failures.length === 0 &&
+    gatingMatrix.blockCount >= 6 &&
+    gatingMatrix.caseCount >= 5 * 4 * 5 &&
+    gatingMatrix.modes.length === 5,
+);
+
+function withNeonShim(spec, run) {
+  const dir = mkdtempSync(path.join(tmpdir(), "tbbt-neon-shim-"));
+  const env = { ...process.env, PATH: spec.missing ? dir : `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+  delete env.NEON_CLI_VERSION_TEXT;
+  delete env.TBBT_NEON_CLI_VERSION_TEXT;
+  if (!spec.missing) {
+    writeFileSync(
+      path.join(dir, "neon"),
+      `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(spec.stdout ?? "")});
+process.stderr.write(${JSON.stringify(spec.stderr ?? "")});
+process.exit(${Number(spec.status ?? 0)});
+`,
+      { mode: 0o755 },
+    );
+  }
+  try {
+    return run(env);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function spawnRequireNeonCli(spec) {
+  return withNeonShim(spec, (env) =>
+    spawnSync(process.execPath, [requireNeonCliPath], {
+      encoding: "utf8",
+      env,
+    }),
+  );
+}
+
+check("Neon CLI version floor is 4.9.0", MIN_NEON_CLI_VERSION === "4.9.0");
+check(
+  "Neon CLI 4.8.9 fails the hosted recovery version gate",
+  evaluateNeonCliVersion("4.8.9").ok === false &&
+    evaluateNeonCliVersion("v4.8.9").ok === false &&
+    evaluateNeonCliVersion("neon 4.8.9").ok === false &&
+    /4\.8\.9/.test(evaluateNeonCliVersion("4.8.9").reason) &&
+    /Upgrade first/.test(evaluateNeonCliVersion("4.8.9").reason),
+);
+check(
+  "Neon CLI 4.9.0 and 4.9.1 pass the hosted recovery version gate",
+  evaluateNeonCliVersion("4.9.0").ok === true &&
+    evaluateNeonCliVersion("v4.9.0").ok === true &&
+    evaluateNeonCliVersion("neon 4.9.0").ok === true &&
+    evaluateNeonCliVersion("4.9.1").ok === true,
+);
+check(
+  "Neon CLI 4.10.0 and 5.0.0 pass the hosted recovery version gate",
+  evaluateNeonCliVersion("4.10.0").ok === true &&
+    evaluateNeonCliVersion("v4.10.0").ok === true &&
+    evaluateNeonCliVersion("5.0.0").ok === true &&
+    evaluateNeonCliVersion("4.10.0-rc.1").ok === true,
+);
+check(
+  "Neon CLI garbage, missing, 4.9, and 4.9.0 prerelease fail closed",
+  evaluateNeonCliVersion("").ok === false &&
+    evaluateNeonCliVersion(null).ok === false &&
+    evaluateNeonCliVersion(undefined).ok === false &&
+    evaluateNeonCliVersion("not-a-version").ok === false &&
+    evaluateNeonCliVersion("4.9").ok === false &&
+    evaluateNeonCliVersion("4.9.0-beta").ok === false &&
+    evaluateNeonCliVersion("4.9.0-beta.1").ok === false &&
+    /missing/.test(evaluateNeonCliVersion("").reason) &&
+    /unreadable/.test(evaluateNeonCliVersion("garbage").reason) &&
+    /Upgrade first/.test(evaluateNeonCliVersion("not-a-version").reason),
+);
+check(
+  "Neon CLI version parse fails closed on banners, path prefixes, and mixed stderr",
+  evaluateNeonCliVersion("Update available 5.0.0...\nneon 4.8.0").ok === false &&
+    evaluateNeonCliVersion("/usr/local/n/versions/node/18.0.0/bin/neon 4.8.9").ok === false &&
+    evaluateNeonCliVersionProcess({
+      status: 1,
+      stdout: "",
+      stderr: "v20.11.0\n",
+    }).ok === false &&
+    evaluateNeonCliVersionProcess({
+      status: 1,
+      stdout: "4.9.0",
+      stderr: "",
+    }).ok === false &&
+    evaluateNeonCliVersionProcess({
+      status: 0,
+      stdout: "4.9.0",
+      stderr: "Update available 5.0.0\n",
+    }).ok === true &&
+    evaluateNeonCliVersionProcess({
+      error: Object.assign(new Error("not found"), { code: "ENOENT" }),
+    }).ok === false,
+);
+check(
+  "NEON_CLI_VERSION_TEXT cannot skip the live neon binary",
+  !requireNeonCliSrc.includes("NEON_CLI_VERSION_TEXT") &&
+    spawnRequireNeonCli({
+      stdout: "4.8.9\n",
+      status: 0,
+    }).status !== 0,
+);
+
+const shimCases = [
+  { label: "4.8.9", stdout: "4.8.9\n", status: 0, ok: false },
+  { label: "4.9.0-beta", stdout: "4.9.0-beta\n", status: 0, ok: false },
+  { label: "4.9", stdout: "4.9\n", status: 0, ok: false },
+  { label: "empty", stdout: "", status: 0, ok: false },
+  { label: "garbage", stdout: "not-a-version\n", status: 0, ok: false },
+  { label: "banner then 4.8.0", stdout: "Update available 5.0.0...\nneon 4.8.0\n", status: 0, ok: false },
+  { label: "stderr node version", stdout: "", stderr: "v20.11.0\n", status: 1, ok: false },
+  { label: "path prefix 18.0.0", stdout: "/usr/local/n/versions/node/18.0.0/bin/neon 4.8.9\n", status: 0, ok: false },
+  { label: "4.9.0 with exit 1", stdout: "4.9.0\n", status: 1, ok: false },
+  { label: "ENOENT", missing: true, ok: false },
+  { label: "4.9.0", stdout: "4.9.0\n", status: 0, ok: true },
+  { label: "4.9.1", stdout: "4.9.1\n", status: 0, ok: true },
+  { label: "5.0.0", stdout: "5.0.0\n", status: 0, ok: true },
+  { label: "4.10.0", stdout: "4.10.0\n", status: 0, ok: true },
+  { label: "neon 4.9.0", stdout: "neon 4.9.0\n", status: 0, ok: true },
+  { label: "v4.9.0", stdout: "v4.9.0\n", status: 0, ok: true },
+];
+const shimResults = shimCases.map((spec) => ({
+  ...spec,
+  result: spawnRequireNeonCli(spec),
+}));
+check(
+  "require-neon-cli.mjs spawn path fail-closes shims that used to pass and accepts 4.9.0+",
+  shimResults.every((entry) => (entry.result.status === 0) === entry.ok) &&
+    shimResults
+      .filter((entry) => !entry.ok)
+      .every((entry) => /Upgrade first|missing|unreadable|exited/.test(entry.result.stderr)) &&
+    spawnRequireNeonCli({ stdout: "4.8.9\n", status: 0, extraEnv: true }).status !== 0,
+);
+
+const envHookPoison = withNeonShim({ stdout: "4.8.9\n", status: 0 }, (env) => {
+  env.NEON_CLI_VERSION_TEXT = "9.9.9";
+  return spawnSync(process.execPath, [requireNeonCliPath], {
+    encoding: "utf8",
+    env,
+  });
+});
+check(
+  "NEON_CLI_VERSION_TEXT=9.9.9 does not skip a failing neon shim",
+  envHookPoison.status !== 0 && /4\.8\.9|Upgrade first/.test(envHookPoison.stderr),
 );
 
 console.log(
