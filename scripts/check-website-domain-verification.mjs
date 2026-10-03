@@ -168,7 +168,8 @@ check(
     !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
     !websiteDomainApexATargetsLabel().includes(PLATFORM_OBSERVED_APEX_A) &&
     !settingsCard.includes(PLATFORM_OBSERVED_APEX_A) &&
-    settingsCard.includes("cname.vercel-dns.com") &&
+    settingsCard.includes("WEBSITE_DOMAIN_DNS_CNAME_TARGET") &&
+    WEBSITE_DOMAIN_DNS_CNAME_TARGET === "cname.vercel-dns.com" &&
     readme.includes("`76.76.21.21`") &&
     certification.includes("`76.76.21.21`") &&
     envExample.includes("WEBSITE_DOMAIN_PROJECT_RECOMMENDED_A") &&
