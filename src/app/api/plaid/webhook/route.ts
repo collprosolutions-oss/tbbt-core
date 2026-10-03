@@ -13,21 +13,38 @@
 import { NextResponse } from "next/server";
 import { handlePlaidWebhookPayload } from "@/lib/bank-connect";
 import { prisma } from "@/lib/prisma";
-import { PlaidWebhookVerificationError, verifyPlaidWebhookRequest } from "@/lib/plaid-webhook";
+import {
+  MAX_PLAID_WEBHOOK_BYTES,
+  PlaidWebhookVerificationError,
+  verifyPlaidWebhookRequest,
+} from "@/lib/plaid-webhook";
 
 export async function POST(request: Request) {
+  const announced = Number(request.headers.get("content-length") ?? 0);
+  if (Number.isFinite(announced) && announced > MAX_PLAID_WEBHOOK_BYTES) {
+    return NextResponse.json({ error: "Webhook body is too large." }, { status: 413 });
+  }
   const rawBody = await request.text();
+  if (Buffer.byteLength(rawBody, "utf8") > MAX_PLAID_WEBHOOK_BYTES) {
+    return NextResponse.json({ error: "Webhook body is too large." }, { status: 413 });
+  }
+
+  let verified: Awaited<ReturnType<typeof verifyPlaidWebhookRequest>>;
   try {
-    await verifyPlaidWebhookRequest(rawBody, request.headers);
+    verified = await verifyPlaidWebhookRequest(rawBody, request.headers);
   } catch (error) {
     if (error instanceof PlaidWebhookVerificationError) {
       return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
     }
-    throw error;
+    return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
   }
 
   try {
-    const result = await handlePlaidWebhookPayload(prisma, { rawBody });
+    const result = await handlePlaidWebhookPayload(prisma, {
+      rawBody,
+      jwtId: verified?.jti ?? null,
+      issuedAt: verified?.iat ?? null,
+    });
     return NextResponse.json({
       ok: true,
       duplicate: result.duplicate,

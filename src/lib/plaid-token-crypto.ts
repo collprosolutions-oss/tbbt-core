@@ -52,9 +52,15 @@ export function decryptPlaidAccessToken(
     throw new PlaidTokenCryptoError("Access token ciphertext is not a v1 payload.");
   }
   const key = readPlaidTokenEncryptionKey(env);
+  if (!/^[0-9a-fA-F]+$/.test(parts[1]) || !/^[0-9a-fA-F]+$/.test(parts[2]) || !/^[0-9a-fA-F]+$/.test(parts[3])) {
+    throw new PlaidTokenCryptoError("Access token ciphertext is not a v1 payload.");
+  }
   const iv = Buffer.from(parts[1], "hex");
   const tag = Buffer.from(parts[2], "hex");
   const encrypted = Buffer.from(parts[3], "hex");
+  if (tag.length !== 16) {
+    throw new PlaidTokenCryptoError("Access token ciphertext tag is truncated.");
+  }
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");

@@ -80,6 +80,7 @@ export function ConnectBankPanel({
   const [clientError, setClientError] = useState<string | null>(null);
 
   const error = clientError || syncState.error || disconnectState.error;
+  const warning = disconnectState.warning;
   const connected = status === "ACTIVE" || status === "NEEDS_REAUTH";
   const busy = syncing || disconnecting || pending;
 
@@ -133,6 +134,11 @@ export function ConnectBankPanel({
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {warning ? (
+        <Alert>
+          <AlertDescription>{warning}</AlertDescription>
         </Alert>
       ) : null}
 

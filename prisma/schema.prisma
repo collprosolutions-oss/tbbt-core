@@ -6081,6 +6081,8 @@ model BankPlaidWebhookEvent {
   eventKey     String
   webhookType  String
   webhookCode  String
+  /// RECEIVED | PROCESSED
+  status       String    @default("RECEIVED")
   receivedAt   DateTime  @default(now())
   processedAt  DateTime?
 

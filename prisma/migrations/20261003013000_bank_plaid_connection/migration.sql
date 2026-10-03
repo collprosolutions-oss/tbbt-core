@@ -90,10 +90,14 @@ CREATE TABLE IF NOT EXISTS "BankPlaidWebhookEvent" (
     "eventKey" TEXT NOT NULL,
     "webhookType" TEXT NOT NULL,
     "webhookCode" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'RECEIVED',
     "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "processedAt" TIMESTAMP(3),
     CONSTRAINT "BankPlaidWebhookEvent_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "BankPlaidWebhookEvent"
+  ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'RECEIVED';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "BankPlaidWebhookEvent_eventKey_key"
   ON "BankPlaidWebhookEvent"("eventKey");

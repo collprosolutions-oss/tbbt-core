@@ -24,6 +24,9 @@ export const BANK_CONNECT_NEEDS_REAUTH_MESSAGE =
 
 export const BANK_CONNECT_DISCONNECTED_MESSAGE = "The bank feed is disconnected.";
 
+export const BANK_CONNECT_PLAID_REMOVE_FAILED_MESSAGE =
+  "Removed locally; Plaid item removal failed, remove it in the Plaid dashboard.";
+
 export const BANK_CONNECT_REVIEW_ONLY_MESSAGE =
   "A connected Plaid feed is read-only review. It never creates a Payment, never changes an invoice, never moves money, and is not a verified cash balance.";
 

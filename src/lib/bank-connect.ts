@@ -16,6 +16,7 @@ import {
   BANK_CONNECT_NEEDS_REAUTH_MESSAGE,
   BANK_CONNECT_NOT_AVAILABLE_MESSAGE,
   BANK_CONNECT_NOT_CONFIGURED_MESSAGE,
+  BANK_CONNECT_PLAID_REMOVE_FAILED_MESSAGE,
   BANK_CONNECT_REVIEW_ONLY_MESSAGE,
   OWNER_ONLY_BANK_CONNECT_MESSAGE,
 } from "@/lib/bank-connect-copy";
@@ -43,6 +44,7 @@ import {
   plaidAdapterKind,
   PlaidProviderError,
   resolvePlaidProvider,
+  resolvePlaidRedirectUri,
   resolvePlaidWebhookUrl,
   type PlaidProvider,
   type PlaidSyncedTransaction,
@@ -66,6 +68,7 @@ export type BankPlaidStatusView = {
   lastSyncedAt: Date | null;
   importId: string | null;
   reviewOnlyMessage: string;
+  disconnectWarning: string | null;
 };
 
 function requireOwnerConnect(access: BankConnectAccess) {
@@ -197,6 +200,7 @@ export async function loadOwnedBankPlaidStatus(
     lastSyncedAt: item?.lastSyncedAt ?? null,
     importId: feed?.id ?? null,
     reviewOnlyMessage: BANK_CONNECT_REVIEW_ONLY_MESSAGE,
+    disconnectWarning: null,
   };
 }
 
@@ -238,6 +242,7 @@ export async function createOwnedBankLinkToken(
     clientUserId: `${access.businessId}:${membershipId(access)}`,
     accessToken,
     webhookUrl: resolvePlaidWebhookUrl(),
+    redirectUri: resolvePlaidRedirectUri(),
   });
 }
 
@@ -409,12 +414,13 @@ export async function disconnectOwnedBankPlaidItem(
   if (item.status === "DISCONNECTED") {
     return loadOwnedBankPlaidStatus(db, access);
   }
+  let removeFailed = false;
   if (item.accessTokenCipher) {
     try {
       const token = decryptPlaidAccessToken(item.accessTokenCipher);
       await providerOrThrow().removeItem(token);
     } catch {
-      /* Provider removal is best-effort; local disconnect still proceeds. */
+      removeFailed = true;
     }
   }
   await db.bankPlaidItem.update({
@@ -426,7 +432,10 @@ export async function disconnectOwnedBankPlaidItem(
       disconnectedAt: new Date(),
     },
   });
-  return loadOwnedBankPlaidStatus(db, access);
+  const status = await loadOwnedBankPlaidStatus(db, access);
+  return removeFailed
+    ? { ...status, disconnectWarning: BANK_CONNECT_PLAID_REMOVE_FAILED_MESSAGE }
+    : status;
 }
 
 export async function syncOwnedBankPlaidItem(
@@ -725,11 +734,30 @@ export async function syncBankPlaidItem(
   return { importId, added: addedCount, removed: removedCount };
 }
 
+export function plaidWebhookEventKey(input: {
+  itemId: string;
+  webhookType: string;
+  webhookCode: string;
+  jwtId?: string | null;
+  issuedAt?: number | null;
+}): string {
+  const jwtId = input.jwtId?.trim();
+  if (jwtId) return `jti:${jwtId}`;
+  if (Number.isFinite(input.issuedAt)) {
+    return `iat:${input.itemId}:${input.webhookType}:${input.webhookCode}:${Math.trunc(Number(input.issuedAt))}`;
+  }
+  const bucket = Math.floor(Date.now() / 30_000);
+  return `bucket:${input.itemId}:${input.webhookType}:${input.webhookCode}:${bucket}`;
+}
+
 export async function handlePlaidWebhookPayload(
   db: Db,
-  input: { rawBody: string },
+  input: {
+    rawBody: string;
+    jwtId?: string | null;
+    issuedAt?: number | null;
+  },
 ): Promise<{ duplicate: boolean; processed: boolean }> {
-  const eventKey = createHash("sha256").update(input.rawBody).digest("hex");
   let payload: {
     webhook_type?: string;
     webhook_code?: string;
@@ -747,21 +775,41 @@ export async function handlePlaidWebhookPayload(
   if (!webhookType || !webhookCode || !itemId) {
     throw new BankConnectError("Plaid webhook is missing item or type.");
   }
+  const eventKey = plaidWebhookEventKey({
+    itemId,
+    webhookType,
+    webhookCode,
+    jwtId: input.jwtId,
+    issuedAt: input.issuedAt,
+  });
 
-  try {
-    await db.bankPlaidWebhookEvent.create({
-      data: {
-        itemId,
-        eventKey,
-        webhookType,
-        webhookCode,
-      },
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return { duplicate: true, processed: false };
+  const existing = await db.bankPlaidWebhookEvent.findUnique({
+    where: { eventKey },
+  });
+  if (existing?.status === "PROCESSED" || existing?.processedAt) {
+    return { duplicate: true, processed: false };
+  }
+  if (!existing) {
+    try {
+      await db.bankPlaidWebhookEvent.create({
+        data: {
+          itemId,
+          eventKey,
+          webhookType,
+          webhookCode,
+          status: "RECEIVED",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const raced = await db.bankPlaidWebhookEvent.findUnique({ where: { eventKey } });
+        if (raced?.status === "PROCESSED" || raced?.processedAt) {
+          return { duplicate: true, processed: false };
+        }
+      } else {
+        throw error;
+      }
     }
-    throw error;
   }
 
   const item = await db.bankPlaidItem.findFirst({
@@ -770,7 +818,7 @@ export async function handlePlaidWebhookPayload(
   if (!item) {
     await db.bankPlaidWebhookEvent.update({
       where: { eventKey },
-      data: { processedAt: new Date() },
+      data: { status: "PROCESSED", processedAt: new Date() },
     });
     return { duplicate: false, processed: false };
   }
@@ -791,8 +839,8 @@ export async function handlePlaidWebhookPayload(
     payload.error?.error_code === "ITEM_LOGIN_REQUIRED";
 
   if (loginRequired && item.status !== "DISCONNECTED") {
-    await db.bankPlaidItem.update({
-      where: { id: item.id },
+    await db.bankPlaidItem.updateMany({
+      where: { id: item.id, businessId: item.businessId, itemId: item.itemId },
       data: { status: "NEEDS_REAUTH" },
     });
   }
@@ -813,7 +861,7 @@ export async function handlePlaidWebhookPayload(
 
   await db.bankPlaidWebhookEvent.update({
     where: { eventKey },
-    data: { processedAt: new Date() },
+    data: { status: "PROCESSED", processedAt: new Date() },
   });
   return { duplicate: false, processed: true };
 }

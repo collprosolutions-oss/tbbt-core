@@ -26,6 +26,7 @@ import { prisma } from "@/lib/prisma";
 
 export type BankConnectActionState = {
   error?: string;
+  warning?: string;
   linkToken?: string;
   updateMode?: boolean;
 };
@@ -113,7 +114,7 @@ export async function disconnectBankConnectionAction(): Promise<BankConnectActio
   try {
     const status = await disconnectOwnedBankPlaidItem(prisma, operating.access);
     revalidateBankSurfaces(status.importId);
-    return {};
+    return status.disconnectWarning ? { warning: status.disconnectWarning } : {};
   } catch (error) {
     return mapError(error);
   }

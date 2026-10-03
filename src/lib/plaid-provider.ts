@@ -59,6 +59,7 @@ export interface PlaidProvider {
     clientUserId: string;
     accessToken?: string;
     webhookUrl?: string;
+    redirectUri?: string;
   }): Promise<PlaidLinkTokenResult>;
   exchangePublicToken(publicToken: string): Promise<PlaidExchangeResult>;
   getItem(accessToken: string): Promise<PlaidInstitution>;
@@ -103,6 +104,7 @@ type FakeItem = {
 };
 
 const fakeItems = new Map<string, FakeItem>();
+let failNextRemove = false;
 
 function defaultFakeAccounts(): FakeAccount[] {
   return [
@@ -123,6 +125,11 @@ function tokenKey(accessToken: string) {
 
 export function resetFakePlaidProvider() {
   fakeItems.clear();
+  failNextRemove = false;
+}
+
+export function failNextFakePlaidRemove() {
+  failNextRemove = true;
 }
 
 export function seedFakePlaidPostedTransactions(accessToken: string, rows: FakeTxn[]) {
@@ -162,6 +169,7 @@ export class FakePlaidProvider implements PlaidProvider {
     clientUserId: string;
     accessToken?: string;
     webhookUrl?: string;
+    redirectUri?: string;
   }): Promise<PlaidLinkTokenResult> {
     const updateMode = Boolean(input.accessToken);
     return {
@@ -237,6 +245,10 @@ export class FakePlaidProvider implements PlaidProvider {
   }
 
   async removeItem(accessToken: string): Promise<void> {
+    if (failNextRemove) {
+      failNextRemove = false;
+      throw new PlaidProviderError("Plaid item/remove failed.", "ITEM_REMOVE_FAILED");
+    }
     const item = this.requireItem(accessToken);
     item.removed = true;
     item.accessToken = `removed-${item.accessToken}`;
@@ -304,6 +316,7 @@ export class LivePlaidProvider implements PlaidProvider {
     clientUserId: string;
     accessToken?: string;
     webhookUrl?: string;
+    redirectUri?: string;
   }): Promise<PlaidLinkTokenResult> {
     const updateMode = Boolean(input.accessToken);
     const payload = await this.request<{ link_token: string }>("/link/token/create", {
@@ -314,6 +327,7 @@ export class LivePlaidProvider implements PlaidProvider {
       products: updateMode ? undefined : ["transactions"],
       access_token: input.accessToken,
       webhook: input.webhookUrl,
+      redirect_uri: input.redirectUri,
       transactions: updateMode ? undefined : { days_requested: 90 },
     });
     return { linkToken: payload.link_token, updateMode };
@@ -419,9 +433,26 @@ export function resolvePlaidWebhookUrl(env: NodeJS.ProcessEnv = process.env): st
   return `${app}${PLAID_WEBHOOK_PATH}`;
 }
 
+export function resolvePlaidRedirectUri(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const explicit = env.PLAID_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+  const app = env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
+  if (!app) return undefined;
+  return `${app}/settings?section=banking`;
+}
+
+export function isProductionPlaidEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.VERCEL_ENV === "production" || env.NODE_ENV === "production";
+}
+
+export function isFakePlaidAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isProductionPlaidEnv(env)) return false;
+  return (env.TBBT_PLAID_ADAPTER ?? "").trim().toLowerCase() === "fake";
+}
+
 export function resolvePlaidProvider(env: NodeJS.ProcessEnv = process.env): PlaidProvider {
+  if (isFakePlaidAdapterEnabled(env)) return new FakePlaidProvider();
   const adapter = (env.TBBT_PLAID_ADAPTER ?? "").trim().toLowerCase();
-  if (adapter === "fake") return new FakePlaidProvider();
   const clientId = env.PLAID_CLIENT_ID?.trim() ?? "";
   const secret = env.PLAID_SECRET?.trim() ?? "";
   if (adapter === "plaid" || (clientId && secret)) {
@@ -441,8 +472,12 @@ const BANK_CONNECT_NOT_CONFIGURED_FALLBACK =
   "Plaid is not configured in this environment. The owner must supply Plaid API credentials in the host environment — never a bank login.";
 
 export function plaidAdapterKind(env: NodeJS.ProcessEnv = process.env): "fake" | "plaid" | "unconfigured" {
-  const adapter = (env.TBBT_PLAID_ADAPTER ?? "").trim().toLowerCase();
-  if (adapter === "fake") return "fake";
-  if (adapter === "plaid" || (env.PLAID_CLIENT_ID?.trim() && env.PLAID_SECRET?.trim())) return "plaid";
+  if (isFakePlaidAdapterEnabled(env)) return "fake";
+  if (
+    (env.TBBT_PLAID_ADAPTER ?? "").trim().toLowerCase() === "plaid" ||
+    (env.PLAID_CLIENT_ID?.trim() && env.PLAID_SECRET?.trim())
+  ) {
+    return "plaid";
+  }
   return "unconfigured";
 }
