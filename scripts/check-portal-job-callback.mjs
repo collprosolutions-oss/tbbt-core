@@ -61,6 +61,7 @@ const {
   parsePortalProjectToken,
   portalJobCallbackCooldownAvailableAt,
   portalJobCallbackCooldownMessage,
+  portalJobCallbackCooldownTestHooks,
 } = await import("@/lib/job-callback");
 const { loadJobCallbackReview } = await import("@/lib/job-callback-data");
 const {
@@ -884,43 +885,49 @@ try {
       })) === 1,
   );
 
-  const justInsideElapsed = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 1);
-  await prisma.jobCallback.update({
-    where: { id: laterFirst.callbackId },
-    data: { outcomeAt: justInsideElapsed },
-  });
-  const oneMsInside = await submitPortalJobCallback(prisma, {
-    token: laterSeed.job.projectToken,
-    description: "One millisecond inside the elapsed 24-hour floor",
-    preferredContact: "TEXT",
-  });
-  check(
-    "Exactly resolve+24h-1ms is still refused",
-    oneMsInside.ok === false && oneMsInside.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
-  );
+  const frozenNow = new Date();
+  portalJobCallbackCooldownTestHooks.now = () => frozenNow;
+  try {
+    const justInsideElapsed = new Date(frozenNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 1);
+    await prisma.jobCallback.update({
+      where: { id: laterFirst.callbackId },
+      data: { outcomeAt: justInsideElapsed },
+    });
+    const oneMsInside = await submitPortalJobCallback(prisma, {
+      token: laterSeed.job.projectToken,
+      description: "One millisecond inside the elapsed 24-hour floor",
+      preferredContact: "TEXT",
+    });
+    check(
+      "Exactly resolve+24h-1ms is still refused",
+      oneMsInside.ok === false && oneMsInside.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
+    );
 
-  const atElapsedBoundary = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
-  await prisma.jobCallback.update({
-    where: { id: laterFirst.callbackId },
-    data: { outcomeAt: atElapsedBoundary },
-  });
-  const laterView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
-  const laterSecond = await submitPortalJobCallback(prisma, {
-    token: laterSeed.job.projectToken,
-    description: "Legitimate later request after 24 elapsed hours",
-    preferredContact: "EMAIL",
-  });
-  const laterCount = await prisma.jobCallback.count({
-    where: { businessId: businessA.id, jobId: laterSeed.job.id },
-  });
-  check(
-    "Exactly resolve+24h is accepted when that instant is not before next local midnight",
-    laterView.status === "ready" &&
-      laterSecond.ok === true &&
-      laterSecond.alreadyExists === false &&
-      laterSecond.callbackId !== laterFirst.callbackId &&
-      laterCount === 2,
-  );
+    const atElapsedBoundary = new Date(frozenNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+    await prisma.jobCallback.update({
+      where: { id: laterFirst.callbackId },
+      data: { outcomeAt: atElapsedBoundary },
+    });
+    const laterView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
+    const laterSecond = await submitPortalJobCallback(prisma, {
+      token: laterSeed.job.projectToken,
+      description: "Legitimate later request after 24 elapsed hours",
+      preferredContact: "EMAIL",
+    });
+    const laterCount = await prisma.jobCallback.count({
+      where: { businessId: businessA.id, jobId: laterSeed.job.id },
+    });
+    check(
+      "Exactly resolve+24h is accepted when that instant is not before next local midnight",
+      laterView.status === "ready" &&
+        laterSecond.ok === true &&
+        laterSecond.alreadyExists === false &&
+        laterSecond.callbackId !== laterFirst.callbackId &&
+        laterCount === 2,
+    );
+  } finally {
+    portalJobCallbackCooldownTestHooks.now = undefined;
+  }
 
   const newestSeed = await createJob(businessA.id);
   const oldestResolved = await submitPortalJobCallback(prisma, {

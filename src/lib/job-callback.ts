@@ -242,13 +242,23 @@ export function portalJobCallbackCooldownAvailableAt(
   return new Date(Math.max(elapsedAt, nextLocalDayAt));
 }
 
+/**
+ * Test-only clock. Production never assigns this. Submit and view call
+ * isPortalJobCallbackCoolingDown without `now`, so this is the only way
+ * a disposable-DB proof can freeze the exact 24-hour boundary.
+ */
+export const portalJobCallbackCooldownTestHooks: {
+  now?: () => Date;
+} = {};
+
 export function isPortalJobCallbackCoolingDown(
   resolvedAt: Date | null | undefined,
   timeZone: string,
-  now: Date = new Date(),
+  now?: Date,
 ): boolean {
   if (!resolvedAt) return false;
-  return now.getTime() < portalJobCallbackCooldownAvailableAt(resolvedAt, timeZone).getTime();
+  const clock = now ?? portalJobCallbackCooldownTestHooks.now?.() ?? new Date();
+  return clock.getTime() < portalJobCallbackCooldownAvailableAt(resolvedAt, timeZone).getTime();
 }
 
 export function portalJobCallbackCooldownMessage(availableAtLabel?: string): string {
