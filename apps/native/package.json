@@ -6,6 +6,9 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
+    "android:prebuild": "expo prebuild --platform android",
+    "android:assemble-debug": "cd android && ./gradlew assembleDebug",
+    "android:debug-apk": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"

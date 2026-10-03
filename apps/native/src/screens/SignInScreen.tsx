@@ -4,11 +4,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { NativeBuildStamp } from "./NativeBuildStamp";
 import { isApiError, signInNative } from "../api";
 import { secureChecklistDraftStorage } from "../checklist-draft-storage";
 import { applyChecklistDraftAccount } from "../checklist-drafts";
@@ -65,59 +67,81 @@ export function SignInScreen({
     }
   }
 
+  const form = (
+    <View style={styles.card}>
+      <Text style={styles.kicker}>TBBT Field</Text>
+      <Text style={styles.title}>Sign in</Text>
+      <Text style={styles.copy}>
+        Assigned jobs only. Your password stays on the server; this app stores a session token.
+      </Text>
+      <TextInput
+        autoCapitalize="none"
+        autoComplete="email"
+        autoCorrect={false}
+        importantForAutofill="yes"
+        keyboardType="email-address"
+        onChangeText={setEmail}
+        placeholder="Email"
+        placeholderTextColor="#8b94a7"
+        style={styles.input}
+        value={email}
+      />
+      <TextInput
+        autoCapitalize="none"
+        autoComplete="password"
+        importantForAutofill="yes"
+        onChangeText={setPassword}
+        placeholder="Password"
+        placeholderTextColor="#8b94a7"
+        secureTextEntry
+        style={styles.input}
+        value={password}
+      />
+      {challengeToken ? (
+        <TextInput
+          autoCapitalize="none"
+          keyboardType="number-pad"
+          onChangeText={setTotpCode}
+          placeholder="Authenticator code"
+          placeholderTextColor="#8b94a7"
+          style={styles.input}
+          value={totpCode}
+        />
+      ) : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <Pressable disabled={busy} onPress={submit} style={styles.button}>
+        {busy ? <ActivityIndicator color="#102018" /> : <Text style={styles.buttonLabel}>Continue</Text>}
+      </Pressable>
+      <NativeBuildStamp />
+    </View>
+  );
+
+  if (Platform.OS === "android") {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.screen}
+        keyboardShouldPersistTaps="handled"
+        style={styles.androidScroll}
+      >
+        {form}
+      </ScrollView>
+    );
+  }
+
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <View style={styles.card}>
-        <Text style={styles.kicker}>TBBT Field</Text>
-        <Text style={styles.title}>Sign in</Text>
-        <Text style={styles.copy}>
-          Assigned jobs only. Your password stays on the server; this app stores a session token.
-        </Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="email-address"
-          onChangeText={setEmail}
-          placeholder="Email"
-          placeholderTextColor="#8b94a7"
-          style={styles.input}
-          value={email}
-        />
-        <TextInput
-          autoCapitalize="none"
-          onChangeText={setPassword}
-          placeholder="Password"
-          placeholderTextColor="#8b94a7"
-          secureTextEntry
-          style={styles.input}
-          value={password}
-        />
-        {challengeToken ? (
-          <TextInput
-            autoCapitalize="none"
-            keyboardType="number-pad"
-            onChangeText={setTotpCode}
-            placeholder="Authenticator code"
-            placeholderTextColor="#8b94a7"
-            style={styles.input}
-            value={totpCode}
-          />
-        ) : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Pressable disabled={busy} onPress={submit} style={styles.button}>
-          {busy ? <ActivityIndicator color="#102018" /> : <Text style={styles.buttonLabel}>Continue</Text>}
-        </Pressable>
-      </View>
+    <KeyboardAvoidingView behavior="padding" style={styles.screen}>
+      {form}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  androidScroll: {
     flex: 1,
+    backgroundColor: "#111827",
+  },
+  screen: {
+    flexGrow: 1,
     backgroundColor: "#111827",
     justifyContent: "center",
     padding: 24,

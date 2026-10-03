@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import {
+  ANDROID_REFRESH_BACKGROUND,
+  ANDROID_REFRESH_COLORS,
+  nativeScreenPaddingTop,
+} from "../android";
+import { useAndroidHardwareBack } from "../use-android-back";
 import {
   NATIVE_NETWORK_ERROR,
   isApiError,
@@ -58,6 +66,7 @@ export function TimeCardsScreen({
   const [drafts, setDrafts] = useState<Record<string, CorrectionDraft>>({});
   const requestGeneration = useRef(0);
   const actionsLocked = pendingEntryId != null || refreshing;
+  useAndroidHardwareBack(onBack);
 
   const refresh = useCallback(async () => {
     const generation = nextNativeRequestGeneration(requestGeneration.current);
@@ -174,8 +183,19 @@ export function TimeCardsScreen({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl onRefresh={refresh} refreshing={refreshing} />}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: nativeScreenPaddingTop(Platform.OS, StatusBar.currentHeight) },
+      ]}
+      refreshControl={
+        <RefreshControl
+          colors={[...ANDROID_REFRESH_COLORS]}
+          onRefresh={refresh}
+          progressBackgroundColor={ANDROID_REFRESH_BACKGROUND}
+          refreshing={refreshing}
+          tintColor="#86efac"
+        />
+      }
       style={styles.screen}
     >
       <Pressable onPress={onBack}>

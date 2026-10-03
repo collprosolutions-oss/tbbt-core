@@ -17,6 +17,21 @@ Sign in with a real TBBT account. The server issues a session token; this app st
 
 A MEMBER sees only jobs assigned to them. An OWNER/ADMIN using this app also sees only their own assigned jobs — never owner Today or invoices.
 
+## Android test build
+
+Local debug APK only. Not Play submission.
+
+```bash
+# Requires Android SDK (ANDROID_HOME) and JDK.
+npm run android:debug-apk
+# or from the repo root:
+bash scripts/android-debug-apk.sh
+```
+
+`eas.json` `preview` is the same internal APK profile (`buildType: apk`). Point `EXPO_PUBLIC_TBBT_API_URL` at the TBBT origin the phone can reach. Android emulators should use `http://10.0.2.2:43217` instead of `localhost`. The app rewrites loopback hosts on Android.
+
+Sign-out revokes the device token with both a JSON body and `x-tbbt-device-token` so a dropped DELETE body still signs the Android device out.
+
 ## Limits
 
 Today + job detail, plus Start job, Complete job, Stop job time, assigned-job travel and material pickup time, purchase-list pickup item recording, Cleaning visit outcome, crew checklist local drafts with explicit sync, assigned-job photo capture/review, and a Time cards screen for the assigned worker's own recorded time. The worker can request a correction and see its recorded status. OWNER accept/decline stays on the existing owner Time Cards surface. Native does not edit approved time or payroll. Optional job alerts are opted in on Today. A notice is informational only and never starts time or accepts an appointment. Device tokens are registered per active membership and revoked on sign-out. This slice does not send real Expo, FCM, or APNs push. No standalone time clock, website wrapper, bundled credentials, or store submission in this slice. Photos reuse private R2 job-photo storage and stay assignment-scoped. Travel and pickup taps reuse the canonical time-card writes and stay distinct from JOB time. Pickup item records reuse the existing purchase list and do not purchase, price, expense, or start time. Visit outcomes reuse the canonical Cleaning visit writes. Every checklist tap is local until **Sync checklist**. Sync reuses `JobCrewVisit.checklistJson` when the Job already has items and does not complete jobs, write time, or send messages. Offline start/stop intents stay on the phone until **Sync time** and never appear as approved server time.
