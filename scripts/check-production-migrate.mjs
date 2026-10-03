@@ -4,8 +4,13 @@
  * Run with:
  *   node scripts/check-production-migrate.mjs
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+  evaluateNeonCliVersion,
+  MIN_NEON_CLI_VERSION,
+} from "./lib/neon-cli-version.mjs";
 import {
   COLLPRO_RENO_VERCEL_PROJECT_ID,
   WORKSPACE_VERCEL_PROJECT_ID,
@@ -20,6 +25,7 @@ import {
   requestPathSchemaWritesBlocked,
   shouldRunProductionMigrate,
 } from "./production-migrate-policy.mjs";
+import { readNeonCliVersionText } from "./require-neon-cli.mjs";
 
 let passed = 0;
 let failed = 0;
@@ -2191,6 +2197,97 @@ check(
     !hostedRecovery.includes("--parent production") &&
     !hostedRecovery.includes("135 local") &&
     !hostedRecovery.includes("20261002193000_esign_signature_request_id"),
+);
+check(
+  "Hosted recovery runbook gates Neon CLI 4.9.0+ and discovers $ROOT_BRANCH before restore",
+  hostedRecovery.includes("neon --version") &&
+    hostedRecovery.includes("4.9.0") &&
+    hostedRecovery.includes("scripts/require-neon-cli.mjs") &&
+    hostedRecovery.includes("$ROOT_BRANCH") &&
+    hostedRecovery.includes('.default == true') &&
+    hostedRecovery.includes("Upgrade first") &&
+    hostedRecovery.includes("--psql") &&
+    hostedRecovery.includes('neon connection-string "$VERIFY_NAME"') &&
+    !hostedRecovery.includes('psql "$(neon connection-string') &&
+    !hostedRecovery.includes("neon branches restore production") &&
+    !hostedRecovery.includes('restore production "^self'),
+);
+
+const requireNeonCliPath = fileURLToPath(new URL("./require-neon-cli.mjs", import.meta.url));
+function runRequireNeonCli(versionText) {
+  const env = { ...process.env };
+  if (versionText === undefined) {
+    delete env.NEON_CLI_VERSION_TEXT;
+  } else {
+    env.NEON_CLI_VERSION_TEXT = versionText;
+  }
+  return spawnSync(process.execPath, [requireNeonCliPath], {
+    encoding: "utf8",
+    env,
+  });
+}
+
+check("Neon CLI version floor is 4.9.0", MIN_NEON_CLI_VERSION === "4.9.0");
+check(
+  "Neon CLI 4.8.9 fails the hosted recovery version gate",
+  evaluateNeonCliVersion("4.8.9").ok === false &&
+    evaluateNeonCliVersion("v4.8.9").ok === false &&
+    evaluateNeonCliVersion("neon 4.8.9").ok === false &&
+    /4\.8\.9/.test(evaluateNeonCliVersion("4.8.9").reason) &&
+    /Upgrade first/.test(evaluateNeonCliVersion("4.8.9").reason),
+);
+check(
+  "Neon CLI 4.9.0 passes the hosted recovery version gate",
+  evaluateNeonCliVersion("4.9.0").ok === true &&
+    evaluateNeonCliVersion("v4.9.0").ok === true &&
+    evaluateNeonCliVersion("neon 4.9.0").ok === true,
+);
+check(
+  "Neon CLI 4.10.0 passes the hosted recovery version gate",
+  evaluateNeonCliVersion("4.10.0").ok === true &&
+    evaluateNeonCliVersion("v4.10.0").ok === true &&
+    evaluateNeonCliVersion("4.10.0-rc.1").ok === true,
+);
+check(
+  "Neon CLI garbage or missing version fails closed",
+  evaluateNeonCliVersion("").ok === false &&
+    evaluateNeonCliVersion(null).ok === false &&
+    evaluateNeonCliVersion(undefined).ok === false &&
+    evaluateNeonCliVersion("not-a-version").ok === false &&
+    evaluateNeonCliVersion("4.9").ok === false &&
+    evaluateNeonCliVersion("4.9.0-beta.1").ok === false &&
+    /missing/.test(evaluateNeonCliVersion("").reason) &&
+    /unreadable/.test(evaluateNeonCliVersion("garbage").reason) &&
+    /Upgrade first/.test(evaluateNeonCliVersion("not-a-version").reason),
+);
+check(
+  "Neon CLI version text injection does not spawn neon",
+  readNeonCliVersionText({
+    env: { NEON_CLI_VERSION_TEXT: "4.9.0" },
+    spawn: () => {
+      throw new Error("spawn must not run when NEON_CLI_VERSION_TEXT is set");
+    },
+  }).text === "4.9.0",
+);
+
+const fail489 = runRequireNeonCli("4.8.9");
+const pass490 = runRequireNeonCli("4.9.0");
+const pass410 = runRequireNeonCli("4.10.0");
+const failGarbage = runRequireNeonCli("not-a-version");
+const failMissing = runRequireNeonCli("");
+check(
+  "require-neon-cli.mjs fail-closes on 4.8.9, garbage, and missing; passes 4.9.0 and 4.10.0",
+  fail489.status !== 0 &&
+    /4\.8\.9/.test(fail489.stderr) &&
+    /Upgrade first/.test(fail489.stderr) &&
+    pass490.status === 0 &&
+    /4\.9\.0/.test(pass490.stdout) &&
+    pass410.status === 0 &&
+    /4\.10\.0/.test(pass410.stdout) &&
+    failGarbage.status !== 0 &&
+    /unreadable/.test(failGarbage.stderr) &&
+    failMissing.status !== 0 &&
+    /missing/.test(failMissing.stderr),
 );
 
 console.log(

@@ -136,24 +136,30 @@ orphaned objects.
 2. **Confirm** the Free history window still covers `T`. On Free,
    anything older than 6 hours / 1 GB is unrecoverable. Do not lengthen
    retention.
-3. **Time Travel Assist** (read-only) at `T` on the Production **root**.
+3. **Require Neon CLI 4.9.0+** (`neon --version` or
+   `node scripts/require-neon-cli.mjs`) before any `neon branches`
+   restore or verify command. `--no-secrets` needs 4.9.0. If the CLI is
+   missing or older, upgrade first and retry; stop otherwise.
+4. **Discover `$ROOT_BRANCH`**: the project's default root from
+   `neon branches list --output json` (`.default == true`). Do not
+   assume the name `production`.
+5. **Time Travel Assist** (read-only) at `T` on `$ROOT_BRANCH`.
    Pick the exact moment. Do not restore.
-4. **Create an isolated Neon branch** with `--parent "$T"` (or keep
+6. **Create an isolated Neon branch** with `--parent "$T"` (or keep
    using Time Travel if the checks fit in the ephemeral endpoint).
    Confirm that branch's `parent_timestamp` equals `T` before any
-   verification SQL. Do **not** `neon branches restore` the Production
-   root.
-5. **Migration-ledger** verification on that isolated connection
+   verification SQL. Do **not** `neon branches restore` `$ROOT_BRANCH`.
+7. **Migration-ledger** verification on that isolated connection
    (`planProductionMigrateDeploy`). No `migrate deploy`.
-6. **Tenant-isolation** SQL on that same connection.
-7. **File-reference** SQL, then **HeadObject** (never GetObject) each
+8. **Tenant-isolation** SQL on that same connection.
+9. **File-reference** SQL, then **HeadObject** (never GetObject) each
    READY PRIVATE `storageKey` in the live private bucket.
-8. **Rollback decision** (GO / NO-GO). Stop on NO-GO. Delete the
-   isolated branch. Leave Production Neon and R2 untouched.
-9. **GO only:** Instant-restore the Production root with
-   `--preserve-under-name`, then keep the live R2 bucket (objects are
-   not time-traveled). Missing private objects stay missing unless a
-   replica already exists.
+10. **Rollback decision** (GO / NO-GO). Stop on NO-GO. Delete the
+    isolated branch. Leave Production Neon and R2 untouched.
+11. **GO only:** Instant-restore `$ROOT_BRANCH` with
+    `--preserve-under-name`, then keep the live R2 bucket (objects are
+    not time-traveled). Missing private objects stay missing unless a
+    replica already exists.
 
 Never restore R2 first. The database `StoredAsset` row is the ownership
 source of truth (`prisma/schema.prisma`: bytes live in object storage;
@@ -178,6 +184,21 @@ still lacks write rights. It is the substitute for a live restore.
 
 ### 4.2 When Neon read is granted
 
+Run the version gate **before** any `neon branches` restore or verify
+command. `--no-secrets` needs Neon CLI **4.9.0** or newer.
+
+```bash
+neon --version
+node scripts/require-neon-cli.mjs
+```
+
+`require-neon-cli.mjs` fail-closes on a missing binary, unreadable
+output, or a version older than 4.9.0 (including `4.9.0` pre-releases
+such as `4.9.0-beta.1`). Prefixed strings such as `v4.9.0` or
+`neon 4.10.0` are accepted when the numeric version meets the floor.
+If the CLI is missing or older: **upgrade first, then retry. Stop
+otherwise.** Do not continue to `neon branches create` / `restore`.
+
 ```bash
 # Replace PROJECT with the decrypted database_NEON_PROJECT_ID or the
 # Console id for empty-cherry-05140338. Do not paste secrets into git.
@@ -188,19 +209,33 @@ neon projects get "$PROJECT" --output json
 # window or the 1 GB cap, stop: it is unrecoverable.
 
 neon branches list --project-id "$PROJECT" --output json
-# Note the Production root, whether it is [default], and whether the
-# 10-branch Free cap is already full. --parent "$T" forks the default
-# root at T. If Production is not the default, stop and do not guess.
+ROOT_BRANCH=$(neon branches list --project-id "$PROJECT" --output json \
+  | jq -r '[.[] | select(.default == true) | .name] | unique | .[]')
+# Exactly one default root. Do not assume the name production.
+# --parent "$T" forks that default root at T. If ROOT_BRANCH is empty
+# or more than one line, stop and do not guess.
 ```
 
-Time Travel in the Neon Console SQL Editor is read-only and prints no
-connection URI. Prefer that. A bare `neon connection-string` always
-prints the role password (`--no-secrets` is not documented on that
-command). If you must use the CLI, connect with `--psql` and do not
-copy the URI into logs or tickets:
+Time Travel in the Neon Console SQL Editor on `$ROOT_BRANCH` at `T` is
+read-only and prints no connection URI. Prefer that.
+
+A bare `neon connection-string` always prints the role password
+(`--no-secrets` is not documented on that command). Do **not** write
+`psql "$(neon connection-string …)"` — command substitution puts the
+password on the next argv and in shell history.
+
+To open the **verify** branch without printing secrets into history or
+logs, let the CLI start psql (no `$(…)` wrap, no `set -x`, no paste
+into tickets):
 
 ```bash
-neon connection-string "production@${T}" --project-id "$PROJECT" --psql
+neon connection-string "$VERIFY_NAME" --project-id "$PROJECT" --psql
+```
+
+Time Travel against the default root (only after `$ROOT_BRANCH` is set):
+
+```bash
+neon connection-string "${ROOT_BRANCH}@${T}" --project-id "$PROJECT" --psql
 ```
 
 Time Travel rejects writes. Run the SQL in sections 5–7 against that
@@ -246,8 +281,9 @@ this branch is copy-on-write; it is not an in-place Production restore.
 Do **not** run:
 
 ```bash
-# FORBIDDEN until GO — overwrites the Production root.
-neon branches restore production "^self@${T}" --preserve-under-name "production_old_${T}"
+# FORBIDDEN until GO — overwrites the default root ($ROOT_BRANCH).
+# Discover the real default first; do not hard-code the name production.
+neon branches restore "$ROOT_BRANCH" "^self@${T}" --preserve-under-name "${ROOT_BRANCH}_old_${T}"
 ```
 
 ### 4.3 When founder read-only Postgres is granted
@@ -547,11 +583,19 @@ Record the decision before anyone touches the Production root.
   is written down and accepted by the owner (legacy Blob or known
   pre-R2 gap).
 - A `--preserve-under-name` backup name is chosen
-  (`production_old_<utc>`).
+  (`${ROOT_BRANCH}_old_<utc>`). Do not hard-code the branch name
+  `production`.
+- Neon CLI is 4.9.0 or newer (`neon --version` /
+  `node scripts/require-neon-cli.mjs`). If older or missing: upgrade
+  first, stop otherwise.
 - Preview owners know the shared `DATABASE_URL` will drop connections.
 
 ### NO-GO — any of these
 
+- Neon CLI is missing, unreadable, or older than 4.9.0 (needed for
+  `--no-secrets`). Upgrade first; stop otherwise.
+- `$ROOT_BRANCH` was not discovered from `.default == true` (empty or
+  more than one default). Do not guess `production`.
 - `T` is outside the window (unrecoverable on Free; do not extend
   retention to reach it).
 - Isolated verify branch `parent_timestamp` does not equal `T`.
@@ -579,8 +623,10 @@ Record the decision before anyone touches the Production root.
    backup name:
 
    ```bash
-   neon branches restore production "^self@${T}" \
-     --preserve-under-name "production_old_${T}" \
+   # $ROOT_BRANCH is the project's real default (section 4.2), not a
+   # hard-coded production name.
+   neon branches restore "$ROOT_BRANCH" "^self@${T}" \
+     --preserve-under-name "${ROOT_BRANCH}_old_${T}" \
      --project-id "$PROJECT"
    ```
 
@@ -591,9 +637,9 @@ Record the decision before anyone touches the Production root.
    `prisma migrate deploy`.
 5. R2 stays the live bucket. Do not overwrite it.
 6. If the restore is wrong, Instant-restore **from**
-   `production_old_${T}` back onto `production`. Do not delete that
-   backup while it has children. R2 needs no rollback because it was
-   not rewritten.
+   `${ROOT_BRANCH}_old_${T}` back onto `$ROOT_BRANCH`. Do not delete
+   that backup while it has children. R2 needs no rollback because it
+   was not rewritten.
 
 ---
 
@@ -615,6 +661,8 @@ Record the decision before anyone touches the Production root.
   `npm run test:handyman-database-restore`
 - Ledger policy: `scripts/production-migrate-policy.mjs`,
   `npm run test:production-migrate`
+- Neon CLI 4.9.0+ gate: `scripts/require-neon-cli.mjs`,
+  `scripts/lib/neon-cli-version.mjs`
 - Founder read-only probe: `scripts/founder-production-preflight-db.mjs`
 - Isolation harness: `npm run test:isolation`
 - Neon Instant restore: https://neon.com/docs/introduction/branch-restore
