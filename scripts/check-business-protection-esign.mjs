@@ -218,6 +218,16 @@ check("Webhook route returns the official Hello API Event Received body", routeS
 check("Webhook path is exact", isEsignWebhookPath("/api/esign/webhook") && ESIGN_WEBHOOK_PATH === "/api/esign/webhook" && !isEsignWebhookPath("/api/esign/webhook/extra"));
 check("Auth proxy allows the e-sign webhook without a session", proxySrc.includes("isEsignWebhookPath") && proxySrc.includes("api/esign/webhook"));
 check("Fake adapter never fetches api.hellosign.com", !fakeSrc.includes("api.hellosign.com"));
+const orphanReleaseSrc = opsSrc.slice(
+  opsSrc.indexOf("async function releaseOrphanedProviderSignedAsset"),
+  opsSrc.indexOf("export async function sendAgreementForEsign"),
+);
+check(
+  "Orphan provider-signed PDF claims READY used bytes once",
+  orphanReleaseSrc.includes("claimReadyUsedBytesOnce") &&
+    orphanReleaseSrc.includes("bestEffortCleanupOwnedObject") &&
+    !orphanReleaseSrc.includes("storageUsedBytes: { decrement"),
+);
 check("OWNER Send exists and stays owner-gated", opsSrc.includes("sendAgreementForEsign") && opsSrc.includes("requireOwnerForCompletion"));
 check("Webhook completion binds the exact version id", opsSrc.includes("completeAgreementFromEsignWebhook") && opsSrc.includes("not bound to this exact business, agreement, and version"));
 check("Legal-review warning and manual upload stay in the workspace", workspaceSrc.includes("Acknowledge attorney-review recommendation") && workspaceSrc.includes("Upload signed PDF"));

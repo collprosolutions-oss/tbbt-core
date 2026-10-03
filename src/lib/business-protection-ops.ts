@@ -79,6 +79,7 @@ import {
   bestEffortCleanupOwnedObject,
   claimReadyUsedBytesOnce,
   finalizeManagedUpload,
+  resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
 
@@ -1493,33 +1494,24 @@ async function releaseOrphanedProviderSignedAsset(
     await abortManagedUpload(deps, businessId, asset.id);
     return;
   }
-  try {
-    const provider = await resolveStorageProvider(deps);
-    await provider
-      .deleteObject({
-        bucket: asset.storageAccount.bucketName,
-        key: asset.storageKey,
-      })
-      .catch(() => undefined);
-  } catch {
-    // Provider absence still allows the tenant-scoped DB cleanup below.
-  }
   const now = deps.now?.() ?? new Date();
-  await deps.db.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT id FROM "BusinessStorageAccount" WHERE id = ${asset.storageAccountId} FOR UPDATE
-    `;
-    const updated = await tx.storedAsset.updateMany({
-      where: { id: asset.id, businessId, status: { not: "DELETED" } },
-      data: { status: "DELETED", deletedAt: now, publicPath: null },
+  const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: orphan provider PDFs use the shared READY claim.
+    const result = await claimReadyUsedBytesOnce(tx, {
+      businessId,
+      assetId: asset.id,
+      accountId: asset.storageAccountId,
+      now,
+      nextStatus: "DELETED",
     });
-    if (updated.count === 1 && asset.status === "READY" && asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
-      });
-    }
+    return result.claimed;
   });
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, businessId, {
+      bucket: asset.storageAccount.bucketName,
+      storageKey: asset.storageKey,
+    });
+  }
 }
 
 export async function sendAgreementForEsign(
