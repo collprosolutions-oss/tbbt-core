@@ -382,6 +382,7 @@ model Business {
   phoneInteractions        PhoneInteraction[]
   receptionistEvents       ReceptionistEvent[]
   messagingWebhookEvents   CustomerMessagingWebhookEvent[]
+  emailFailedDestinations  EmailFailedDestination[]
   goals                    BusinessGoal[]
   actionItems              BusinessActionItem[]
   campaigns                MarketingCampaign[]
@@ -916,6 +917,7 @@ model CustomerCommunication {
   thread       CommunicationThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
   initiatedBy  Membership?          @relation("CustomerCommunicationInitiator", fields: [initiatedByMembershipId], references: [id], onDelete: SetNull)
   phoneInteractions PhoneInteraction[]
+  emailFailedDestinations EmailFailedDestination[]
 
   @@unique([businessId, idempotencyKey])
   @@index([businessId])
@@ -1021,6 +1023,33 @@ model CustomerMessagingWebhookEvent {
 
   @@unique([provider, providerEventId, eventKind])
   @@index([businessId])
+}
+
+/// Verified Resend bounce/complaint destinations. One row per business +
+/// email fingerprint. Tenant comes from existing send history
+/// (CustomerCommunication.providerMessageId), never from a payload
+/// businessId. Replay of the same provider event does not add a second row.
+model EmailFailedDestination {
+  id                      String   @id @default(cuid())
+  businessId              String
+  destinationFingerprint  String
+  destinationLast4        String?
+  /// BOUNCE | COMPLAINT
+  reason                  String
+  provider                String
+  providerEventId         String
+  providerMessageId       String
+  communicationId         String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  business      Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  communication CustomerCommunication? @relation(fields: [communicationId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@unique([businessId, destinationFingerprint])
+  @@index([businessId])
+  @@index([provider, providerMessageId])
 }
 
 model Property {

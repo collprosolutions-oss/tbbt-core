@@ -17,6 +17,7 @@ import {
 } from "@/lib/payments/config";
 import { explainPaymentsGoLive } from "@/lib/payments/go-live";
 import { redactStripeText } from "@/lib/payments/stripe-errors";
+import { isMailWebhookPath, MAIL_WEBHOOK_PATH } from "@/lib/mail-webhook-path";
 import { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } from "@/lib/stripe-webhook-path";
 import { getSaasBillingWebhookSecret, getSaasPriceId } from "@/lib/saas-billing/config";
 import { resolveSaasBillingReadiness } from "@/lib/saas-billing/readiness";
@@ -116,6 +117,7 @@ export const PREFLIGHT_ENV_KEYS = [
   "VERCEL_PROJECT_PRODUCTION_URL",
   "NEXT_PUBLIC_APP_URL",
   "RESEND_API_KEY",
+  "RESEND_WEBHOOK_SECRET",
   "EMAIL_FROM",
   "R2_ACCOUNT_ID",
   "R2_ACCESS_KEY_ID",
@@ -148,6 +150,7 @@ export const SENSITIVE_ENV_KEYS = [
   "STRIPE_WEBHOOK_SECRET",
   "STRIPE_SAAS_WEBHOOK_SECRET",
   "RESEND_API_KEY",
+  "RESEND_WEBHOOK_SECRET",
   "EMAIL_FROM",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
@@ -930,7 +933,7 @@ function evaluateInside(input: {
     title: "Webhook public reachability",
     status: "MANUAL",
     requirement: "REQUIRED",
-    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio SMS callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. Twilio Voice callbacks use ${PRODUCTION_APP_ORIGIN}${VOICE_WEBHOOK_PATH}. Calendar clients GET ${PRODUCTION_APP_ORIGIN}${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/<token> with no TBBT session. isStripeWebhookPath, isCustomerMessagingWebhookPath, isVoiceWebhookPath, and isScheduleCalendarFeedPath allow those paths. This checker does not call Vercel.`,
+    detail: `Confirm Production does not enable Vercel Authentication. Stripe posts to ${PRODUCTION_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}. Twilio SMS callbacks use ${PRODUCTION_APP_ORIGIN}${CUSTOMER_MESSAGING_WEBHOOK_PATH}. Twilio Voice callbacks use ${PRODUCTION_APP_ORIGIN}${VOICE_WEBHOOK_PATH}. Resend bounce and complaint events use ${PRODUCTION_APP_ORIGIN}${MAIL_WEBHOOK_PATH}. Calendar clients GET ${PRODUCTION_APP_ORIGIN}${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/<token> with no TBBT session. isStripeWebhookPath, isCustomerMessagingWebhookPath, isVoiceWebhookPath, isMailWebhookPath, and isScheduleCalendarFeedPath allow those paths. This checker does not call Vercel.`,
   });
 
   const storageConfigured = isBusinessStorageConfigured();
@@ -1271,6 +1274,7 @@ function evaluateInside(input: {
     isStripeWebhookPath(STRIPE_WEBHOOK_PATH) &&
     isCustomerMessagingWebhookPath(CUSTOMER_MESSAGING_WEBHOOK_PATH) &&
     isVoiceWebhookPath(VOICE_WEBHOOK_PATH) &&
+    isMailWebhookPath(MAIL_WEBHOOK_PATH) &&
     isStudioWeeklyReminderCronPath(STUDIO_WEEKLY_REMINDER_CRON_PATH) &&
     isScheduleCalendarFeedPath(`${SCHEDULE_CALENDAR_FEED_PATH_PREFIX}/token`);
   drafts.push({
@@ -1280,7 +1284,7 @@ function evaluateInside(input: {
     status: routesOk ? "PASS" : "BLOCKED",
     requirement: "REQUIRED",
     detail: routesOk
-      ? "Public site, storage, Stripe webhook, Twilio SMS webhook, Twilio Voice webhook, cron, and calendar-feed paths match the existing allow helpers."
+      ? "Public site, storage, Stripe webhook, Twilio SMS webhook, Twilio Voice webhook, Resend webhook, cron, and calendar-feed paths match the existing allow helpers."
       : "A public, webhook, cron, or calendar-feed path helper no longer matches the production paths.",
   });
 

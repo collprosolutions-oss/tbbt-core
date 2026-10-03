@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { signResendWebhook } from "@/lib/mail-webhook-signature";
 
 export const FAKE_EMAIL_ADAPTER = "fake";
 
@@ -27,6 +28,15 @@ export function isFakeEmailAdapterEnabled() {
     return false;
   }
   return process.env.TBBT_EMAIL_ADAPTER === "fake";
+}
+
+export function signFakeResendWebhook(input: {
+  secret: string;
+  payload: string;
+  id?: string;
+  timestamp?: string | number;
+}) {
+  return signResendWebhook(input);
 }
 
 export function createFakeTransactionalEmailSender(): FakeTransactionalEmailSender {

@@ -5,6 +5,7 @@ import {
   consentContextSnapshot,
   emailDestinationFingerprint,
 } from "@/lib/communications/consent";
+import { findEmailFailedDestination } from "@/lib/mail-failed-destination";
 import { productCapabilityForPurpose } from "@/lib/communications/entitlements";
 import { assertRelatedRecordForCustomer } from "@/lib/communications/related";
 import { departmentSmsComposeRequiresAddon } from "@/lib/communications/sms-policy";
@@ -310,6 +311,16 @@ export async function composeCustomerCommunication(
     },
   });
 
+  const emailFingerprint = isUsableEmail(customer.email)
+    ? emailDestinationFingerprint(access.businessId, customer.email)
+    : null;
+  const failedDestination = emailFingerprint
+    ? await findEmailFailedDestination(db, {
+        businessId: access.businessId,
+        destinationFingerprint: emailFingerprint,
+      })
+    : null;
+
   const eligibility = evaluateComposeChannelEligibility({
     businessId: access.businessId,
     channel: input.channel,
@@ -319,6 +330,7 @@ export async function composeCustomerCommunication(
     purpose,
     preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
     smsEntitled,
+    failedDestinationReason: failedDestination?.reason ?? null,
   });
 
   const thread = await getOrCreateCustomerThread(db, {

@@ -17,12 +17,18 @@ import {
 } from "@/lib/communications/types";
 import { isEmailDeliveryConfigured } from "@/lib/settings";
 import { isCustomerMessagingConfigured } from "@/lib/customer-messaging/config";
+import {
+  emailFailedDestinationOwnerReason,
+  isEmailFailedDestinationReason,
+  type EmailFailedDestinationReason,
+} from "@/lib/mail-failed-destination";
 
 export type ChannelUnavailableReason =
   | "missing_email"
   | "missing_phone"
   | "unknown_consent"
   | "revoked_consent"
+  | "failed_destination"
   | "preference_disabled"
   | "email_not_configured"
   | "sms_not_configured"
@@ -57,6 +63,7 @@ export function evaluateEmailEligibility(input: {
   deliveryConfigured?: boolean;
   purpose?: CustomerMessagePurpose;
   preferences?: Partial<SettingsPreferenceFlags> | null;
+  failedDestinationReason?: EmailFailedDestinationReason | string | null;
 }): ChannelEligibility {
   const configured = input.deliveryConfigured ?? isEmailDeliveryConfigured();
   if (!isUsableEmail(input.email)) {
@@ -71,6 +78,17 @@ export function evaluateEmailEligibility(input: {
     };
   }
   const email = input.email!.trim();
+  if (isEmailFailedDestinationReason(input.failedDestinationReason)) {
+    return {
+      channel: "EMAIL",
+      permitted: false,
+      available: false,
+      reason: "failed_destination",
+      ownerReason: emailFailedDestinationOwnerReason(input.failedDestinationReason),
+      last4: emailDestinationLast4(email),
+      fingerprint: emailDestinationFingerprint(input.businessId, email),
+    };
+  }
   if (
     input.purpose &&
     !communicationPreferenceEnabled(input.purpose, input.preferences)
@@ -142,6 +160,7 @@ export function evaluateComposeChannelEligibility(input: {
   smsEntitled: boolean;
   smsConfigured?: boolean;
   emailConfigured?: boolean;
+  failedDestinationReason?: EmailFailedDestinationReason | string | null;
 }): ChannelEligibility {
   if (input.channel === "EMAIL") {
     return evaluateEmailEligibility({
@@ -150,6 +169,7 @@ export function evaluateComposeChannelEligibility(input: {
       deliveryConfigured: input.emailConfigured,
       purpose: input.purpose,
       preferences: input.preferences,
+      failedDestinationReason: input.failedDestinationReason,
     });
   }
 
