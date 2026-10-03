@@ -123,6 +123,7 @@ npm run test:collections-worklist
 npm run test:job-money-reconciliation
 npm run test:handyman-bank-reconciliation
 npm run test:bank-reconciliation
+npm run test:bank-connect
 npm run test:handyman-database-restore
 npm run test:handyman-storage-restore
 npx tsc --noEmit

@@ -455,6 +455,12 @@ model Business {
   bankReconciliationImports BankReconciliationImport[]
   bankReconciliationRows    BankReconciliationRow[]
   bankReconciliationMatches BankReconciliationMatch[]
+  /// Read-only Plaid Item for OWNER reconciliation review. Never a
+  /// verified cash balance and never a money-movement credential.
+  bankPlaidItems            BankPlaidItem[]
+  bankPlaidAccounts         BankPlaidAccount[]
+  bankPlaidTransactions     BankPlaidTransaction[]
+  bankPlaidWebhookEvents    BankPlaidWebhookEvent[]
   /// OWNER-reviewed CSV preview/confirm for this business's catalog.
   /// Confirm writes ServiceCatalogItem only — never LineItem snapshots
   /// or published hourly rates.
@@ -763,6 +769,7 @@ model Membership {
   recordedInvoiceCredits InvoiceCredit[] @relation("InvoiceCreditRecorder")
   createdBankReconciliationImports BankReconciliationImport[] @relation("BankReconciliationImportCreator")
   decidedBankReconciliationMatches BankReconciliationMatch[] @relation("BankReconciliationMatchDecider")
+  createdBankPlaidItems BankPlaidItem[] @relation("BankPlaidItemCreator")
   scheduleCalendarSubscriptions ScheduleCalendarSubscription[]
   decidedProjectDocumentReviews ProjectDocumentReview[] @relation("ProjectDocumentReviewDecider")
   nativePushDevices             NativePushDevice[]
@@ -5881,7 +5888,7 @@ model RegulatoryIntelligenceNote {
 model BankReconciliationImport {
   id                    String   @id @default(cuid())
   businessId            String
-  /// CSV_UPLOAD. No live bank feed and no owner-supplied URL fetch.
+  /// CSV_UPLOAD | PLAID_SYNC. PLAID_SYNC is a read-only review feed.
   sourceKind            String
   /// Sanitized filename. Display only.
   sourceLabel           String
@@ -5935,6 +5942,8 @@ model BankReconciliationRow {
   invalidReason        String?
   reversalOfRowNumber  Int?
   duplicateOfRowNumber Int?
+  /// Plaid transaction_id when this row came from PLAID_SYNC. Null for CSV.
+  externalTransactionId String?
   createdAt            DateTime @default(now())
 
   business Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -5945,6 +5954,7 @@ model BankReconciliationRow {
   @@index([businessId])
   @@index([importId])
   @@index([rowFingerprint])
+  @@index([importId, externalTransactionId])
 }
 
 /// Suggested or owner-reviewed link from a bank row to a recorded TBBT
@@ -5981,4 +5991,103 @@ model BankReconciliationMatch {
   @@index([importId])
   @@index([rowId])
   @@index([importId, candidateKind, candidateId])
+}
+
+/// One read-only Plaid Item per business. Access tokens are stored
+/// encrypted. Status ACTIVE means a review feed is linked — never a
+/// verified cash balance and never a money-movement credential.
+model BankPlaidItem {
+  id                    String    @id @default(cuid())
+  businessId            String
+  itemId                String
+  institutionId         String?
+  institutionName       String
+  /// ACTIVE | NEEDS_REAUTH | DISCONNECTED
+  status                String
+  /// AES-256-GCM ciphertext. Empty after disconnect.
+  accessTokenCipher     String    @default("")
+  syncCursor            String    @default("")
+  lastSyncedAt          DateTime?
+  lastWebhookAt         DateTime?
+  connectedAt           DateTime
+  disconnectedAt        DateTime?
+  createdByMembershipId String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business     Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy    Membership            @relation("BankPlaidItemCreator", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  accounts     BankPlaidAccount[]
+  transactions BankPlaidTransaction[]
+  webhookEvents BankPlaidWebhookEvent[]
+
+  @@unique([businessId])
+  @@unique([itemId])
+  @@index([createdByMembershipId])
+}
+
+model BankPlaidAccount {
+  id           String   @id @default(cuid())
+  businessId   String
+  itemRowId    String
+  accountId    String
+  name         String
+  officialName String?
+  mask         String?
+  type         String
+  subtype      String?
+  createdAt    DateTime @default(now())
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  item     BankPlaidItem @relation(fields: [itemRowId], references: [id], onDelete: Cascade)
+
+  @@unique([itemRowId, accountId])
+  @@index([businessId])
+}
+
+/// Posted Plaid transactions mirrored into the OWNER review workspace.
+/// Pending rows are ignored until they post. Never writes Payment / Expense.
+model BankPlaidTransaction {
+  id            String   @id @default(cuid())
+  businessId    String
+  itemRowId     String
+  transactionId String
+  accountId     String
+  postedOn      String
+  amountCents   Int
+  description   String
+  pending       Boolean  @default(false)
+  removed       Boolean  @default(false)
+  importId      String?
+  rowId         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  item     BankPlaidItem @relation(fields: [itemRowId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, transactionId])
+  @@index([itemRowId])
+  @@index([importId])
+  @@index([rowId])
+}
+
+/// Idempotent Plaid webhook receipts. Duplicate eventKey is a no-op.
+model BankPlaidWebhookEvent {
+  id           String    @id @default(cuid())
+  businessId   String?
+  itemRowId    String?
+  itemId       String
+  eventKey     String
+  webhookType  String
+  webhookCode  String
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+
+  business Business?     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  item     BankPlaidItem? @relation(fields: [itemRowId], references: [id], onDelete: SetNull)
+
+  @@unique([eventKey])
+  @@index([itemId])
+  @@index([businessId])
 }

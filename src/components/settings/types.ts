@@ -107,6 +107,13 @@ export type SettingsWorkspaceProps = {
     accountingMessage: string;
     bankingMessage: string;
   };
+  bankConnect?: {
+    adapter: "fake" | "plaid" | "unconfigured";
+    status: string;
+    institutionName: string | null;
+    lastSyncedAtLabel: string | null;
+    importHref: string | null;
+  };
 };
 
 export type {

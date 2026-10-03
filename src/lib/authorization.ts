@@ -231,10 +231,11 @@ export const CAPABILITIES = {
    */
   MANAGE_EQUIPMENT: "MANAGE_EQUIPMENT",
   /**
-   * OWNER-only import and review of a manual bank CSV. Suggests matches
-   * to recorded Payment / Expense rows. Never creates a Payment, never
-   * changes an invoice, never writes InvoiceCredit, and never claims a
-   * verified bank balance or live banking connection.
+   * OWNER-only bank CSV import, Plaid read-only connect/sync, and
+   * reconciliation review. Suggests matches to recorded Payment /
+   * Expense rows. Never creates a Payment, never changes an invoice,
+   * never writes InvoiceCredit, never moves money, and never claims a
+   * verified bank balance.
    */
   REVIEW_BANK_RECONCILIATION: "REVIEW_BANK_RECONCILIATION",
 } as const;

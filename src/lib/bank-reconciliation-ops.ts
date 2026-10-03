@@ -72,6 +72,7 @@ export type StoredBankRow = {
   invalidReason: string | null;
   reversalOfRowNumber: number | null;
   duplicateOfRowNumber: number | null;
+  externalTransactionId: string | null;
   matches: StoredBankMatch[];
 };
 
@@ -140,6 +141,7 @@ function rowWriteData(businessId: string, row: ParsedBankRow) {
     invalidReason: row.invalidReason,
     reversalOfRowNumber: row.reversalOfRowNumber,
     duplicateOfRowNumber: row.duplicateOfRowNumber,
+    externalTransactionId: row.externalTransactionId ?? null,
   };
 }
 
@@ -286,6 +288,7 @@ export async function loadOwnedBankReconciliation(
     invalidReason: row.invalidReason,
     reversalOfRowNumber: row.reversalOfRowNumber,
     duplicateOfRowNumber: row.duplicateOfRowNumber,
+    externalTransactionId: row.externalTransactionId ?? null,
     matches: attachLabels(row.matches, labels),
   }));
   return toWorkspace(record, rows);

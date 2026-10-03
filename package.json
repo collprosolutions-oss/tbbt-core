@@ -81,6 +81,7 @@
     "test:job-money-reconciliation": "node --experimental-strip-types scripts/check-job-money-reconciliation.mjs",
     "test:handyman-bank-reconciliation": "node --experimental-strip-types scripts/check-handyman-bank-reconciliation.mjs",
     "test:bank-reconciliation": "node --experimental-strip-types scripts/check-bank-reconciliation.mjs",
+    "test:bank-connect": "node --experimental-strip-types scripts/check-bank-connect.mjs",
     "test:job-property-export": "node --experimental-strip-types scripts/check-job-property-export.mjs",
     "test:theme-contrast": "node scripts/check-theme-contrast.mjs",
     "test:app-url": "node --experimental-strip-types scripts/check-app-url.mjs",

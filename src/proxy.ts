@@ -10,6 +10,7 @@ import { isNativeFieldApiPath } from "@/lib/native-field-api-path";
 import { isStudioWeeklyReminderCronPath } from "@/lib/studio-weekly-reminder-cron-path";
 import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
 import { isEsignWebhookPath } from "@/lib/esign/webhook-path";
+import { isPlaidWebhookPath } from "@/lib/plaid-webhook-path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -81,6 +82,7 @@ export function proxy(request: NextRequest) {
   if (
     isPublicWebsitePath(pathname) ||
     isStripeWebhookPath(pathname) ||
+    isPlaidWebhookPath(pathname) ||
     isCustomerMessagingWebhookPath(pathname) ||
     isVoiceWebhookPath(pathname) ||
     isEsignWebhookPath(pathname)
@@ -117,6 +119,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/esign/webhook|api/cron/|api/native/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/plaid/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/esign/webhook|api/cron/|api/native/).*)",
   ],
 };

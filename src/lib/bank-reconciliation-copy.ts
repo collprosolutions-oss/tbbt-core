@@ -12,7 +12,7 @@ export const BANK_MATCH_DATE_WINDOW_DAYS = 3;
 export const BANK_REVERSAL_DATE_WINDOW_DAYS = 7;
 export const MAX_BANK_MATCH_CANDIDATES = 3;
 
-export const BANK_RECONCILIATION_SOURCE_KINDS = ["CSV_UPLOAD"] as const;
+export const BANK_RECONCILIATION_SOURCE_KINDS = ["CSV_UPLOAD", "PLAID_SYNC"] as const;
 export type BankReconciliationSourceKind =
   (typeof BANK_RECONCILIATION_SOURCE_KINDS)[number];
 

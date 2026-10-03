@@ -31,6 +31,9 @@ import { loadWebsitePhotoEditorSlots } from "@/lib/public-site-images";
 import { loadSupplierPricingContextPayload } from "@/lib/material-pricing/db";
 import { loadWebsiteDomainVerification, loadWebsitePublishPanelData } from "@/lib/website-engine";
 import { getFinanceConnectionProvider } from "@/lib/finance-connections";
+import { loadOwnedBankPlaidStatus } from "@/lib/bank-connect";
+import { BANK_RECONCILIATION_ROUTE } from "@/lib/bank-reconciliation-copy";
+import { formatDate, formatTime } from "@/lib/format";
 import { asNumberOrNull } from "@/lib/reports";
 
 export const metadata: Metadata = {
@@ -60,6 +63,11 @@ export default async function SettingsPage({
     select: { burdenRate: true, targetGrossMarginRate: true, notes: true },
   });
   const financeStatus = getFinanceConnectionProvider().status();
+  const canConnectBank = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.REVIEW_BANK_RECONCILIATION,
+  );
+  const bankConnect = canConnectBank ? await loadOwnedBankPlaidStatus(prisma, access) : null;
   const readiness = settingsReadinessFromSnapshot(snapshot);
   const integrations = settingsIntegrationCardsFromSnapshot(snapshot);
   const role = access.workspace.role;
@@ -223,6 +231,21 @@ export default async function SettingsPage({
             accountingMessage: financeStatus.accounting.message,
             bankingMessage: financeStatus.banking.message,
           }}
+          bankConnect={
+            bankConnect
+              ? {
+                  adapter: bankConnect.adapter,
+                  status: bankConnect.status,
+                  institutionName: bankConnect.institutionName,
+                  lastSyncedAtLabel: bankConnect.lastSyncedAt
+                    ? `${formatDate(bankConnect.lastSyncedAt)} ${formatTime(bankConnect.lastSyncedAt)}`
+                    : null,
+                  importHref: bankConnect.importId
+                    ? `${BANK_RECONCILIATION_ROUTE}/${bankConnect.importId}`
+                    : null,
+                }
+              : undefined
+          }
         />
       </FounderDesignRoot>
     </PageContainer>

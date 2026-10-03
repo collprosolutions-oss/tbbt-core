@@ -20,7 +20,9 @@ import {
   BANK_RECONCILIATION_ROUTE,
   OWNER_ONLY_BANK_RECONCILIATION_MESSAGE,
 } from "@/lib/bank-reconciliation";
+import { loadOwnedBankPlaidStatus } from "@/lib/bank-connect";
 import { listOwnedBankReconciliations } from "@/lib/bank-reconciliation-ops";
+import { ConnectBankPanel } from "@/components/settings/connect-bank-panel";
 import { formatDate, formatTime } from "@/lib/format";
 import { loadSaasEntitlement, saasOperatingUiState } from "@/lib/saas-billing";
 import { SAAS_BILLING_SETTINGS_HREF } from "@/lib/saas-billing/config";
@@ -36,6 +38,7 @@ export default async function BankReconciliationPage() {
   const operating = saasOperatingUiState(entitlement, access.workspace.role);
   const isOwner = roleHasCapability(access.workspace.role, CAPABILITIES.REVIEW_BANK_RECONCILIATION);
   const imports = isOwner ? await listOwnedBankReconciliations(prisma, access) : [];
+  const bankConnect = isOwner ? await loadOwnedBankPlaidStatus(prisma, access) : null;
 
   return (
     <PageContainer width="narrow">
@@ -75,6 +78,35 @@ export default async function BankReconciliationPage() {
         </Card>
       ) : (
         <div className="space-y-6">
+          {bankConnect ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Connect bank</CardTitle>
+                <CardDescription>
+                  Read-only Plaid transactions sync into this review workspace. Last
+                  verified bank balance stays Unavailable.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ConnectBankPanel
+                  adapter={bankConnect.adapter}
+                  status={bankConnect.status}
+                  institutionName={bankConnect.institutionName}
+                  lastSyncedAtLabel={
+                    bankConnect.lastSyncedAt
+                      ? `${formatDate(bankConnect.lastSyncedAt)} ${formatTime(bankConnect.lastSyncedAt)}`
+                      : null
+                  }
+                  importHref={
+                    bankConnect.importId
+                      ? `${BANK_RECONCILIATION_ROUTE}/${bankConnect.importId}`
+                      : null
+                  }
+                />
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardTitle>Owner-uploaded bank CSV</CardTitle>

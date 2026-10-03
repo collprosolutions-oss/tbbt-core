@@ -15,6 +15,7 @@ import { WebsitePublishPanel } from "@/components/settings/website-publish-panel
 import { WebsiteDomainVerificationCard } from "@/components/settings/website-domain-verification";
 import { ViewPublicWebsiteLink } from "@/components/settings/view-public-website-link";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
+import { ConnectBankPanel } from "@/components/settings/connect-bank-panel";
 import { ConnectStripeButton } from "@/components/settings/connect-stripe-button";
 import {
   SaasBillingPortalButton,
@@ -220,6 +221,7 @@ function SectionBody(props: SettingsWorkspaceProps) {
     checkoutStatus,
     laborBurden,
     financeStatus,
+    bankConnect,
   } = props;
 
   if (section === "overview") {
@@ -849,13 +851,22 @@ function SectionBody(props: SettingsWorkspaceProps) {
         <p className="text-sm text-muted-foreground">{PROJECTED_BALANCE_UNAVAILABLE_MESSAGE}</p>
         <p className="text-sm text-muted-foreground">{financeStatus?.bankingMessage ?? snapshot.bank.unavailableReason}</p>
         <p className="text-sm text-muted-foreground">{financeStatus?.accountingMessage ?? "Accounting is Not Connected."}</p>
+        {role === "OWNER" && bankConnect ? (
+          <ConnectBankPanel
+            adapter={bankConnect.adapter}
+            status={bankConnect.status}
+            institutionName={bankConnect.institutionName}
+            lastSyncedAtLabel={bankConnect.lastSyncedAtLabel}
+            importHref={bankConnect.importHref}
+          />
+        ) : null}
         {role === "OWNER" ? (
           <p className="text-sm">
             <Link href="/reconciliation" className="font-medium underline underline-offset-4">
               Review a bank CSV
             </Link>
             {" "}
-            against recorded payments and expenses. Import never connects a bank or claims a verified balance.
+            against recorded payments and expenses. CSV import never claims a verified balance.
           </p>
         ) : null}
       </SectionCard>
