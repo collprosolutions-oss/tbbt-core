@@ -12,8 +12,9 @@ import { fileURLToPath } from "node:url";
 import {
   bashSyntaxResults,
   hostedRecoveryVerifyNameSafety,
+  neonInvokingBlocks,
   REQUIRED_CHECKS,
-  runInteractiveEmptyVarCases,
+  runGatingMatrix,
   runSection42Flow,
 } from "./lib/hosted-recovery-runbook-check.mjs";
 import {
@@ -2221,8 +2222,10 @@ check(
     hostedRecovery.includes('neon connection-string "$VERIFY_NAME"') &&
     hostedRecovery.includes("command substitution") &&
     hostedRecovery.includes("$(…)") &&
-    hostedRecovery.includes('[ -n "$VERIFY_NAME" ]') &&
-    hostedRecovery.includes('[ -n "$PROJECT" ]') &&
+    hostedRecovery.includes("${VERIFY_NAME//[[:space:]]/}") &&
+    hostedRecovery.includes("${PROJECT//[[:space:]]/}") &&
+    hostedRecovery.includes("${ROOT_BRANCH//[[:space:]]/}") &&
+    hostedRecovery.includes("ROOT_BRANCH must be a single default root") &&
     !hostedRecovery.includes("${ROOT_BRANCH:?") &&
     !hostedRecovery.includes("${VERIFY_NAME:?") &&
     !hostedRecovery.includes("${PROJECT:?") &&
@@ -2324,11 +2327,33 @@ check(
     section42Flow.forbiddenRanRestore === false,
 );
 
-const interactiveEmpty = runInteractiveEmptyVarCases(hostedRecovery);
+const gatingMatrix = runGatingMatrix(hostedRecovery);
+const neonBlocks = neonInvokingBlocks(hostedRecovery);
 check(
-  "Interactive paste and source abort before neon when VERIFY_NAME or PROJECT is empty",
-  interactiveEmpty.length >= 8 &&
-    interactiveEmpty.every((entry) => entry.neonBeyondVersion.length === 0),
+  "Every neon-invoking block lists the expected gating variables",
+  neonBlocks.length >= 6 &&
+    neonBlocks.some((block) => block.discovery && block.vars.includes("PROJECT")) &&
+    neonBlocks.some(
+      (block) =>
+        block.block.includes("neon branches restore") &&
+        block.vars.includes("T") &&
+        block.vars.includes("PROJECT") &&
+        block.vars.includes("ROOT_BRANCH"),
+    ) &&
+    neonBlocks.some(
+      (block) =>
+        block.block.includes("neon branches create") &&
+        block.vars.includes("DEFAULT_BRANCH") &&
+        block.vars.includes("T") &&
+        !block.vars.includes("VERIFY_NAME"),
+    ),
+);
+check(
+  "Every neon-invoking block aborts on unset/empty/space/tab in all five shell modes",
+  gatingMatrix.failures.length === 0 &&
+    gatingMatrix.blockCount >= 6 &&
+    gatingMatrix.caseCount >= 5 * 4 * 5 &&
+    gatingMatrix.modes.length === 5,
 );
 
 function withNeonShim(spec, run) {
