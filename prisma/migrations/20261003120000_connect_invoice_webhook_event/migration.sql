@@ -3,6 +3,8 @@
 -- Additive only. Preview shares Production and skips migrate, so every
 -- statement is IF NOT EXISTS. No backfill. Existing payments stay unchanged.
 -- Distinct from SaasBillingWebhookEvent.
+-- Timestamp 20261003120000 is after 20261003040000 (open #341 uses that
+-- prefix for EmailFailedDestination).
 
 CREATE TABLE IF NOT EXISTS "ConnectInvoiceWebhookEvent" (
     "id" TEXT NOT NULL,

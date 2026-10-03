@@ -3,17 +3,20 @@
  * remaining unapplied: tenant-scoped OWNER inbox + retry of the stored
  * verified event. Dedicated disposable Postgres. Fake Stripe only.
  *
- * Proves duplicate, concurrent, wrong-account, and already-applied cases.
+ * Proves duplicate, concurrent, wrong-account, already-applied, a second
+ * event on the same invoice, and OWNER retry racing deposit apply.
  * Invoice FOR UPDATE and Payment unique indexes stay in
- * applyVerifiedCheckoutPayment. Does not edit payments/service.ts
- * (PR #332 deposit Estimate lock).
+ * applyVerifiedCheckoutPayment. #332 (merged) uses Estimate FOR NO KEY
+ * UPDATE so that race cannot deadlock.
  *
  * Run with:
  *   npm run test:connect-invoice-webhook-retry
  */
 import { createRequire, register } from "node:module";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -21,6 +24,10 @@ import {
   assertLocalDatabaseUrl,
   openDisposableTestDatabase,
 } from "./disposable-test-database.mjs";
+
+const MUTATION_KIND = process.argv.includes("--mutation")
+  ? process.argv[process.argv.indexOf("--mutation") + 1]
+  : null;
 
 const WEBHOOK_SECRET = "whsec_connect_invoice_retry_check";
 
@@ -44,8 +51,10 @@ function readRepo(rel) {
 }
 
 let failures = 0;
+let passes = 0;
 function check(label, condition) {
   if (condition) {
+    passes += 1;
     console.log(`  ok  - ${label}`);
   } else {
     console.error(`FAIL - ${label}`);
@@ -75,9 +84,10 @@ check(
 );
 check(
   "inbox documents #332 overlap and reuses applyVerifiedCheckoutPayment",
-  inboxSrc.includes("PR #332") &&
+  inboxSrc.includes("#332") &&
+    inboxSrc.includes("FOR NO KEY UPDATE") &&
     inboxSrc.includes("applyVerifiedCheckoutPayment") &&
-    inboxSrc.includes("Do not edit service.ts") &&
+    inboxSrc.includes("does not reimplement those writes") &&
     !inboxSrc.includes("recordSucceededPayment("),
 );
 check(
@@ -124,23 +134,40 @@ check(
   "invoice apply lock stays in service.ts; this change does not rewrite deposit apply",
   serviceSrc.includes('FROM "Invoice"') &&
     serviceSrc.includes("FOR UPDATE") &&
+    serviceSrc.includes("ESTIMATE_DEPOSIT_FOR_NO_KEY_UPDATE") &&
     !inboxSrc.includes("applyVerifiedDepositPayment"),
 );
+check(
+  "stored amountCents is narrowed with typeof number before use",
+  inboxSrc.includes("typeof value !== \"number\"") &&
+    inboxSrc.includes("Number.isInteger(value)") &&
+    inboxSrc.includes("readIntegerCents(record.amountCents)"),
+);
 
-const session = await openDisposableTestDatabase({
-  databaseUrl: baseUrl,
-  namePrefix: "tbbt_connect_invoice_wh",
-  setProcessEnv: true,
-});
-const prisma = session.prisma;
-const testUrl = session.testUrl;
+let session = null;
+let prisma;
+let testUrl;
+
+if (MUTATION_KIND) {
+  const { PrismaClient } = createRequire(import.meta.url)("@prisma/client");
+  prisma = new PrismaClient({ datasourceUrl: baseUrl });
+  testUrl = baseUrl;
+} else {
+  session = await openDisposableTestDatabase({
+    databaseUrl: baseUrl,
+    namePrefix: "tbbt_connect_invoice_wh",
+    setProcessEnv: true,
+  });
+  prisma = session.prisma;
+  testUrl = session.testUrl;
+}
 
 const require = createRequire(import.meta.url);
 const { Prisma } = require("@prisma/client");
 const Stripe = (await import("stripe")).default;
-const { ForbiddenError, requireBusinessCapability, CAPABILITIES } =
-  await import("@/lib/authorization");
+const { ForbiddenError } = await import("@/lib/authorization");
 const { createFakePaymentProvider } = await import("@/lib/payments/fake");
+const { applyVerifiedCheckoutPayment } = await import("@/lib/payments");
 const { dispatchStripeWebhookEvent, verifyStripeWebhookPayload } = await import(
   "@/lib/stripe-webhook-dispatch"
 );
@@ -241,6 +268,69 @@ async function seedInvoice(input) {
     },
   });
   return { job, invoice };
+}
+
+async function seedApprovedEstimateJobInvoice(input) {
+  const estimate = await prisma.estimate.create({
+    data: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      propertyId: input.propertyId,
+      status: "APPROVED",
+      total: new Prisma.Decimal("550.00"),
+      publicToken: randomUUID(),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: input.businessId,
+      estimateId: estimate.id,
+      description: "Labor",
+      type: "LABOR",
+      quantity: new Prisma.Decimal("1"),
+      unitPrice: new Prisma.Decimal("350.00"),
+      total: new Prisma.Decimal("350.00"),
+    },
+  });
+  await prisma.lineItem.create({
+    data: {
+      businessId: input.businessId,
+      estimateId: estimate.id,
+      description: "Materials",
+      type: "MATERIAL",
+      quantity: new Prisma.Decimal("1"),
+      unitPrice: new Prisma.Decimal("200.00"),
+      total: new Prisma.Decimal("200.00"),
+    },
+  });
+  const job = await prisma.job.create({
+    data: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      propertyId: input.propertyId,
+      estimateId: estimate.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const invoice = await prisma.invoice.create({
+    data: {
+      businessId: input.businessId,
+      customerId: input.customerId,
+      jobId: job.id,
+      kind: "ORIGINAL",
+      status: input.status ?? "DRAFT",
+      total: new Prisma.Decimal("550.00"),
+    },
+  });
+  return { estimate, job, invoice };
+}
+
+function isDeadlockError(error) {
+  if (!error) return false;
+  const code = error.code ?? error.meta?.code;
+  const message = String(error.message ?? error);
+  return code === "P2034" || code === "40P01" || /deadlock detected/i.test(message);
 }
 
 function connectCheckoutEvent(input) {
@@ -485,18 +575,6 @@ try {
       })) === 0,
   );
 
-  let adminRetryError = null;
-  try {
-    requireBusinessCapability(adminA, CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK);
-    await retryConnectInvoiceWebhookEvent(prisma, adminA, wrongRow.id);
-  } catch (error) {
-    adminRetryError = error;
-  }
-  check(
-    "ADMIN cannot retry a Connect invoice webhook event",
-    adminRetryError instanceof ForbiddenError,
-  );
-
   const ownerAWrongRetry = await retryConnectInvoiceWebhookEvent(prisma, ownerA, wrongRow.id);
   check(
     "OWNER A retry of the wrong-account event stays unapplied",
@@ -505,6 +583,73 @@ try {
       (await prisma.invoice.findUnique({ where: { id: sentA.invoice.id } }))?.status === "SENT",
   );
 
+  console.log("\nTEST — ADMIN, MEMBER, and anonymous must hit the in-function retry guard");
+  const guardInvoice = await seedInvoice({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    status: "DRAFT",
+    total: "45.00",
+  });
+  const guardSession = await provider.createInvoiceCheckoutSession({
+    connectedAccountId: businessA.accountId,
+    invoiceId: guardInvoice.invoice.id,
+    businessId: businessA.business.id,
+    amountCents: 4500,
+    currency: "usd",
+    description: "Guard invoice",
+    successUrl: "http://connect-invoice-retry.test/ok?session_id={CHECKOUT_SESSION_ID}",
+    cancelUrl: "http://connect-invoice-retry.test/cancel",
+  });
+  provider.completeCheckout(guardSession.id);
+  const guardEvent = connectCheckoutEvent({
+    id: `evt_guard_${randomUUID().slice(0, 8)}`,
+    account: businessA.accountId,
+    sessionId: guardSession.id,
+    invoiceId: guardInvoice.invoice.id,
+    businessId: businessA.business.id,
+    amountCents: 4500,
+  });
+  await dispatchSigned(guardEvent);
+  await prisma.invoice.update({
+    where: { id: guardInvoice.invoice.id },
+    data: { status: "SENT" },
+  });
+  const guardRow = await prisma.connectInvoiceWebhookEvent.findUnique({
+    where: { stripeEventId: guardEvent.id },
+  });
+  const memberA = makeAccess(businessA.business.id, "MEMBER", `member-${businessA.business.id}`);
+  const anonymousA = makeAccess(businessA.business.id, "MEMBER", "anonymous");
+  const deniedCallers = [
+    ["ADMIN", adminA],
+    ["MEMBER", memberA],
+    ["anonymous", anonymousA],
+  ];
+  const deniedErrors = [];
+  for (const [label, access] of deniedCallers) {
+    try {
+      await retryConnectInvoiceWebhookEvent(prisma, access, guardRow.id);
+      deniedErrors.push({ label, error: null });
+    } catch (error) {
+      deniedErrors.push({ label, error });
+    }
+  }
+  const guardPayments = await prisma.payment.count({
+    where: { invoiceId: guardInvoice.invoice.id, businessId: businessA.business.id },
+  });
+  const guardAfter = await prisma.connectInvoiceWebhookEvent.findUnique({
+    where: { id: guardRow.id },
+  });
+  check(
+    "ADMIN, MEMBER, and anonymous retry are denied by the in-function guard with zero side effects",
+    deniedErrors.every((row) => row.error instanceof ForbiddenError) &&
+      guardPayments === 0 &&
+      guardAfter?.applied === false &&
+      (await prisma.invoice.findUnique({ where: { id: guardInvoice.invoice.id } }))?.status ===
+        "SENT",
+  );
+
+  if (!MUTATION_KIND) {
   console.log("\nTEST — concurrent retries of one stored event keep the invoice lock");
   const raceInvoice = await seedInvoice({
     businessId: businessA.business.id,
@@ -673,10 +818,204 @@ try {
       Array.isArray(scopedWhere.reason.notIn),
   );
 
+  console.log("\nTEST — a distinct second event on the same invoice stays isolated");
+  const dual = await seedInvoice({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    status: "DRAFT",
+    total: "80.00",
+  });
+  const dualSessions = [];
+  const dualEvents = [];
+  for (const suffix of ["a", "b"]) {
+    const checkout = await provider.createInvoiceCheckoutSession({
+      connectedAccountId: businessA.accountId,
+      invoiceId: dual.invoice.id,
+      businessId: businessA.business.id,
+      amountCents: 8000,
+      currency: "usd",
+      description: `Dual ${suffix}`,
+      successUrl: "http://connect-invoice-retry.test/ok?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl: "http://connect-invoice-retry.test/cancel",
+    });
+    provider.completeCheckout(checkout.id);
+    dualSessions.push(checkout);
+    const event = connectCheckoutEvent({
+      id: `evt_dual_${suffix}_${randomUUID().slice(0, 8)}`,
+      account: businessA.accountId,
+      sessionId: checkout.id,
+      invoiceId: dual.invoice.id,
+      businessId: businessA.business.id,
+      amountCents: 8000,
+    });
+    dualEvents.push(event);
+    await dispatchSigned(event);
+  }
+  await prisma.invoice.update({
+    where: { id: dual.invoice.id },
+    data: { status: "SENT" },
+  });
+  const dualRows = await prisma.connectInvoiceWebhookEvent.findMany({
+    where: { invoiceId: dual.invoice.id, businessId: businessA.business.id },
+    orderBy: { createdAt: "asc" },
+  });
+  const firstDual = await retryConnectInvoiceWebhookEvent(prisma, ownerA, dualRows[0].id);
+  const secondDual = await retryConnectInvoiceWebhookEvent(prisma, ownerA, dualRows[1].id);
+  const dualPayments = await prisma.payment.findMany({
+    where: { invoiceId: dual.invoice.id, businessId: businessA.business.id },
+  });
+  const dualInbox = await listUnappliedConnectInvoiceWebhookEvents(
+    prisma,
+    businessA.business.id,
+    { invoiceId: dual.invoice.id },
+  );
+  check(
+    "second stored event on the same invoice does not double-apply",
+    dualRows.length === 2 &&
+      dualRows[0].stripeEventId !== dualRows[1].stripeEventId &&
+      dualRows[0].checkoutSessionId !== dualRows[1].checkoutSessionId &&
+      firstDual.applied === true &&
+      secondDual.applied === false &&
+      (secondDual.reason === "already_paid" || secondDual.reason === "already_applied") &&
+      dualPayments.length === 1 &&
+      dualInbox.length === 0,
+  );
+
+  console.log("\nTEST — OWNER invoice retry races deposit apply on the same job");
+  const RACE_ITERS = 20;
+  let deadlockCount = 0;
+  let raceFailures = 0;
+  for (let i = 0; i < RACE_ITERS; i += 1) {
+    const fixture = await seedApprovedEstimateJobInvoice({
+      businessId: businessA.business.id,
+      customerId: businessA.customer.id,
+      propertyId: businessA.property.id,
+      status: "DRAFT",
+    });
+    const invoiceCheckout = await provider.createInvoiceCheckoutSession({
+      connectedAccountId: businessA.accountId,
+      invoiceId: fixture.invoice.id,
+      businessId: businessA.business.id,
+      amountCents: 35000,
+      currency: "usd",
+      description: "Balance after deposit",
+      successUrl: "http://connect-invoice-retry.test/ok?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl: "http://connect-invoice-retry.test/cancel",
+    });
+    provider.completeCheckout(invoiceCheckout.id);
+    const invoiceEvent = connectCheckoutEvent({
+      id: `evt_vs_dep_${i}_${randomUUID().slice(0, 8)}`,
+      account: businessA.accountId,
+      sessionId: invoiceCheckout.id,
+      invoiceId: fixture.invoice.id,
+      businessId: businessA.business.id,
+      amountCents: 35000,
+    });
+    await dispatchSigned(invoiceEvent);
+    await prisma.invoice.update({
+      where: { id: fixture.invoice.id },
+      data: { status: "SENT" },
+    });
+    const invoiceRow = await prisma.connectInvoiceWebhookEvent.findUnique({
+      where: { stripeEventId: invoiceEvent.id },
+    });
+    const depositPayment = {
+      purpose: "material_deposit",
+      invoiceId: null,
+      estimateId: fixture.estimate.id,
+      checkoutSessionId: `cs_test_dep_${i}_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      businessId: businessA.business.id,
+      connectedAccountId: businessA.accountId,
+      amountCents: 20000,
+      currency: "usd",
+      paymentReference: `pi_dep_${i}_${randomUUID().slice(0, 8)}`,
+      paymentStatus: "paid",
+    };
+    const previous = invoiceRemainingReadTestHooks.afterRead;
+    invoiceRemainingReadTestHooks.afterRead = async () => sleep(80);
+    const invoiceClient = session.createClient();
+    const depositClient = session.createClient();
+    let invoiceResult;
+    let depositResult;
+    try {
+      [invoiceResult, depositResult] = await Promise.all([
+        retryConnectInvoiceWebhookEvent(invoiceClient, ownerA, invoiceRow.id).catch(
+          (error) => ({ error }),
+        ),
+        applyVerifiedCheckoutPayment(depositClient, depositPayment).catch((error) => ({
+          error,
+        })),
+      ]);
+    } finally {
+      invoiceRemainingReadTestHooks.afterRead = previous;
+      await Promise.all([invoiceClient.$disconnect(), depositClient.$disconnect()]);
+    }
+    if (isDeadlockError(invoiceResult?.error) || isDeadlockError(depositResult?.error)) {
+      deadlockCount += 1;
+    }
+    const payments = await prisma.payment.findMany({
+      where: {
+        businessId: businessA.business.id,
+        jobId: fixture.job.id,
+      },
+    });
+    const deposits = payments.filter((row) => row.purpose === "MATERIAL_DEPOSIT");
+    const invoicePays = payments.filter((row) => row.purpose === "INVOICE_BALANCE");
+    const invoiceOk = invoiceResult?.applied === true && !invoiceResult?.error;
+    const depositOk = depositResult?.applied === true && !depositResult?.error;
+    if (!(invoiceOk && depositOk && deposits.length === 1 && invoicePays.length === 1)) {
+      raceFailures += 1;
+    }
+  }
+  check(
+    "20 OWNER retry vs deposit apply races: zero deadlocks, deposit once, invoice payment once",
+    deadlockCount === 0 && raceFailures === 0,
+  );
+
+  if (!MUTATION_KIND) {
+    const scriptPath = fileURLToPath(import.meta.url);
+    const guardFile = fileURLToPath(
+      new URL("../src/lib/connect-invoice-webhook.ts", import.meta.url),
+    );
+    const original = readFileSync(guardFile, "utf8");
+    const find =
+      "  // RETRY_CONNECT_INVOICE_WEBHOOK_GUARD\n  requireBusinessCapability(access, CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK);";
+    const replace = "  // RETRY_CONNECT_INVOICE_WEBHOOK_GUARD";
+    check("retry-capability-guard mutation found its target", original.includes(find));
+    writeFileSync(guardFile, original.replace(find, replace));
+    try {
+      const child = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", scriptPath, "--mutation", "retry-capability-guard"],
+        {
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: testUrl, TZ: "America/New_York" },
+        },
+      );
+      check(
+        "removing the in-function retry guard fails ADMIN/MEMBER/anonymous denial",
+        child.status !== 0,
+      );
+      if (child.status === 0) {
+        console.error(child.stdout);
+        console.error(child.stderr);
+      }
+    } finally {
+      writeFileSync(guardFile, original);
+    }
+  }
+
+  }
+
   if (failures > 0) {
     throw new Error(`${failures} connect-invoice-webhook-retry check(s) failed.`);
   }
-  console.log("\nconnect-invoice-webhook-retry checks passed.");
+  console.log(`\nconnect-invoice-webhook-retry checks passed (${passes}).`);
 } finally {
-  await session.cleanup();
+  if (session) {
+    await session.cleanup();
+  } else {
+    await prisma.$disconnect();
+  }
 }

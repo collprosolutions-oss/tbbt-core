@@ -4,8 +4,8 @@
  *
  * Invoice apply, Invoice FOR UPDATE, and Payment unique indexes stay in
  * `applyVerifiedCheckoutPayment` (`src/lib/payments/service.ts`). This
- * module does not reimplement those writes. Do not edit service.ts here —
- * PR #332 locks Estimate on the material-deposit path in that file.
+ * module does not reimplement those writes. #332 (merged) locks Estimate
+ * FOR NO KEY UPDATE on the material-deposit path in that file.
  *
  * OWNER retry uses the frozen verified payment JSON. It never calls
  * Stripe and never applies another business's event.
@@ -145,6 +145,13 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readIntegerCents(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return null;
+  }
+  return value;
+}
+
 export function readStripeEventId(event: unknown): string | null {
   if (!event || typeof event !== "object") return null;
   return readNonEmptyString((event as { id?: unknown }).id);
@@ -172,7 +179,7 @@ export function parseStoredVerifiedCheckoutPayment(
   const currency = readNonEmptyString(record.currency);
   const paymentReference = readNonEmptyString(record.paymentReference);
   const paymentStatus = readNonEmptyString(record.paymentStatus);
-  const amountCents = record.amountCents;
+  const amountCents = readIntegerCents(record.amountCents);
   if (
     !invoiceId ||
     !checkoutSessionId ||
@@ -181,7 +188,7 @@ export function parseStoredVerifiedCheckoutPayment(
     !currency ||
     !paymentReference ||
     !paymentStatus ||
-    !Number.isInteger(amountCents)
+    amountCents === null
   ) {
     return null;
   }
@@ -361,6 +368,7 @@ export async function retryConnectInvoiceWebhookEvent(
   access: BusinessAccess,
   eventId: string,
 ): Promise<{ applied: boolean; reason: string; eventId: string }> {
+  // RETRY_CONNECT_INVOICE_WEBHOOK_GUARD
   requireBusinessCapability(access, CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK);
   await ensureConnectInvoiceWebhookEventTable(db);
 
