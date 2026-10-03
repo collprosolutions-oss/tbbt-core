@@ -205,6 +205,7 @@ node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
 
 ```bash
 node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
+[ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
 # Replace PROJECT with the decrypted database_NEON_PROJECT_ID or the
 # Console id for empty-cherry-05140338. Do not paste secrets into git.
 # Table output omits history_retention_seconds — use JSON.
@@ -216,7 +217,8 @@ neon projects get "$PROJECT" --output json
 neon branches list --project-id "$PROJECT" --output json
 ROOT_BRANCH=$(neon branches list --project-id "$PROJECT" --output json \
   | jq -r '[.[] | select(.default == true) | .name] | unique | .[]')
-: "${ROOT_BRANCH:?discover the project's default root first}"
+[ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+DEFAULT_BRANCH="$ROOT_BRANCH"
 # Exactly one default root. Do not assume the name production.
 # --parent "$T" forks that default root at T. If ROOT_BRANCH is empty
 # or more than one line, stop and do not guess.
@@ -236,8 +238,9 @@ never run `connection-string` without a non-empty branch:
 
 ```bash
 node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
-: "${ROOT_BRANCH:?discover the project's default root first}"
-: "${T:?record incident time T first}"
+[ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$T" ] || { echo 'T must be the incident timestamp' >&2; return 1 2>/dev/null || exit 1; }
 neon connection-string "${ROOT_BRANCH}@${T}" --project-id "$PROJECT" --psql
 ```
 
@@ -262,14 +265,14 @@ the default root.
 
 ```bash
 node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
-: "${ROOT_BRANCH:?discover the project's default root first}"
-: "${T:?record incident time T first}"
+[ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$DEFAULT_BRANCH" ] || { echo 'DEFAULT_BRANCH must be the project default' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$T" ] || { echo 'T must be the incident timestamp' >&2; return 1 2>/dev/null || exit 1; }
 VERIFY_NAME="tbbt-pitr-verify-$(date -u +%Y%m%dT%H%M%SZ)"
-: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
-if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
-  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
-  exit 1
-fi
+[ -n "$VERIFY_NAME" ] || { echo 'VERIFY_NAME must be the isolated verify branch' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$ROOT_BRANCH" ] || { echo 'VERIFY_NAME must not equal ROOT_BRANCH' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$DEFAULT_BRANCH" ] || { echo 'VERIFY_NAME must not equal the default branch' >&2; return 1 2>/dev/null || exit 1; }
 neon branches create \
   --name "$VERIFY_NAME" \
   --project-id "$PROJECT" \
@@ -284,12 +287,12 @@ fields (create JSON can include passwords):
 
 ```bash
 node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
-: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
-: "${ROOT_BRANCH:?}"
-if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
-  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
-  exit 1
-fi
+[ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$DEFAULT_BRANCH" ] || { echo 'DEFAULT_BRANCH must be the project default' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$VERIFY_NAME" ] || { echo 'VERIFY_NAME must be the isolated verify branch' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$ROOT_BRANCH" ] || { echo 'VERIFY_NAME must not equal ROOT_BRANCH' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$DEFAULT_BRANCH" ] || { echo 'VERIFY_NAME must not equal the default branch' >&2; return 1 2>/dev/null || exit 1; }
 neon branches get "$VERIFY_NAME" --project-id "$PROJECT" --output json \
   | jq '{id, name, parent_id, parent_timestamp, parent_lsn, default}'
 ```
@@ -304,12 +307,12 @@ into tickets). Only after `VERIFY_NAME` is set and validated:
 
 ```bash
 node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
-: "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"
-: "${ROOT_BRANCH:?}"
-if [ "$VERIFY_NAME" = "$ROOT_BRANCH" ]; then
-  echo "VERIFY_NAME must not equal the default root \$ROOT_BRANCH" >&2
-  exit 1
-fi
+[ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$DEFAULT_BRANCH" ] || { echo 'DEFAULT_BRANCH must be the project default' >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$VERIFY_NAME" ] || { echo 'VERIFY_NAME must be the isolated verify branch' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$ROOT_BRANCH" ] || { echo 'VERIFY_NAME must not equal ROOT_BRANCH' >&2; return 1 2>/dev/null || exit 1; }
+[ "$VERIFY_NAME" != "$DEFAULT_BRANCH" ] || { echo 'VERIFY_NAME must not equal the default branch' >&2; return 1 2>/dev/null || exit 1; }
 neon connection-string "$VERIFY_NAME" --project-id "$PROJECT" --psql
 ```
 
@@ -664,9 +667,9 @@ Record the decision before anyone touches the Production root.
 
    ```bash
    node scripts/require-neon-cli.mjs || return 1 2>/dev/null || exit 1
-   : "${ROOT_BRANCH:?discover the project's default root first}"
-   : "${PROJECT:?}"
-   : "${T:?record incident time T first}"
+   [ -n "$PROJECT" ] || { echo 'PROJECT must be set' >&2; return 1 2>/dev/null || exit 1; }
+   [ -n "$ROOT_BRANCH" ] || { echo 'ROOT_BRANCH must be the project default root' >&2; return 1 2>/dev/null || exit 1; }
+   [ -n "$T" ] || { echo 'T must be the incident timestamp' >&2; return 1 2>/dev/null || exit 1; }
    # $ROOT_BRANCH is the project's real default (section 4.2), not a
    # hard-coded production name.
    neon branches restore "$ROOT_BRANCH" "^self@${T}" \

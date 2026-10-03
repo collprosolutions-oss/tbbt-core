@@ -10,6 +10,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bashSyntaxResults,
+  hostedRecoveryVerifyNameSafety,
+  REQUIRED_CHECKS,
+  runInteractiveEmptyVarCases,
+  runSection42Flow,
+} from "./lib/hosted-recovery-runbook-check.mjs";
+import {
   evaluateNeonCliVersion,
   evaluateNeonCliVersionProcess,
   MIN_NEON_CLI_VERSION,
@@ -2214,7 +2221,12 @@ check(
     hostedRecovery.includes('neon connection-string "$VERIFY_NAME"') &&
     hostedRecovery.includes("command substitution") &&
     hostedRecovery.includes("$(…)") &&
-    hostedRecovery.includes(': "${VERIFY_NAME:?') &&
+    hostedRecovery.includes('[ -n "$VERIFY_NAME" ]') &&
+    hostedRecovery.includes('[ -n "$PROJECT" ]') &&
+    !hostedRecovery.includes("${ROOT_BRANCH:?") &&
+    !hostedRecovery.includes("${VERIFY_NAME:?") &&
+    !hostedRecovery.includes("${PROJECT:?") &&
+    !hostedRecovery.includes("${T:?") &&
     !hostedRecovery.includes('psql "$(neon connection-string') &&
     !hostedRecovery.includes("neon branches restore production") &&
     !hostedRecovery.includes('restore production "^self'),
@@ -2263,34 +2275,60 @@ check(
     ),
 );
 
-const verifyNameAssignIdx = hostedRecovery.search(/^\s*VERIFY_NAME=/m);
-const verifyConnectionIdx = hostedRecovery.indexOf(
-  'neon connection-string "$VERIFY_NAME"',
-);
-const timeTravelConnectionIdx = hostedRecovery.indexOf(
-  'neon connection-string "${ROOT_BRANCH}@${T}"',
-);
-const connectionStringLines = hostedRecovery
-  .split("\n")
-  .map((line) => line.trim())
-  .filter((line) => line.startsWith("neon connection-string "));
 check(
-  "VERIFY_NAME is assigned and fail-closed before connection-string uses it",
-  verifyNameAssignIdx !== -1 &&
-    verifyConnectionIdx !== -1 &&
-    timeTravelConnectionIdx !== -1 &&
-    verifyNameAssignIdx < verifyConnectionIdx &&
-    timeTravelConnectionIdx < verifyConnectionIdx &&
-    connectionStringLines.length === 2 &&
-    connectionStringLines.every(
-      (line) =>
-        !/^neon connection-string\s+--/.test(line) &&
-        !/^neon connection-string\s+(""|'')/.test(line),
-    ) &&
-    hostedRecovery.includes(': "${VERIFY_NAME:?VERIFY_NAME must be the isolated verify branch}"') &&
-    hostedRecovery.includes('VERIFY_NAME must not equal the default root') &&
+  "VERIFY_NAME is assigned and fail-closed before branches create/get and connection-string",
+  hostedRecoveryVerifyNameSafety(hostedRecovery) === true &&
     !requireNeonCliSrc.includes("NEON_CLI_VERSION_TEXT") &&
     !neonCliVersionSrc.includes("NEON_CLI_VERSION_TEXT"),
+);
+const assignAfterCreate = hostedRecovery
+  .replace(/^\s*VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"\n/m, "")
+  .replace(/--no-secrets\n/, '--no-secrets\nVERIFY_NAME="tbbt-pitr-verify-late"\n');
+const assignAfterGet = hostedRecovery
+  .replace(/^\s*VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"\n/m, "")
+  .replace(
+    /neon branches get "\$VERIFY_NAME"/,
+    'neon branches get "$VERIFY_NAME"\nVERIFY_NAME="tbbt-pitr-verify-late"',
+  );
+const emptyVerifyAssign = hostedRecovery.replace(
+  /VERIFY_NAME="tbbt-pitr-verify-\$\(date -u \+%Y%m%dT%H%M%SZ\)"/,
+  'VERIFY_NAME=""',
+);
+check(
+  "VERIFY_NAME assigned after branches create or get, or as empty, fails the suite",
+  hostedRecoveryVerifyNameSafety(assignAfterCreate) === false &&
+    hostedRecoveryVerifyNameSafety(assignAfterGet) === false &&
+    hostedRecoveryVerifyNameSafety(emptyVerifyAssign) === false,
+);
+check(
+  "Removing any one interactive abort check fails the VERIFY_NAME safety suite",
+  REQUIRED_CHECKS.every(
+    (line) => hostedRecoveryVerifyNameSafety(hostedRecovery.replaceAll(line, "")) === false,
+  ),
+);
+
+const bashSyntax = bashSyntaxResults(hostedRecovery);
+check(
+  "Every fenced bash block in the hosted recovery runbook parses under bash -n",
+  bashSyntax.length >= 8 && bashSyntax.every((entry) => entry.ok === true),
+);
+
+const section42Flow = runSection42Flow(hostedRecovery);
+check(
+  "Section 4.2 flow with a 4.9.0 neon shim sets VERIFY_NAME before get/connection-string and forbids restore",
+  section42Flow.flowStatus === 0 &&
+    section42Flow.expectedSequence === true &&
+    section42Flow.verifyNameBeforeGetAndConn === true &&
+    section42Flow.emptyBranchArgs.length === 0 &&
+    section42Flow.forbiddenStatus !== 0 &&
+    section42Flow.forbiddenRanRestore === false,
+);
+
+const interactiveEmpty = runInteractiveEmptyVarCases(hostedRecovery);
+check(
+  "Interactive paste and source abort before neon when VERIFY_NAME or PROJECT is empty",
+  interactiveEmpty.length >= 8 &&
+    interactiveEmpty.every((entry) => entry.neonBeyondVersion.length === 0),
 );
 
 function withNeonShim(spec, run) {
