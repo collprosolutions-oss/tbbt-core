@@ -7,6 +7,7 @@
  */
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   JOB_CALLBACK_OPEN_STATUSES,
   MAX_JOB_CALLBACK_ATTACHMENTS,
@@ -48,6 +49,7 @@ const PORTAL_JOB_SELECT = {
   id: true,
   businessId: true,
   status: true,
+  business: { select: { timezone: true } },
 } as const;
 
 export async function loadPortalJobCallbackView(
@@ -90,12 +92,13 @@ export async function loadPortalJobCallbackView(
   if (isPortalJobCallbackClosed(resolved?.outcome)) {
     return { status: "closed", jobId: job.id };
   }
+  const timeZone = resolveBusinessTimeZone(job.business);
   const resolvedAt = resolvedJobCallbackAt(resolved);
-  if (resolvedAt && isPortalJobCallbackCoolingDown(resolvedAt)) {
+  if (resolvedAt && isPortalJobCallbackCoolingDown(resolvedAt, timeZone)) {
     return {
       status: "cooldown",
       jobId: job.id,
-      availableAt: portalJobCallbackCooldownAvailableAt(resolvedAt),
+      availableAt: portalJobCallbackCooldownAvailableAt(resolvedAt, timeZone),
     };
   }
 

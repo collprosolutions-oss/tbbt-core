@@ -5,10 +5,11 @@
  *
  * Proves token-only ownership, invalid-token refusal, wrong-tenant
  * isolation, duplicate/retry idempotency, concurrent submit, and the
- * bounded post-outcome portal cooldown on a dedicated local DB. Reuses
- * the existing OWNER JobCallback review path. OWNER can still record an
- * urgent callback during the portal cooldown. Does not create a job,
- * promise warranty coverage, or send a message.
+ * bounded post-outcome portal cooldown on a dedicated local DB. The
+ * wait ends at the next calendar day in Business.timezone — never a
+ * UTC date. Reuses the existing OWNER JobCallback review path. OWNER
+ * can still record an urgent callback during the portal cooldown. Does
+ * not create a job, promise warranty coverage, or send a message.
  *
  * Run with:
  *   npm run test:portal-job-callback
@@ -33,6 +34,13 @@ if (generateEarly.status !== 0) {
 
 const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
 const {
+  addZonedCalendarDays,
+  DEFAULT_BUSINESS_TIMEZONE,
+  resolveBusinessTimeZone,
+  startOfZonedDay,
+  zonedCivilToUtc,
+} = await import("@/lib/business-timezone");
+const {
   JOB_CALLBACK_PORTAL_COMPLETED_JOB_MESSAGE,
   JOB_CALLBACK_PORTAL_CONTACT_REQUIRED_MESSAGE,
   JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
@@ -42,8 +50,7 @@ const {
   JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE,
   MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH,
   MAX_PORTAL_PROJECT_TOKEN_LENGTH,
-  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS,
-  PORTAL_JOB_CALLBACK_COOLDOWN_MS,
+  PORTAL_JOB_CALLBACK_COOLDOWN_DAYS,
   formatPortalCallbackDescription,
   isPortalJobCallbackCoolingDown,
   parsePortalJobCallbackDescription,
@@ -170,6 +177,7 @@ const featureFiles = [
 ];
 const opsSrc = read("src/lib/portal-job-callback-ops.ts");
 const dataSrc = read("src/lib/portal-job-callback-data.ts");
+const callbackSrc = read("src/lib/job-callback.ts");
 const actionSrc = read("src/app/actions/portal-job-callback.ts");
 const formSrc = read("src/components/portal/request-job-callback-form.tsx");
 const portalSrc = read("src/app/p/[token]/page.tsx");
@@ -178,6 +186,8 @@ const ownerOpsSrc = read("src/lib/job-callback-ops.ts");
 const navSrc = read("src/lib/nav.ts");
 const appShellSrc = read("src/components/app-shell.tsx");
 const packageSrc = read("package.json");
+const NY = "America/New_York";
+const LA = "America/Los_Angeles";
 
 const DANGEROUS = /\beval\s*\(|new\s+Function\b|Function\s*\(|\$executeRawUnsafe/;
 
@@ -220,34 +230,56 @@ check(
     !portalSrc.includes("recordJobCallbackAction"),
 );
 check(
-  "Portal cooldown is a bounded 24 hours and OWNER record is not cooled down",
-  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS === 24 &&
-    PORTAL_JOB_CALLBACK_COOLDOWN_MS === 24 * 60 * 60 * 1000 &&
+  "Portal cooldown is the next Business.timezone calendar day and OWNER record is not cooled down",
+  PORTAL_JOB_CALLBACK_COOLDOWN_DAYS === 1 &&
+    callbackSrc.includes("addZonedCalendarDays") &&
+    opsSrc.includes("resolveBusinessTimeZone") &&
+    dataSrc.includes("resolveBusinessTimeZone") &&
+    opsSrc.includes("where: { id: locked.businessId }") &&
+    opsSrc.includes("select: { timezone: true }") &&
     opsSrc.includes("isPortalJobCallbackCoolingDown") &&
     opsSrc.includes("JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE") &&
     dataSrc.includes('status: "cooldown"') &&
     portalSrc.includes("portalJobCallbackCooldownMessage") &&
+    !callbackSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN_MS") &&
+    !callbackSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN_HOURS") &&
     !ownerOpsSrc.includes("isPortalJobCallbackCoolingDown") &&
     !ownerOpsSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN") &&
     !ownerActionSrc.includes("isPortalJobCallbackCoolingDown"),
 );
-const cooldownNow = new Date("2026-10-02T12:00:00.000Z");
+const nyEvening = new Date("2026-10-03T00:00:00.000Z");
+const utcMidnight = new Date("2026-10-03T00:00:00.000Z");
+const justBeforeNyMidnight = new Date("2026-10-03T03:59:59.000Z");
+const nyMidnight = zonedCivilToUtc(2026, 10, 3, 0, 0, 0, NY);
+const sameInstantLaNow = new Date("2026-10-03T05:00:00.000Z");
+const sharedResolved = new Date("2026-10-03T03:30:00.000Z");
 check(
-  "Cooldown boundary is exclusive of the 24-hour mark",
-  isPortalJobCallbackCoolingDown(
-    new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 1),
-    cooldownNow,
-  ) === true &&
+  "UTC midnight does not end a New York cooldown that is still the prior calendar day",
+  resolveBusinessTimeZone({ timezone: null }) === DEFAULT_BUSINESS_TIMEZONE &&
+    DEFAULT_BUSINESS_TIMEZONE === NY &&
+    isPortalJobCallbackCoolingDown(nyEvening, NY, utcMidnight) === true &&
+    isPortalJobCallbackCoolingDown(nyEvening, NY, justBeforeNyMidnight) === true &&
+    isPortalJobCallbackCoolingDown(nyEvening, NY, nyMidnight) === false &&
+    portalJobCallbackCooldownAvailableAt(nyEvening, NY).getTime() === nyMidnight.getTime(),
+);
+check(
+  "The same resolved instant can be cooling down in Los Angeles after New York's day has rolled",
+  isPortalJobCallbackCoolingDown(sharedResolved, NY, sameInstantLaNow) === false &&
+    isPortalJobCallbackCoolingDown(sharedResolved, LA, sameInstantLaNow) === true &&
+    portalJobCallbackCooldownAvailableAt(sharedResolved, NY).getTime() !==
+      portalJobCallbackCooldownAvailableAt(sharedResolved, LA).getTime(),
+);
+const beforeSpring = zonedCivilToUtc(2026, 3, 8, 0, 0, 0, NY);
+const afterSpring = portalJobCallbackCooldownAvailableAt(beforeSpring, NY);
+check(
+  "Spring-forward day boundary is EDT midnight, not +24 hours",
+  afterSpring.toISOString() === "2026-03-09T04:00:00.000Z" &&
+    afterSpring.getTime() - beforeSpring.getTime() !== 24 * 60 * 60 * 1000 &&
     isPortalJobCallbackCoolingDown(
-      new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS),
-      cooldownNow,
-    ) === false &&
-    isPortalJobCallbackCoolingDown(
-      new Date(cooldownNow.getTime() - PORTAL_JOB_CALLBACK_COOLDOWN_MS - 1),
-      cooldownNow,
-    ) === false &&
-    portalJobCallbackCooldownAvailableAt(cooldownNow).getTime() ===
-      cooldownNow.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS,
+      beforeSpring,
+      NY,
+      new Date(beforeSpring.getTime() + 23 * 60 * 60 * 1000),
+    ) === false,
 );
 const submitSrc = opsSrc.slice(opsSrc.indexOf("export async function submitPortalJobCallback"));
 const liveIdx = submitSrc.indexOf("findLiveJobByProjectToken");
@@ -268,14 +300,15 @@ check(
     dataSrc.includes("findLiveJobByProjectToken"),
 );
 check(
-  "Cooldown copy states the 24-hour wait and does not promise a visit or warranty",
-  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("after 24 hours") &&
+  "Cooldown copy states the next-day wait and does not promise a visit or warranty",
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("tomorrow") &&
+    !JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("after 24 hours") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("not a warranty decision") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not promise coverage") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not schedule a visit") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not send a message") &&
-    portalJobCallbackCooldownMessage("Oct 3, 2026, 12:00 PM").includes(
-      "Next available Oct 3, 2026, 12:00 PM",
+    portalJobCallbackCooldownMessage("Oct 3, 2026, 12:00 AM").includes(
+      "Next available Oct 3, 2026, 12:00 AM",
     ) &&
     !JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("we will call"),
 );
@@ -347,10 +380,20 @@ try {
   });
 
   const businessA = await prisma.business.create({
-    data: { name: "Alpha Portal Callback", slug: `alpha-pcb-${suffix}`, tradeCode: "HANDYMAN" },
+    data: {
+      name: "Alpha Portal Callback",
+      slug: `alpha-pcb-${suffix}`,
+      tradeCode: "HANDYMAN",
+      timezone: NY,
+    },
   });
   const businessB = await prisma.business.create({
-    data: { name: "Beta Portal Callback", slug: `beta-pcb-${suffix}`, tradeCode: "CLEANING" },
+    data: {
+      name: "Beta Portal Callback",
+      slug: `beta-pcb-${suffix}`,
+      tradeCode: "CLEANING",
+      timezone: LA,
+    },
   });
 
   const memOwnerA = await prisma.membership.create({
@@ -360,6 +403,7 @@ try {
     data: { userId: ownerBUser.id, businessId: businessB.id, role: "OWNER" },
   });
   const ownerA = makeAccess(businessA.id, "OWNER", memOwnerA.id, ownerUser.id);
+  const ownerB = makeAccess(businessB.id, "OWNER", memOwnerB.id, ownerBUser.id);
 
   async function createJob(businessId, options = {}) {
     const { status = "COMPLETED" } = options;
@@ -573,7 +617,7 @@ try {
       cooldownView.jobId === completedA.job.id &&
       cooldownView.availableAt instanceof Date &&
       cooldownView.availableAt.getTime() ===
-        portalJobCallbackCooldownAvailableAt(outcome.callback.outcomeAt).getTime() &&
+        portalJobCallbackCooldownAvailableAt(outcome.callback.outcomeAt, NY).getTime() &&
       isolationView.status === "ready" &&
       isolationView.jobId === isolationReady.job.id &&
       betaOpenView.status === "already_requested" &&
@@ -670,41 +714,42 @@ try {
     callbackId: laterFirst.callbackId,
     outcome: "RECORDED_ONLY",
   });
-  const justInside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 60_000);
+  const todayStartNy = startOfZonedDay(new Date(), NY);
+  const stillTodayNy = new Date(todayStartNy.getTime() + 60_000);
   await prisma.jobCallback.update({
     where: { id: laterFirst.callbackId },
-    data: { outcomeAt: justInside },
+    data: { outcomeAt: stillTodayNy },
   });
   const insideBoundary = await submitPortalJobCallback(prisma, {
     token: laterSeed.job.projectToken,
-    description: "Still inside the 24-hour wait",
+    description: "Still the same New York calendar day",
     preferredContact: "PHONE",
   });
   const insideView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
   check(
-    "Sixty seconds inside the 24-hour mark still refuses a portal re-file",
+    "A resolve earlier today in America/New_York still refuses a portal re-file",
     laterOutcome.callback.status === "OUTCOME_RECORDED" &&
       insideBoundary.ok === false &&
       insideBoundary.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
       insideView.status === "cooldown",
   );
 
-  const atBoundary = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+  const previousNyDay = new Date(todayStartNy.getTime() - 1);
   await prisma.jobCallback.update({
     where: { id: laterFirst.callbackId },
-    data: { outcomeAt: atBoundary },
+    data: { outcomeAt: previousNyDay },
   });
   const laterView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
   const laterSecond = await submitPortalJobCallback(prisma, {
     token: laterSeed.job.projectToken,
-    description: "Legitimate later request after the wait",
+    description: "Legitimate later request after the New York day rolled",
     preferredContact: "EMAIL",
   });
   const laterCount = await prisma.jobCallback.count({
     where: { businessId: businessA.id, jobId: laterSeed.job.id },
   });
   check(
-    "A later portal request is accepted at the 24-hour boundary",
+    "A later portal request is accepted once the New York calendar day has rolled",
     laterView.status === "ready" &&
       laterSecond.ok === true &&
       laterSecond.alreadyExists === false &&
@@ -740,8 +785,8 @@ try {
     callbackId: newestResolved.id,
     outcome: "RECORDED_ONLY",
   });
-  const laterCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS * 2);
-  const earlierCreatedInside = new Date(Date.now() - 60_000);
+  const laterCreatedOutside = addZonedCalendarDays(todayStartNy, -2, NY);
+  const earlierCreatedInside = new Date(todayStartNy.getTime() + 60_000);
   await prisma.jobCallback.update({
     where: { id: oldestResolved.callbackId },
     data: { outcomeAt: earlierCreatedInside },
@@ -764,7 +809,7 @@ try {
     description: "Should follow the newest outcomeAt, not createdAt",
     preferredContact: "EMAIL",
   });
-  const earlierCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+  const earlierCreatedOutside = new Date(todayStartNy.getTime() - 1);
   await prisma.jobCallback.update({
     where: { id: oldestResolved.callbackId },
     data: { outcomeAt: earlierCreatedOutside },
@@ -784,7 +829,7 @@ try {
     preferredContact: "TEXT",
   });
   check(
-    "Newest resolved callback wins the 24-hour cooldown",
+    "Newest resolved callback wins the calendar-day cooldown",
     pickedInside?.id === oldestResolved.callbackId &&
       newestInsideView.status === "cooldown" &&
       newestInsideSubmit.ok === false &&
@@ -795,6 +840,72 @@ try {
       newestOutsideSubmit.alreadyExists === false &&
       newestOutsideSubmit.callbackId !== oldestResolved.callbackId &&
       newestOutsideSubmit.callbackId !== newestResolved.id,
+  );
+
+  console.log("\nTIMEZONE — each tenant uses its own Business.timezone calendar day");
+  const tzNySeed = await createJob(businessA.id);
+  const tzLaSeed = await createJob(businessB.id);
+  const tzNyFirst = await submitPortalJobCallback(prisma, {
+    token: tzNySeed.job.projectToken,
+    description: "NY timezone cooldown seed",
+    preferredContact: "PHONE",
+  });
+  const tzLaFirst = await submitPortalJobCallback(prisma, {
+    token: tzLaSeed.job.projectToken,
+    description: "LA timezone cooldown seed",
+    preferredContact: "TEXT",
+  });
+  if (!tzNyFirst.ok || !tzLaFirst.ok) {
+    throw new Error(tzNyFirst.ok ? tzLaFirst.error : tzNyFirst.error);
+  }
+  await reviewCustomerReportedCallback(prisma, ownerA, { callbackId: tzNyFirst.callbackId });
+  await recordCustomerReportedCallbackOutcome(prisma, ownerA, {
+    callbackId: tzNyFirst.callbackId,
+    outcome: "RECORDED_ONLY",
+  });
+  await reviewCustomerReportedCallback(prisma, ownerB, { callbackId: tzLaFirst.callbackId });
+  await recordCustomerReportedCallbackOutcome(prisma, ownerB, {
+    callbackId: tzLaFirst.callbackId,
+    outcome: "RECORDED_ONLY",
+  });
+  const todayStartLa = startOfZonedDay(new Date(), LA);
+  await prisma.jobCallback.update({
+    where: { id: tzNyFirst.callbackId },
+    data: { outcomeAt: new Date(todayStartNy.getTime() + 60_000) },
+  });
+  await prisma.jobCallback.update({
+    where: { id: tzLaFirst.callbackId },
+    data: { outcomeAt: new Date(todayStartLa.getTime() - 1) },
+  });
+  const tzNyView = await loadPortalJobCallbackView(prisma, tzNySeed.job.projectToken);
+  const tzLaView = await loadPortalJobCallbackView(prisma, tzLaSeed.job.projectToken);
+  const tzNySubmit = await submitPortalJobCallback(prisma, {
+    token: tzNySeed.job.projectToken,
+    description: "NY should still be cooling down on its own calendar day",
+    preferredContact: "EMAIL",
+  });
+  const tzLaSubmit = await submitPortalJobCallback(prisma, {
+    token: tzLaSeed.job.projectToken,
+    description: "LA previous calendar day should accept",
+    preferredContact: "PHONE",
+  });
+  check(
+    "New York still cooling down does not block a Los Angeles token whose day has rolled",
+    tzNyView.status === "cooldown" &&
+      tzNyView.jobId === tzNySeed.job.id &&
+      tzNySubmit.ok === false &&
+      tzNySubmit.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
+      tzLaView.status === "ready" &&
+      tzLaView.jobId === tzLaSeed.job.id &&
+      tzLaSubmit.ok === true &&
+      tzLaSubmit.alreadyExists === false &&
+      tzLaSubmit.jobId === tzLaSeed.job.id &&
+      (await prisma.jobCallback.count({
+        where: { businessId: businessA.id, jobId: tzNySeed.job.id },
+      })) === 1 &&
+      (await prisma.jobCallback.count({
+        where: { businessId: businessB.id, jobId: tzLaSeed.job.id },
+      })) === 2,
   );
 
   console.log("\nCONCURRENT — two token submits create one open callback");
@@ -839,7 +950,7 @@ try {
   check(
     "Invoice / job / payment / communication counts stay honest",
     (await countBusinessInvoices(prisma, businessA.id)) === invoicesBefore &&
-      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 4 &&
+      (await countBusinessJobs(prisma, businessA.id)) === jobsBefore + 5 &&
       (await countBusinessPayments(prisma, businessA.id)) === paymentsBefore &&
       (await countBusinessCommunications(prisma, businessA.id)) === commsBefore,
   );
