@@ -176,14 +176,19 @@ export function parseSaasBillingEvent(event: unknown): ParsedSaasBillingEvent | 
     if (object.mode !== "subscription") return null;
     const metadata = readMetadata(object.metadata);
     if (!isSaasPurpose(metadata)) return null;
+    // Match Connect invoice/deposit Checkout: session.status=complete only
+    // means the customer finished Checkout. Async methods can still be unpaid
+    // until checkout.session.async_payment_succeeded. Treating complete as
+    // active granted Founder entitlement and founderConvertedAt before money
+    // cleared, and leftover trial days could not recover after a later fail.
+    if (eventType === "checkout.session.completed" && object.payment_status !== "paid") {
+      return null;
+    }
     const snapshot: SaasSubscriptionSnapshot = {
       stripeCustomerId: idOf(object.customer),
       stripeSubscriptionId: idOf(object.subscription),
       stripePriceId: metadata.priceId || null,
-      status:
-        object.payment_status === "paid" || object.status === "complete"
-          ? "active"
-          : "incomplete",
+      status: object.payment_status === "paid" ? "active" : "incomplete",
       currentPeriodEnd: null,
       cancelAtPeriodEnd: null,
     };

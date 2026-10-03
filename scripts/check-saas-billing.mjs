@@ -144,14 +144,14 @@ async function seedBusiness(name, extra = {}) {
 function saasCheckoutEvent(input) {
   return {
     id: input.id ?? "evt_checkout_1",
-    type: "checkout.session.completed",
+    type: input.type ?? "checkout.session.completed",
     data: {
       object: {
         object: "checkout.session",
         id: input.sessionId ?? "cs_saas_1",
         mode: "subscription",
-        status: "complete",
-        payment_status: "paid",
+        status: input.status ?? "complete",
+        payment_status: input.paymentStatus ?? "paid",
         customer: input.customerId,
         subscription: input.subscriptionId,
         metadata: {
@@ -423,6 +423,12 @@ check(
 check(
   "SaaS events ignore Connect-account payloads",
   saasEvents.includes("Connect-account events belong to customer invoice/deposit"),
+);
+check(
+  "SaaS Checkout activation requires payment_status paid, not session complete",
+  saasEvents.includes('eventType === "checkout.session.completed" && object.payment_status !== "paid"') &&
+    saasEvents.includes('object.payment_status === "paid" ? "active" : "incomplete"') &&
+    !saasEvents.includes('object.payment_status === "paid" || object.status === "complete"'),
 );
 
 console.log("\nUNIT — fake SaaS adapter never operates in Vercel production");
@@ -1123,6 +1129,80 @@ try {
       customerId: first.customerId,
       subscriptionId: "sub_from_checkout",
     }))?.snapshot.status === "active",
+  );
+  const unpaidCompleteCheckout = saasCheckoutEvent({
+    id: "evt_unpaid_complete",
+    businessId: businessA.business.id,
+    customerId: first.customerId,
+    subscriptionId: "sub_unpaid_complete",
+    paymentStatus: "unpaid",
+  });
+  check(
+    "parseSaasBillingEvent ignores unpaid complete Founder Checkout",
+    parseSaasBillingEvent(unpaidCompleteCheckout) === null,
+  );
+  check(
+    "Connect parser also ignores unpaid complete SaaS Checkout",
+    parseCheckoutPaymentEvent(unpaidCompleteCheckout) === null,
+  );
+  check(
+    "parseSaasBillingEvent activates only after async payment succeeds",
+    parseSaasBillingEvent(saasCheckoutEvent({
+      id: "evt_async_paid",
+      type: "checkout.session.async_payment_succeeded",
+      businessId: businessA.business.id,
+      customerId: first.customerId,
+      subscriptionId: "sub_async_paid",
+      paymentStatus: "paid",
+    }))?.snapshot.status === "active",
+  );
+
+  const asyncPay = await seedBusiness("Async Founder Checkout");
+  const unpaidDispatch = await dispatchStripeWebhookEvent(prisma, unpaidCompleteCheckout);
+  check(
+    "Unpaid complete Checkout is not applied as SaaS or Connect",
+    unpaidDispatch.applied === false && unpaidDispatch.system === null,
+  );
+  const unpaidOwnDispatch = await dispatchStripeWebhookEvent(
+    prisma,
+    saasCheckoutEvent({
+      id: "evt_async_unpaid_own",
+      businessId: asyncPay.business.id,
+      customerId: "cus_async_pay",
+      subscriptionId: "sub_async_pay",
+      paymentStatus: "unpaid",
+    }),
+  );
+  const unpaidOwnRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: asyncPay.business.id },
+  });
+  const unpaidOwnEntitlement = await loadSaasEntitlement(prisma, asyncPay.business);
+  check(
+    "Unpaid complete Founder Checkout does not subscribe or convert the tenant",
+    unpaidOwnDispatch.applied === false &&
+      unpaidOwnDispatch.system === null &&
+      (unpaidOwnRow == null || unpaidOwnRow.status === "none") &&
+      unpaidOwnRow?.founderConvertedAt == null &&
+      unpaidOwnEntitlement.state !== "subscribed_active",
+  );
+  const asyncPaidDispatch = await verifyAndDispatch(saasCheckoutEvent({
+    id: "evt_async_pay_succeeded",
+    type: "checkout.session.async_payment_succeeded",
+    businessId: asyncPay.business.id,
+    customerId: "cus_async_pay",
+    subscriptionId: "sub_async_pay",
+    paymentStatus: "paid",
+  }));
+  const asyncPaidRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: asyncPay.business.id },
+  });
+  check(
+    "async_payment_succeeded marks only that tenant active after money clears",
+    asyncPaidDispatch.applied === true &&
+      asyncPaidDispatch.system === "saas" &&
+      asyncPaidRow?.status === "active" &&
+      asyncPaidRow?.stripeSubscriptionId === "sub_async_pay" &&
+      Boolean(asyncPaidRow?.founderConvertedAt),
   );
   check(
     "parseSaasBillingEvent ignores Connect-account events",
