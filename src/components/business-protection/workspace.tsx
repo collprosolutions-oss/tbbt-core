@@ -666,9 +666,7 @@ function AgreementDetail({
               <form action={esignReconcileAction} className="space-y-2">
                 <input type="hidden" name="agreementId" value={selected.id} />
                 <p className="text-xs text-muted-foreground">
-                  Look up the provider request for this unknown send before canceling. This does not
-                  create a second signature request. Bind only the request for this exact business,
-                  agreement, and version.
+                  Look up the provider request for this unknown send before canceling. This does not create a second signature request. Bind only the request for this exact business, agreement, and version.
                 </p>
                 <div className="space-y-1.5">
                   <Label htmlFor="requestId">Dropbox Sign request id (optional)</Label>

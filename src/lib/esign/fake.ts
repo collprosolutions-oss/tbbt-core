@@ -83,7 +83,7 @@ export class FakeEsignProvider implements EsignProvider {
   private timeoutBeforeCreate = false;
   private throwAfterCreate: Error | null = null;
   private failNextDownload = false;
-  private failNextLookup = false;
+  private lookupShouldFail = false;
   private processedEventIds = new Set<string>();
   private createCalls = 0;
   private lookupCalls = 0;
@@ -94,7 +94,7 @@ export class FakeEsignProvider implements EsignProvider {
     this.timeoutBeforeCreate = false;
     this.throwAfterCreate = null;
     this.failNextDownload = false;
-    this.failNextLookup = false;
+    this.lookupShouldFail = false;
     this.processedEventIds.clear();
     this.createCalls = 0;
     this.lookupCalls = 0;
@@ -118,7 +118,7 @@ export class FakeEsignProvider implements EsignProvider {
   }
 
   failNextLookup() {
-    this.failNextLookup = true;
+    this.lookupShouldFail = true;
   }
 
   createdRequestCount() {
@@ -178,8 +178,8 @@ export class FakeEsignProvider implements EsignProvider {
     input: LookupEsignSignatureRequestInput,
   ): Promise<EsignSignatureLookupResult | null> {
     this.lookupCalls += 1;
-    if (this.failNextLookup) {
-      this.failNextLookup = false;
+    if (this.lookupShouldFail) {
+      this.lookupShouldFail = false;
       throw new EsignProviderError(
         "Fake e-sign provider lookup outcome is unknown. Check Dropbox Sign before canceling.",
         { outcome: "unknown" },
