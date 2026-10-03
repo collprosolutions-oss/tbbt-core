@@ -429,6 +429,7 @@ await withDisposableTestDatabase(
       });
     }
 
+    let passwordResetNow = Date.now();
     async function runPasswordReset(tenant, email) {
       const user =
         (await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } })) ??
@@ -447,7 +448,8 @@ await withDisposableTestDatabase(
         where: { userId: user.id, businessId: { not: tenant.business.id } },
         data: { active: false },
       });
-      return requestPasswordResetOp(prisma, email);
+      passwordResetNow += 120_000;
+      return requestPasswordResetOp(prisma, email, undefined, new Date(passwordResetNow));
     }
 
     async function runCompanyNotify(tenant, email) {
