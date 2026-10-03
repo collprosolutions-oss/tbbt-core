@@ -112,6 +112,7 @@ export type ParsedBankRow = {
   invalidReason: string | null;
   reversalOfRowNumber: number | null;
   duplicateOfRowNumber: number | null;
+  externalTransactionId?: string | null;
 };
 
 export type BankMatchCandidate = {

@@ -2037,6 +2037,25 @@ check(
       localNames.indexOf("20261002193000_esign_signature_request_id"),
 );
 
+const bankPlaidConnectionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261003013000_bank_plaid_connection/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+check(
+  "Plaid bank connection migration is additive and uses the reserved timestamp",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(bankPlaidConnectionMigration) &&
+    bankPlaidConnectionMigration.includes('CREATE TABLE IF NOT EXISTS "BankPlaidItem"') &&
+    bankPlaidConnectionMigration.includes('ADD COLUMN IF NOT EXISTS "externalTransactionId"') &&
+    bankPlaidConnectionMigration.includes("Reserved timestamp 20261003013000") &&
+    localNames.includes("20261003013000_bank_plaid_connection") &&
+    localNames.includes("20261002193000_esign_signature_request_id") &&
+    localNames.indexOf("20261002193000_esign_signature_request_id") <
+      localNames.indexOf("20261003013000_bank_plaid_connection"),
+);
+
 const projectDocumentReviewMigration = readFileSync(
   new URL(
     "../prisma/migrations/20261001200000_project_document_review/migration.sql",
