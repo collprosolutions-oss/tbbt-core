@@ -3,14 +3,18 @@
  *
  * Tenant-facing instructions use Vercel's documented general-purpose
  * records (and a validated project-recommended public IPv4 when set).
- * Matching also accepts platform-observed CollPro/TBBT apex addresses so
- * those production hosts are not reported unverified. This module does
- * not call Vercel, edit DNS, or change public routing.
+ * Matching also accepts documented Vercel compatibility apex 76.76.21.22
+ * and platform-observed CollPro/TBBT apex addresses so those hosts are
+ * not reported unverified. This module does not call Vercel, edit DNS,
+ * or change public routing.
  */
 
 export const WEBSITE_DOMAIN_DNS_CNAME_TARGET = "cname.vercel-dns.com";
 
 export const VERCEL_GENERAL_PURPOSE_APEX_A = "76.76.21.21";
+
+/** Documented Vercel compatibility apex A. Match-only; never tenant-facing. */
+export const VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A = "76.76.21.22";
 
 export const PLATFORM_OBSERVED_APEX_A = "216.198.79.1";
 
@@ -34,6 +38,12 @@ const STATIC_APEX_A_ALLOWLIST: readonly WebsiteDomainApexAAllowlistRow[] = [
     source: "vercel-general-purpose",
     tenantFacing: true,
     label: "Vercel documented general-purpose apex A",
+  },
+  {
+    address: VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A,
+    source: "vercel-general-purpose",
+    tenantFacing: false,
+    label: "Vercel documented compatibility apex A; not a tenant instruction",
   },
   {
     address: PLATFORM_OBSERVED_APEX_A,

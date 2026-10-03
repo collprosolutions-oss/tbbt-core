@@ -28,6 +28,7 @@ const { classifyCustomDomain, goLiveCardById } = await import("@/lib/go-live");
 const {
   PLATFORM_OBSERVED_APEX_A,
   VERCEL_GENERAL_PURPOSE_APEX_A,
+  VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A,
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
   WEBSITE_DOMAIN_MAX_DNS_RECORDS,
@@ -166,8 +167,11 @@ check(
     websiteDomainApexATargetsLabel() === VERCEL_GENERAL_PURPOSE_APEX_A &&
     websiteDomainApexAInstructionAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
     !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
+    !websiteDomainApexAInstructionAddresses().includes(VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A) &&
     !websiteDomainApexATargetsLabel().includes(PLATFORM_OBSERVED_APEX_A) &&
+    !websiteDomainApexATargetsLabel().includes(VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A) &&
     !settingsCard.includes(PLATFORM_OBSERVED_APEX_A) &&
+    !settingsCard.includes(VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A) &&
     settingsCard.includes("WEBSITE_DOMAIN_DNS_CNAME_TARGET") &&
     WEBSITE_DOMAIN_DNS_CNAME_TARGET === "cname.vercel-dns.com" &&
     readme.includes("`76.76.21.21`") &&
@@ -193,10 +197,16 @@ check(
 check(
   "Display matching accepts Vercel apex A and project CNAMEs",
   isVercelApexAddress(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+    isVercelApexAddress(VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A) &&
     isVercelApexAddress(PLATFORM_OBSERVED_APEX_A) &&
     websiteDomainApexAMatchAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+    websiteDomainApexAMatchAddresses().includes(VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A) &&
     websiteDomainApexAMatchAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
     dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A],
+    }) &&
     dnsRecordsPointAtTbbt({
       cnames: [],
       addresses: websiteDomainApexAMatchAddresses(),
@@ -311,6 +321,26 @@ check(
       ),
   );
   resetWebsiteDomainProjectRecommendedA();
+  check(
+    "76.76.21.22 is match-only compatibility and is not shown to tenants",
+    VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A === "76.76.21.22" &&
+      isVercelApexAddress("76.76.21.22") &&
+      websiteDomainApexAMatchAddresses().includes("76.76.21.22") &&
+      dnsRecordsPointAtTbbt({ cnames: [], addresses: ["76.76.21.22"] }) &&
+      !websiteDomainApexAInstructionAddresses().includes("76.76.21.22") &&
+      !websiteDomainApexATargetsLabel().includes("76.76.21.22") &&
+      !settingsCard.includes("76.76.21.22") &&
+      websiteDomainApexAAllowlist().filter((row) => row.address === "76.76.21.22")
+        .length === 1 &&
+      websiteDomainApexAAllowlist().some(
+        (row) =>
+          row.address === "76.76.21.22" &&
+          row.source === "vercel-general-purpose" &&
+          !row.tenantFacing,
+      ) &&
+      readme.includes("`76.76.21.22`") &&
+      certification.includes("`76.76.21.22`"),
+  );
   check(
     "216.198.79.1 is match-only unless the operator sets it",
     !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
