@@ -6,6 +6,7 @@
  * Job, or messages the customer.
  */
 import type { MembershipRole } from "@prisma/client";
+import { addZonedCalendarDays } from "@/lib/business-timezone";
 
 export const JOB_CALLBACK_STATUSES = [
   "RECORDED",
@@ -189,13 +190,26 @@ export const JOB_CALLBACK_PORTAL_RECEIVED_MESSAGE =
 export const JOB_CALLBACK_PORTAL_WORKFLOW_MESSAGE =
   "Ask the team to review a concern about the completed work. This is not a warranty claim, does not promise coverage, does not schedule a visit, and does not send a message.";
 
-/** Bounded portal re-file wait after an OWNER records an outcome. */
+/**
+ * Bounded portal re-file wait after an OWNER records an outcome.
+ *
+ * availableAt is the later of:
+ * - resolvedAt plus 24 elapsed hours (absolute milliseconds; DST cannot
+ *   shorten this floor)
+ * - the start of the next calendar day in Business.timezone
+ *
+ * The start instant is the owner-recorded outcomeAt. Customer-supplied
+ * timestamps are never read. If local midnight is skipped on a DST day,
+ * calendar-day math may land on the first valid civil time; the 24-hour
+ * elapsed floor still holds.
+ */
 export const PORTAL_JOB_CALLBACK_COOLDOWN_HOURS = 24;
 export const PORTAL_JOB_CALLBACK_COOLDOWN_MS =
   PORTAL_JOB_CALLBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
+export const PORTAL_JOB_CALLBACK_COOLDOWN_DAYS = 1;
 
 export const JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE =
-  "The team already recorded an outcome on a recent callback request for this job. You can send another request after 24 hours. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.";
+  "The team already recorded an outcome on a recent callback request for this job. You can send another request after at least 24 hours. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.";
 
 export const JOB_CALLBACK_PORTAL_CLOSED_MESSAGE =
   "The team closed this request and is not planning a return visit. You cannot send another request for this job. This is not a warranty claim, does not promise coverage, does not schedule a visit, and does not send a message.";
@@ -212,21 +226,44 @@ export const JOB_CALLBACK_ATTACHMENT_LIMIT_MESSAGE =
 export const JOB_CALLBACK_UNAVAILABLE_MESSAGE =
   "Customer-reported callbacks are unavailable on this environment until the callback issue migration is applied.";
 
-export function portalJobCallbackCooldownAvailableAt(resolvedAt: Date): Date {
-  return new Date(resolvedAt.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+export function portalJobCallbackCooldownAvailableAt(
+  resolvedAt: Date,
+  timeZone: string,
+): Date {
+  const elapsedAt = resolvedAt.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS;
+  const nextLocalDayAt = addZonedCalendarDays(
+    resolvedAt,
+    PORTAL_JOB_CALLBACK_COOLDOWN_DAYS,
+    timeZone,
+  ).getTime();
+  if (!Number.isFinite(nextLocalDayAt) || nextLocalDayAt <= resolvedAt.getTime()) {
+    return new Date(elapsedAt);
+  }
+  return new Date(Math.max(elapsedAt, nextLocalDayAt));
 }
+
+/**
+ * Test-only clock. Production never assigns this. Submit and view call
+ * isPortalJobCallbackCoolingDown without `now`, so this is the only way
+ * a disposable-DB proof can freeze the exact 24-hour boundary.
+ */
+export const portalJobCallbackCooldownTestHooks: {
+  now?: () => Date;
+} = {};
 
 export function isPortalJobCallbackCoolingDown(
   resolvedAt: Date | null | undefined,
-  now: Date = new Date(),
+  timeZone: string,
+  now?: Date,
 ): boolean {
   if (!resolvedAt) return false;
-  return now.getTime() - resolvedAt.getTime() < PORTAL_JOB_CALLBACK_COOLDOWN_MS;
+  const clock = now ?? portalJobCallbackCooldownTestHooks.now?.() ?? new Date();
+  return clock.getTime() < portalJobCallbackCooldownAvailableAt(resolvedAt, timeZone).getTime();
 }
 
 export function portalJobCallbackCooldownMessage(availableAtLabel?: string): string {
   if (!availableAtLabel) return JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE;
-  return `The team already recorded an outcome on a recent callback request for this job. You can send another request after 24 hours. Next available ${availableAtLabel}. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.`;
+  return `The team already recorded an outcome on a recent callback request for this job. You can send another request after at least 24 hours. Next available ${availableAtLabel}. This is not a warranty decision, does not promise coverage, does not schedule a visit, and does not send a message.`;
 }
 
 export function jobCallbackWriteAllowed(role: MembershipRole | string): boolean {

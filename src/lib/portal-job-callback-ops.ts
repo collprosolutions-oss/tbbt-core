@@ -8,6 +8,7 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { PROJECT_DOCUMENT_PURPOSE } from "@/lib/business-storage/project-documents";
+import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
   JOB_CALLBACK_OPEN_STATUSES,
   JOB_CALLBACK_PORTAL_CLOSED_MESSAGE,
@@ -167,7 +168,12 @@ export async function submitPortalJobCallback(
       if (isPortalJobCallbackClosed(resolved?.outcome)) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_CLOSED_MESSAGE };
       }
-      if (isPortalJobCallbackCoolingDown(resolvedJobCallbackAt(resolved))) {
+      const business = await tx.business.findFirst({
+        where: { id: locked.businessId },
+        select: { timezone: true },
+      });
+      const timeZone = resolveBusinessTimeZone(business);
+      if (isPortalJobCallbackCoolingDown(resolvedJobCallbackAt(resolved), timeZone)) {
         return { ok: false, error: JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE };
       }
 
