@@ -258,6 +258,7 @@ const offboardingSrc = readFileSync(new URL("../src/lib/offboarding.ts", import.
 const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 const envExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
+const { isStripeWebhookPath } = await import("@/lib/stripe-webhook-path");
 
 console.log("\nSTATIC — SaaS billing stays separate from Connect and Tasks 1–3");
 check(
@@ -313,9 +314,13 @@ check(
 );
 check(
   "Auth proxy lets Stripe reach /api/stripe/webhook without a session cookie",
-  proxySrc.includes("isStripeWebhookPath") &&
+  proxySrc.includes('from "@/lib/stripe-webhook-path"') &&
+    /isStripeWebhookPath\(\s*pathname\s*\)/.test(proxySrc) &&
     proxySrc.includes("api/stripe/webhook") &&
-    proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+    isStripeWebhookPath("/api/stripe/webhook") === true &&
+    isStripeWebhookPath("/dashboard") === false &&
+    proxySrc.indexOf("isStripeWebhookPath(") < proxySrc.indexOf("!hasSession") &&
+    /if\s*\(\s*!hasSession\s*&&\s*!isAuthPath\(\s*pathname\s*\)\s*\)/.test(proxySrc),
 );
 check(
   "Success redirect copy does not persist subscription status",
