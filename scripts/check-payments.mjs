@@ -713,8 +713,8 @@ try {
   check("webhook applies only a parsed checkout payment", webhookStack.includes("parseCheckoutPaymentEvent"));
   check(
     "deposit apply locks the Estimate row before remaining-due write",
-    serviceSrc.includes("ESTIMATE_DEPOSIT_FOR_UPDATE") &&
-      /FROM "Estimate"[\s\S]{0,180}FOR UPDATE/.test(serviceSrc) &&
+    serviceSrc.includes("ESTIMATE_DEPOSIT_FOR_NO_KEY_UPDATE") &&
+      /FROM "Estimate"[\s\S]{0,220}FOR NO KEY UPDATE/.test(serviceSrc) &&
       serviceSrc.includes("isPrismaClient(db) ? db.$transaction(applyLocked) : applyLocked(db)"),
   );
   const paymentEventsSrc = readFileSync(

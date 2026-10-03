@@ -800,12 +800,14 @@ async function applyVerifiedDepositPayment(
       return { applied: false, reason: "business_mismatch" };
     }
 
-    // ESTIMATE_DEPOSIT_FOR_UPDATE
+    // ESTIMATE_DEPOSIT_FOR_NO_KEY_UPDATE
+    // NO KEY so Payment FK inserts (FOR KEY SHARE on Estimate) from the
+    // invoice-balance path cannot deadlock against this lock.
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM "Estimate"
       WHERE id = ${estimateId} AND "businessId" = ${payment.businessId}
-      FOR UPDATE
+      FOR NO KEY UPDATE
     `;
     if (locked.length === 0) {
       return { applied: false, reason: "estimate_not_found" };
