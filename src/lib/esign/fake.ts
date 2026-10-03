@@ -8,13 +8,16 @@ import { randomUUID } from "node:crypto";
 import { getFakeEsignWebhookKey } from "@/lib/esign/config";
 import { dropboxSignEventHash, verifyDropboxSignEventHash } from "@/lib/esign/hmac";
 import { renderEsignAgreementPdf } from "@/lib/esign/signed-pdf";
+import { scanEsignSignatureRequestPages, type EsignListPageFetch } from "@/lib/esign/lookup-scan";
 import {
   ESIGN_METADATA_KEYS,
   EsignProviderError,
   type CreateEsignSignatureRequestInput,
   type EsignProvider,
   type EsignRequestMetadata,
+  type EsignSignatureLookupOutcome,
   type EsignSignatureRequestResult,
+  type LookupEsignSignatureRequestInput,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
 
@@ -26,6 +29,13 @@ type FakeRequest = {
   input: CreateEsignSignatureRequestInput;
   signedPdf: Buffer;
 };
+
+export type FakeLookupListPage =
+  | {
+      rows: Array<{ requestId: string; metadata: EsignRequestMetadata }>;
+      numPages: number;
+    }
+  | { error: "timeout" | "error" | "malformed" | "unknown_total" };
 
 function metadataFromRecord(value: unknown): EsignRequestMetadata | null {
   if (!value || typeof value !== "object") return null;
@@ -52,26 +62,79 @@ export async function buildFakeSignedPdf(input: {
   return renderEsignAgreementPdf(input);
 }
 
+function metadataFromInput(input: EsignRequestMetadata): EsignRequestMetadata {
+  return {
+    businessId: input.businessId,
+    agreementId: input.agreementId,
+    versionId: input.versionId,
+    attemptKey: input.attemptKey,
+    actorMembershipId: input.actorMembershipId,
+  };
+}
+
+function lookupMatchesMetadata(
+  stored: EsignRequestMetadata,
+  query: LookupEsignSignatureRequestInput,
+) {
+  return (
+    stored.businessId === query.businessId &&
+    stored.agreementId === query.agreementId &&
+    stored.versionId === query.versionId &&
+    stored.attemptKey === query.attemptKey
+  );
+}
+
+function fakePageToFetch(page: FakeLookupListPage): EsignListPageFetch {
+  if ("error" in page) {
+    if (page.error === "timeout") {
+      throw Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }
+    return { ok: false, reason: page.error };
+  }
+  return {
+    ok: true,
+    signatureRequests: page.rows.map((row) => ({
+      signature_request_id: row.requestId,
+      metadata: row.metadata,
+    })),
+    numPages: page.numPages,
+  };
+}
+
 export class FakeEsignProvider implements EsignProvider {
   readonly id = "fake" as const;
   private readonly requests = new Map<string, FakeRequest>();
   private failNextCreate = false;
+  private timeoutBeforeCreate = false;
   private throwAfterCreate: Error | null = null;
   private failNextDownload = false;
+  private lookupShouldFail = false;
+  private lookupPages: FakeLookupListPage[] | null = null;
+  private nextLookupOutcome: EsignSignatureLookupOutcome | null = null;
   private processedEventIds = new Set<string>();
   private createCalls = 0;
+  private lookupCalls = 0;
 
   reset() {
     this.requests.clear();
     this.failNextCreate = false;
+    this.timeoutBeforeCreate = false;
     this.throwAfterCreate = null;
     this.failNextDownload = false;
+    this.lookupShouldFail = false;
+    this.lookupPages = null;
+    this.nextLookupOutcome = null;
     this.processedEventIds.clear();
     this.createCalls = 0;
+    this.lookupCalls = 0;
   }
 
   failNextSignatureRequest() {
     this.failNextCreate = true;
+  }
+
+  timeoutBeforeSignatureRequest() {
+    this.timeoutBeforeCreate = true;
   }
 
   createThenThrow(error?: Error) {
@@ -83,8 +146,28 @@ export class FakeEsignProvider implements EsignProvider {
     this.failNextDownload = true;
   }
 
+  failNextLookup() {
+    this.lookupShouldFail = true;
+  }
+
+  useLookupListPages(pages: FakeLookupListPage[]) {
+    this.lookupPages = pages;
+  }
+
+  clearLookupListPages() {
+    this.lookupPages = null;
+  }
+
+  returnNextLookup(outcome: EsignSignatureLookupOutcome) {
+    this.nextLookupOutcome = outcome;
+  }
+
   createdRequestCount() {
     return this.createCalls;
+  }
+
+  lookupCallCount() {
+    return this.lookupCalls;
   }
 
   lastCreatedRequestId() {
@@ -113,6 +196,10 @@ export class FakeEsignProvider implements EsignProvider {
         statusCode: 400,
       });
     }
+    if (this.timeoutBeforeCreate) {
+      this.timeoutBeforeCreate = false;
+      throw Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }
     this.createCalls += 1;
     const requestId = `fake_sr_${randomUUID().replaceAll("-", "")}`;
     this.requests.set(requestId, {
@@ -126,6 +213,56 @@ export class FakeEsignProvider implements EsignProvider {
       throw error;
     }
     return { requestId, signingUrl: `https://esign.test/sign/${requestId}` };
+  }
+
+  async lookupSignatureRequest(
+    input: LookupEsignSignatureRequestInput,
+  ): Promise<EsignSignatureLookupOutcome> {
+    this.lookupCalls += 1;
+    if (this.nextLookupOutcome) {
+      const outcome = this.nextLookupOutcome;
+      this.nextLookupOutcome = null;
+      return outcome;
+    }
+    if (this.lookupShouldFail) {
+      this.lookupShouldFail = false;
+      return { status: "unknown", reason: "timeout" };
+    }
+    if (input.requestId) {
+      const row = this.requests.get(input.requestId);
+      // A typed request id never scans the account. A miss is not a complete
+      // "not found" — it is only "that request id was not found".
+      if (!row) return { status: "request_id_not_found" };
+      return {
+        status: "found",
+        requestId: row.requestId,
+        metadata: metadataFromInput(row.input),
+      };
+    }
+    if (this.lookupPages) {
+      const pages = this.lookupPages;
+      return scanEsignSignatureRequestPages({
+        query: input,
+        fetchPage: async (page) => {
+          const spec = pages[page - 1];
+          if (!spec) return { ok: false, reason: "unknown_total" };
+          return fakePageToFetch(spec);
+        },
+      });
+    }
+    const matches = [...this.requests.values()].filter((row) =>
+      lookupMatchesMetadata(row.input, input),
+    );
+    if (matches.length > 1) {
+      return { status: "unknown", reason: "ambiguous" };
+    }
+    const row = matches[0];
+    if (!row) return { status: "not_found_complete" };
+    return {
+      status: "found",
+      requestId: row.requestId,
+      metadata: metadataFromInput(row.input),
+    };
   }
 
   async downloadSignedDocument(requestId: string): Promise<Buffer> {

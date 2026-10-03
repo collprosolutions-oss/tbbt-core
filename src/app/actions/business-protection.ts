@@ -23,11 +23,18 @@ import {
   markAgreementSent,
   sendAgreementForEsign,
   cancelStuckEsignSend,
+  reconcileStuckEsignSend,
   releaseUnreferencedVaultAsset,
   saveAgreementAnswers,
   saveAgreementDraftContent,
   updateVaultRecord,
 } from "@/lib/business-protection-ops";
+import {
+  ESIGN_RECONCILE_BOUND_MESSAGE,
+  ESIGN_RECONCILE_MISSING_MESSAGE,
+  ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_RECONCILE_REUSED_MESSAGE,
+} from "@/lib/business-protection-esign";
 import { prisma } from "@/lib/prisma";
 
 export type ProtectionActionState = {
@@ -357,6 +364,37 @@ export async function cancelStuckEsignSendAction(
     };
   } catch (error) {
     return { error: businessProtectionErrorMessage(error, "That stuck e-sign send could not be cleared.") };
+  }
+}
+
+export async function reconcileStuckEsignSendAction(
+  _prev: ProtectionActionState,
+  formData: FormData,
+): Promise<ProtectionActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    const result = await reconcileStuckEsignSend(prisma, access, {
+      agreementId: readString(formData, "agreementId"),
+      requestId: readString(formData, "requestId") || undefined,
+    });
+    revalidateProtection();
+    if (result.reused) {
+      return { message: ESIGN_RECONCILE_REUSED_MESSAGE, agreementId: result.agreement.id };
+    }
+    if (result.found) {
+      return { message: ESIGN_RECONCILE_BOUND_MESSAGE, agreementId: result.agreement.id };
+    }
+    if (result.lookupStatus === "not_found_complete") {
+      return { message: ESIGN_RECONCILE_MISSING_MESSAGE, agreementId: result.agreement.id };
+    }
+    return {
+      error: ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+      agreementId: readString(formData, "agreementId"),
+    };
+  } catch (error) {
+    return {
+      error: businessProtectionErrorMessage(error, "That e-sign send could not be looked up."),
+    };
   }
 }
 

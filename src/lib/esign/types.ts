@@ -27,6 +27,26 @@ export type EsignSignatureRequestResult = {
   signingUrl: string | null;
 };
 
+export type LookupEsignSignatureRequestInput = EsignRequestMetadata & {
+  requestId?: string;
+};
+
+export type EsignSignatureLookupResult = {
+  requestId: string;
+  metadata: EsignRequestMetadata;
+};
+
+export type EsignSignatureLookupOutcome =
+  | {
+      status: "found";
+      requestId: string;
+      metadata: EsignRequestMetadata;
+    }
+  | { status: "not_found_complete" }
+  /** Typed request id returned HTTP 404. Not a complete account scan. */
+  | { status: "request_id_not_found" }
+  | { status: "unknown"; reason: string };
+
 export type VerifiedEsignCompletionEvent = {
   eventId: string;
   eventType: string;
@@ -72,6 +92,13 @@ export type EsignProvider = {
   createSignatureRequest(
     input: CreateEsignSignatureRequestInput,
   ): Promise<EsignSignatureRequestResult>;
+  /**
+   * Read-only recovery lookup. Must never create a signature request.
+   * Incomplete scans are "unknown", never a safe "not found".
+   */
+  lookupSignatureRequest(
+    input: LookupEsignSignatureRequestInput,
+  ): Promise<EsignSignatureLookupOutcome>;
   downloadSignedDocument(requestId: string): Promise<Buffer>;
   verifyCompletionEvent(input: {
     rawJson: string;

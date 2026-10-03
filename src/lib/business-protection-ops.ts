@@ -18,6 +18,8 @@ import { requireEsignProvider } from "@/lib/esign/provider";
 import {
   EsignProviderError,
   isDefiniteEsignProviderRejection,
+  type EsignSignatureLookupOutcome,
+  type EsignSignatureLookupResult,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
 import { isUsableEmail } from "@/lib/mail";
@@ -64,6 +66,10 @@ import {
   allowedCompletionModes,
   assertDigitalSignatureAllowed,
   ESIGN_CANCEL_STUCK_SEND_WARNING,
+  ESIGN_RECONCILE_NOT_STUCK_MESSAGE,
+  ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE,
+  ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE,
   ESIGN_SEND_IN_PROGRESS_MESSAGE,
   ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
   ESIGN_STALE_SEND_MINUTES,
@@ -202,6 +208,48 @@ function boundEsignRequestId(
     return null;
   }
   return agreementRequestId;
+}
+
+function esignSendingClaimVersion(
+  agreement: {
+    currentDraftVersionId: string | null;
+    versions: Array<{
+      id: string;
+      versionNumber: number;
+      representationStatus: string;
+      lockedAt: Date | null;
+      answersJson: string;
+      draftContent: string;
+      riskReviewJson: string | null;
+      esignSignatureRequestId?: string | null;
+    }>;
+  },
+) {
+  const current = currentVersion(agreement);
+  if (
+    current.representationStatus === "SENT" ||
+    current.representationStatus === "SIGNED_FINAL"
+  ) {
+    return current;
+  }
+  const sent = [...agreement.versions]
+    .reverse()
+    .find((row) => row.representationStatus === "SENT");
+  if (sent) return sent;
+  throw new BusinessProtectionError(ESIGN_RECONCILE_NOT_STUCK_MESSAGE);
+}
+
+function lookupMatchesEsignClaim(
+  lookedUp: EsignSignatureLookupResult,
+  claim: { businessId: string; agreementId: string; versionId: string; attemptKey: string },
+) {
+  return (
+    Boolean(lookedUp.requestId) &&
+    lookedUp.metadata.businessId === claim.businessId &&
+    lookedUp.metadata.agreementId === claim.agreementId &&
+    lookedUp.metadata.versionId === claim.versionId &&
+    lookedUp.metadata.attemptKey === claim.attemptKey
+  );
 }
 
 function assertLifecycleTransition(
@@ -1853,6 +1901,168 @@ export async function cancelStuckEsignSend(
       },
     });
     return { agreement: updated, version: currentVersion(locked) };
+  });
+}
+
+export async function reconcileStuckEsignSend(
+  db: Db,
+  access: BusinessAccess,
+  input: { agreementId: string; requestId?: string },
+) {
+  requireOwnerForCompletion(access);
+  assertDigitalSignatureAllowed(resolveEsignProviderStatus());
+  const suppliedRequestId = input.requestId?.trim() ?? "";
+  const adapter = requireEsignProvider();
+
+  const preview = await requireOwnedAgreement(db, access, input.agreementId);
+  const previewVersion = esignSendingClaimVersion(preview);
+  const storedRequestId = boundEsignRequestId(preview, previewVersion);
+
+  if (storedRequestId) {
+    if (suppliedRequestId && suppliedRequestId !== storedRequestId) {
+      throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+    }
+    return {
+      agreement: preview,
+      version: previewVersion,
+      requestId: storedRequestId,
+      found: true as const,
+      bound: true as const,
+      reused: true as const,
+      lookupStatus: "found" as const,
+    };
+  }
+
+  if (preview.signingMode !== ESIGN_SENDING_MODE || !preview.completionAttemptKey) {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_NOT_STUCK_MESSAGE);
+  }
+
+  const claim = {
+    businessId: access.businessId,
+    agreementId: preview.id,
+    versionId: previewVersion.id,
+    attemptKey: preview.completionAttemptKey,
+  };
+
+  let outcome: EsignSignatureLookupOutcome;
+  try {
+    outcome = await adapter.lookupSignatureRequest({
+      ...claim,
+      actorMembershipId: membershipId(access),
+      requestId: suppliedRequestId || undefined,
+    });
+  } catch (error) {
+    if (isDefiniteEsignProviderRejection(error)) {
+      throw new BusinessProtectionError(error.message);
+    }
+    throw new BusinessProtectionError(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
+  }
+
+  if (outcome.status === "unknown") {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
+  }
+
+  if (outcome.status === "request_id_not_found") {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE);
+  }
+
+  if (outcome.status === "not_found_complete") {
+    return {
+      agreement: preview,
+      version: previewVersion,
+      requestId: null,
+      found: false as const,
+      bound: false as const,
+      reused: false as const,
+      lookupStatus: "not_found_complete" as const,
+    };
+  }
+
+  const lookedUp: EsignSignatureLookupResult = {
+    requestId: outcome.requestId,
+    metadata: outcome.metadata,
+  };
+
+  if (!lookupMatchesEsignClaim(lookedUp, claim)) {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+  }
+
+  return runAgreementTransaction(db, async (tx) => {
+    await lockOwnedAgreement(tx, access, input.agreementId);
+    await lockOwnedAgreementVersion(tx, access, {
+      agreementId: input.agreementId,
+      versionId: previewVersion.id,
+    });
+    const locked = await requireOwnedAgreement(tx, access, input.agreementId);
+    const version = locked.versions.find((row) => row.id === previewVersion.id);
+    if (
+      !version ||
+      version.businessId !== access.businessId ||
+      version.agreementId !== locked.id
+    ) {
+      throw new BusinessProtectionError(
+        "E-sign lookup is not bound to this exact business, agreement, and version.",
+      );
+    }
+    const existingRequestId = boundEsignRequestId(locked, version);
+    if (existingRequestId) {
+      if (existingRequestId === lookedUp.requestId) {
+        return {
+          agreement: locked,
+          version,
+          requestId: existingRequestId,
+          found: true as const,
+          bound: true as const,
+          reused: true as const,
+          lookupStatus: "found" as const,
+        };
+      }
+      throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+    }
+    if (
+      locked.signingMode !== ESIGN_SENDING_MODE ||
+      locked.completionAttemptKey !== claim.attemptKey
+    ) {
+      throw new BusinessProtectionError(ESIGN_RECONCILE_NOT_STUCK_MESSAGE);
+    }
+
+    await tx.businessAgreementVersion.update({
+      where: { id: version.id },
+      data: { esignSignatureRequestId: lookedUp.requestId },
+    });
+    const updated = await tx.businessAgreement.update({
+      where: { id: locked.id },
+      data: {
+        esignSignatureRequestId: lookedUp.requestId,
+        signingMode: "PROVIDER_READY",
+        esignSendingClaimedAt: null,
+      },
+    });
+    await writeProtectionAudit(tx, {
+      businessId: access.businessId,
+      membershipId: membershipId(access),
+      action: "esign_request_reconciled",
+      agreementId: locked.id,
+      newValue: {
+        versionId: version.id,
+        versionNumber: version.versionNumber,
+        requestId: lookedUp.requestId,
+        provider: adapter.id,
+        attemptKey: claim.attemptKey,
+      },
+    });
+    return {
+      agreement: updated,
+      version: {
+        ...version,
+        esignSignatureRequestId: lookedUp.requestId,
+      },
+      requestId: lookedUp.requestId,
+      found: true as const,
+      bound: true as const,
+      reused: false as const,
+      lookupStatus: "found" as const,
+    };
   });
 }
 

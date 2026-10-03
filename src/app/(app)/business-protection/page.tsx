@@ -12,6 +12,9 @@ export const metadata: Metadata = {
   title: "Business Protection",
 };
 
+/** Hobby functions time out at 10s; lookup budget is 8s plus abort epsilon. */
+export const maxDuration = 10;
+
 export default async function BusinessProtectionPage({
   searchParams,
 }: {

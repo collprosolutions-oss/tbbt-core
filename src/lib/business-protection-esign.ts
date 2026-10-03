@@ -41,6 +41,27 @@ export const ESIGN_CANCEL_STUCK_SEND_WARNING =
 export const ESIGN_STALE_SEND_NOT_READY_MESSAGE =
   "That e-sign send is still in progress. Wait before canceling, and check Dropbox Sign first.";
 
+export const ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE =
+  "The provider could not be fully checked. Check Dropbox Sign directly and retry this lookup. TBBT did not invent a signature.";
+
+export const ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE =
+  "That request id was not found. Check Dropbox Sign directly and retry this lookup. TBBT did not invent a signature.";
+
+export const ESIGN_RECONCILE_MISSING_MESSAGE =
+  "No provider signature request was found for this send. You can cancel the stuck send when it is stale. TBBT did not invent a signature.";
+
+export const ESIGN_RECONCILE_BOUND_MESSAGE =
+  "A provider signature request was found and bound to this exact business, agreement, and version. TBBT did not invent a signature.";
+
+export const ESIGN_RECONCILE_REUSED_MESSAGE =
+  "This locked version already has an e-sign request. TBBT did not invent a signature.";
+
+export const ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE =
+  "That signature request is not bound to this exact business, agreement, and version.";
+
+export const ESIGN_RECONCILE_NOT_STUCK_MESSAGE =
+  "That agreement does not have a stuck e-sign send claim.";
+
 export const ESIGN_STALE_SEND_MINUTES = 15;
 
 export class EsignBoundaryError extends Error {
