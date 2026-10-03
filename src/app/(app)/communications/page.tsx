@@ -46,6 +46,7 @@ export default async function CommunicationsPage({
       <CommunicationsWorkspace
         area={parseCommunicationArea(params.area)}
         source={source}
+        businessId={access.businessId}
         businessName={access.workspace.business.name}
         relatedType={params.relatedType}
         relatedId={params.relatedId}

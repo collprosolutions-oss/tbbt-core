@@ -972,7 +972,7 @@ function findingsFromProjection(
     findings.push({
       key: "communications-failed-delivery",
       title: "Recent communication delivery failed",
-      why: `${t.failedDeliveries} recorded communication${t.failedDeliveries === 1 ? " has" : "s have"} status FAILED. That is a recorded delivery result, not a read receipt.`,
+      why: `${t.failedDeliveries} recorded communication${t.failedDeliveries === 1 ? " has" : "s have"} status FAILED. That is a recorded delivery result, not a read receipt. Open Failed SMS in Communications to review; the Coach does not retry.`,
       entityIds: projection.messages
         .filter((row) => row.status === "FAILED")
         .map((row) => row.id)

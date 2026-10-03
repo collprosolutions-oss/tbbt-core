@@ -13,6 +13,7 @@ import {
   recordInboundCallEvent,
   recordMissedOrManualCall,
   executeReceptionistDispositionAction,
+  retryFailedSmsDelivery,
   runCommunicationAssist,
 } from "@/lib/communications";
 import {
@@ -93,6 +94,37 @@ export async function composeCommunicationAction(
     return { message: result.reused ? "That send was already recorded." : "Message recorded." };
   } catch {
     return { error: "You do not have permission to do that." };
+  }
+}
+
+export async function retryFailedSmsDeliveryAction(
+  _prev: CommunicationsActionState,
+  formData: FormData,
+): Promise<CommunicationsActionState> {
+  try {
+    const access = await requireOperatingBusinessAccess();
+    requireBusinessCapability(access, CAPABILITIES.MANAGE_COMMUNICATIONS);
+    const communicationId = readString(formData, "communicationId");
+    const result = await retryFailedSmsDelivery(prisma, access, {
+      communicationId,
+      browserBusinessId: readString(formData, "businessId") || null,
+    });
+    const scopedId = result.communicationId ?? communicationId;
+    const row = scopedId
+      ? await prisma.customerCommunication.findFirst({
+          where: { id: scopedId, businessId: access.businessId },
+          select: { customerId: true },
+        })
+      : null;
+    revalidateCommunications(row?.customerId);
+    if (!result.ok) {
+      return { error: result.failureReason ?? "The failed SMS was not retried." };
+    }
+    return {
+      message: result.reused ? "That retry was already recorded." : "Failed SMS retried.",
+    };
+  } catch (error) {
+    return communicationsActionError(error);
   }
 }
 

@@ -3,6 +3,7 @@ import { ComposeCommunicationForm } from "@/components/communications/compose-fo
 import { MissedCallForm } from "@/components/communications/missed-call-form";
 import { CustomerCommunicationTimeline } from "@/components/communications/customer-communication-timeline";
 import { CommunicationTimelineList } from "@/components/communications/timeline-list";
+import { RetryFailedSmsButton } from "@/components/communications/retry-failed-sms-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { formatDateTime } from "@/lib/format";
@@ -20,6 +21,7 @@ type Source = Awaited<ReturnType<typeof loadCommunicationsWorkspace>>;
 export function CommunicationsWorkspace({
   area,
   source,
+  businessId,
   businessName,
   relatedType,
   relatedId,
@@ -27,6 +29,7 @@ export function CommunicationsWorkspace({
 }: {
   area: CommunicationArea;
   source: Source;
+  businessId: string;
   businessName: string;
   relatedType?: string;
   relatedId?: string;
@@ -56,6 +59,9 @@ export function CommunicationsWorkspace({
       </nav>
 
       {area === "inbox" ? <InboxPanel source={source} /> : null}
+      {area === "failed-deliveries" ? (
+        <FailedDeliveriesPanel source={source} businessId={businessId} />
+      ) : null}
       {area === "compose" ? (
         <Card>
           <CardHeader>
@@ -116,6 +122,63 @@ export function CommunicationsWorkspace({
       {area === "receptionist" ? <ReceptionistPanel source={source} /> : null}
       {area === "automation" ? <AutomationPanel source={source} /> : null}
     </div>
+  );
+}
+
+function FailedDeliveriesPanel({
+  source,
+  businessId,
+}: {
+  source: Source;
+  businessId: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Failed SMS</CardTitle>
+        <CardDescription>
+          Tenant-scoped delivery failures only. Retry is explicit and never
+          automatic. Consent and the current destination are checked again at
+          send time. A successful message is not resent.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {source.failedDeliveries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No failed SMS deliveries for this business.
+          </p>
+        ) : (
+          source.failedDeliveries.map((row) => (
+            <div key={row.id} className="rounded-md border border-border/70 p-3 text-sm">
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge status={row.status} />
+                <span>{row.customerName}</span>
+                <span className="text-muted-foreground">{row.purpose.replaceAll("_", " ")}</span>
+                {row.destinationLast4 ? (
+                  <span className="text-muted-foreground">ending {row.destinationLast4}</span>
+                ) : null}
+              </div>
+              <p className="mt-1 line-clamp-3">{row.bodySnapshot}</p>
+              {row.failureReason ? (
+                <p className="mt-1 text-xs text-destructive">{row.failureReason}</p>
+              ) : null}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {formatDateTime(row.attemptedAt ?? row.createdAt, source.timeZone)}
+              </p>
+              {row.canRetry ? (
+                <div className="mt-2">
+                  <RetryFailedSmsButton communicationId={row.id} businessId={businessId} />
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Already retried{row.retryStatus ? ` · ${row.retryStatus}` : ""}.
+                </p>
+              )}
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
