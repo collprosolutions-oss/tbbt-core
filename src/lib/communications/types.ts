@@ -52,6 +52,7 @@ export type CommunicationRelatedType = (typeof COMMUNICATION_RELATED_TYPES)[numb
 
 export const COMMUNICATION_AREAS = [
   "inbox",
+  "failed-deliveries",
   "compose",
   "missed-calls",
   "receptionist",
@@ -61,6 +62,7 @@ export type CommunicationArea = (typeof COMMUNICATION_AREAS)[number];
 
 export const COMMUNICATION_AREA_LABELS: Record<CommunicationArea, string> = {
   inbox: "Inbox",
+  "failed-deliveries": "Failed SMS",
   compose: "Compose",
   "missed-calls": "Missed calls",
   receptionist: "Receptionist",

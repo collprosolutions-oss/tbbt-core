@@ -339,7 +339,7 @@ function materialsFactEntries(facts?: Record<string, string>): CitedFact[] {
 }
 
 const COMMUNICATIONS_FACT_LABELS: Record<string, { label: string; href: string }> = {
-  "communications-failed-delivery-count": { label: "Failed recorded deliveries", href: "/communications" },
+  "communications-failed-delivery-count": { label: "Failed recorded deliveries", href: "/communications?area=failed-deliveries" },
   "communications-pending-count": { label: "Pending recorded communications", href: "/communications" },
   "communications-revoked-consent-count": { label: "SMS consent revoked", href: "/communications" },
   "communications-unknown-consent-count": { label: "SMS consent unknown", href: "/communications" },

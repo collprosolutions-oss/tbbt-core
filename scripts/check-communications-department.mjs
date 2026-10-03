@@ -86,11 +86,22 @@ const {
   RELATED_RECORD_WRONG_CUSTOMER_REASON,
   SMS_COMMERCIAL_BOUNDARY,
   productCapabilityForTemplate,
+  FAILED_SMS_NOT_IN_BUSINESS_REASON,
+  FAILED_SMS_ONLY_FAILED_REASON,
+  FAILED_SMS_SUCCESS_NOT_RETRIED_REASON,
+  failedSmsRetryIdempotencyKey,
+  listFailedSmsDeliveries,
+  loadCommunicationsWorkspace,
+  retryFailedSmsDelivery,
 } = await import("@/lib/communications");
 const {
   createFakeCustomerMessagingProvider,
+  createTwilioCustomerMessagingProvider,
+  customerSmsDispatchTestHooks,
+  handleCustomerMessagingWebhookRequest,
   setCustomerMessagingProvider,
   attemptCustomerSms,
+  twilioRequestSignature,
 } = await import("@/lib/customer-messaging");
 const { PRODUCT_CAPABILITIES } = await import("@/lib/product-catalog/codes");
 
@@ -202,6 +213,24 @@ try {
     new URL("../src/components/communications/compose-form.tsx", import.meta.url),
     "utf8",
   );
+  const workspaceSrc = readFileSync(
+    new URL("../src/components/communications/communications-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const retryButtonSrc = readFileSync(
+    new URL("../src/components/communications/retry-failed-sms-button.tsx", import.meta.url),
+    "utf8",
+  );
+  const failedDeliverySrc = readFileSync(
+    new URL("../src/lib/communications/failed-delivery.ts", import.meta.url),
+    "utf8",
+  );
+  const typesSrc = readFileSync(new URL("../src/lib/communications/types.ts", import.meta.url), "utf8");
+  const webhookSrc = readFileSync(
+    new URL("../src/lib/customer-messaging/webhook.ts", import.meta.url),
+    "utf8",
+  );
+  const coachSrc = readFileSync(new URL("../src/lib/ai/coach.ts", import.meta.url), "utf8");
   const dataSrc = readFileSync(new URL("../src/lib/communications/data.ts", import.meta.url), "utf8");
   const smsPolicySrc = readFileSync(new URL("../src/lib/communications/sms-policy.ts", import.meta.url), "utf8");
   const missedCallSrc = readFileSync(new URL("../src/lib/communications/missed-call.ts", import.meta.url), "utf8");
@@ -272,6 +301,7 @@ try {
     schemaSrc,
     engineSrc,
     dataSrc,
+    failedDeliverySrc,
     timelineSrc,
     missedCallSrc,
     threadSrc,
@@ -323,6 +353,35 @@ try {
     roleHasCapability("OWNER", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       roleHasCapability("ADMIN", CAPABILITIES.MANAGE_COMMUNICATIONS) &&
       !roleHasCapability("MEMBER", CAPABILITIES.MANAGE_COMMUNICATIONS),
+  );
+  check(
+    "Communications workspace has a tenant Failed SMS area",
+    typesSrc.includes('"failed-deliveries"') &&
+      workspaceSrc.includes('area === "failed-deliveries"') &&
+      workspaceSrc.includes("FailedDeliveriesPanel") &&
+      workspaceSrc.includes("RetryFailedSmsButton") &&
+      retryButtonSrc.includes("retryFailedSmsDeliveryAction") &&
+      pageSrc.includes("loadCommunicationsWorkspace") &&
+      dataSrc.includes("listFailedSmsDeliveries") &&
+      dataSrc.includes("failedDeliveries"),
+  );
+  check(
+    "Failed SMS retry is explicit and reuses attemptCustomerSms",
+    actionSrc.includes("retryFailedSmsDelivery") &&
+      failedDeliverySrc.includes("export async function retryFailedSmsDelivery") &&
+      failedDeliverySrc.includes("attemptCustomerSms") &&
+      failedDeliverySrc.includes("evaluateSmsEligibility") &&
+      failedDeliverySrc.includes("STALE_RECIPIENT_FAILURE") &&
+      !failedDeliverySrc.includes("withSmsDispatchLock") &&
+      !failedDeliverySrc.includes("decideSmsDispatch") &&
+      !failedDeliverySrc.includes("SMS_DISPATCH_CLAIM_STATUS") &&
+      !failedDeliverySrc.includes("setInterval") &&
+      !webhookSrc.includes("retryFailedSmsDelivery") &&
+      !webhookSrc.includes("attemptCustomerSms"),
+  );
+  check(
+    "Coach failed-delivery fact opens the Failed SMS view",
+    coachSrc.includes('href: "/communications?area=failed-deliveries"'),
   );
 
   const tenantA = await seedBusiness("Alpha Comms");
@@ -1173,6 +1232,398 @@ try {
   const foreignLookup = await lookupCaller(prisma, tenantB.access, { phone: "5551112222" });
   check("Caller lookup does not leak tenant A customers", foreignLookup.matched === false);
 
+  console.log("\nDB — Failed SMS owner view and explicit retry");
+  const alphaSms = "2395550101";
+  const betaSms = "2395550102";
+  const alphaE164 = `+1${alphaSms}`;
+  const betaE164 = `+1${betaSms}`;
+  const customerAPhone = customerA.phone;
+  const customerAE164 = `+1${customerAPhone}`;
+  const customerBE164 = `+1${customerB.phone}`;
+  await prisma.business.update({
+    where: { id: tenantA.business.id },
+    data: { operationalSmsNumber: alphaSms },
+  });
+  await prisma.business.update({
+    where: { id: tenantB.business.id },
+    data: { operationalSmsNumber: betaSms },
+  });
+
+  const twilioSent = [];
+  const fakeTwilio = createTwilioCustomerMessagingProvider(
+    {
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio_test_token",
+      messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      fromNumber: null,
+    },
+    async (_url, init) => {
+      const params = new URLSearchParams(init.body);
+      const sid = `SM${randomUUID().replace(/-/g, "")}`.slice(0, 34);
+      twilioSent.push({
+        sid,
+        to: params.get("To"),
+        from: params.get("From"),
+        body: params.get("Body"),
+      });
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return { sid, status: "queued" };
+        },
+      };
+    },
+  );
+  setCustomerMessagingProvider(fakeTwilio);
+
+  const webhookUrl = "http://communications-department.test/api/customer-messaging/webhook";
+  async function postTwilioWebhook(params) {
+    const rawBody = new URLSearchParams(params).toString();
+    return handleCustomerMessagingWebhookRequest(prisma, {
+      url: webhookUrl,
+      twilioSignature: twilioRequestSignature("twilio_test_token", webhookUrl, params),
+      tbbtSignature: null,
+      rawBody,
+      contentType: "application/x-www-form-urlencoded",
+    });
+  }
+
+  async function sendThenMark(input, deliveryStatus, fromE164, toE164) {
+    const attempt = await attemptCustomerSms(prisma, input);
+    const delivery = await postTwilioWebhook({
+      MessageSid: attempt.providerMessageId,
+      MessageStatus: deliveryStatus,
+      From: fromE164,
+      To: toE164,
+      AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      ...(deliveryStatus === "undelivered"
+        ? { ErrorCode: "30003", ErrorMessage: "Unreachable destination" }
+        : {}),
+    });
+    return { attempt, delivery };
+  }
+
+  const failedA = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "ESTIMATE_READY",
+      relatedType: "ESTIMATE",
+      relatedId: estimateA.id,
+      body: "Your estimate is ready.",
+      idempotencyKey: `sms:failed-view:${randomUUID()}`,
+    },
+    "undelivered",
+    alphaE164,
+    customerAE164,
+  );
+  const failedB = await sendThenMark(
+    {
+      businessId: tenantB.business.id,
+      customerId: customerB.id,
+      purpose: "GENERAL",
+      body: "Beta tenant failed SMS.",
+      idempotencyKey: `sms:failed-view-b:${randomUUID()}`,
+    },
+    "undelivered",
+    betaE164,
+    customerBE164,
+  );
+  const deliveredA = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "INVOICE_READY",
+      body: "Your invoice is ready.",
+      idempotencyKey: `sms:delivered-view:${randomUUID()}`,
+    },
+    "delivered",
+    alphaE164,
+    customerAE164,
+  );
+  check(
+    "Fake Twilio delivery webhook records tenant A FAILED SMS",
+    failedA.attempt.ok &&
+      failedA.delivery.status === 200 &&
+      (await prisma.customerCommunication.findFirst({
+        where: { id: failedA.attempt.communicationId, businessId: tenantA.business.id },
+      }))?.status === "FAILED",
+  );
+  check(
+    "Fake Twilio delivery webhook records tenant B FAILED SMS",
+    failedB.attempt.ok &&
+      (await prisma.customerCommunication.findFirst({
+        where: { id: failedB.attempt.communicationId, businessId: tenantB.business.id },
+      }))?.status === "FAILED",
+  );
+
+  const replayFailedA = await postTwilioWebhook({
+    MessageSid: failedA.attempt.providerMessageId,
+    MessageStatus: "undelivered",
+    From: alphaE164,
+    To: customerAE164,
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    ErrorCode: "30003",
+    ErrorMessage: "Unreachable destination",
+  });
+  check(
+    "Replayed failed-delivery webhook does not send another SMS",
+    replayFailedA.status === 200 &&
+      twilioSent.filter((row) => row.body.includes("Your estimate is ready.")).length === 1,
+  );
+
+  const workspaceA = await loadCommunicationsWorkspace(prisma, tenantA.access);
+  const workspaceB = await loadCommunicationsWorkspace(prisma, tenantB.access);
+  check(
+    "Owner Failed SMS view lists this tenant's failed delivery",
+    workspaceA.failedDeliveries.some((row) => row.id === failedA.attempt.communicationId) &&
+      workspaceA.failedDeliveries.every((row) => row.status === "FAILED"),
+  );
+  check(
+    "Owner Failed SMS view hides another tenant's delivery",
+    !workspaceA.failedDeliveries.some((row) => row.id === failedB.attempt.communicationId) &&
+      workspaceB.failedDeliveries.some((row) => row.id === failedB.attempt.communicationId) &&
+      !workspaceB.failedDeliveries.some((row) => row.id === failedA.attempt.communicationId),
+  );
+  check(
+    "Delivered SMS is not listed as a failed delivery",
+    !workspaceA.failedDeliveries.some((row) => row.id === deliveredA.attempt.communicationId),
+  );
+
+  const otherTenantRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: failedB.attempt.communicationId,
+  });
+  check(
+    "Owner cannot retry another tenant's failed delivery",
+    otherTenantRetry.ok === false &&
+      otherTenantRetry.failureReason === FAILED_SMS_NOT_IN_BUSINESS_REASON &&
+      twilioSent.filter((row) => row.body.includes("Beta tenant failed SMS.")).length === 1,
+  );
+
+  const successRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: deliveredA.attempt.communicationId,
+  });
+  check(
+    "Owner cannot retry a successful message",
+    successRetry.ok === false &&
+      successRetry.failureReason === FAILED_SMS_SUCCESS_NOT_RETRIED_REASON,
+  );
+
+  const emailFailedRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: failedRow.id,
+  });
+  check(
+    "Owner cannot retry a failed email as SMS",
+    emailFailedRetry.ok === false &&
+      emailFailedRetry.failureReason === FAILED_SMS_ONLY_FAILED_REASON,
+  );
+
+  let memberRetryDenied = false;
+  try {
+    await retryFailedSmsDelivery(prisma, tenantA.memberAccess, {
+      communicationId: failedA.attempt.communicationId,
+    });
+  } catch (error) {
+    memberRetryDenied = error instanceof ForbiddenError;
+  }
+  check("MEMBER cannot retry a failed SMS", memberRetryDenied);
+
+  const stopParams = {
+    MessageSid: `SM_stop_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+    From: customerAE164,
+    To: alphaE164,
+    Body: "STOP",
+    OptOutType: "STOP",
+    AccountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  };
+  const stopWebhook = await postTwilioWebhook(stopParams);
+  const afterStop = await prisma.customer.findFirst({ where: { id: customerA.id } });
+  const sendsBeforeStopRetry = twilioSent.length;
+  const stopRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: failedA.attempt.communicationId,
+  });
+  check(
+    "Signed STOP webhook revokes tenant A only",
+    stopWebhook.status === 200 && afterStop.smsConsentStatus === "REVOKED",
+  );
+  check(
+    "STOP blocks explicit retry and does not call Twilio",
+    stopRetry.ok === false &&
+      stopRetry.status === "BLOCKED" &&
+      /revoked/i.test(stopRetry.failureReason ?? "") &&
+      twilioSent.length === sendsBeforeStopRetry,
+  );
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: { smsConsentStatus: "GRANTED", smsConsentUpdatedAt: new Date() },
+  });
+
+  const changedNumberFailed = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "JOB_UPDATE",
+      body: "On my way.",
+      idempotencyKey: `sms:changed-number:${randomUUID()}`,
+    },
+    "undelivered",
+    alphaE164,
+    customerAE164,
+  );
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: { phone: "5550001212" },
+  });
+  const sendsBeforeChanged = twilioSent.length;
+  const changedRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: changedNumberFailed.attempt.communicationId,
+  });
+  check(
+    "Changed number blocks explicit retry and does not call Twilio",
+    changedRetry.ok === false &&
+      /destination changed/i.test(changedRetry.failureReason ?? "") &&
+      twilioSent.length === sendsBeforeChanged,
+  );
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: { phone: customerAPhone },
+  });
+
+  const retryableFailed = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "PAYMENT_REMINDER",
+      body: "Payment reminder for retry.",
+      idempotencyKey: `sms:retryable:${randomUUID()}`,
+    },
+    "undelivered",
+    alphaE164,
+    customerAE164,
+  );
+  const sendsBeforeRetry = twilioSent.length;
+  const firstRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: retryableFailed.attempt.communicationId,
+  });
+  const replayRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: retryableFailed.attempt.communicationId,
+  });
+  const retryRows = await prisma.customerCommunication.findMany({
+    where: {
+      businessId: tenantA.business.id,
+      idempotencyKey: failedSmsRetryIdempotencyKey(retryableFailed.attempt.communicationId),
+    },
+  });
+  check(
+    "Explicit retry sends once through fake Twilio",
+    firstRetry.ok &&
+      firstRetry.status === "ACCEPTED" &&
+      twilioSent.length === sendsBeforeRetry + 1 &&
+      twilioSent[sendsBeforeRetry]?.to === customerAE164 &&
+      twilioSent[sendsBeforeRetry]?.from === alphaE164,
+  );
+  check(
+    "Replay of a successful retry does not resend",
+    replayRetry.ok &&
+      replayRetry.reused &&
+      replayRetry.communicationId === firstRetry.communicationId &&
+      twilioSent.length === sendsBeforeRetry + 1 &&
+      retryRows.length === 1,
+  );
+  const originalStillFailed = await prisma.customerCommunication.findFirst({
+    where: { id: retryableFailed.attempt.communicationId, businessId: tenantA.business.id },
+  });
+  check("Original failed SMS stays FAILED after retry", originalStillFailed.status === "FAILED");
+
+  const concurrentFailed = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "ESTIMATE_FOLLOW_UP",
+      relatedType: "ESTIMATE",
+      relatedId: estimateA.id,
+      body: "Concurrent retry body.",
+      idempotencyKey: `sms:concurrent-retry:${randomUUID()}`,
+    },
+    "undelivered",
+    alphaE164,
+    customerAE164,
+  );
+  const sendsBeforeConcurrent = twilioSent.length;
+  const [concurrentLeft, concurrentRight] = await Promise.all([
+    retryFailedSmsDelivery(prisma, tenantA.access, {
+      communicationId: concurrentFailed.attempt.communicationId,
+    }),
+    retryFailedSmsDelivery(prisma, tenantA.access, {
+      communicationId: concurrentFailed.attempt.communicationId,
+    }),
+  ]);
+  const concurrentRows = await prisma.customerCommunication.findMany({
+    where: {
+      businessId: tenantA.business.id,
+      idempotencyKey: failedSmsRetryIdempotencyKey(concurrentFailed.attempt.communicationId),
+    },
+  });
+  check(
+    "Concurrent explicit retries call fake Twilio once",
+    twilioSent.length === sendsBeforeConcurrent + 1 &&
+      concurrentRows.length === 1 &&
+      concurrentLeft.communicationId === concurrentRight.communicationId &&
+      [concurrentLeft, concurrentRight].some((row) => row.ok && row.status === "ACCEPTED"),
+  );
+
+  const stopAtSendFailed = await sendThenMark(
+    {
+      businessId: tenantA.business.id,
+      customerId: customerA.id,
+      purpose: "GENERAL",
+      body: "Stop at send-time retry.",
+      idempotencyKey: `sms:stop-at-retry:${randomUUID()}`,
+    },
+    "undelivered",
+    alphaE164,
+    customerAE164,
+  );
+  const sendsBeforeSendTimeStop = twilioSent.length;
+  customerSmsDispatchTestHooks.beforeProviderSend = async () => {
+    await prisma.customer.update({
+      where: { id: customerA.id },
+      data: { smsConsentStatus: "REVOKED", smsConsentUpdatedAt: new Date() },
+    });
+  };
+  const sendTimeStopRetry = await retryFailedSmsDelivery(prisma, tenantA.access, {
+    communicationId: stopAtSendFailed.attempt.communicationId,
+  });
+  customerSmsDispatchTestHooks.beforeProviderSend = undefined;
+  check(
+    "STOP after retry claim blocks send-time Twilio call",
+    sendTimeStopRetry.status === "BLOCKED" &&
+      /revoked/i.test(sendTimeStopRetry.failureReason ?? "") &&
+      twilioSent.length === sendsBeforeSendTimeStop,
+  );
+  await prisma.customer.update({
+    where: { id: customerA.id },
+    data: {
+      phone: customerAPhone,
+      smsConsentStatus: "GRANTED",
+      smsConsentUpdatedAt: new Date(),
+    },
+  });
+
+  const listedAfter = await listFailedSmsDeliveries(prisma, tenantA.access);
+  check(
+    "Successful retry is marked already retried in the owner view",
+    listedAfter.some(
+      (row) =>
+        row.id === retryableFailed.attempt.communicationId &&
+        row.canRetry === false &&
+        row.retryCommunicationId === firstRetry.communicationId,
+    ),
+  );
+
+  setCustomerMessagingProvider(createFakeCustomerMessagingProvider());
+
   console.log("\nDB — Automation reuse, no spam loops");
   await ensureDefaultAutomationRules(prisma, tenantA.business.id);
   await prisma.businessEvent.create({
@@ -1250,6 +1701,8 @@ try {
   resetCommunicationEmailSender();
   communicationEmailDispatchTestHooks.afterClaim = undefined;
   communicationEmailDispatchTestHooks.beforeProviderSend = undefined;
+  customerSmsDispatchTestHooks.afterClaim = undefined;
+  customerSmsDispatchTestHooks.beforeProviderSend = undefined;
 } finally {
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });

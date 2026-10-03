@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
 import { evaluateComposeChannelEligibility } from "@/lib/communications/consent";
 import type { CommunicationAccess } from "@/lib/communications/engine";
+import { listFailedSmsDeliveries } from "@/lib/communications/failed-delivery";
 import { getReceptionistReadiness } from "@/lib/communications/receptionist";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { loadCustomerCommunicationHistory } from "@/lib/communications/timeline";
@@ -19,7 +20,7 @@ export async function loadCommunicationsWorkspace(
 ) {
   await ensureDefaultAutomationRules(db, access.businessId);
 
-  const [customers, inbox, phoneLogs, rules, smsEntitled, business] = await Promise.all([
+  const [customers, inbox, failedDeliveries, phoneLogs, rules, smsEntitled, business] = await Promise.all([
     db.customer.findMany({
       where: { businessId: access.businessId },
       orderBy: { name: "asc" },
@@ -38,6 +39,7 @@ export async function loadCommunicationsWorkspace(
       take: 40,
       include: { customer: { select: { id: true, name: true } } },
     }),
+    listFailedSmsDeliveries(db, access),
     db.phoneInteraction.findMany({
       where: { businessId: access.businessId },
       orderBy: { occurredAt: "desc" },
@@ -144,10 +146,12 @@ export async function loadCommunicationsWorkspace(
     : null;
 
   return {
+    businessId: access.businessId,
     customers,
     composeCustomers,
     selectedCustomerId: selected?.id ?? null,
     inbox,
+    failedDeliveries,
     phoneLogs,
     rules,
     timeline,

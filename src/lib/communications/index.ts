@@ -110,6 +110,20 @@ export {
 export { renderCommunicationTemplate } from "@/lib/communications/templates";
 export { loadCommunicationsWorkspace } from "@/lib/communications/data";
 export {
+  FAILED_SMS_DELIVERY_LIMIT,
+  FAILED_SMS_EMPTY_BODY_REASON,
+  FAILED_SMS_NOT_IN_BUSINESS_REASON,
+  FAILED_SMS_ONLY_FAILED_REASON,
+  FAILED_SMS_RETRY_KEY_PREFIX,
+  FAILED_SMS_SUCCESS_NOT_RETRIED_REASON,
+  FAILED_SMS_UNSUPPORTED_PURPOSE_REASON,
+  failedSmsRetryIdempotencyKey,
+  isFailedSmsRetryKey,
+  listFailedSmsDeliveries,
+  retryFailedSmsDelivery,
+} from "@/lib/communications/failed-delivery";
+export type { FailedSmsDeliveryRow } from "@/lib/communications/failed-delivery";
+export {
   buildComposeFormFields,
   composeIdempotencyKey,
   nextCommunicationAttemptId,
