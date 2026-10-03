@@ -1,12 +1,9 @@
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
+import { isExpoPushToken } from "./push-token-resolve";
 
-export const EXPO_PUSH_TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
+export { EXPO_PUSH_TOKEN_PATTERN, isExpoPushToken } from "./push-token-resolve";
 export const NATIVE_JOB_ALERT_CHANNEL_ID = "job-alerts";
-
-export function isExpoPushToken(token: string) {
-  return EXPO_PUSH_TOKEN_PATTERN.test(token.trim());
-}
 
 export function jobIdFromNativePushNotification(data: unknown) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;

@@ -35,7 +35,7 @@ export type NativePushSendInput = {
 
 export type NativePushSendResult =
   | { ok: true; status: "SENT"; providerMessageId: string }
-  | { ok: false; status: "FAILED"; error: string };
+  | { ok: false; status: "FAILED"; error: string; revokeDevice?: boolean };
 
 export type NativePushProvider = {
   id: string;

@@ -49,6 +49,7 @@ const {
   NATIVE_PUSH_DEVICE_NOT_OWNED,
   NATIVE_PUSH_FORBIDDEN_PAYLOAD_KEYS,
   NATIVE_PUSH_DEVICE_TOKEN_HEADER,
+  NATIVE_PUSH_EXPO_TOKEN_REQUIRED,
   NATIVE_PUSH_MAX_ATTEMPTS,
   NATIVE_PUSH_MEMBERSHIP_INACTIVE,
   NATIVE_PUSH_PENDING_STALE_MS,
@@ -58,6 +59,7 @@ const {
   createExpoNativePushProvider,
   createFakeNativePushProvider,
   expoPushMessageFromAlert,
+  expoFailureRevokesDevice,
   flushNativePushNotifies,
   getNativePushProvider,
   hashNativePushDeviceToken,
@@ -77,12 +79,18 @@ const {
   resetNativePushSchemaEnsure,
   retryNativePushDelivery,
   revokeNativePushDevice,
+  sanitizeNativePushFailureReason,
   setNativePushPendingStaleMs,
   setNativePushProvider,
 } = await import("@/lib/native-push");
 const { isMaterialAppointmentChange } = await import("@/lib/appointment-confirmation");
 const { createSecureToken, hashToken } = await import("@/lib/auth-crypto");
 const { resolveNativeSession, revokeNativeSession } = await import("@/lib/native-session");
+const {
+  NATIVE_PUSH_PERMISSION_DENIED,
+  NATIVE_PUSH_TOKEN_UNAVAILABLE,
+  resolveNativePushOptInToken,
+} = await import(new URL("../apps/native/src/push-token-resolve.ts", import.meta.url).href);
 const { revokeOtherSessionsOp, revokeSessionOp } = await import("@/lib/account-security");
 
 let passed = 0;
@@ -136,6 +144,7 @@ const nativeApi = readRepo("apps/native/src/api.ts");
 const todaySrc = readRepo("apps/native/src/screens/TodayScreen.tsx");
 const appSrc = readRepo("apps/native/App.tsx");
 const pushTokenSrc = readRepo("apps/native/src/push-token.ts");
+const pushTokenResolveSrc = readRepo("apps/native/src/push-token-resolve.ts");
 const nativeSessionSrc = readRepo("apps/native/src/session.ts");
 const settingsSrc = readRepo("src/components/settings/settings-workspace.tsx");
 const nativePkg = readRepo("apps/native/package.json");
@@ -295,16 +304,24 @@ check(
     settingsSrc.includes("Worker assignment alerts are opted in on the field app") &&
     nativePkg.includes("expo-notifications") &&
     nativeSessionSrc.includes("readExpoPushToken") &&
+    !nativeSessionSrc.includes("randomDeviceToken") &&
+    nativeSessionSrc.includes("readOptInNativePushDeviceToken") &&
     pushTokenSrc.includes("getExpoPushTokenAsync") &&
     pushTokenSrc.includes("jobIdFromNativePushNotification") &&
-    pushTokenSrc.includes("ExponentPushToken|ExpoPushToken") &&
+    pushTokenResolveSrc.includes("ExponentPushToken|ExpoPushToken") &&
+    todaySrc.includes("readOptInNativePushDeviceToken") &&
+    todaySrc.includes("resolved.error") &&
+    todaySrc.includes("thisDeviceOptedIn: false") &&
+    devicesSrc.includes("NATIVE_PUSH_EXPO_TOKEN_REQUIRED") &&
+    notifySrc.includes("revokeDevice") &&
+    assignSrc.includes("enqueueNativePushNotify") &&
     appSrc.includes("jobIdFromNativePushNotification") &&
     appSrc.includes("addNotificationResponseReceivedListener") &&
     !appSrc.includes("startNativeJob") &&
     !notifySrc.includes("notifyTeamEvents") &&
     nativeEnvExample.includes("EXPO_PUBLIC_PROJECT_ID") &&
     !nativeEnvExample.includes("EXPO_ACCESS_TOKEN") &&
-    todaySrc.includes("requestPermission: turningOn") &&
+    todaySrc.includes("requestPermission: true") &&
     todaySrc.includes("nativePushPlatform(Platform.OS)"),
 );
 check(
@@ -321,6 +338,16 @@ check(
     checkSrc.includes("Inactive membership cannot register a new device token") &&
     checkSrc.includes("Reassignment alerts only the new worker") &&
     checkSrc.includes("Assignment still commits when the fake provider rejects"),
+);
+check(
+  "Suite covers permission denial, missing Expo token, Expo 4xx, and DeviceNotRegistered prune",
+  checkSrc.includes("Denied notification permission does not invent a device token") &&
+    checkSrc.includes("Missing Expo token does not fall back to a random device token") &&
+    checkSrc.includes("Expo path rejects non-Expo-shaped tokens with a clear 4xx") &&
+    checkSrc.includes("DeviceNotRegistered revokes only that device row") &&
+    checkSrc.includes("Later alerts skip the DeviceNotRegistered row") &&
+    checkSrc.includes("MessageRateExceeded records FAILED without revoking the device") &&
+    checkSrc.includes("Network Expo failure records FAILED without revoking the device"),
 );
 check(
   "Test harness refuses a non-localhost DATABASE_URL before connecting",
@@ -376,6 +403,41 @@ resetNativePushProvider();
 
 const expoToken = "ExponentPushToken[tbbt-test-device]";
 check("Expo token helper accepts official Expo token shapes", isExpoPushToken(expoToken) && isExpoPushToken("ExpoPushToken[abc]") && !isExpoPushToken("device-token-ava"));
+const denied = resolveNativePushOptInToken({
+  permissionGranted: false,
+  expoToken: null,
+  requirePermission: true,
+});
+check(
+  "Denied notification permission does not invent a device token",
+  denied.ok === false &&
+    denied.reason === "permission-denied" &&
+    denied.error === NATIVE_PUSH_PERMISSION_DENIED,
+);
+const missingToken = resolveNativePushOptInToken({
+  permissionGranted: true,
+  expoToken: null,
+  storedToken: "device-token-random-fallback",
+  requirePermission: true,
+});
+check(
+  "Missing Expo token does not fall back to a random device token",
+  missingToken.ok === false &&
+    missingToken.reason === "token-unavailable" &&
+    missingToken.error === NATIVE_PUSH_TOKEN_UNAVAILABLE,
+);
+const storedExpo = resolveNativePushOptInToken({
+  permissionGranted: true,
+  expoToken: null,
+  storedToken: expoToken,
+});
+check("Stored Expo token can be reused when the live read is empty", storedExpo.ok && storedExpo.token === expoToken);
+check(
+  "Failure reasons redact raw Expo tokens",
+  sanitizeNativePushFailureReason(`failed ${expoToken}`) === "failed ExponentPushToken[redacted]" &&
+    !sanitizeNativePushFailureReason(`failed ${expoToken}`).includes("tbbt-test-device"),
+);
+check("DeviceNotRegistered is the only Expo ticket that revokes", expoFailureRevokesDevice("DeviceNotRegistered") && !expoFailureRevokesDevice("MessageRateExceeded"));
 const samplePayload = buildNativePushAlertPayload({ kind: "JOB_ASSIGNED", jobId: "job_expo" });
 const expoMessage = expoPushMessageFromAlert({
   businessId: "biz",
@@ -502,8 +564,60 @@ const expoFailed = await failingExpo.send({
   payload: samplePayload,
 });
 check(
-  "Expo DeviceNotRegistered is recorded as FAILED",
-  expoFailed.ok === false && expoFailed.status === "FAILED" && /no longer registered/i.test(expoFailed.error),
+  "Expo DeviceNotRegistered is recorded as FAILED and asks to revoke the device",
+  expoFailed.ok === false &&
+    expoFailed.status === "FAILED" &&
+    expoFailed.revokeDevice === true &&
+    /no longer registered/i.test(expoFailed.error) &&
+    !expoFailed.error.includes(expoToken),
+);
+
+const rateLimitedExpo = createExpoNativePushProvider(
+  { accessToken: "expo_test_access_token_not_real" },
+  async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        data: [{ status: "error", message: "slow down", details: { error: "MessageRateExceeded" } }],
+      };
+    },
+  }),
+);
+const rateLimited = await rateLimitedExpo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: samplePayload,
+});
+check(
+  "MessageRateExceeded fails without revoking the device",
+  rateLimited.ok === false && rateLimited.status === "FAILED" && rateLimited.revokeDevice !== true,
+);
+
+const networkExpo = createExpoNativePushProvider(
+  { accessToken: "expo_test_access_token_not_real" },
+  async () => {
+    throw new Error("network down");
+  },
+);
+const networkFailed = await networkExpo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: samplePayload,
+});
+check(
+  "Network Expo failure does not revoke the device",
+  networkFailed.ok === false && networkFailed.status === "FAILED" && networkFailed.revokeDevice !== true,
 );
 
 console.log("  note - Real-device Expo delivery is UNVERIFIED until a physical device is available.");
@@ -651,6 +765,43 @@ try {
   );
   check("Second worker registers independently", registeredB.ok && registeredB.preference.devices.length === 1);
   check("Beta tenant registers its own token", registeredBeta.ok);
+
+  const previousFakeForReject = process.env.TBBT_NATIVE_PUSH_ADAPTER;
+  const previousExpoForReject = process.env.EXPO_ACCESS_TOKEN;
+  delete process.env.TBBT_NATIVE_PUSH_ADAPTER;
+  process.env.EXPO_ACCESS_TOKEN = "expo_test_access_token_not_real";
+  const rejectedNonExpo = await registerNativePushDevice(prisma, accessA, {
+    token: "device-token-not-expo-shape",
+    platform: "test",
+    optedIn: true,
+  });
+  const rejectedNonExpoRow = await prisma.nativePushDevice.findFirst({
+    where: { tokenHash: hashNativePushDeviceToken("device-token-not-expo-shape") },
+  });
+  const acceptedExpoShape = await registerNativePushDevice(prisma, accessA, {
+    token: "ExponentPushToken[tbbt-register-shape]",
+    platform: "expo",
+    optedIn: true,
+  });
+  check(
+    "Expo path rejects non-Expo-shaped tokens with a clear 4xx",
+    !rejectedNonExpo.ok &&
+      rejectedNonExpo.status === 400 &&
+      rejectedNonExpo.error === NATIVE_PUSH_EXPO_TOKEN_REQUIRED &&
+      !rejectedNonExpoRow,
+  );
+  check("Expo path still accepts official Expo token shapes", acceptedExpoShape.ok === true);
+  await prisma.nativePushDevice.deleteMany({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken("ExponentPushToken[tbbt-register-shape]"),
+    },
+  });
+  if (previousFakeForReject == null) delete process.env.TBBT_NATIVE_PUSH_ADAPTER;
+  else process.env.TBBT_NATIVE_PUSH_ADAPTER = previousFakeForReject;
+  if (previousExpoForReject == null) delete process.env.EXPO_ACCESS_TOKEN;
+  else process.env.EXPO_ACCESS_TOKEN = previousExpoForReject;
+  setNativePushProvider(fake);
 
   const crossRegister = await registerNativePushDevice(prisma, accessBeta, {
     token: tokenA,
@@ -803,6 +954,197 @@ try {
       membershipId: memberA.id,
       tokenHash: hashNativePushDeviceToken(expoDeviceToken),
     },
+  });
+  setNativePushProvider(fake);
+
+  const deadExpoToken = "ExponentPushToken[tbbt-dead-device]";
+  const keepExpoToken = "ExponentPushToken[tbbt-keep-device]";
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: false },
+  });
+  const deadRegistered = await registerNativePushDevice(prisma, accessA, {
+    token: deadExpoToken,
+    platform: "expo",
+    optedIn: true,
+  });
+  check("Dead Expo token can register for prune proofs", deadRegistered.ok === true);
+  const deadExpo = createExpoNativePushProvider(
+    { accessToken: "expo_test_access_token_not_real" },
+    async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          data: [
+            {
+              status: "error",
+              message: `Device ${deadExpoToken} is gone`,
+              details: { error: "DeviceNotRegistered" },
+            },
+          ],
+        };
+      },
+    }),
+  );
+  setNativePushProvider(deadExpo);
+  const deadAssignJob = await createHandymanJob("expo-dead");
+  const deadAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: deadAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const deadJobRow = await prisma.job.findFirst({ where: { id: deadAssignJob.id } });
+  const deadDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: deadAssignJob.id, kind: "JOB_ASSIGNED" },
+  });
+  const deadDeviceRow = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(deadExpoToken) },
+  });
+  check(
+    "DeviceNotRegistered records FAILED and still commits the assignment",
+    !deadAssigned?.error &&
+      deadJobRow?.assignedMembershipId === memberA.id &&
+      deadDelivery?.status === "FAILED" &&
+      typeof deadDelivery?.failureReason === "string" &&
+      !deadDelivery.failureReason.includes(deadExpoToken) &&
+      !deadDelivery.failureReason.includes("tbbt-dead-device"),
+  );
+  check(
+    "DeviceNotRegistered revokes only that device row",
+    deadDeviceRow?.optedIn === false && deadDeviceRow?.revokedAt instanceof Date,
+  );
+
+  const keepRegistered = await registerNativePushDevice(prisma, accessA, {
+    token: keepExpoToken,
+    platform: "expo",
+    optedIn: true,
+  });
+  check("Keep Expo token can register after the dead row is revoked", keepRegistered.ok === true);
+  const laterExpoBodies = [];
+  const laterExpo = createExpoNativePushProvider(
+    { accessToken: "expo_test_access_token_not_real" },
+    async (_url, init) => {
+      laterExpoBodies.push(init.body);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { data: [{ status: "ok", id: "expo-ticket-keep-later-1" }] };
+        },
+      };
+    },
+  );
+  setNativePushProvider(laterExpo);
+  const laterAssignJob = await createHandymanJob("expo-later");
+  const laterAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: laterAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const laterDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: laterAssignJob.id, kind: "JOB_ASSIGNED" },
+  });
+  const keepAfterLater = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(keepExpoToken) },
+  });
+  const deadAfterLater = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(deadExpoToken) },
+  });
+  const leftoverAAfterLater = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+  });
+  check(
+    "Later alerts skip the DeviceNotRegistered row and do not select leftover fake tokens",
+    !laterAssigned?.error &&
+      laterDelivery?.status === "SENT" &&
+      laterExpoBodies.length === 1 &&
+      laterExpoBodies[0].includes(keepExpoToken) &&
+      !laterExpoBodies[0].includes(deadExpoToken) &&
+      !laterExpoBodies[0].includes(tokenA) &&
+      keepAfterLater?.optedIn === true &&
+      keepAfterLater?.revokedAt == null &&
+      deadAfterLater?.optedIn === false &&
+      deadAfterLater?.revokedAt instanceof Date &&
+      leftoverAAfterLater?.optedIn === false &&
+      leftoverAAfterLater?.revokedAt == null,
+  );
+
+  const rateExpo = createExpoNativePushProvider(
+    { accessToken: "expo_test_access_token_not_real" },
+    async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          data: [{ status: "error", message: "slow down", details: { error: "MessageRateExceeded" } }],
+        };
+      },
+    }),
+  );
+  setNativePushProvider(rateExpo);
+  const rateAssignJob = await createHandymanJob("expo-rate");
+  const rateAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: rateAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const rateDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: rateAssignJob.id, kind: "JOB_ASSIGNED" },
+  });
+  const keepAfterRate = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(keepExpoToken) },
+  });
+  check(
+    "MessageRateExceeded records FAILED without revoking the device",
+    !rateAssigned?.error &&
+      rateDelivery?.status === "FAILED" &&
+      keepAfterRate?.optedIn === true &&
+      keepAfterRate?.revokedAt == null,
+  );
+
+  const networkDbExpo = createExpoNativePushProvider(
+    { accessToken: "expo_test_access_token_not_real" },
+    async () => {
+      throw new Error("network down");
+    },
+  );
+  setNativePushProvider(networkDbExpo);
+  const networkAssignJob = await createHandymanJob("expo-network");
+  const networkAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: networkAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const networkDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: networkAssignJob.id, kind: "JOB_ASSIGNED" },
+  });
+  const keepAfterNetwork = await prisma.nativePushDevice.findFirst({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(keepExpoToken) },
+  });
+  check(
+    "Network Expo failure records FAILED without revoking the device",
+    !networkAssigned?.error &&
+      networkDelivery?.status === "FAILED" &&
+      keepAfterNetwork?.optedIn === true &&
+      keepAfterNetwork?.revokedAt == null,
+  );
+
+  await prisma.nativePushDevice.deleteMany({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: {
+        in: [hashNativePushDeviceToken(deadExpoToken), hashNativePushDeviceToken(keepExpoToken)],
+      },
+    },
+  });
+  await prisma.nativePushDevice.updateMany({
+    where: { membershipId: memberA.id, tokenHash: hashNativePushDeviceToken(tokenA) },
+    data: { optedIn: true, revokedAt: null },
   });
   setNativePushProvider(fake);
 

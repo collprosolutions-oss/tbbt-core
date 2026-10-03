@@ -22,7 +22,7 @@ import {
   stopRunningAssignedJobTimeInTransaction,
   timeCardErrorMessage,
 } from "@/lib/time-card-ops";
-import { notifyHandymanJobAssigned } from "@/lib/native-push/notify";
+import { enqueueNativePushNotify, notifyHandymanJobAssigned } from "@/lib/native-push/notify";
 import {
   loadSchedulingPolicy,
   loadWorkforceTimeZone,
@@ -178,13 +178,15 @@ export async function writeAssignedMembershipAndLaneWindows(
     committed.nextMembershipId &&
     committed.previousMembershipId !== committed.nextMembershipId
   ) {
-    await notifyHandymanJobAssigned(db, {
-      businessId: input.businessId,
-      jobId: input.job.id,
-      previousMembershipId: committed.previousMembershipId,
-      nextMembershipId: committed.nextMembershipId,
-      actorMembershipId: input.actorMembershipId,
-    }).catch(() => undefined);
+    await enqueueNativePushNotify(() =>
+      notifyHandymanJobAssigned(db, {
+        businessId: input.businessId,
+        jobId: input.job.id,
+        previousMembershipId: committed.previousMembershipId,
+        nextMembershipId: committed.nextMembershipId,
+        actorMembershipId: input.actorMembershipId,
+      }).catch(() => undefined),
+    );
   }
 }
 

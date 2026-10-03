@@ -25,6 +25,8 @@ export const EXPO_PUSH_SEND_PATH = "/--/api/v2/push/send";
 export const EXPO_PUSH_SEND_URL = `${EXPO_PUSH_API_ORIGIN}${EXPO_PUSH_SEND_PATH}`;
 export const EXPO_PUSH_SEND_TIMEOUT_MS = 4_000;
 export const EXPO_PUSH_TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
+export const EXPO_PUSH_TOKEN_IN_TEXT = /(?:ExponentPushToken|ExpoPushToken)\[[^\]]+\]/g;
+export const EXPO_DEVICE_NOT_REGISTERED = "DeviceNotRegistered";
 
 export type ExpoFetch = (
   input: string,
@@ -77,19 +79,39 @@ function safePayload(payload: NativePushAlertPayload): NativePushAlertPayload {
   };
 }
 
-function ticketError(ticket: Record<string, unknown>) {
-  const message = typeof ticket.message === "string" ? ticket.message : "";
+export function expoTicketErrorCode(ticket: Record<string, unknown>) {
   const details = ticket.details;
-  const code =
-    details && typeof details === "object" && !Array.isArray(details)
-      ? typeof (details as { error?: unknown }).error === "string"
-        ? (details as { error: string }).error
-        : ""
-      : "";
-  if (code === "DeviceNotRegistered") {
-    return "Expo reported the device token is no longer registered.";
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    const error = (details as { error?: unknown }).error;
+    if (typeof error === "string" && error.trim()) return error.trim();
   }
-  return message || "Expo rejected the alert.";
+  const code = ticket.code;
+  return typeof code === "string" ? code.trim() : "";
+}
+
+export function expoFailureRevokesDevice(code: string) {
+  return code === EXPO_DEVICE_NOT_REGISTERED || code === "DEVICE_NOT_REGISTERED";
+}
+
+export function sanitizeNativePushFailureReason(reason: string) {
+  return reason.replace(EXPO_PUSH_TOKEN_IN_TEXT, (match) =>
+    match.startsWith("ExpoPushToken") ? "ExpoPushToken[redacted]" : "ExponentPushToken[redacted]",
+  );
+}
+
+function ticketError(ticket: Record<string, unknown>) {
+  const code = expoTicketErrorCode(ticket);
+  if (expoFailureRevokesDevice(code)) {
+    return {
+      error: "Expo reported the device token is no longer registered.",
+      revokeDevice: true,
+    };
+  }
+  const message = typeof ticket.message === "string" ? ticket.message : "";
+  return {
+    error: sanitizeNativePushFailureReason(message || "Expo rejected the alert."),
+    revokeDevice: false,
+  };
 }
 
 export function createExpoNativePushProvider(
@@ -161,12 +183,15 @@ export function createExpoNativePushProvider(
 
       const errors = Array.isArray(body.errors) ? body.errors : [];
       if (!response.ok || errors.length > 0) {
-        const first = errors[0];
-        const message =
-          first && typeof first === "object" && typeof (first as { message?: unknown }).message === "string"
-            ? (first as { message: string }).message
-            : "Expo rejected the alert.";
-        return { ok: false, status: "FAILED", error: message };
+        const first =
+          errors[0] && typeof errors[0] === "object" ? (errors[0] as Record<string, unknown>) : {};
+        const mapped = ticketError(first);
+        return {
+          ok: false,
+          status: "FAILED",
+          error: mapped.error,
+          ...(mapped.revokeDevice ? { revokeDevice: true } : {}),
+        };
       }
 
       const tickets = Array.isArray(body.data) ? body.data : body.data ? [body.data] : [];
@@ -182,7 +207,13 @@ export function createExpoNativePushProvider(
         }
         return { ok: true, status: "SENT", providerMessageId: id };
       }
-      return { ok: false, status: "FAILED", error: ticketError(record) };
+      const mapped = ticketError(record);
+      return {
+        ok: false,
+        status: "FAILED",
+        error: mapped.error,
+        ...(mapped.revokeDevice ? { revokeDevice: true } : {}),
+      };
     },
   };
 }

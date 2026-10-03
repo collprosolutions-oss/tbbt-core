@@ -28,6 +28,7 @@ export {
   NATIVE_PUSH_JSON_MAX_BYTES,
   NATIVE_PUSH_PLATFORM_REQUIRED,
   NATIVE_PUSH_TOKEN_REQUIRED,
+  NATIVE_PUSH_EXPO_TOKEN_REQUIRED,
 } from "@/lib/native-push/devices";
 export {
   assignmentAlertIdempotencyKey,
@@ -59,8 +60,10 @@ export {
   EXPO_PUSH_SEND_URL,
   EXPO_PUSH_TOKEN_PATTERN,
   createExpoNativePushProvider,
+  expoFailureRevokesDevice,
   expoPushMessageFromAlert,
   isExpoPushToken,
+  sanitizeNativePushFailureReason,
 } from "@/lib/native-push/expo";
 export {
   ensureNativePushSchema,
