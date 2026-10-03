@@ -14,6 +14,7 @@ import {
   markAgreementSentAction,
   sendAgreementForEsignAction,
   cancelStuckEsignSendAction,
+  reconcileStuckEsignSendAction,
   saveAgreementAnswersAction,
   saveAgreementDraftContentAction,
   updateVaultRecordAction,
@@ -472,6 +473,10 @@ function AgreementDetail({
     cancelStuckEsignSendAction,
     initial,
   );
+  const [esignReconcileState, esignReconcileAction, esignReconcilePending] = useActionState(
+    reconcileStuckEsignSendAction,
+    initial,
+  );
   const [completeState, completeAction, completePending] = useActionState(completeAgreementAction, initial);
   const [aiState, aiAction, aiPending] = useActionState(agreementAssistAction, initial);
   const [attemptId, setAttemptId] = useState(() => crypto.randomUUID());
@@ -656,15 +661,33 @@ function AgreementDetail({
           ) : null}
 
           {esignReady && canFinalize && selected.signingMode === "SENDING" ? (
-            <form action={esignCancelAction} className="space-y-2 rounded-md border border-amber-600/40 p-3">
-              <input type="hidden" name="agreementId" value={selected.id} />
+            <div className="space-y-2 rounded-md border border-amber-600/40 p-3">
               <div className="text-sm font-medium">Stuck e-sign send</div>
-              <p className="text-xs text-muted-foreground">{ESIGN_CANCEL_STUCK_SEND_WARNING}</p>
-              <Button type="submit" variant="outline" disabled={esignCancelPending}>
-                Cancel stuck e-sign send
-              </Button>
-              <FormMessage state={esignCancelState} />
-            </form>
+              <form action={esignReconcileAction} className="space-y-2">
+                <input type="hidden" name="agreementId" value={selected.id} />
+                <p className="text-xs text-muted-foreground">
+                  Look up the provider request for this unknown send before canceling. This does not
+                  create a second signature request. Bind only the request for this exact business,
+                  agreement, and version.
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="requestId">Dropbox Sign request id (optional)</Label>
+                  <Input id="requestId" name="requestId" />
+                </div>
+                <Button type="submit" variant="outline" disabled={esignReconcilePending}>
+                  Look up provider request
+                </Button>
+                <FormMessage state={esignReconcileState} />
+              </form>
+              <form action={esignCancelAction} className="space-y-2">
+                <input type="hidden" name="agreementId" value={selected.id} />
+                <p className="text-xs text-muted-foreground">{ESIGN_CANCEL_STUCK_SEND_WARNING}</p>
+                <Button type="submit" variant="outline" disabled={esignCancelPending}>
+                  Cancel stuck e-sign send
+                </Button>
+                <FormMessage state={esignCancelState} />
+              </form>
+            </div>
           ) : null}
 
           <div className="space-y-2 rounded-md border border-dashed border-border p-3">

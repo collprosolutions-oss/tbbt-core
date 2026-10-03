@@ -27,6 +27,15 @@ export type EsignSignatureRequestResult = {
   signingUrl: string | null;
 };
 
+export type LookupEsignSignatureRequestInput = EsignRequestMetadata & {
+  requestId?: string;
+};
+
+export type EsignSignatureLookupResult = {
+  requestId: string;
+  metadata: EsignRequestMetadata;
+};
+
 export type VerifiedEsignCompletionEvent = {
   eventId: string;
   eventType: string;
@@ -72,6 +81,13 @@ export type EsignProvider = {
   createSignatureRequest(
     input: CreateEsignSignatureRequestInput,
   ): Promise<EsignSignatureRequestResult>;
+  /**
+   * Read-only recovery lookup. Must never create a signature request.
+   * Returns null when the provider has no matching request.
+   */
+  lookupSignatureRequest(
+    input: LookupEsignSignatureRequestInput,
+  ): Promise<EsignSignatureLookupResult | null>;
   downloadSignedDocument(requestId: string): Promise<Buffer>;
   verifyCompletionEvent(input: {
     rawJson: string;

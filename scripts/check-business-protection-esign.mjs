@@ -23,6 +23,9 @@ const { PROVIDER_SIGNED_DOCUMENT_NOTE, UPLOADED_SIGNED_DOCUMENT_NOTE } =
   await import("@/lib/business-protection");
 const {
   ESIGN_CANCEL_STUCK_SEND_WARNING,
+  ESIGN_RECONCILE_NOT_STUCK_MESSAGE,
+  ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE,
   ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
   ESIGN_STALE_SEND_MINUTES,
   ESIGN_STALE_SEND_NOT_READY_MESSAGE,
@@ -36,7 +39,7 @@ const { getFakeEsignWebhookKey } = await import("@/lib/esign/config");
 const { resetEsignProviderCache, getFakeEsignProvider } = await import("@/lib/esign/provider");
 const { dispatchEsignWebhook, ESIGN_WEBHOOK_HELLO } = await import("@/lib/esign/dispatch");
 const { ESIGN_WEBHOOK_PATH, isEsignWebhookPath } = await import("@/lib/esign/webhook-path");
-const { DROPBOX_SIGN_API_ORIGIN, DROPBOX_SIGN_SEND_PATH } = await import("@/lib/esign/dropbox-sign");
+const { DROPBOX_SIGN_API_ORIGIN, DROPBOX_SIGN_GET_PATH, DROPBOX_SIGN_LIST_PATH, DROPBOX_SIGN_SEND_PATH } = await import("@/lib/esign/dropbox-sign");
 const { FAKE_ESIGN_DOWNLOADABLE_EVENT, FAKE_ESIGN_SIGNED_EVENT } = await import("@/lib/esign/fake");
 const { esignPdfLooksValid } = await import("@/lib/esign/signed-pdf");
 const { MemoryStorageProvider } = await import("@/lib/business-storage/memory-provider");
@@ -53,6 +56,7 @@ const {
   saveAgreementDraftContent,
   sendAgreementForEsign,
   cancelStuckEsignSend,
+  reconcileStuckEsignSend,
   esignWebhookTestHooks,
   BusinessProtectionError,
 } = await import("@/lib/business-protection-ops");
@@ -167,6 +171,13 @@ check(
 );
 check("Live adapter renders a valid PDF, not a %PDF-1.4 text stub", dropboxSrc.includes("renderEsignAgreementPdf") && !dropboxSrc.includes('"%PDF-1.4"'));
 check("Live adapter uses official send and files paths", dropboxSrc.includes(DROPBOX_SIGN_API_ORIGIN) && dropboxSrc.includes(DROPBOX_SIGN_SEND_PATH) && dropboxSrc.includes("/v3/signature_request/files"));
+check(
+  "Live adapter lookup uses official GET and list paths",
+  dropboxSrc.includes("lookupSignatureRequest") &&
+    dropboxSrc.includes(DROPBOX_SIGN_GET_PATH) &&
+    dropboxSrc.includes(DROPBOX_SIGN_LIST_PATH) &&
+    dropboxSrc.includes('method: "GET"'),
+);
 const sendFn = opsSrc.slice(
   opsSrc.indexOf("export async function sendAgreementForEsign"),
   opsSrc.indexOf("export async function completeAgreementFromEsignWebhook"),
@@ -220,6 +231,29 @@ check(
     !/catch \(error\) \{\s*await releaseClaim\(\);/.test(sendFn),
 );
 check("OWNER can cancel a stale SENDING claim", opsSrc.includes("cancelStuckEsignSend") && workspaceSrc.includes("Cancel stuck e-sign send"));
+check(
+  "OWNER can look up a stuck SENDING claim before cancel",
+  opsSrc.includes("reconcileStuckEsignSend") &&
+    workspaceSrc.includes("Look up provider request") &&
+    workspaceSrc.includes("does not create a second signature request"),
+);
+const reconcileFn = opsSrc.slice(
+  opsSrc.indexOf("export async function reconcileStuckEsignSend"),
+  opsSrc.indexOf("async function resolveEsignWebhookActor"),
+);
+check(
+  "Reconcile looks up and never creates a signature request",
+  reconcileFn.includes("lookupSignatureRequest") &&
+    !reconcileFn.includes("createSignatureRequest") &&
+    !reconcileFn.includes("signerEmail") &&
+    reconcileFn.includes("esign_request_reconciled"),
+);
+check(
+  "Owner action reports missing, bound, and reused lookup outcomes",
+  readRepo("src/app/actions/business-protection.ts").includes("ESIGN_RECONCILE_MISSING_MESSAGE") &&
+    readRepo("src/app/actions/business-protection.ts").includes("ESIGN_RECONCILE_BOUND_MESSAGE") &&
+    readRepo("src/app/actions/business-protection.ts").includes("reconcileStuckEsignSendAction"),
+);
 const createdAudit = opsSrc.slice(
   opsSrc.indexOf('action: "esign_request_created"'),
   opsSrc.indexOf('action: "esign_request_created"') + 500,
@@ -447,6 +481,221 @@ try {
     "Stuck-send cancel is audited with the Dropbox Sign warning",
     Boolean(cancelAudit?.newValue) && String(cancelAudit.newValue).includes(ESIGN_CANCEL_STUCK_SEND_WARNING),
   );
+
+  const lookupTimeoutNda = await readyNda(prisma, ownerA, "Lookup timeout NDA");
+  const lookupTimeoutKey = randomUUID();
+  const createsBeforeLookupTimeout = fake.createdRequestCount();
+  const lookupsBeforeTimeout = fake.lookupCallCount();
+  fake.createThenThrow();
+  await expectError("Lookup-timeout send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: lookupTimeoutNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: lookupTimeoutKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const lookupTimeoutRequestId = fake.lastCreatedRequestId();
+  fake.failNextLookup();
+  await expectError("Provider lookup timeout keeps the SENDING claim unbound", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, { agreementId: lookupTimeoutNda.id });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
+  const afterLookupTimeout = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: lookupTimeoutNda.id },
+    include: { versions: true },
+  });
+  check(
+    "Lookup timeout does not bind or create a second request",
+    afterLookupTimeout.signingMode === "SENDING" &&
+      !afterLookupTimeout.esignSignatureRequestId &&
+      afterLookupTimeout.versions.every((row) => !row.esignSignatureRequestId) &&
+      fake.createdRequestCount() === createsBeforeLookupTimeout + 1 &&
+      fake.lookupCallCount() === lookupsBeforeTimeout + 1 &&
+      Boolean(lookupTimeoutRequestId),
+  );
+
+  const missingNda = await readyNda(prisma, ownerA, "Missing provider request NDA");
+  const missingKey = randomUUID();
+  const createsBeforeMissing = fake.createdRequestCount();
+  fake.timeoutBeforeSignatureRequest();
+  await expectError("Timeout before create keeps SENDING with no provider request", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: missingNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: missingKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const missingLookup = await reconcileStuckEsignSend(prisma, ownerA, { agreementId: missingNda.id });
+  const afterMissing = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: missingNda.id },
+  });
+  check(
+    "Missing provider request stays unbound so the owner can cancel when stale",
+    missingLookup.found === false &&
+      missingLookup.bound === false &&
+      !missingLookup.requestId &&
+      afterMissing.signingMode === "SENDING" &&
+      !afterMissing.esignSignatureRequestId &&
+      fake.createdRequestCount() === createsBeforeMissing,
+  );
+  await prisma.businessAgreement.update({
+    where: { id: missingNda.id },
+    data: { esignSendingClaimedAt: new Date(Date.now() - (ESIGN_STALE_SEND_MINUTES + 1) * 60_000) },
+  });
+  const missingCancelled = await cancelStuckEsignSend(prisma, ownerA, { agreementId: missingNda.id });
+  check(
+    "Stale cancel still works after a missing-request lookup",
+    missingCancelled.agreement.signingMode === "NOT_CONNECTED" &&
+      !missingCancelled.agreement.completionAttemptKey,
+  );
+
+  const wrongHome = await readyNda(prisma, ownerA, "Wrong-id home NDA");
+  const wrongOther = await readyNda(prisma, ownerA, "Wrong-id other NDA");
+  const wrongHomeKey = randomUUID();
+  const wrongOtherKey = randomUUID();
+  const createsBeforeWrong = fake.createdRequestCount();
+  fake.createThenThrow();
+  await expectError("Wrong-id home send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: wrongHome.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: wrongHomeKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const homeRequestId = fake.lastCreatedRequestId();
+  fake.createThenThrow();
+  await expectError("Wrong-id other send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: wrongOther.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: wrongOtherKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const otherRequestId = fake.lastCreatedRequestId();
+  await expectError("Wrong request id refuses to bind a different send", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, {
+      agreementId: wrongHome.id,
+      requestId: otherRequestId,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+  const afterWrong = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: wrongHome.id },
+    include: { versions: true },
+  });
+  check(
+    "Wrong request id leaves both claims unbound and creates no third request",
+    afterWrong.signingMode === "SENDING" &&
+      !afterWrong.esignSignatureRequestId &&
+      afterWrong.versions.every((row) => !row.esignSignatureRequestId) &&
+      homeRequestId !== otherRequestId &&
+      fake.createdRequestCount() === createsBeforeWrong + 2,
+  );
+
+  const replayNda = await readyNda(prisma, ownerA, "Reconcile replay NDA");
+  const replayKey = randomUUID();
+  const createsBeforeReplay = fake.createdRequestCount();
+  fake.createThenThrow();
+  await expectError("Replay send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: replayNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: replayKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const replayRequestId = fake.lastCreatedRequestId();
+  const replayFirst = await reconcileStuckEsignSend(prisma, ownerA, { agreementId: replayNda.id });
+  const replaySecond = await reconcileStuckEsignSend(prisma, ownerA, { agreementId: replayNda.id });
+  const replayThird = await reconcileStuckEsignSend(prisma, ownerA, {
+    agreementId: replayNda.id,
+    requestId: replayRequestId,
+  });
+  const afterReplay = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: replayNda.id },
+    include: { versions: true },
+  });
+  const replayAudit = await prisma.businessProtectionAuditLog.findMany({
+    where: { agreementId: replayNda.id, action: "esign_request_reconciled" },
+  });
+  check(
+    "Reconcile binds the discovered request to this exact business, agreement, and version",
+    replayFirst.found === true &&
+      replayFirst.bound === true &&
+      replayFirst.reused === false &&
+      replayFirst.requestId === replayRequestId &&
+      afterReplay.signingMode === "PROVIDER_READY" &&
+      afterReplay.esignSignatureRequestId === replayRequestId &&
+      afterReplay.businessId === businessA.id &&
+      afterReplay.versions.some(
+        (row) => row.id === replayFirst.version.id && row.esignSignatureRequestId === replayRequestId,
+      ),
+  );
+  check(
+    "Replay reconcile reuses the bound request and never creates a second one",
+    replaySecond.reused === true &&
+      replaySecond.requestId === replayRequestId &&
+      replayThird.reused === true &&
+      replayThird.requestId === replayRequestId &&
+      fake.createdRequestCount() === createsBeforeReplay + 1 &&
+      replayAudit.length === 1 &&
+      !String(replayAudit[0]?.newValue ?? "").includes("signerEmail"),
+  );
+  await expectError("Replay with a different request id is refused", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, {
+      agreementId: replayNda.id,
+      requestId: otherRequestId,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+
+  await expectError("ADMIN cannot reconcile a stuck e-sign send", () => {
+    return reconcileStuckEsignSend(prisma, adminA, { agreementId: replayNda.id });
+  }, (error) => error instanceof ForbiddenError);
+  await expectError("Ready agreement has no stuck send to reconcile", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, { agreementId: failure.id });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_RECONCILE_NOT_STUCK_MESSAGE);
+
+  const raceLookupReady = await readyNda(prisma, ownerA, "Concurrent reconcile NDA");
+  const raceLookupKey = randomUUID();
+  const createsBeforeRaceLookup = fake.createdRequestCount();
+  fake.createThenThrow();
+  await expectError("Concurrent-lookup send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: raceLookupReady.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: raceLookupKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const raceLookupRequestId = fake.lastCreatedRequestId();
+  const lookupLeft = new PrismaClient({ datasourceUrl: testUrl });
+  const lookupRight = new PrismaClient({ datasourceUrl: testUrl });
+  try {
+    const [leftLookup, rightLookup] = await Promise.allSettled([
+      reconcileStuckEsignSend(lookupLeft, ownerA, { agreementId: raceLookupReady.id }),
+      reconcileStuckEsignSend(lookupRight, ownerA, { agreementId: raceLookupReady.id }),
+    ]);
+    const afterRaceLookup = await prisma.businessAgreement.findUniqueOrThrow({
+      where: { id: raceLookupReady.id },
+      include: { versions: true },
+    });
+    const fulfilledLookups = [leftLookup, rightLookup].filter((row) => row.status === "fulfilled");
+    const lookupIds = fulfilledLookups.map((row) => row.value.requestId).filter(Boolean);
+    check(
+      "Concurrent lookups bind exactly one existing request and never create another",
+      fulfilledLookups.length === 2 &&
+        lookupIds.every((id) => id === raceLookupRequestId) &&
+        afterRaceLookup.signingMode === "PROVIDER_READY" &&
+        afterRaceLookup.esignSignatureRequestId === raceLookupRequestId &&
+        afterRaceLookup.versions.filter((row) => row.esignSignatureRequestId === raceLookupRequestId).length === 1 &&
+        fake.createdRequestCount() === createsBeforeRaceLookup + 1,
+    );
+  } finally {
+    await lookupLeft.$disconnect();
+    await lookupRight.$disconnect();
+  }
 
   const bindNda = await readyNda(prisma, ownerA, "Webhook binds stuck SENDING");
   const bindKey = randomUUID();

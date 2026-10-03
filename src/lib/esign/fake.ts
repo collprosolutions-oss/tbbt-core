@@ -14,7 +14,9 @@ import {
   type CreateEsignSignatureRequestInput,
   type EsignProvider,
   type EsignRequestMetadata,
+  type EsignSignatureLookupResult,
   type EsignSignatureRequestResult,
+  type LookupEsignSignatureRequestInput,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
 
@@ -52,26 +54,58 @@ export async function buildFakeSignedPdf(input: {
   return renderEsignAgreementPdf(input);
 }
 
+function metadataFromInput(input: EsignRequestMetadata): EsignRequestMetadata {
+  return {
+    businessId: input.businessId,
+    agreementId: input.agreementId,
+    versionId: input.versionId,
+    attemptKey: input.attemptKey,
+    actorMembershipId: input.actorMembershipId,
+  };
+}
+
+function lookupMatchesMetadata(
+  stored: EsignRequestMetadata,
+  query: LookupEsignSignatureRequestInput,
+) {
+  return (
+    stored.businessId === query.businessId &&
+    stored.agreementId === query.agreementId &&
+    stored.versionId === query.versionId &&
+    stored.attemptKey === query.attemptKey
+  );
+}
+
 export class FakeEsignProvider implements EsignProvider {
   readonly id = "fake" as const;
   private readonly requests = new Map<string, FakeRequest>();
   private failNextCreate = false;
+  private timeoutBeforeCreate = false;
   private throwAfterCreate: Error | null = null;
   private failNextDownload = false;
+  private failNextLookup = false;
   private processedEventIds = new Set<string>();
   private createCalls = 0;
+  private lookupCalls = 0;
 
   reset() {
     this.requests.clear();
     this.failNextCreate = false;
+    this.timeoutBeforeCreate = false;
     this.throwAfterCreate = null;
     this.failNextDownload = false;
+    this.failNextLookup = false;
     this.processedEventIds.clear();
     this.createCalls = 0;
+    this.lookupCalls = 0;
   }
 
   failNextSignatureRequest() {
     this.failNextCreate = true;
+  }
+
+  timeoutBeforeSignatureRequest() {
+    this.timeoutBeforeCreate = true;
   }
 
   createThenThrow(error?: Error) {
@@ -83,8 +117,16 @@ export class FakeEsignProvider implements EsignProvider {
     this.failNextDownload = true;
   }
 
+  failNextLookup() {
+    this.failNextLookup = true;
+  }
+
   createdRequestCount() {
     return this.createCalls;
+  }
+
+  lookupCallCount() {
+    return this.lookupCalls;
   }
 
   lastCreatedRequestId() {
@@ -113,6 +155,10 @@ export class FakeEsignProvider implements EsignProvider {
         statusCode: 400,
       });
     }
+    if (this.timeoutBeforeCreate) {
+      this.timeoutBeforeCreate = false;
+      throw Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }
     this.createCalls += 1;
     const requestId = `fake_sr_${randomUUID().replaceAll("-", "")}`;
     this.requests.set(requestId, {
@@ -126,6 +172,42 @@ export class FakeEsignProvider implements EsignProvider {
       throw error;
     }
     return { requestId, signingUrl: `https://esign.test/sign/${requestId}` };
+  }
+
+  async lookupSignatureRequest(
+    input: LookupEsignSignatureRequestInput,
+  ): Promise<EsignSignatureLookupResult | null> {
+    this.lookupCalls += 1;
+    if (this.failNextLookup) {
+      this.failNextLookup = false;
+      throw new EsignProviderError(
+        "Fake e-sign provider lookup outcome is unknown. Check Dropbox Sign before canceling.",
+        { outcome: "unknown" },
+      );
+    }
+    if (input.requestId) {
+      const row = this.requests.get(input.requestId);
+      if (!row) return null;
+      return {
+        requestId: row.requestId,
+        metadata: metadataFromInput(row.input),
+      };
+    }
+    const matches = [...this.requests.values()].filter((row) =>
+      lookupMatchesMetadata(row.input, input),
+    );
+    if (matches.length > 1) {
+      throw new EsignProviderError(
+        "Fake e-sign provider found more than one request for that send.",
+        { outcome: "unknown" },
+      );
+    }
+    const row = matches[0];
+    if (!row) return null;
+    return {
+      requestId: row.requestId,
+      metadata: metadataFromInput(row.input),
+    };
   }
 
   async downloadSignedDocument(requestId: string): Promise<Buffer> {
