@@ -389,7 +389,7 @@ export async function reconcileStuckEsignSendAction(
     }
     return {
       error: ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
-      agreementId: result.agreement.id,
+      agreementId: readString(formData, "agreementId"),
     };
   } catch (error) {
     return {
