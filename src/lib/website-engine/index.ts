@@ -52,6 +52,7 @@ export {
   snapshotPageMetadata,
   viewHomeMetadata,
 } from "@/lib/website-engine/seo";
+export { publicRootPageMetadata } from "@/lib/website-engine/root-metadata";
 export {
   buildPublicSitemap,
   usesCollProSitemapFallback,
