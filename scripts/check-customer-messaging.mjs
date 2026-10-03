@@ -391,6 +391,24 @@ try {
       webhookHandlerSrc.includes("Unable to process.") &&
       webhookHandlerSrc.includes("GENERIC_UNAVAILABLE"),
   );
+  const abandonAt = inboundSrc.indexOf("async function abandonRecordedInboundWebhook");
+  const abandonFn = inboundSrc.slice(
+    abandonAt,
+    inboundSrc.indexOf("function absorbedSnapshotPhone", abandonAt),
+  );
+  check(
+    "Inbound consent failure logs omit customer identifiers",
+    inboundSrc.includes("redactedInboundConsentFailure") &&
+      inboundSrc.includes('eventKind: "inbound"') &&
+      inboundSrc.includes("hasProviderEventId: true") &&
+      inboundSrc.includes("errorName") &&
+      abandonFn.includes('console.error("Inbound consent write failed"') &&
+      abandonFn.includes("redactedInboundConsentFailure(input.error)") &&
+      !abandonFn.includes("customerId: input.customerId") &&
+      !abandonFn.includes("businessId: input.businessId") &&
+      !abandonFn.includes("providerEventId: input.providerEventId") &&
+      !abandonFn.includes("error: input.error"),
+  );
   check(
     "SMS dispatch claims the idempotency row before the provider send",
     opsSrc.includes("decideSmsDispatch") &&

@@ -53,6 +53,7 @@ const {
   STUDIO_WEEKLY_REMINDER_SMS_STOPPED,
   STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE,
   canManageStudioWeeklyReminder,
   isStudioWeeklyReminderSendWindow,
   maskOwnerSmsDestination,
@@ -74,13 +75,16 @@ const {
 const { loadMarketingSource } = await import("@/lib/marketing-data");
 const {
   authorizeStudioWeeklyReminderCron,
+  classifyStudioWeeklyReminderCronAuth,
   createStudioWeeklyReviewReminder,
   dispatchStudioWeeklyReviewReminder,
   loadStudioWeeklyReminderState,
+  logStudioWeeklyReminderCron,
   missingStudioWeeklyReminderSchema,
   presentStudioWeeklyReminderForViewer,
   recordOwnerStudioReminderBlocked,
   recordOwnerStudioReminderStop,
+  retryStudioWeeklyReminderSchedule,
   runScheduledStudioWeeklyReminders,
   setStudioWeeklyReminderOwnerSms,
   setStudioWeeklyReviewReminderOptIn,
@@ -506,6 +510,7 @@ try {
       actionSrc.includes('access.workspace.role !== "OWNER"') &&
       reminderUiSrc.includes("Turn weekly reminder on") &&
       reminderUiSrc.includes("Turn weekly reminder off") &&
+      reminderUiSrc.includes("Retry scheduled reminder") &&
       reminderUiSrc.includes("OWNER SMS number") &&
       reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE") &&
       reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED") &&
@@ -535,14 +540,28 @@ try {
     reminderOpsSrc.includes("runScheduledStudioWeeklyReminders") &&
       reminderOpsSrc.includes("isStudioWeeklyReminderSendWindow") &&
       reminderOpsSrc.includes("authorizeStudioWeeklyReminderCron") &&
-      cronRouteSrc.includes("authorizeStudioWeeklyReminderCron") &&
+      reminderOpsSrc.includes("classifyStudioWeeklyReminderCronAuth") &&
+      reminderOpsSrc.includes("logStudioWeeklyReminderCron") &&
+      cronRouteSrc.includes("classifyStudioWeeklyReminderCronAuth") &&
       cronRouteSrc.includes("runScheduledStudioWeeklyReminders") &&
+      cronRouteSrc.includes('reason: "runner_failed"') &&
       cronPathSrc.includes("/api/cron/studio-weekly-reminder") &&
       vercelSrc.includes("/api/cron/studio-weekly-reminder") &&
       vercelSrc.includes("0 15 * * *") &&
       !vercelSrc.includes("0 * * * *") &&
       proxySrc.includes("isStudioWeeklyReminderCronPath") &&
       proxySrc.includes("api/cron/"),
+  );
+  check(
+    "Cron denial and retry logs stay count-only",
+    reminderOpsSrc.includes('"[cron] studio-weekly-reminder"') &&
+      reminderOpsSrc.includes("secret_missing") &&
+      reminderOpsSrc.includes("owner_retry") &&
+      reminderOpsSrc.includes("retryStudioWeeklyReminderSchedule") &&
+      actionSrc.includes("retryStudioWeeklyReminderScheduleAction") &&
+      !reminderOpsSrc.includes("customerId") &&
+      !cronRouteSrc.includes("customerId") &&
+      !cronRouteSrc.includes("businessId"),
   );
   check(
     "Provider send has a timeout and owner STOP is separate from customer consent",
@@ -1574,7 +1593,65 @@ try {
       new Headers({ authorization: "Bearer studio-weekly-cron-secret" }),
     ) === false,
   );
+  process.env.CRON_SECRET = "";
+  check(
+    "Cron classifies a missing secret without echoing a bearer",
+    JSON.stringify(
+      classifyStudioWeeklyReminderCronAuth(
+        new Headers({ authorization: "Bearer studio-weekly-cron-secret" }),
+      ),
+    ) === JSON.stringify({ ok: false, reason: "secret_missing" }),
+  );
+  process.env.CRON_SECRET = "studio-weekly-cron-secret";
+  check(
+    "Cron classifies a wrong secret as unauthorized",
+    JSON.stringify(
+      classifyStudioWeeklyReminderCronAuth(new Headers({ authorization: "Bearer other" })),
+    ) === JSON.stringify({ ok: false, reason: "unauthorized" }),
+  );
+  const logged = [];
+  const previousInfo = console.info;
+  console.info = (...args) => {
+    logged.push(args.map(String).join(" "));
+  };
+  logStudioWeeklyReminderCron({ ok: false, reason: "secret_missing" });
+  console.info = previousInfo;
+  const cronLog = logged.join("\n");
+  check(
+    "Cron log is redacted counts and reasons only",
+    cronLog.includes("[cron] studio-weekly-reminder") &&
+      cronLog.includes("secret_missing") &&
+      !cronLog.includes("studio-weekly-cron-secret") &&
+      !cronLog.includes("@") &&
+      !cronLog.includes("555") &&
+      !cronLog.includes("customer"),
+  );
   process.env.CRON_SECRET = previousCronSecret;
+  const saturdayRetryProvider = createFakeCustomerMessagingProvider();
+  const saturdayInstant = new Date("2026-10-03T15:00:00.000Z");
+  let adminRetryError = "";
+  try {
+    await retryStudioWeeklyReminderSchedule(prisma, adminA, saturdayInstant, {
+      smsPlatformConfigured: true,
+      messagingProvider: saturdayRetryProvider,
+    });
+  } catch (error) {
+    adminRetryError = error instanceof Error ? error.message : String(error);
+  }
+  const ownerSaturdayRetry = await retryStudioWeeklyReminderSchedule(prisma, ownerA, saturdayInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: saturdayRetryProvider,
+  });
+  check(
+    "OWNER can retry the scheduled reminder on Saturday without sending",
+    adminRetryError === STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE &&
+      saturdayRetryProvider.sent.length === 0 &&
+      ownerSaturdayRetry.claimed === 0 &&
+      ownerSaturdayRetry.considered >= 0 &&
+      ownerSaturdayRetry.message.includes("Counts do not include customer data") &&
+      !ownerSaturdayRetry.message.includes(ownerDest) &&
+      !JSON.stringify(ownerSaturdayRetry).includes(businessA.id),
+  );
   const optInDoesNotSend = createFakeCustomerMessagingProvider();
   await writeOwnerSmsDestination(businessA.id, ownerDest, true);
   await prisma.business.update({

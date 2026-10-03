@@ -52,6 +52,8 @@ import {
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_NOT_SENT,
   STUDIO_WEEKLY_REMINDER_SMS_STATUS_SENT,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE,
   OWNER_SMS_BLOCKED_PROVIDER_CODE,
   canManageStudioWeeklyReminder,
   isOwnerSmsBlockedProviderCode,
@@ -95,6 +97,16 @@ export type StudioWeeklyReminderDispatchResult = {
   delivery: ReturnType<typeof studioWeeklyReminderDelivery>;
 };
 
+export type StudioWeeklyReminderCronAuth =
+  | { ok: true }
+  | { ok: false; reason: "secret_missing" | "unauthorized" };
+
+export type StudioWeeklyReminderCronSummary = {
+  considered: number;
+  claimed: number;
+  skipped: number;
+};
+
 export type StudioWeeklyReminderState = {
   available: boolean;
   optedIn: boolean;
@@ -109,6 +121,7 @@ export type StudioWeeklyReminderState = {
   delivery: ReturnType<typeof studioWeeklyReminderDelivery>;
   copy: string | null;
   inAppMessage: string;
+  cronSecretConfigured: boolean;
 };
 
 export type StudioWeeklyReminderDeps = {
@@ -197,15 +210,54 @@ function cronSecretEquals(provided: string, expected: string) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-export function authorizeStudioWeeklyReminderCron(headers: { get(name: string): string | null }) {
+export function isStudioWeeklyReminderCronSecretConfigured() {
+  return Boolean(process.env.CRON_SECRET?.trim());
+}
+
+export function classifyStudioWeeklyReminderCronAuth(headers: {
+  get(name: string): string | null;
+}): StudioWeeklyReminderCronAuth {
   const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return false;
+  if (!secret) return { ok: false, reason: "secret_missing" };
   const auth = headers.get("authorization") ?? "";
   const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
   const header = (headers.get("x-cron-secret") ?? "").trim();
-  return (
+  const accepted =
     (bearer !== "" && cronSecretEquals(bearer, secret)) ||
-    (header !== "" && cronSecretEquals(header, secret))
+    (header !== "" && cronSecretEquals(header, secret));
+  return accepted ? { ok: true } : { ok: false, reason: "unauthorized" };
+}
+
+export function authorizeStudioWeeklyReminderCron(headers: { get(name: string): string | null }) {
+  return classifyStudioWeeklyReminderCronAuth(headers).ok;
+}
+
+export function summarizeStudioWeeklyReminderCronRun(
+  results: StudioWeeklyReminderScheduleResult[],
+): StudioWeeklyReminderCronSummary {
+  return {
+    considered: results.length,
+    claimed: results.filter((row) => row.reminder?.smsSendClaimedAt).length,
+    skipped: results.filter((row) => row.skipped).length,
+  };
+}
+
+/**
+ * Structured cron log. Never includes secrets, phone numbers, emails,
+ * customer names, business ids, or reminder row ids.
+ */
+export function logStudioWeeklyReminderCron(
+  event: { ok: boolean; reason?: string } & Partial<StudioWeeklyReminderCronSummary>,
+) {
+  console.info(
+    "[cron] studio-weekly-reminder",
+    JSON.stringify({
+      ok: event.ok,
+      reason: event.reason ?? null,
+      considered: event.considered ?? null,
+      claimed: event.claimed ?? null,
+      skipped: event.skipped ?? null,
+    }),
   );
 }
 
@@ -699,6 +751,7 @@ function unavailableReminderState(
     }),
     copy: null,
     inAppMessage: STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+    cronSecretConfigured: isStudioWeeklyReminderCronSecretConfigured(),
   };
 }
 
@@ -752,6 +805,7 @@ export async function loadStudioWeeklyReminderState(
       delivery,
       copy: reminder ? studioWeeklyReminderCopy(reminder.awaitingCount) : null,
       inAppMessage: STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE,
+      cronSecretConfigured: isStudioWeeklyReminderCronSecretConfigured(),
     };
   } catch (error) {
     if (missingStudioWeeklyReminderSchema(error)) {
@@ -984,6 +1038,26 @@ export function presentStudioWeeklyReminderForViewer(
     ...state,
     ownerSmsTo: owner ? state.ownerSmsTo : state.ownerSmsToMasked,
     reminder,
+    cronSecretConfigured: state.cronSecretConfigured,
+  };
+}
+
+export async function retryStudioWeeklyReminderSchedule(
+  db: Db,
+  access: BusinessAccess,
+  now = new Date(),
+  deps?: StudioWeeklyReminderDeps,
+) {
+  requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
+  if (access.workspace.role !== "OWNER") {
+    throw new MarketingError(STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE);
+  }
+  const results = await runScheduledStudioWeeklyReminders(db, now, deps);
+  const summary = summarizeStudioWeeklyReminderCronRun(results);
+  logStudioWeeklyReminderCron({ ok: true, reason: "owner_retry", ...summary });
+  return {
+    ...summary,
+    message: `${STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE} Considered ${summary.considered}. Claimed ${summary.claimed}.`,
   };
 }
 
