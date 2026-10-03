@@ -14,6 +14,11 @@ import {
   recordOwnerInvoiceCredit,
 } from "@/lib/invoice-credits";
 import {
+  ConnectInvoiceWebhookError,
+  connectInvoiceWebhookErrorMessage,
+  retryConnectInvoiceWebhookEvent,
+} from "@/lib/connect-invoice-webhook";
+import {
   PaymentError,
   resolveStripeCreditMismatchReview,
 } from "@/lib/payments";
@@ -246,6 +251,36 @@ export async function resolveInvoiceStripeCreditMismatch(
   } catch (error) {
     if (error instanceof PaymentError) {
       return { error: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function retryInvoiceConnectWebhookEvent(
+  _prev: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  const operating = await requireOperatingProductAccessForForm(
+    PRODUCT_CAPABILITIES.ESTIMATES_INVOICES,
+  );
+  if (!operating.ok) return { error: operating.error };
+  const access = operating.access;
+  const eventId = readString(formData, "eventId");
+  const invoiceId = readString(formData, "invoiceId");
+  if (!eventId) {
+    return { error: "That payment event could not be retried." };
+  }
+  try {
+    await retryConnectInvoiceWebhookEvent(prisma, access, eventId);
+    revalidatePath("/dashboard");
+    revalidatePath("/invoices");
+    if (invoiceId) {
+      revalidatePath(`/invoices/${invoiceId}`);
+    }
+    return {};
+  } catch (error) {
+    if (error instanceof ConnectInvoiceWebhookError) {
+      return { error: connectInvoiceWebhookErrorMessage(error, error.message) };
     }
     throw error;
   }

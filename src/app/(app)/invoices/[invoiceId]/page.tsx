@@ -5,6 +5,7 @@ import { CopyProjectLinkButton } from "@/components/jobs/copy-project-link-butto
 import { MarkInvoicePaidForm } from "@/components/invoices/mark-invoice-paid-form";
 import { RecordInvoiceCreditForm } from "@/components/invoices/record-invoice-credit-form";
 import { ResolveStripeCreditMismatchForm } from "@/components/invoices/resolve-stripe-credit-mismatch-form";
+import { RetryConnectInvoiceWebhookForm } from "@/components/invoices/retry-connect-invoice-webhook-form";
 import { OwnerPaymentsGoLiveBanner } from "@/components/payments/owner-payments-go-live";
 import { MarkInvoiceSentButton } from "@/components/invoices/mark-invoice-sent-button";
 import { WorkPerformedList } from "@/components/invoices/work-performed-list";
@@ -29,6 +30,11 @@ import { invoiceNumberFromId } from "@/lib/invoice-document";
 import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { paymentMethodLabel } from "@/lib/invoice-payment";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  CONNECT_INVOICE_WEBHOOK_OWNER_DETAIL,
+  CONNECT_INVOICE_WEBHOOK_OWNER_TITLE,
+  listUnappliedConnectInvoiceWebhookEvents,
+} from "@/lib/connect-invoice-webhook";
 import {
   getBusinessPaymentStatus,
   paymentsNeedingStripeCreditMismatchReview,
@@ -131,6 +137,15 @@ export default async function InvoicePage({
     access.workspace.role,
     CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
   );
+  const canRetryConnectInvoiceWebhook = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK,
+  );
+  const unappliedConnectEvents = await listUnappliedConnectInvoiceWebhookEvents(
+    prisma,
+    access.businessId,
+    { invoiceId: invoice.id },
+  );
   const payment = await getBusinessPaymentStatus(prisma, invoice.businessId);
   const paymentsGoLive = explainPaymentsGoLiveFromStatus(payment);
   const showCollectionHelp = isSent && !dueIsZero;
@@ -201,6 +216,28 @@ export default async function InvoicePage({
                   />
                 ))
               : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {unappliedConnectEvents.length > 0 ? (
+        <Alert>
+          <AlertTitle>{CONNECT_INVOICE_WEBHOOK_OWNER_TITLE}</AlertTitle>
+          <AlertDescription>
+            {CONNECT_INVOICE_WEBHOOK_OWNER_DETAIL}
+            {unappliedConnectEvents.map((event) => (
+              <div key={event.id} className="mt-3 space-y-1">
+                <p>
+                  {formatMoney(event.amountCents / 100)} — {event.reasonLabel}
+                </p>
+                {canRetryConnectInvoiceWebhook ? (
+                  <RetryConnectInvoiceWebhookForm
+                    eventId={event.id}
+                    invoiceId={invoice.id}
+                  />
+                ) : null}
+              </div>
+            ))}
           </AlertDescription>
         </Alert>
       ) : null}

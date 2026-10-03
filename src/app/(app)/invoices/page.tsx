@@ -10,6 +10,8 @@ import {
 } from "@/components/invoices/invoices-workspace";
 import { PageSizeSelect } from "@/components/invoices/page-size-select";
 import { PaymentMethodFilterSelect } from "@/components/invoices/payment-method-filter-select";
+import { RetryConnectInvoiceWebhookForm } from "@/components/invoices/retry-connect-invoice-webhook-form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { FounderDesignRoot } from "@/components/founder-design/root";
 import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { FounderRegion } from "@/components/founder-design/region";
@@ -19,6 +21,12 @@ import { PageHeader } from "@/components/page-header";
 import { PageHeaderControls } from "@/components/page-header-controls";
 import { Input } from "@/components/ui/input";
 import { requireManagementPageAccess } from "@/lib/access";
+import { CAPABILITIES, roleHasCapability } from "@/lib/authorization";
+import {
+  CONNECT_INVOICE_WEBHOOK_OWNER_DETAIL,
+  CONNECT_INVOICE_WEBHOOK_OWNER_TITLE,
+  listUnappliedConnectInvoiceWebhookEvents,
+} from "@/lib/connect-invoice-webhook";
 import { checkFounderAccess } from "@/lib/founder-access";
 import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import { formatAddress, formatDateTime, formatMoney } from "@/lib/format";
@@ -144,6 +152,7 @@ export default async function InvoicesPage({
     invoicesRaw,
     customerOptions,
     sentInvoicesForKpi,
+    unappliedConnectEvents,
   ] = await Promise.all([
     prisma.invoice.aggregate({ where: access.scope, _count: { _all: true }, _sum: { total: true } }),
     prisma.invoice.aggregate({
@@ -211,7 +220,12 @@ export default async function InvoicesPage({
       where: { ...access.scope, status: "SENT" },
       select: { id: true, status: true, total: true, jobId: true, kind: true },
     }),
+    listUnappliedConnectInvoiceWebhookEvents(prisma, access.businessId, { take: 8 }),
   ]);
+  const canRetryConnectInvoiceWebhook = roleHasCapability(
+    access.workspace.role,
+    CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK,
+  );
 
   const invoiceTargets = [
     ...invoicesRaw.map((invoice) => ({
@@ -413,6 +427,35 @@ export default async function InvoicesPage({
       </FounderRegion>
 
       {/* Mobile-only search fallback -- the shared header's search slot only renders on desktop. */}
+      {unappliedConnectEvents.length > 0 ? (
+        <Alert>
+          <AlertTitle>{CONNECT_INVOICE_WEBHOOK_OWNER_TITLE}</AlertTitle>
+          <AlertDescription>
+            {CONNECT_INVOICE_WEBHOOK_OWNER_DETAIL}
+            {unappliedConnectEvents.map((event) => (
+              <div key={event.id} className="mt-3 space-y-1">
+                <p>
+                  {event.invoiceId ? (
+                    <Link href={`/invoices/${event.invoiceId}`} className="underline">
+                      {formatMoney(event.amountCents / 100)}
+                    </Link>
+                  ) : (
+                    formatMoney(event.amountCents / 100)
+                  )}{" "}
+                  — {event.reasonLabel}
+                </p>
+                {canRetryConnectInvoiceWebhook ? (
+                  <RetryConnectInvoiceWebhookForm
+                    eventId={event.id}
+                    invoiceId={event.invoiceId}
+                  />
+                ) : null}
+              </div>
+            ))}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <form action="/invoices" method="GET" className="md:hidden">
         <input type="hidden" name="status" value={tab === "all" ? "" : tab} />
         <input type="hidden" name="customer" value={customerId ?? ""} />
