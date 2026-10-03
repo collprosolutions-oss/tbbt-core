@@ -95,6 +95,8 @@ export type StudioWeeklyReminderDispatchResult = {
   reason: StudioWeeklyReminderDispatchReason;
   reminder: StudioWeeklyReminderRecord | null;
   delivery: ReturnType<typeof studioWeeklyReminderDelivery>;
+  /** True only when this invocation claimed the once-per-week owner SMS. */
+  smsClaimedThisRun?: boolean;
 };
 
 export type StudioWeeklyReminderCronAuth =
@@ -121,7 +123,6 @@ export type StudioWeeklyReminderState = {
   delivery: ReturnType<typeof studioWeeklyReminderDelivery>;
   copy: string | null;
   inAppMessage: string;
-  cronSecretConfigured: boolean;
 };
 
 export type StudioWeeklyReminderDeps = {
@@ -247,7 +248,7 @@ export function summarizeStudioWeeklyReminderCronRun(
  * customer names, business ids, or reminder row ids.
  */
 export function logStudioWeeklyReminderCron(
-  event: { ok: boolean; reason?: string } & Partial<StudioWeeklyReminderCronSummary>,
+  event: { ok: boolean; reason?: string; errorName?: string } & Partial<StudioWeeklyReminderCronSummary>,
 ) {
   console.info(
     "[cron] studio-weekly-reminder",
@@ -257,6 +258,7 @@ export function logStudioWeeklyReminderCron(
       considered: event.considered ?? null,
       claimed: event.claimed ?? null,
       skipped: event.skipped ?? null,
+      ...(event.errorName ? { errorName: event.errorName } : {}),
     }),
   );
 }
@@ -680,6 +682,8 @@ async function deliverOwnerStudioWeeklyReminderSms(
     return { ...result, reminder: await loadReminderRow(db, existing) };
   }
 
+  const claimedResult = { ...result, smsClaimedThisRun: true };
+
   const sent = await sendOwnerSms({
     provider,
     businessId: existing.businessId,
@@ -695,7 +699,7 @@ async function deliverOwnerStudioWeeklyReminderSms(
       await deps.afterProviderAccepted();
     }
   } catch {
-    return { ...result, reminder: await loadReminderRow(db, existing) };
+    return { ...claimedResult, reminder: await loadReminderRow(db, existing) };
   }
 
   try {
@@ -722,9 +726,9 @@ async function deliverOwnerStudioWeeklyReminderSms(
       providerMessageId: sent.ok ? sent.providerMessageId : existing.smsProviderMessageId,
       providerError: sent.ok ? null : sent.error,
     });
-    return { ...result, reminder };
+    return { ...claimedResult, reminder };
   } catch {
-    return { ...result, reminder: await loadReminderRow(db, existing) };
+    return { ...claimedResult, reminder: await loadReminderRow(db, existing) };
   }
 }
 
@@ -751,7 +755,6 @@ function unavailableReminderState(
     }),
     copy: null,
     inAppMessage: STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
-    cronSecretConfigured: isStudioWeeklyReminderCronSecretConfigured(),
   };
 }
 
@@ -805,7 +808,6 @@ export async function loadStudioWeeklyReminderState(
       delivery,
       copy: reminder ? studioWeeklyReminderCopy(reminder.awaitingCount) : null,
       inAppMessage: STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE,
-      cronSecretConfigured: isStudioWeeklyReminderCronSecretConfigured(),
     };
   } catch (error) {
     if (missingStudioWeeklyReminderSchema(error)) {
@@ -979,6 +981,35 @@ export type StudioWeeklyReminderScheduleResult = StudioWeeklyReminderDispatchRes
   skipped?: "outside_send_window";
 };
 
+export async function runScheduledStudioWeeklyReminderForBusiness(
+  db: Db,
+  businessId: string,
+  now = new Date(),
+  deps?: StudioWeeklyReminderDeps,
+): Promise<StudioWeeklyReminderScheduleResult> {
+  const business = await db.business.findFirst({
+    where: { id: businessId },
+    select: { timezone: true, operationalSmsNumber: true },
+  });
+  const timezone = resolveBusinessTimeZone(business);
+  const delivery = resolveStudioWeeklyReminderDelivery({
+    platformConfigured: deps?.smsPlatformConfigured,
+    dedicatedNumberAssigned: Boolean(business?.operationalSmsNumber?.trim()),
+  });
+  if (!isStudioWeeklyReminderSendWindow(now, timezone)) {
+    return {
+      businessId,
+      created: false,
+      reason: "already_recorded",
+      reminder: null,
+      delivery,
+      skipped: "outside_send_window",
+    };
+  }
+  const dispatched = await dispatchStudioWeeklyReviewReminder(db, businessId, now, deps);
+  return { businessId, ...dispatched };
+}
+
 export async function runScheduledStudioWeeklyReminders(
   db: Db,
   now = new Date(),
@@ -997,28 +1028,7 @@ export async function runScheduledStudioWeeklyReminders(
 
   const results: StudioWeeklyReminderScheduleResult[] = [];
   for (const row of rows) {
-    const business = await db.business.findFirst({
-      where: { id: row.businessId },
-      select: { timezone: true, operationalSmsNumber: true },
-    });
-    const timezone = resolveBusinessTimeZone(business);
-    const delivery = resolveStudioWeeklyReminderDelivery({
-      platformConfigured: deps?.smsPlatformConfigured,
-      dedicatedNumberAssigned: Boolean(business?.operationalSmsNumber?.trim()),
-    });
-    if (!isStudioWeeklyReminderSendWindow(now, timezone)) {
-      results.push({
-        businessId: row.businessId,
-        created: false,
-        reason: "already_recorded",
-        reminder: null,
-        delivery,
-        skipped: "outside_send_window",
-      });
-      continue;
-    }
-    const dispatched = await dispatchStudioWeeklyReviewReminder(db, row.businessId, now, deps);
-    results.push({ businessId: row.businessId, ...dispatched });
+    results.push(await runScheduledStudioWeeklyReminderForBusiness(db, row.businessId, now, deps));
   }
   return results;
 }
@@ -1038,26 +1048,43 @@ export function presentStudioWeeklyReminderForViewer(
     ...state,
     ownerSmsTo: owner ? state.ownerSmsTo : state.ownerSmsToMasked,
     reminder,
-    cronSecretConfigured: state.cronSecretConfigured,
   };
 }
+
+export type StudioWeeklyReminderRetryResult = {
+  created: boolean;
+  claimed: number;
+  skipped: "outside_send_window" | null;
+  reason: StudioWeeklyReminderDispatchReason | "outside_send_window";
+  message: string;
+};
 
 export async function retryStudioWeeklyReminderSchedule(
   db: Db,
   access: BusinessAccess,
   now = new Date(),
   deps?: StudioWeeklyReminderDeps,
-) {
+): Promise<StudioWeeklyReminderRetryResult> {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
   if (access.workspace.role !== "OWNER") {
     throw new MarketingError(STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE);
   }
-  const results = await runScheduledStudioWeeklyReminders(db, now, deps);
-  const summary = summarizeStudioWeeklyReminderCronRun(results);
-  logStudioWeeklyReminderCron({ ok: true, reason: "owner_retry", ...summary });
+  const result = await runScheduledStudioWeeklyReminderForBusiness(db, access.businessId, now, deps);
+  const claimed = result.smsClaimedThisRun ? 1 : 0;
+  const skipped = result.skipped ?? null;
+  logStudioWeeklyReminderCron({
+    ok: true,
+    reason: "owner_retry",
+    considered: 1,
+    claimed,
+    skipped: skipped ? 1 : 0,
+  });
   return {
-    ...summary,
-    message: `${STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE} Considered ${summary.considered}. Claimed ${summary.claimed}.`,
+    created: result.created,
+    claimed,
+    skipped,
+    reason: skipped ?? result.reason,
+    message: STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE,
   };
 }
 

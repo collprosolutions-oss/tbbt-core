@@ -13,7 +13,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE,
-  STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE,
   STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
@@ -98,9 +97,6 @@ export function StudioWeeklyReminderControls({
       {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
 
-      {!reminder.cronSecretConfigured ? (
-        <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE}</p>
-      ) : null}
       {canManage ? (
         <form action={retryAction} className="space-y-1">
           <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE}</p>

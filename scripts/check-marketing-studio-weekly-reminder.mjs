@@ -53,7 +53,10 @@ const {
   STUDIO_WEEKLY_REMINDER_SMS_STOPPED,
   STUDIO_WEEKLY_REMINDER_SMS_TIMED_OUT,
   STUDIO_WEEKLY_REMINDER_UNAVAILABLE_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE,
   STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE,
   canManageStudioWeeklyReminder,
   isStudioWeeklyReminderSendWindow,
   maskOwnerSmsDestination,
@@ -79,7 +82,6 @@ const {
   createStudioWeeklyReviewReminder,
   dispatchStudioWeeklyReviewReminder,
   loadStudioWeeklyReminderState,
-  logStudioWeeklyReminderCron,
   missingStudioWeeklyReminderSchema,
   presentStudioWeeklyReminderForViewer,
   recordOwnerStudioReminderBlocked,
@@ -89,6 +91,10 @@ const {
   setStudioWeeklyReminderOwnerSms,
   setStudioWeeklyReviewReminderOptIn,
 } = await import("@/lib/marketing-studio-reminder");
+const {
+  GET: getStudioWeeklyReminderCron,
+  setStudioWeeklyReminderCronRunnerForTests,
+} = await import("@/app/api/cron/studio-weekly-reminder/route");
 const { emitBusinessEvent } = await import("@/lib/automation/events");
 const { INVOICE_DUE_AFTER_MS, scanScheduledBusinessEvents } = await import("@/lib/automation/scan");
 const {
@@ -204,6 +210,38 @@ function createNotifier() {
     notify = resolve;
   });
   return { reached, notify };
+}
+
+function captureConsole(method, run) {
+  const lines = [];
+  const previous = console[method];
+  console[method] = (...args) => {
+    lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "));
+  };
+  return Promise.resolve()
+    .then(run)
+    .finally(() => {
+      console[method] = previous;
+    })
+    .then((value) => ({ value, lines, text: lines.join("\n") }));
+}
+
+function cronRequest(headers = {}) {
+  return new Request("http://tbbt.test/api/cron/studio-weekly-reminder", {
+    method: "GET",
+    headers,
+  });
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { status: response.status, body, text };
 }
 
 async function waitUntilUngrantedAdvisoryLock(client) {
@@ -514,6 +552,14 @@ try {
       reminderUiSrc.includes("OWNER SMS number") &&
       reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE") &&
       reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_SMS_NOT_CONNECTED") &&
+      reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE") &&
+      !reminderUiSrc.includes("STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE") &&
+      !reminderUiSrc.includes("Ask the operator to set CRON_SECRET") &&
+      !reminderUiSrc.includes("cronSecretConfigured") &&
+      !/no messages are sent/i.test(STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE) &&
+      !/no messages are sent/i.test(STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE) &&
+      STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE.includes("can send the OWNER SMS") &&
+      STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE.includes("Ask the operator to set CRON_SECRET") &&
       queueUiSrc.includes("StudioWeeklyReminderControls"),
   );
   check(
@@ -553,13 +599,10 @@ try {
       proxySrc.includes("api/cron/"),
   );
   check(
-    "Cron denial and retry logs stay count-only",
-    reminderOpsSrc.includes('"[cron] studio-weekly-reminder"') &&
-      reminderOpsSrc.includes("secret_missing") &&
-      reminderOpsSrc.includes("owner_retry") &&
-      reminderOpsSrc.includes("retryStudioWeeklyReminderSchedule") &&
+    "OWNER retry action stays on the scheduled reminder path",
+    reminderOpsSrc.includes("retryStudioWeeklyReminderSchedule") &&
+      reminderOpsSrc.includes("runScheduledStudioWeeklyReminderForBusiness") &&
       actionSrc.includes("retryStudioWeeklyReminderScheduleAction") &&
-      !reminderOpsSrc.includes("customerId") &&
       !cronRouteSrc.includes("customerId") &&
       !cronRouteSrc.includes("businessId"),
   );
@@ -1609,54 +1652,250 @@ try {
       classifyStudioWeeklyReminderCronAuth(new Headers({ authorization: "Bearer other" })),
     ) === JSON.stringify({ ok: false, reason: "unauthorized" }),
   );
-  const logged = [];
-  const previousInfo = console.info;
-  console.info = (...args) => {
-    logged.push(args.map(String).join(" "));
-  };
-  logStudioWeeklyReminderCron({ ok: false, reason: "secret_missing" });
-  console.info = previousInfo;
-  const cronLog = logged.join("\n");
-  check(
-    "Cron log is redacted counts and reasons only",
-    cronLog.includes("[cron] studio-weekly-reminder") &&
-      cronLog.includes("secret_missing") &&
-      !cronLog.includes("studio-weekly-cron-secret") &&
-      !cronLog.includes("@") &&
-      !cronLog.includes("555") &&
-      !cronLog.includes("customer"),
+  console.log("\nTEST — Cron GET: secret, denial body, and runner_failed log");
+  setStudioWeeklyReminderCronRunnerForTests(async () => []);
+  process.env.CRON_SECRET = "";
+  const missingSecret = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(cronRequest()),
   );
+  const missingSecretRes = await readJsonResponse(missingSecret.value);
+  check(
+    "Cron GET missing secret returns 401 {ok:false} and logs secret_missing",
+    missingSecretRes.status === 401 &&
+      JSON.stringify(missingSecretRes.body) === JSON.stringify({ ok: false }) &&
+      !missingSecretRes.text.includes("secret_missing") &&
+      !missingSecretRes.text.includes("unauthorized") &&
+      missingSecret.text.includes("[cron] studio-weekly-reminder") &&
+      missingSecret.text.includes("secret_missing") &&
+      !missingSecret.text.includes("studio-weekly-cron-secret"),
+  );
+
+  process.env.CRON_SECRET = "studio-weekly-cron-secret";
+  const wrongSecret = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(cronRequest({ authorization: "Bearer other-secret-value" })),
+  );
+  const wrongSecretRes = await readJsonResponse(wrongSecret.value);
+  check(
+    "Cron GET wrong secret returns 401 {ok:false} and logs unauthorized",
+    wrongSecretRes.status === 401 &&
+      JSON.stringify(wrongSecretRes.body) === JSON.stringify({ ok: false }) &&
+      !wrongSecretRes.text.includes("unauthorized") &&
+      wrongSecret.text.includes("unauthorized") &&
+      !wrongSecret.text.includes("studio-weekly-cron-secret") &&
+      !wrongSecret.text.includes("other-secret-value"),
+  );
+
+  const malformedAuth = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(
+      cronRequest({ authorization: "NotBearer studio-weekly-cron-secret" }),
+    ),
+  );
+  const malformedAuthRes = await readJsonResponse(malformedAuth.value);
+  check(
+    "Cron GET malformed Authorization returns 401 {ok:false}",
+    malformedAuthRes.status === 401 &&
+      JSON.stringify(malformedAuthRes.body) === JSON.stringify({ ok: false }) &&
+      malformedAuth.text.includes("unauthorized") &&
+      !malformedAuthRes.text.includes("unauthorized") &&
+      !malformedAuth.text.includes("studio-weekly-cron-secret"),
+  );
+
+  const bearerOk = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(
+      cronRequest({ authorization: "Bearer studio-weekly-cron-secret" }),
+    ),
+  );
+  const bearerOkRes = await readJsonResponse(bearerOk.value);
+  check(
+    "Cron GET accepts Authorization Bearer",
+    bearerOkRes.status === 200 &&
+      bearerOkRes.body?.ok === true &&
+      bearerOkRes.body?.considered === 0 &&
+      bearerOkRes.body?.claimed === 0 &&
+      bearerOk.text.includes('"ok":true'),
+  );
+
+  const headerOk = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(cronRequest({ "x-cron-secret": "studio-weekly-cron-secret" })),
+  );
+  const headerOkRes = await readJsonResponse(headerOk.value);
+  check(
+    "Cron GET accepts x-cron-secret",
+    headerOkRes.status === 200 && headerOkRes.body?.ok === true && headerOkRes.body?.considered === 0,
+  );
+
+  setStudioWeeklyReminderCronRunnerForTests(async () => {
+    throw new Error("forced runner failure studio-weekly-cron-secret +15555550199");
+  });
+  const runnerFailed = await captureConsole("info", () =>
+    getStudioWeeklyReminderCron(
+      cronRequest({ authorization: "Bearer studio-weekly-cron-secret" }),
+    ),
+  );
+  const runnerFailedRes = await readJsonResponse(runnerFailed.value);
+  check(
+    "Cron GET runner_failed returns 500 {ok:false} with counts-only log",
+    runnerFailedRes.status === 500 &&
+      JSON.stringify(runnerFailedRes.body) === JSON.stringify({ ok: false }) &&
+      !runnerFailedRes.text.includes("runner_failed") &&
+      runnerFailed.text.includes("runner_failed") &&
+      runnerFailed.text.includes('"errorName":"Error"') &&
+      !runnerFailed.text.includes("forced runner failure") &&
+      !runnerFailed.text.includes("studio-weekly-cron-secret") &&
+      !runnerFailed.text.includes("+15555550199") &&
+      !runnerFailed.text.includes("15555550199"),
+  );
+  setStudioWeeklyReminderCronRunnerForTests();
   process.env.CRON_SECRET = previousCronSecret;
-  const saturdayRetryProvider = createFakeCustomerMessagingProvider();
+
+  console.log("\nTEST — OWNER retry is scoped to the caller business");
+  const ownerDestA = "+19415550191";
+  const ownerDestB = "+19415550192";
   const saturdayInstant = new Date("2026-10-03T15:00:00.000Z");
-  let adminRetryError = "";
+  await prisma.business.update({
+    where: { id: businessA.id },
+    data: { operationalSmsNumber: tenantFromA },
+  });
+  await prisma.business.update({
+    where: { id: businessB.id },
+    data: { operationalSmsNumber: tenantFrom },
+  });
+  await resetOwnerSmsSendWeek(businessA.id, ownerDestA);
+  await resetOwnerSmsSendWeek(businessB.id, ownerDestB);
+  await seedReadyPackage(prisma, ownerA, "Alpha retry isolation package");
+  await seedReadyPackage(prisma, ownerB, "Beta retry isolation package");
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, weekInstant, {
+    smsPlatformConfigured: false,
+  });
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerB, true, pacificMonday10, {
+    smsPlatformConfigured: false,
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: { in: [businessA.id, businessB.id] }, weekKey: "2026-09-27" },
+  });
+
+  const scopedRetryProvider = createFakeCustomerMessagingProvider();
+  function isRetryRoleRejection(error) {
+    return (
+      error instanceof ForbiddenError ||
+      (error instanceof MarketingError &&
+        error.message === STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE)
+    );
+  }
+  let adminRetryRejected = false;
   try {
-    await retryStudioWeeklyReminderSchedule(prisma, adminA, saturdayInstant, {
+    await retryStudioWeeklyReminderSchedule(prisma, adminA, weekInstant, {
       smsPlatformConfigured: true,
-      messagingProvider: saturdayRetryProvider,
+      messagingProvider: scopedRetryProvider,
     });
   } catch (error) {
-    adminRetryError = error instanceof Error ? error.message : String(error);
+    adminRetryRejected = isRetryRoleRejection(error);
   }
-  const ownerSaturdayRetry = await retryStudioWeeklyReminderSchedule(prisma, ownerA, saturdayInstant, {
+  let memberRetryRejected = false;
+  try {
+    await retryStudioWeeklyReminderSchedule(prisma, memberA, weekInstant, {
+      smsPlatformConfigured: true,
+      messagingProvider: scopedRetryProvider,
+    });
+  } catch (error) {
+    memberRetryRejected = isRetryRoleRejection(error);
+  }
+  check(
+    "Non-OWNER roles are rejected from scheduled reminder retry",
+    adminRetryRejected && memberRetryRejected && scopedRetryProvider.sent.length === 0,
+  );
+
+  const ownerMondayRetry = await retryStudioWeeklyReminderSchedule(prisma, ownerA, weekInstant, {
     smsPlatformConfigured: true,
-    messagingProvider: saturdayRetryProvider,
+    messagingProvider: scopedRetryProvider,
+  });
+  const reminderAfterA = await prisma.marketingStudioWeeklyReminder.findMany({
+    where: { businessId: businessA.id, weekKey: "2026-09-27" },
+  });
+  const reminderAfterB = await prisma.marketingStudioWeeklyReminder.findMany({
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
+  });
+  const retryJson = JSON.stringify(ownerMondayRetry);
+  check(
+    "Tenant A OWNER Monday retry does not dispatch or expose tenant B",
+    ownerMondayRetry.created === true &&
+      ownerMondayRetry.claimed === 1 &&
+      ownerMondayRetry.skipped == null &&
+      ownerMondayRetry.message === STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE &&
+      !("considered" in ownerMondayRetry) &&
+      reminderAfterA.length === 1 &&
+      reminderAfterA[0]?.smsSendClaimedAt != null &&
+      reminderAfterB.length === 0 &&
+      scopedRetryProvider.sent.length === 1 &&
+      scopedRetryProvider.sent[0]?.to === ownerDestA &&
+      scopedRetryProvider.sent.every((row) => row.to !== ownerDestB) &&
+      !retryJson.includes(businessA.id) &&
+      !retryJson.includes(businessB.id) &&
+      !retryJson.includes(ownerDestA) &&
+      !retryJson.includes(ownerDestB) &&
+      !retryJson.includes("considered") &&
+      scopedRetryProvider.sent.every((row) => !isCustomerMessagePurpose(row.purpose)),
+  );
+
+  const ownerMondayRetryAgain = await retryStudioWeeklyReminderSchedule(prisma, ownerA, weekInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: scopedRetryProvider,
   });
   check(
-    "OWNER can retry the scheduled reminder on Saturday without sending",
-    adminRetryError === STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE &&
-      saturdayRetryProvider.sent.length === 0 &&
+    "Second Monday retry for the same business claims 0",
+    ownerMondayRetryAgain.created === false &&
+      ownerMondayRetryAgain.claimed === 0 &&
+      ownerMondayRetryAgain.skipped == null &&
+      scopedRetryProvider.sent.length === 1 &&
+      (await prisma.marketingStudioWeeklyReminder.count({
+        where: { businessId: businessA.id, weekKey: "2026-09-27" },
+      })) === 1 &&
+      (await prisma.marketingStudioWeeklyReminder.count({
+        where: { businessId: businessB.id, weekKey: "2026-09-27" },
+      })) === 0,
+  );
+
+  const [doubleOne, doubleTwo] = await Promise.all([
+    retryStudioWeeklyReminderSchedule(prisma, ownerA, weekInstant, {
+      smsPlatformConfigured: true,
+      messagingProvider: scopedRetryProvider,
+    }),
+    retryStudioWeeklyReminderSchedule(prisma, ownerA, weekInstant, {
+      smsPlatformConfigured: true,
+      messagingProvider: scopedRetryProvider,
+    }),
+  ]);
+  check(
+    "Double-invoke Monday retry claims 0 after the week is taken",
+    doubleOne.claimed === 0 &&
+      doubleTwo.claimed === 0 &&
+      scopedRetryProvider.sent.length === 1,
+  );
+
+  const ownerSaturdayRetry = await retryStudioWeeklyReminderSchedule(prisma, ownerA, saturdayInstant, {
+    smsPlatformConfigured: true,
+    messagingProvider: scopedRetryProvider,
+  });
+  check(
+    "Non-Monday OWNER retry returns without a claim",
+    ownerSaturdayRetry.created === false &&
       ownerSaturdayRetry.claimed === 0 &&
-      ownerSaturdayRetry.considered >= 0 &&
-      ownerSaturdayRetry.message.includes("Counts do not include customer data") &&
-      !ownerSaturdayRetry.message.includes(ownerDest) &&
-      !JSON.stringify(ownerSaturdayRetry).includes(businessA.id),
+      ownerSaturdayRetry.skipped === "outside_send_window" &&
+      ownerSaturdayRetry.reason === "outside_send_window" &&
+      ownerSaturdayRetry.message === STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE &&
+      !("considered" in ownerSaturdayRetry) &&
+      scopedRetryProvider.sent.length === 1 &&
+      !JSON.stringify(ownerSaturdayRetry).includes(businessA.id) &&
+      !JSON.stringify(ownerSaturdayRetry).includes(businessB.id),
   );
   const optInDoesNotSend = createFakeCustomerMessagingProvider();
   await writeOwnerSmsDestination(businessA.id, ownerDest, true);
   await prisma.business.update({
     where: { id: businessA.id },
     data: { operationalSmsNumber: tenantFromA },
+  });
+  await prisma.marketingStudioWeeklyReminder.deleteMany({
+    where: { businessId: businessA.id, weekKey: "2026-09-27" },
   });
   const pageLikeOptIn = await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, weekInstant, {
     smsPlatformConfigured: true,

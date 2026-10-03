@@ -5,6 +5,7 @@
  *
  * Denied or failed runs log counts and machine reasons only. They never
  * log secrets, phone numbers, emails, customer names, or business ids.
+ * Unauthenticated callers receive a uniform {ok:false} body.
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -17,20 +18,30 @@ import {
 
 export const dynamic = "force-dynamic";
 
+type ScheduledRunner = typeof runScheduledStudioWeeklyReminders;
+
+let scheduledRunner: ScheduledRunner = runScheduledStudioWeeklyReminders;
+
+/** Test hook. Restores the platform-wide runner when called without an argument. */
+export function setStudioWeeklyReminderCronRunnerForTests(runner?: ScheduledRunner) {
+  scheduledRunner = runner ?? runScheduledStudioWeeklyReminders;
+}
+
 export async function GET(request: Request) {
   const auth = classifyStudioWeeklyReminderCronAuth(request.headers);
   if (!auth.ok) {
     logStudioWeeklyReminderCron({ ok: false, reason: auth.reason });
-    return NextResponse.json({ ok: false, reason: auth.reason }, { status: 401 });
+    return NextResponse.json({ ok: false }, { status: 401 });
   }
 
   try {
-    const results = await runScheduledStudioWeeklyReminders(prisma);
+    const results = await scheduledRunner(prisma);
     const summary = summarizeStudioWeeklyReminderCronRun(results);
     logStudioWeeklyReminderCron({ ok: true, ...summary });
     return NextResponse.json({ ok: true, ...summary });
-  } catch {
-    logStudioWeeklyReminderCron({ ok: false, reason: "runner_failed" });
-    return NextResponse.json({ ok: false, reason: "runner_failed" }, { status: 500 });
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : "Error";
+    logStudioWeeklyReminderCron({ ok: false, reason: "runner_failed", errorName });
+    return NextResponse.json({ ok: false }, { status: 500 });
   }
 }
