@@ -686,7 +686,7 @@ async function sendRecordedEmail(
           failureReason = sendError;
         } else {
           status = "SENT";
-          providerMessageId = sent.id ?? input.idempotencyKey;
+          providerMessageId = ("id" in sent ? sent.id : undefined) ?? input.idempotencyKey;
         }
       } catch {
         status = "FAILED";
