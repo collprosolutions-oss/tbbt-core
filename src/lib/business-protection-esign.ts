@@ -42,7 +42,7 @@ export const ESIGN_STALE_SEND_NOT_READY_MESSAGE =
   "That e-sign send is still in progress. Wait before canceling, and check Dropbox Sign first.";
 
 export const ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE =
-  "The e-sign lookup outcome is unknown. Check Dropbox Sign before canceling. TBBT did not invent a signature.";
+  "The provider could not be fully checked. Check Dropbox Sign directly and retry this lookup. TBBT did not invent a signature.";
 
 export const ESIGN_RECONCILE_MISSING_MESSAGE =
   "No provider signature request was found for this send. You can cancel the stuck send when it is stale. TBBT did not invent a signature.";

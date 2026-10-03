@@ -12,11 +12,16 @@ import { getDropboxSignApiKey, getDropboxSignClientId } from "@/lib/esign/config
 import { verifyDropboxSignEventHash } from "@/lib/esign/hmac";
 import { renderEsignAgreementPdf } from "@/lib/esign/signed-pdf";
 import {
+  ESIGN_LIST_PAGE_SIZE,
+  readEsignLookupRow,
+  scanEsignSignatureRequestPages,
+  type EsignListPageFetch,
+} from "@/lib/esign/lookup-scan";
+import {
   EsignProviderError,
   type EsignProvider,
   type EsignRequestMetadata,
-  type EsignSignatureLookupResult,
-  type LookupEsignSignatureRequestInput,
+  type EsignSignatureLookupOutcome,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
 
@@ -25,6 +30,7 @@ export const DROPBOX_SIGN_SEND_PATH = "/v3/signature_request/send";
 export const DROPBOX_SIGN_GET_PATH = "/v3/signature_request";
 export const DROPBOX_SIGN_LIST_PATH = "/v3/signature_request/list";
 export const DROPBOX_SIGN_FILES_PATH = "/v3/signature_request/files";
+export { ESIGN_LIST_PAGE_LIMIT, ESIGN_LIST_PAGE_SIZE, ESIGN_LIST_SCAN_BUDGET_MS } from "@/lib/esign/lookup-scan";
 export const DROPBOX_SIGN_COMPLETION_EVENTS = new Set([
   "signature_request_all_signed",
   "signature_request_downloadable",
@@ -47,40 +53,6 @@ function metadataFromRecord(value: unknown): EsignRequestMetadata | null {
     return null;
   }
   return { businessId, agreementId, versionId, attemptKey, actorMembershipId };
-}
-
-function emptyMetadata(): EsignRequestMetadata {
-  return {
-    businessId: "",
-    agreementId: "",
-    versionId: "",
-    attemptKey: "",
-    actorMembershipId: "",
-  };
-}
-
-function lookupResultFromSignatureRequest(value: unknown): EsignSignatureLookupResult | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as { signature_request_id?: unknown; metadata?: unknown };
-  const requestId =
-    typeof record.signature_request_id === "string" ? record.signature_request_id : "";
-  if (!requestId) return null;
-  return {
-    requestId,
-    metadata: metadataFromRecord(record.metadata) ?? emptyMetadata(),
-  };
-}
-
-function lookupMatchesMetadata(
-  result: EsignSignatureLookupResult,
-  query: LookupEsignSignatureRequestInput,
-) {
-  return (
-    result.metadata.businessId === query.businessId &&
-    result.metadata.agreementId === query.agreementId &&
-    result.metadata.versionId === query.versionId &&
-    result.metadata.attemptKey === query.attemptKey
-  );
 }
 
 async function dropboxSignGet(path: string, apiKey: string) {
@@ -178,7 +150,7 @@ export function createDropboxSignEsignProvider(): EsignProvider {
       };
     },
 
-    async lookupSignatureRequest(input) {
+    async lookupSignatureRequest(input): Promise<EsignSignatureLookupOutcome> {
       const apiKey = getDropboxSignApiKey();
       if (!apiKey) {
         throw new EsignProviderError("Dropbox Sign is not configured.");
@@ -188,68 +160,53 @@ export function createDropboxSignEsignProvider(): EsignProvider {
           `${DROPBOX_SIGN_GET_PATH}/${encodeURIComponent(input.requestId)}`,
           apiKey,
         );
-        if (response.status === 404) return null;
+        if (response.status === 404) return { status: "not_found_complete" };
         const body = (await response.json().catch(() => null)) as {
           signature_request?: unknown;
           error?: { error_msg?: unknown };
         } | null;
         if (!response.ok) {
-          const detail =
-            typeof body?.error?.error_msg === "string" ? body.error.error_msg : "lookup failed";
-          const outcome = response.status >= 400 && response.status < 500 ? "rejected" : "unknown";
-          throw new EsignProviderError(
-            `Dropbox Sign could not look up the signature request (${detail}).`,
-            { outcome, statusCode: response.status },
-          );
+          return { status: "unknown", reason: response.status === 429 ? "timeout" : "error" };
         }
-        const lookedUp = lookupResultFromSignatureRequest(body?.signature_request);
+        const lookedUp = readEsignLookupRow(body?.signature_request);
         if (!lookedUp) {
-          throw new EsignProviderError(
-            "Dropbox Sign lookup outcome is unknown. Check Dropbox Sign before canceling.",
-            { outcome: "unknown", statusCode: response.status },
-          );
+          return { status: "unknown", reason: "malformed" };
         }
-        return lookedUp;
+        return {
+          status: "found",
+          requestId: lookedUp.requestId,
+          metadata: lookedUp.metadata,
+        };
       }
 
-      const matches: EsignSignatureLookupResult[] = [];
-      for (let page = 1; page <= 3; page += 1) {
-        const response = await dropboxSignGet(
-          `${DROPBOX_SIGN_LIST_PATH}?page=${page}&page_size=100`,
-          apiKey,
-        );
-        const body = (await response.json().catch(() => null)) as {
-          signature_requests?: unknown;
-          list_info?: { num_pages?: unknown };
-          error?: { error_msg?: unknown };
-        } | null;
-        if (!response.ok) {
-          const detail =
-            typeof body?.error?.error_msg === "string" ? body.error.error_msg : "list failed";
-          const outcome = response.status >= 400 && response.status < 500 ? "rejected" : "unknown";
-          throw new EsignProviderError(
-            `Dropbox Sign could not look up the signature request (${detail}).`,
-            { outcome, statusCode: response.status },
+      return scanEsignSignatureRequestPages({
+        query: input,
+        fetchPage: async (page): Promise<EsignListPageFetch> => {
+          const response = await dropboxSignGet(
+            `${DROPBOX_SIGN_LIST_PATH}?page=${page}&page_size=${ESIGN_LIST_PAGE_SIZE}`,
+            apiKey,
           );
-        }
-        const rows = Array.isArray(body?.signature_requests) ? body.signature_requests : [];
-        for (const row of rows) {
-          const lookedUp = lookupResultFromSignatureRequest(row);
-          if (lookedUp && lookupMatchesMetadata(lookedUp, input)) {
-            matches.push(lookedUp);
+          if (!response.ok) {
+            return { ok: false, reason: response.status === 429 ? "timeout" : "error" };
           }
-        }
-        const numPages =
-          typeof body?.list_info?.num_pages === "number" ? body.list_info.num_pages : page;
-        if (page >= numPages) break;
-      }
-      if (matches.length > 1) {
-        throw new EsignProviderError(
-          "Dropbox Sign lookup outcome is unknown. Check Dropbox Sign before canceling.",
-          { outcome: "unknown" },
-        );
-      }
-      return matches[0] ?? null;
+          const body = (await response.json().catch(() => null)) as {
+            signature_requests?: unknown;
+            list_info?: { num_pages?: unknown };
+          } | null;
+          if (!body || !Array.isArray(body.signature_requests)) {
+            return { ok: false, reason: "malformed" };
+          }
+          const numPages = body.list_info?.num_pages;
+          if (typeof numPages !== "number" || !Number.isInteger(numPages) || numPages < 1) {
+            return { ok: false, reason: "unknown_total" };
+          }
+          return {
+            ok: true,
+            signatureRequests: body.signature_requests,
+            numPages,
+          };
+        },
+      });
     },
 
     async downloadSignedDocument(requestId) {

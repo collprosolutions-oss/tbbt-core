@@ -18,6 +18,7 @@ import { requireEsignProvider } from "@/lib/esign/provider";
 import {
   EsignProviderError,
   isDefiniteEsignProviderRejection,
+  type EsignSignatureLookupOutcome,
   type EsignSignatureLookupResult,
   type VerifiedEsignCompletionEvent,
 } from "@/lib/esign/types";
@@ -1927,6 +1928,7 @@ export async function reconcileStuckEsignSend(
       found: true as const,
       bound: true as const,
       reused: true as const,
+      lookupStatus: "found" as const,
     };
   }
 
@@ -1941,9 +1943,9 @@ export async function reconcileStuckEsignSend(
     attemptKey: preview.completionAttemptKey,
   };
 
-  let lookedUp: EsignSignatureLookupResult | null;
+  let outcome: EsignSignatureLookupOutcome;
   try {
-    lookedUp = await adapter.lookupSignatureRequest({
+    outcome = await adapter.lookupSignatureRequest({
       ...claim,
       actorMembershipId: membershipId(access),
       requestId: suppliedRequestId || undefined,
@@ -1955,7 +1957,11 @@ export async function reconcileStuckEsignSend(
     throw new BusinessProtectionError(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
   }
 
-  if (!lookedUp) {
+  if (outcome.status === "unknown") {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
+  }
+
+  if (outcome.status === "not_found_complete") {
     return {
       agreement: preview,
       version: previewVersion,
@@ -1963,8 +1969,14 @@ export async function reconcileStuckEsignSend(
       found: false as const,
       bound: false as const,
       reused: false as const,
+      lookupStatus: "not_found_complete" as const,
     };
   }
+
+  const lookedUp: EsignSignatureLookupResult = {
+    requestId: outcome.requestId,
+    metadata: outcome.metadata,
+  };
 
   if (!lookupMatchesEsignClaim(lookedUp, claim)) {
     throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
@@ -1997,6 +2009,7 @@ export async function reconcileStuckEsignSend(
           found: true as const,
           bound: true as const,
           reused: true as const,
+          lookupStatus: "found" as const,
         };
       }
       throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
@@ -2043,6 +2056,7 @@ export async function reconcileStuckEsignSend(
       found: true as const,
       bound: true as const,
       reused: false as const,
+      lookupStatus: "found" as const,
     };
   });
 }

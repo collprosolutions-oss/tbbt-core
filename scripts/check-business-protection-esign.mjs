@@ -23,6 +23,7 @@ const { PROVIDER_SIGNED_DOCUMENT_NOTE, UPLOADED_SIGNED_DOCUMENT_NOTE } =
   await import("@/lib/business-protection");
 const {
   ESIGN_CANCEL_STUCK_SEND_WARNING,
+  ESIGN_RECONCILE_MISSING_MESSAGE,
   ESIGN_RECONCILE_NOT_STUCK_MESSAGE,
   ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
   ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE,
@@ -40,6 +41,10 @@ const { resetEsignProviderCache, getFakeEsignProvider } = await import("@/lib/es
 const { dispatchEsignWebhook, ESIGN_WEBHOOK_HELLO } = await import("@/lib/esign/dispatch");
 const { ESIGN_WEBHOOK_PATH, isEsignWebhookPath } = await import("@/lib/esign/webhook-path");
 const { DROPBOX_SIGN_API_ORIGIN, DROPBOX_SIGN_GET_PATH, DROPBOX_SIGN_LIST_PATH, DROPBOX_SIGN_SEND_PATH } = await import("@/lib/esign/dropbox-sign");
+const {
+  ESIGN_LIST_PAGE_LIMIT,
+  scanEsignSignatureRequestPages,
+} = await import("@/lib/esign/lookup-scan");
 const { FAKE_ESIGN_DOWNLOADABLE_EVENT, FAKE_ESIGN_SIGNED_EVENT } = await import("@/lib/esign/fake");
 const { esignPdfLooksValid } = await import("@/lib/esign/signed-pdf");
 const { MemoryStorageProvider } = await import("@/lib/business-storage/memory-provider");
@@ -130,6 +135,46 @@ function readRepo(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
+function fillerLookupRow(suffix) {
+  return {
+    requestId: `fake_sr_filler_${suffix}`,
+    metadata: {
+      businessId: "other-business",
+      agreementId: "other-agreement",
+      versionId: "other-version",
+      attemptKey: "00000000-0000-4000-8000-000000000000",
+      actorMembershipId: "other-actor",
+    },
+  };
+}
+
+function matchLookupRow(requestId, metadata) {
+  return { requestId, metadata };
+}
+
+async function scanLookupPages(pages, query, pageLimit = ESIGN_LIST_PAGE_LIMIT) {
+  return scanEsignSignatureRequestPages({
+    query,
+    pageLimit,
+    fetchPage: async (page) => {
+      const spec = pages[page - 1];
+      if (!spec) return { ok: false, reason: "unknown_total" };
+      if (spec.error) {
+        if (spec.error === "timeout") throw new Error("connect ETIMEDOUT");
+        return { ok: false, reason: spec.error };
+      }
+      return {
+        ok: true,
+        signatureRequests: spec.rows.map((row) => ({
+          signature_request_id: row.requestId,
+          metadata: row.metadata,
+        })),
+        numPages: spec.numPages,
+      };
+    },
+  });
+}
+
 async function readyNda(db, access, title) {
   const agreement = await createAgreement(db, access, { agreementType: "NDA", title });
   await saveAgreementAnswers(db, access, {
@@ -171,12 +216,33 @@ check(
 );
 check("Live adapter renders a valid PDF, not a %PDF-1.4 text stub", dropboxSrc.includes("renderEsignAgreementPdf") && !dropboxSrc.includes('"%PDF-1.4"'));
 check("Live adapter uses official send and files paths", dropboxSrc.includes(DROPBOX_SIGN_API_ORIGIN) && dropboxSrc.includes(DROPBOX_SIGN_SEND_PATH) && dropboxSrc.includes("/v3/signature_request/files"));
+const scanSrc = readRepo("src/lib/esign/lookup-scan.ts");
 check(
   "Live adapter lookup uses official GET and list paths",
   dropboxSrc.includes("lookupSignatureRequest") &&
     dropboxSrc.includes(DROPBOX_SIGN_GET_PATH) &&
     dropboxSrc.includes(DROPBOX_SIGN_LIST_PATH) &&
-    dropboxSrc.includes('method: "GET"'),
+    dropboxSrc.includes('method: "GET"') &&
+    dropboxSrc.includes("encodeURIComponent"),
+);
+check(
+  "List scan uses a bounded page walker, not a 3-page cap that returns not found",
+  dropboxSrc.includes("scanEsignSignatureRequestPages") &&
+    !/for \(let page = 1; page <= 3/.test(dropboxSrc) &&
+    !dropboxSrc.includes("matches[0] ?? null") &&
+    scanSrc.includes("not_found_complete") &&
+    scanSrc.includes('reason: "page_cap"') &&
+    scanSrc.includes('status: "unknown"') &&
+    ESIGN_LIST_PAGE_LIMIT > 3,
+);
+check(
+  "Unknown lookup copy never says cancel-safe or not found",
+  !/cancel/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
+    !/not found/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
+    /could not be fully checked/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
+    /retry/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
+    /Dropbox Sign/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
+    /cancel/i.test(ESIGN_RECONCILE_MISSING_MESSAGE),
 );
 const sendFn = opsSrc.slice(
   opsSrc.indexOf("export async function sendAgreementForEsign"),
@@ -246,13 +312,27 @@ check(
   reconcileFn.includes("lookupSignatureRequest") &&
     !reconcileFn.includes("createSignatureRequest") &&
     !reconcileFn.includes("signerEmail") &&
-    reconcileFn.includes("esign_request_reconciled"),
+    reconcileFn.includes("esign_request_reconciled") &&
+    reconcileFn.includes('outcome.status === "unknown"') &&
+    reconcileFn.includes('outcome.status === "not_found_complete"'),
+);
+const actionSrc = readRepo("src/app/actions/business-protection.ts");
+const actionReconcile = actionSrc.slice(
+  actionSrc.indexOf("export async function reconcileStuckEsignSendAction"),
+  actionSrc.indexOf("export async function completeAgreementAction"),
 );
 check(
   "Owner action reports missing, bound, and reused lookup outcomes",
-  readRepo("src/app/actions/business-protection.ts").includes("ESIGN_RECONCILE_MISSING_MESSAGE") &&
-    readRepo("src/app/actions/business-protection.ts").includes("ESIGN_RECONCILE_BOUND_MESSAGE") &&
-    readRepo("src/app/actions/business-protection.ts").includes("reconcileStuckEsignSendAction"),
+  actionReconcile.includes("ESIGN_RECONCILE_MISSING_MESSAGE") &&
+    actionReconcile.includes("ESIGN_RECONCILE_BOUND_MESSAGE") &&
+    actionSrc.includes("reconcileStuckEsignSendAction"),
+);
+check(
+  "Owner action shows not-found only after a complete scan and unknown as an error",
+  actionReconcile.includes('lookupStatus === "not_found_complete"') &&
+    actionReconcile.includes("ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE") &&
+    actionReconcile.includes("error: ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE") &&
+    !/cancel/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE),
 );
 const createdAudit = opsSrc.slice(
   opsSrc.indexOf('action: "esign_request_created"'),
@@ -300,6 +380,80 @@ check(
 
 const officialHash = dropboxSignEventHash(getFakeEsignWebhookKey(), "1348177752", "signature_request_sent");
 check("Official sample event_time+event_type hashes to 64 hex chars", /^[0-9a-f]{64}$/.test(officialHash));
+
+console.log("\nSCAN — list pages are found, not_found_complete, or unknown");
+const scanQuery = {
+  businessId: "biz-scan",
+  agreementId: "agr-scan",
+  versionId: "ver-scan",
+  attemptKey: "11111111-1111-4111-8111-111111111111",
+  actorMembershipId: "actor-scan",
+};
+const scanMatch = matchLookupRow("fake_sr_page4", {
+  businessId: scanQuery.businessId,
+  agreementId: scanQuery.agreementId,
+  versionId: scanQuery.versionId,
+  attemptKey: scanQuery.attemptKey,
+  actorMembershipId: scanQuery.actorMembershipId,
+});
+const fivePagesMatchOn4 = [1, 2, 3, 4, 5].map((page) => ({
+  rows: [page === 4 ? scanMatch : fillerLookupRow(`p${page}`)],
+  numPages: 5,
+}));
+const page4Of5 = await scanLookupPages(fivePagesMatchOn4, scanQuery);
+check(
+  "Matching request on page 4 of 5 is found",
+  page4Of5.status === "found" && page4Of5.requestId === "fake_sr_page4",
+);
+const oldCapOnFivePages = await scanLookupPages(fivePagesMatchOn4, scanQuery, 3);
+check(
+  "Old 3-page cap with a match on page 4 is unknown, never not_found_complete",
+  oldCapOnFivePages.status === "unknown" && oldCapOnFivePages.reason === "page_cap",
+);
+const beyondBoundPages = Array.from({ length: ESIGN_LIST_PAGE_LIMIT }, (_, index) => ({
+  rows: [fillerLookupRow(`bound-${index + 1}`)],
+  numPages: ESIGN_LIST_PAGE_LIMIT + 1,
+}));
+beyondBoundPages.push({
+  rows: [scanMatch],
+  numPages: ESIGN_LIST_PAGE_LIMIT + 1,
+});
+const beyondBound = await scanLookupPages(beyondBoundPages, scanQuery);
+check(
+  "Matching request beyond the page bound is unknown, never not_found_complete",
+  beyondBound.status === "unknown" && beyondBound.reason === "page_cap",
+);
+const midScanError = await scanLookupPages(
+  [
+    { rows: [fillerLookupRow("ok")], numPages: 3 },
+    { error: "timeout" },
+  ],
+  scanQuery,
+);
+check("Page error mid-scan is unknown", midScanError.status === "unknown");
+const completeEmpty = await scanLookupPages(
+  [
+    { rows: [fillerLookupRow("a")], numPages: 2 },
+    { rows: [fillerLookupRow("b")], numPages: 2 },
+  ],
+  scanQuery,
+);
+check(
+  "Complete scan with no match is not_found_complete",
+  completeEmpty.status === "not_found_complete",
+);
+const unknownTotal = await scanLookupPages(
+  [{ rows: [fillerLookupRow("u")], numPages: 0 }],
+  scanQuery,
+);
+check("Unknown page total is unknown", unknownTotal.status === "unknown");
+const mutatedCapToNotFound = oldCapOnFivePages.status === "not_found_complete" || beyondBound.status === "not_found_complete";
+check(
+  "Mutation restoring cap-reached to not-found fails these proofs",
+  mutatedCapToNotFound === false &&
+    oldCapOnFivePages.status === "unknown" &&
+    beyondBound.status === "unknown",
+);
 
 try {
   console.log("\nDB — OWNER Send, webhook bind, forged/replay/tenant/concurrent/failure");
@@ -533,6 +687,7 @@ try {
   check(
     "Missing provider request stays unbound so the owner can cancel when stale",
     missingLookup.found === false &&
+      missingLookup.lookupStatus === "not_found_complete" &&
       missingLookup.bound === false &&
       !missingLookup.requestId &&
       afterMissing.signingMode === "SENDING" &&
@@ -696,6 +851,190 @@ try {
     await lookupLeft.$disconnect();
     await lookupRight.$disconnect();
   }
+
+  function storedLookupRow(requestId) {
+    const stored = fake.getRequest(requestId);
+    if (!stored) throw new Error(`missing fake request ${requestId}`);
+    return matchLookupRow(requestId, {
+      businessId: stored.input.businessId,
+      agreementId: stored.input.agreementId,
+      versionId: stored.input.versionId,
+      attemptKey: stored.input.attemptKey,
+      actorMembershipId: stored.input.actorMembershipId,
+    });
+  }
+
+  const page4Nda = await readyNda(prisma, ownerA, "List page 4 of 5 NDA");
+  const page4Key = randomUUID();
+  const createsBeforePage4 = fake.createdRequestCount();
+  fake.createThenThrow();
+  await expectError("Page-4 send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: page4Nda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: page4Key,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const page4RequestId = fake.lastCreatedRequestId();
+  fake.useLookupListPages([1, 2, 3, 4, 5].map((page) => ({
+    rows: [page === 4 ? storedLookupRow(page4RequestId) : fillerLookupRow(`page4-${page}`)],
+    numPages: 5,
+  })));
+  const page4Bound = await reconcileStuckEsignSend(prisma, ownerA, { agreementId: page4Nda.id });
+  const afterPage4 = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: page4Nda.id },
+    include: { versions: true },
+  });
+  check(
+    "Reconcile finds a matching request on page 4 of 5 and binds it",
+    page4Bound.found === true &&
+      page4Bound.bound === true &&
+      page4Bound.requestId === page4RequestId &&
+      afterPage4.signingMode === "PROVIDER_READY" &&
+      afterPage4.esignSignatureRequestId === page4RequestId &&
+      afterPage4.versions.some((row) => row.esignSignatureRequestId === page4RequestId) &&
+      fake.createdRequestCount() === createsBeforePage4 + 1,
+  );
+  fake.clearLookupListPages();
+
+  const beyondNda = await readyNda(prisma, ownerA, "List beyond page bound NDA");
+  const beyondKey = randomUUID();
+  fake.createThenThrow();
+  await expectError("Beyond-bound send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: beyondNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: beyondKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const beyondRequestId = fake.lastCreatedRequestId();
+  const beyondPages = Array.from({ length: ESIGN_LIST_PAGE_LIMIT }, (_, index) => ({
+    rows: [fillerLookupRow(`beyond-${index + 1}`)],
+    numPages: ESIGN_LIST_PAGE_LIMIT + 1,
+  }));
+  beyondPages.push({
+    rows: [storedLookupRow(beyondRequestId)],
+    numPages: ESIGN_LIST_PAGE_LIMIT + 1,
+  });
+  fake.useLookupListPages(beyondPages);
+  await expectError("Match beyond the page bound stays unknown and is not cancel-safe", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, { agreementId: beyondNda.id });
+  }, (error) => {
+    return (
+      error instanceof BusinessProtectionError &&
+      error.message === ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE &&
+      !/cancel/i.test(error.message) &&
+      !/not found/i.test(error.message) &&
+      error.message !== ESIGN_RECONCILE_MISSING_MESSAGE
+    );
+  });
+  const afterBeyond = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: beyondNda.id },
+  });
+  check(
+    "Beyond-bound lookup leaves the claim unbound",
+    afterBeyond.signingMode === "SENDING" &&
+      !afterBeyond.esignSignatureRequestId &&
+      Boolean(beyondRequestId),
+  );
+  fake.clearLookupListPages();
+
+  const pageErrorNda = await readyNda(prisma, ownerA, "List page error NDA");
+  const pageErrorKey = randomUUID();
+  fake.createThenThrow();
+  await expectError("Page-error send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: pageErrorNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: pageErrorKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  fake.useLookupListPages([
+    { rows: [fillerLookupRow("err-1")], numPages: 3 },
+    { error: "timeout" },
+  ]);
+  await expectError("Page error mid-scan is unknown and not cancel-safe", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, { agreementId: pageErrorNda.id });
+  }, (error) => {
+    return (
+      error instanceof BusinessProtectionError &&
+      error.message === ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE &&
+      !/cancel/i.test(error.message) &&
+      error.message !== ESIGN_RECONCILE_MISSING_MESSAGE
+    );
+  });
+  const afterPageError = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: pageErrorNda.id },
+  });
+  check(
+    "Page-error lookup leaves the claim unbound",
+    afterPageError.signingMode === "SENDING" && !afterPageError.esignSignatureRequestId,
+  );
+  fake.clearLookupListPages();
+
+  const completeEmptyNda = await readyNda(prisma, ownerA, "Complete empty list NDA");
+  const completeEmptyKey = randomUUID();
+  fake.timeoutBeforeSignatureRequest();
+  await expectError("Complete-empty send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: completeEmptyNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: completeEmptyKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  fake.useLookupListPages([
+    { rows: [fillerLookupRow("empty-1")], numPages: 2 },
+    { rows: [fillerLookupRow("empty-2")], numPages: 2 },
+  ]);
+  const completeEmptyLookup = await reconcileStuckEsignSend(prisma, ownerA, {
+    agreementId: completeEmptyNda.id,
+  });
+  check(
+    "Complete list scan with no match is not_found_complete",
+    completeEmptyLookup.found === false &&
+      completeEmptyLookup.lookupStatus === "not_found_complete" &&
+      !completeEmptyLookup.requestId,
+  );
+  fake.clearLookupListPages();
+
+  const foreignPageNda = await readyNda(prisma, ownerA, "Foreign list metadata NDA");
+  const foreignPageKey = randomUUID();
+  fake.createThenThrow();
+  await expectError("Foreign-list send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: foreignPageNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: foreignPageKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  const foreignPageRequestId = fake.lastCreatedRequestId();
+  fake.returnNextLookup({
+    status: "found",
+    requestId: foreignPageRequestId,
+    metadata: {
+      businessId: businessB.id,
+      agreementId: foreignPageNda.id,
+      versionId: "wrong-version",
+      attemptKey: foreignPageKey,
+      actorMembershipId: ownerMem.id,
+    },
+  });
+  await expectError("Foreign metadata on a discovered request is still rejected", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, { agreementId: foreignPageNda.id });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE);
+  const afterForeignPage = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: foreignPageNda.id },
+  });
+  check(
+    "Foreign list metadata leaves the claim unbound",
+    afterForeignPage.signingMode === "SENDING" && !afterForeignPage.esignSignatureRequestId,
+  );
+  fake.clearLookupListPages();
 
   const bindNda = await readyNda(prisma, ownerA, "Webhook binds stuck SENDING");
   const bindKey = randomUUID();

@@ -36,6 +36,15 @@ export type EsignSignatureLookupResult = {
   metadata: EsignRequestMetadata;
 };
 
+export type EsignSignatureLookupOutcome =
+  | {
+      status: "found";
+      requestId: string;
+      metadata: EsignRequestMetadata;
+    }
+  | { status: "not_found_complete" }
+  | { status: "unknown"; reason: string };
+
 export type VerifiedEsignCompletionEvent = {
   eventId: string;
   eventType: string;
@@ -83,11 +92,11 @@ export type EsignProvider = {
   ): Promise<EsignSignatureRequestResult>;
   /**
    * Read-only recovery lookup. Must never create a signature request.
-   * Returns null when the provider has no matching request.
+   * Incomplete scans are "unknown", never a safe "not found".
    */
   lookupSignatureRequest(
     input: LookupEsignSignatureRequestInput,
-  ): Promise<EsignSignatureLookupResult | null>;
+  ): Promise<EsignSignatureLookupOutcome>;
   downloadSignedDocument(requestId: string): Promise<Buffer>;
   verifyCompletionEvent(input: {
     rawJson: string;
