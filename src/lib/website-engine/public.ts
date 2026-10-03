@@ -139,6 +139,19 @@ export function snapshotServiceAreaRecords(
   }));
 }
 
+/**
+ * Hire-form city rules for a public submit.
+ * A resolved WebsitePublish snapshot always wins, including an already-open
+ * tab whose publish id is no longer current. Live or browser-supplied areas
+ * are compatibility-only and never override a snapshot.
+ */
+export function publicIntakeServiceAreas(
+  publishedSnapshot: PublishedWebsiteSnapshot | null | undefined,
+  fallbackAreas: RecordedServiceArea[] = [],
+): RecordedServiceArea[] {
+  return publishedSnapshot ? snapshotServiceAreaRecords(publishedSnapshot) : fallbackAreas;
+}
+
 export function publicServiceAreaFromSnapshot(snapshot: PublishedWebsiteSnapshot) {
   const areas = snapshotServiceAreaRecords(snapshot);
   return {

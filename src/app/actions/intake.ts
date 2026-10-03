@@ -116,24 +116,28 @@ async function submitServiceRequestInner(
     else if (paired) catalogQuantities[id] = paired;
   });
 
+  const websitePublishId = readString(formData, "websitePublishId") || null;
   const notifyBusiness = await prisma.business.findUnique({
     where: { slug: safeSlug },
-    select: { id: true },
+    select: { id: true, publishedWebsiteId: true },
   });
-  const configuredAreas = notifyBusiness
-    ? (await prisma.serviceArea.findMany({ where: { businessId: notifyBusiness.id } })).map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        label: row.label,
-        city: row.city,
-        region: row.region,
-        postalCode: row.postalCode,
-        enabled: row.enabled,
-        travelAdjustment: row.travelAdjustment ? Number(row.travelAdjustment) : null,
-        minimumAdjustment: row.minimumAdjustment ? Number(row.minimumAdjustment) : null,
-        notes: row.notes,
-      }))
-    : [];
+  // Published hire forms qualify cities from the WebsitePublish the tab
+  // displayed. Live ServiceArea rows are compatibility-only.
+  const configuredAreas =
+    notifyBusiness && !notifyBusiness.publishedWebsiteId && !websitePublishId
+      ? (await prisma.serviceArea.findMany({ where: { businessId: notifyBusiness.id } })).map((row) => ({
+          id: row.id,
+          kind: row.kind,
+          label: row.label,
+          city: row.city,
+          region: row.region,
+          postalCode: row.postalCode,
+          enabled: row.enabled,
+          travelAdjustment: row.travelAdjustment ? Number(row.travelAdjustment) : null,
+          minimumAdjustment: row.minimumAdjustment ? Number(row.minimumAdjustment) : null,
+          notes: row.notes,
+        }))
+      : [];
 
   const created = await createPublicServiceRequest(prisma, {
     slug: safeSlug,
@@ -160,7 +164,7 @@ async function submitServiceRequestInner(
     preferredWindows: parsePreferredWindowsField(formData),
     requestedTradeCode: readString(formData, "requestedTradeCode") || null,
     tenantIntakeSnapshotId: readString(formData, "tenantIntakeSnapshotId") || null,
-    websitePublishId: readString(formData, "websitePublishId") || null,
+    websitePublishId,
     submissionId: readString(formData, "submissionId") || null,
     smsOptIn: readString(formData, "smsOptIn") || formData.get("smsOptIn"),
     leadSource: readString(formData, "leadSource") || "WEBSITE",

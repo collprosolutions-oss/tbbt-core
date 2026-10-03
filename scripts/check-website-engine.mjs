@@ -52,6 +52,7 @@ const {
   snapshotPageMetadata,
   snapshotIntakeSchemasByTrade,
   snapshotServiceAreaRecords,
+  publicIntakeServiceAreas,
   publicServiceAreaFromView,
   absolutePublicSitemapUrl,
   buildPublicSitemap,
@@ -313,9 +314,12 @@ check(
     publicView.includes("publishId: publish.id") &&
     publicView.includes("publishId: null") &&
     requestFlow.includes('formData.set("websitePublishId"') &&
+    requestFlow.includes('name="websitePublishId"') &&
     intakeAction.includes('readString(formData, "websitePublishId")') &&
+    intakeAction.includes("!notifyBusiness.publishedWebsiteId && !websitePublishId") &&
     intakeSrc.includes("websitePublishId") &&
     intakeSrc.includes("readReferencedWebsitePublishId") &&
+    intakeSrc.includes("publicIntakeServiceAreas") &&
     intakeSrc.includes("loadOwnedWebsiteSnapshot") &&
     intakeSrc.includes("referencedPublishInvalid") &&
     snapshot.includes("readReferencedWebsitePublishId") &&
@@ -330,6 +334,16 @@ check(
     readReferencedWebsitePublishId("pub_ok-1").publishId === "pub_ok-1" &&
     readReferencedWebsitePublishId("not a valid id!").publishId == null &&
     readReferencedWebsitePublishId("not a valid id!").provided === true,
+);
+check(
+  "Snapshot service areas win over live fallback cities",
+  publicIntakeServiceAreas(
+    { serviceAreas: [{ id: "snap-reno", kind: "CITY", label: "Reno", city: "Reno", region: "NV", postalCode: null, slug: "reno" }] },
+    [{ id: "live-sparks", kind: "CITY", label: "Sparks", city: "Sparks", region: "NV", postalCode: null, enabled: true, travelAdjustment: null, minimumAdjustment: null, notes: "" }],
+  ).every((row) => row.city === "Reno") === true &&
+    publicIntakeServiceAreas(null, [
+      { id: "live-sparks", kind: "CITY", label: "Sparks", city: "Sparks", region: "NV", postalCode: null, enabled: true, travelAdjustment: null, minimumAdjustment: null, notes: "" },
+    ])[0]?.city === "Sparks",
 );
 const ownedWebsiteLookup = intakeSrc.slice(
   intakeSrc.indexOf("async function loadOwnedWebsiteSnapshot"),
@@ -1105,6 +1119,213 @@ try {
   check(
     "Missing or cross-tenant website publish refs fail closed",
     missingPublishSubmit.ok === false && foreignPublishSubmit.ok === false,
+  );
+
+  const openTabUser = await prisma.user.create({
+    data: { name: "Open Tab Owner", email: `we-ot-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  async function seedOpenTabTenant(label, sparksEnabled) {
+    const business = await prisma.business.create({
+      data: {
+        name: `Open Tab ${label}`,
+        slug: `ot-${label}-${randomUUID().slice(0, 8)}`.toLowerCase(),
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const mem = await prisma.membership.create({
+      data: { userId: openTabUser.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, mem.id);
+    await activateBusinessTradeOp(prisma, access, "HANDYMAN");
+    const service = await prisma.serviceCatalogItem.create({
+      data: {
+        businessId: business.id,
+        name: "Fence Repair",
+        category: "Fencing",
+        tradeCode: "HANDYMAN",
+        active: true,
+      },
+    });
+    const reno = await prisma.serviceArea.create({
+      data: {
+        businessId: business.id,
+        kind: "CITY",
+        label: "Reno",
+        city: "Reno",
+        region: "NV",
+        enabled: true,
+      },
+    });
+    const sparks = await prisma.serviceArea.create({
+      data: {
+        businessId: business.id,
+        kind: "CITY",
+        label: "Sparks",
+        city: "Sparks",
+        region: "NV",
+        enabled: sparksEnabled,
+      },
+    });
+    return { business, access, service, reno, sparks };
+  }
+  async function submitOpenTabCity({ slug, city, catalogItemId, websitePublishId, name, notes, configuredAreas }) {
+    const created = await createPublicServiceRequest(prisma, {
+      slug,
+      name,
+      email: `${name.replace(/\s+/g, "-").toLowerCase()}-${randomUUID().slice(0, 8)}@example.com`,
+      phone: "555-0199",
+      address: "",
+      streetAddress: "20 Snapshot St",
+      city,
+      region: "NV",
+      postalCode: "89431",
+      notes,
+      catalogItemIds: [catalogItemId],
+      includeOther: false,
+      otherDescription: "",
+      intakeAnswers: { frequency: "ONE_TIME" },
+      websitePublishId,
+      configuredAreas,
+    });
+    const row = created.ok
+      ? await prisma.serviceRequest.findUnique({ where: { id: created.requestId } })
+      : null;
+    return { created, row };
+  }
+
+  const addOrder = await seedOpenTabTenant("add", false);
+  const addV1 = await publishWebsite(prisma, addOrder.access, { idempotencyKey: "ot-add-v1" });
+  await prisma.serviceArea.update({ where: { id: addOrder.sparks.id }, data: { enabled: true } });
+  const addV2 = await publishWebsite(prisma, addOrder.access, { idempotencyKey: "ot-add-v2" });
+  const addOpenedSparks = await submitOpenTabCity({
+    slug: addOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: addOrder.service.id,
+    websitePublishId: addV1.id,
+    name: "Add Order Opened",
+    notes: "Opened against Reno-only, owner later published Sparks.",
+  });
+  const addCurrentSparks = await submitOpenTabCity({
+    slug: addOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: addOrder.service.id,
+    websitePublishId: addV2.id,
+    name: "Add Order Current",
+    notes: "New tab after Sparks was published.",
+  });
+  await prisma.serviceArea.delete({ where: { id: addOrder.sparks.id } });
+  const addDeletedCurrent = await submitOpenTabCity({
+    slug: addOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: addOrder.service.id,
+    websitePublishId: addV2.id,
+    name: "Add Order Deleted Current",
+    notes: "Current snapshot still lists Sparks after the live CITY row was deleted.",
+  });
+  const addDeletedOpened = await submitOpenTabCity({
+    slug: addOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: addOrder.service.id,
+    websitePublishId: addV1.id,
+    name: "Add Order Deleted Opened",
+    notes: "Opened Reno-only tab after Sparks live row was deleted.",
+  });
+  check(
+    "Publish order Reno-then-Sparks keeps the opened tab on Reno-only cities",
+    addOpenedSparks.created.ok === true &&
+      addOpenedSparks.row?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      addOpenedSparks.row?.matchedServiceAreaId == null &&
+      addCurrentSparks.created.ok === true &&
+      addCurrentSparks.row?.serviceAreaQualification === "IN_AREA" &&
+      addCurrentSparks.row?.matchedServiceAreaId === addOrder.sparks.id,
+  );
+  check(
+    "Deleted live CITY row still qualifies from the displayed snapshot, not live rows",
+    addDeletedCurrent.created.ok === true &&
+      addDeletedCurrent.row?.serviceAreaQualification === "IN_AREA" &&
+      addDeletedCurrent.row?.matchedServiceAreaId == null &&
+      addDeletedOpened.created.ok === true &&
+      addDeletedOpened.row?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      addDeletedOpened.row?.matchedServiceAreaId == null,
+  );
+
+  const dropOrder = await seedOpenTabTenant("drop", true);
+  const dropV1 = await publishWebsite(prisma, dropOrder.access, { idempotencyKey: "ot-drop-v1" });
+  await prisma.serviceArea.update({ where: { id: dropOrder.sparks.id }, data: { enabled: false } });
+  const dropV2 = await publishWebsite(prisma, dropOrder.access, { idempotencyKey: "ot-drop-v2" });
+  const dropOpenedSparks = await submitOpenTabCity({
+    slug: dropOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: dropOrder.service.id,
+    websitePublishId: dropV1.id,
+    name: "Drop Order Opened",
+    notes: "Opened against Reno+Sparks, owner later published Reno-only.",
+    configuredAreas: [
+      {
+        id: dropOrder.reno.id,
+        kind: "CITY",
+        label: "Reno",
+        city: "Reno",
+        region: "NV",
+        postalCode: null,
+        enabled: true,
+        travelAdjustment: null,
+        minimumAdjustment: null,
+        notes: "",
+      },
+    ],
+  });
+  const dropCurrentSparks = await submitOpenTabCity({
+    slug: dropOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: dropOrder.service.id,
+    websitePublishId: dropV2.id,
+    name: "Drop Order Current",
+    notes: "New tab after Sparks was removed from publish.",
+  });
+  await prisma.serviceArea.delete({ where: { id: dropOrder.sparks.id } });
+  const dropDeletedOpened = await submitOpenTabCity({
+    slug: dropOrder.business.slug,
+    city: "Sparks",
+    catalogItemId: dropOrder.service.id,
+    websitePublishId: dropV1.id,
+    name: "Drop Order Deleted Opened",
+    notes: "Opened Reno+Sparks tab after the live Sparks CITY row was deleted.",
+  });
+  const dropForged = await submitOpenTabCity({
+    slug: dropOrder.business.slug,
+    city: "Reno",
+    catalogItemId: dropOrder.service.id,
+    websitePublishId: `forged_${randomUUID().replaceAll("-", "")}`,
+    name: "Drop Order Forged",
+    notes: "Forged website publish id.",
+  });
+  const dropForeign = await submitOpenTabCity({
+    slug: dropOrder.business.slug,
+    city: "Reno",
+    catalogItemId: dropOrder.service.id,
+    websitePublishId: addV2.id,
+    name: "Drop Order Foreign",
+    notes: "Other-tenant website publish id.",
+  });
+  check(
+    "Publish order Sparks-then-Reno keeps the opened tab on the cities the customer saw",
+    dropOpenedSparks.created.ok === true &&
+      dropOpenedSparks.row?.serviceAreaQualification === "IN_AREA" &&
+      dropOpenedSparks.row?.matchedServiceAreaId === dropOrder.sparks.id &&
+      dropCurrentSparks.created.ok === true &&
+      dropCurrentSparks.row?.serviceAreaQualification === "OUTSIDE_PREFERRED" &&
+      dropCurrentSparks.row?.matchedServiceAreaId == null,
+  );
+  check(
+    "Opened Sparks-then-Reno tab still qualifies after the live CITY row is deleted",
+    dropDeletedOpened.created.ok === true &&
+      dropDeletedOpened.row?.serviceAreaQualification === "IN_AREA" &&
+      dropDeletedOpened.row?.matchedServiceAreaId == null,
+  );
+  check(
+    "Forged or other-tenant WebsitePublish ids never qualify an opened hire form",
+    dropForged.created.ok === false && dropForeign.created.ok === false,
   );
 
   await expectError(

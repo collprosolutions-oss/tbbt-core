@@ -831,6 +831,9 @@ export function MultiServiceRequestFlow({
             </p>
           )}
           <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
+          {websitePublishId ? (
+            <input type="hidden" name="websitePublishId" value={websitePublishId} />
+          ) : null}
           <button type="submit" className="public-btn public-btn-primary w-full">
             Next: Your Information
             <ArrowRight className="size-4" aria-hidden="true" />
@@ -919,6 +922,9 @@ export function MultiServiceRequestFlow({
             </div>
           </fieldset>
           <SmsOptInField smsOptIn={smsOptIn} onChange={setSmsOptIn} />
+          {websitePublishId ? (
+            <input type="hidden" name="websitePublishId" value={websitePublishId} />
+          ) : null}
           <div className="flex flex-col gap-3 sm:flex-row">
             <button type="button" className="public-btn public-btn-outline flex-1" onClick={() => setStep("details")}>
               Back

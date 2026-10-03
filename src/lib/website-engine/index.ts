@@ -31,6 +31,7 @@ export {
   publicLocalPageFromView,
   publicServiceAreaFromSnapshot,
   publicServiceAreaFromView,
+  publicIntakeServiceAreas,
   snapshotServiceAreaRecords,
   snapshotToImageRows,
   snapshotIntakeSchemasByTrade,

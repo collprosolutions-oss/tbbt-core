@@ -68,8 +68,8 @@ import {
   type PublishedWebsiteSnapshot,
 } from "@/lib/website-engine/snapshot";
 import {
+  publicIntakeServiceAreas,
   snapshotIntakeSchemaForTrade,
-  snapshotServiceAreaRecords,
   snapshotTenantIntakeStateForTrade,
 } from "@/lib/website-engine/public";
 import {
@@ -201,9 +201,11 @@ export type PublicIntakeInput = {
    * Server-resolved against the slug business. A missing, cross-tenant,
    * or corrupt reference fails closed. Omitting the id uses the current
    * published pointer when one exists (new tabs). Already-opened forms
-   * send the id they displayed so a later owner publish cannot change
-   * service-city qualification. A service deactivated after that publish
-   * is rejected even if the opened snapshot still lists it.
+   * send the id they displayed so a later owner publish — adding or
+   * removing cities — cannot change service-city qualification. Live
+   * ServiceArea deletes do not rewrite that snapshot. A service
+   * deactivated after that publish is rejected even if the opened
+   * snapshot still lists it.
    */
   websitePublishId?: string | null;
   /**
@@ -663,9 +665,10 @@ async function createPublicServiceRequestInner(
     referencedPublish.provided &&
     Boolean(referencedPublish.publishId) &&
     referencedPublish.publishId !== business.publishedWebsiteId;
-  const configuredAreas = publishedSnapshot
-    ? snapshotServiceAreaRecords(publishedSnapshot)
-    : (input.configuredAreas ?? []);
+  const configuredAreas = publicIntakeServiceAreas(
+    publishedSnapshot,
+    input.configuredAreas ?? [],
+  );
   const serviceArea = resolveBusinessServiceArea({
     slug: safeSlug,
     configuredCities: serviceAreaCities(configuredAreas),
