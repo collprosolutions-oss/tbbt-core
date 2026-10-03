@@ -5,8 +5,10 @@
  *
  * Terminal authenticated outcomes return HTTP 200 + Hello API Event
  * Received (already applied/complete, mismatch, ignored). Dropbox Sign
- * treats non-200 as a callback failure; retriable download failures
- * therefore return 503 so the provider retries. Failed event_hash stays 400.
+ * treats non-200 as a callback failure; retriable download, storage, and
+ * database failures therefore return 503 so the provider retries.
+ * Failed event_hash stays 400. HTTP 200 is reserved for proven terminal
+ * outcomes and already-applied events.
  */
 import { DROPBOX_SIGN_COMPLETION_EVENTS } from "@/lib/esign/dropbox-sign";
 import { requireEsignProvider } from "@/lib/esign/provider";
@@ -193,7 +195,7 @@ export async function dispatchEsignWebhook(
     if (/not an owner in that business/.test(message)) {
       return authenticated("tenant_mismatch");
     }
-    return authenticated("completion_failed");
+    return retriable("completion_failed");
   }
 }
 

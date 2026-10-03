@@ -88,6 +88,12 @@ export const vaultReleaseTestHooks: {
   afterStatusRead?: () => Promise<void>;
 } = {};
 
+/** Proof hooks for webhook ingest and completion fault injection. */
+export const esignWebhookTestHooks: {
+  beforeResolveStorageProvider?: () => Promise<void>;
+  afterIngestBeforeCommit?: () => Promise<void>;
+} = {};
+
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export class BusinessProtectionError extends Error {
@@ -1458,8 +1464,9 @@ async function ingestProviderSignedPdf(
     fileSizeBytes: input.body.byteLength,
     visibility: "PRIVATE",
   });
-  const provider = await resolveStorageProvider(deps);
   try {
+    await esignWebhookTestHooks.beforeResolveStorageProvider?.();
+    const provider = await resolveStorageProvider(deps);
     await provider.putObject({
       bucket: authorized.account.bucketName,
       key: authorized.asset.storageKey,
@@ -1955,6 +1962,7 @@ export async function completeAgreementFromEsignWebhook(
     filename: `signed-${metadata.agreementId}-${metadata.versionId}.pdf`,
     body: input.signedPdf,
   });
+  await esignWebhookTestHooks.afterIngestBeforeCommit?.();
   const write = async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`
       SELECT 1 FROM "BusinessAgreement"

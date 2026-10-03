@@ -53,6 +53,7 @@ const {
   saveAgreementDraftContent,
   sendAgreementForEsign,
   cancelStuckEsignSend,
+  esignWebhookTestHooks,
   BusinessProtectionError,
 } = await import("@/lib/business-protection-ops");
 const { isFakeEsignAdapterEnabled } = await import("@/lib/esign/config");
@@ -193,6 +194,24 @@ check(
   readRepo("src/lib/esign/dispatch.ts").includes('return retriable("document_not_ready")') &&
     readRepo("src/lib/esign/dispatch.ts").includes('return retriable("provider_download_failed")') &&
     readRepo("src/lib/esign/dispatch.ts").includes("status: 503, hello: false"),
+);
+const ingestSrc = opsSrc.slice(
+  opsSrc.indexOf("async function ingestProviderSignedPdf"),
+  opsSrc.indexOf("async function releaseOrphanedProviderSignedAsset"),
+);
+check(
+  "Ingest aborts the pending upload when resolveStorageProvider fails",
+  ingestSrc.includes("try {") &&
+    ingestSrc.indexOf("try {") < ingestSrc.indexOf("resolveStorageProvider") &&
+    ingestSrc.indexOf("resolveStorageProvider") < ingestSrc.indexOf("putObject") &&
+    ingestSrc.includes("abortManagedUpload") &&
+    ingestSrc.indexOf("resolveStorageProvider") < ingestSrc.indexOf("abortManagedUpload"),
+);
+check(
+  "Unexpected completion storage or database failures return 503, not Hello",
+  readRepo("src/lib/esign/dispatch.ts").includes('return retriable("completion_failed")') &&
+    !readRepo("src/lib/esign/dispatch.ts").includes('return authenticated("completion_failed")') &&
+    readRepo("src/lib/esign/dispatch.ts").includes("HTTP 200 is reserved for proven terminal"),
 );
 check(
   "OWNER Send releases a claim only on a definite 4xx rejection",
@@ -864,6 +883,147 @@ try {
     retryDownload.applied === true && retryDownload.status === 200 && retryDownload.hello === true,
   );
 
+  async function snapshotEsignStorage() {
+    const account = await prisma.businessStorageAccount.findFirstOrThrow({
+      where: { businessId: businessA.id },
+    });
+    const ready = await prisma.storedAsset.findMany({
+      where: { businessId: businessA.id, status: "READY", purpose: "BUSINESS_VAULT" },
+    });
+    const pending = await prisma.storedAsset.count({
+      where: { businessId: businessA.id, status: "PENDING", purpose: "BUSINESS_VAULT" },
+    });
+    const vaults = await prisma.businessVaultRecord.count({
+      where: { businessId: businessA.id },
+    });
+    return {
+      used: Number(account.storageUsedBytes),
+      reserved: Number(account.storageReservedBytes),
+      readyCount: ready.length,
+      pending,
+      vaults,
+    };
+  }
+
+  const resolveFailNda = await readyNda(prisma, ownerA, "Resolve-fail retry NDA");
+  const resolveFailSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: resolveFailNda.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  const resolveFailPdf = fake.getRequest(resolveFailSend.requestId)?.signedPdf ?? Buffer.from("");
+  const beforeResolveFail = await snapshotEsignStorage();
+  esignWebhookTestHooks.beforeResolveStorageProvider = async () => {
+    esignWebhookTestHooks.beforeResolveStorageProvider = undefined;
+    throw new Error("injected storage provider resolve failure");
+  };
+  const resolveFailPayload = fake.buildSignedWebhookPayload({ requestId: resolveFailSend.requestId });
+  const resolveFailResult = await dispatchEsignWebhook(prisma, {
+    rawJson: resolveFailPayload.rawJson,
+    storage,
+  });
+  const afterResolveFail = await snapshotEsignStorage();
+  const resolveFailAgreement = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: resolveFailNda.id },
+  });
+  check(
+    "Storage resolve failure returns 503 and aborts the pending upload",
+    resolveFailResult.status === 503 &&
+      resolveFailResult.hello === false &&
+      resolveFailResult.reason === "completion_failed" &&
+      resolveFailAgreement.lifecycleStatus === "SENT" &&
+      !resolveFailAgreement.signedVersionId &&
+      afterResolveFail.pending === beforeResolveFail.pending &&
+      afterResolveFail.readyCount === beforeResolveFail.readyCount &&
+      afterResolveFail.vaults === beforeResolveFail.vaults &&
+      afterResolveFail.used === beforeResolveFail.used &&
+      afterResolveFail.reserved === beforeResolveFail.reserved,
+  );
+  const resolveRetry = await dispatchEsignWebhook(prisma, {
+    rawJson: resolveFailPayload.rawJson,
+    storage,
+  });
+  const afterResolveRetry = await snapshotEsignStorage();
+  const resolveRetryAgreement = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: resolveFailNda.id },
+    include: { vaultRecord: true, completionClaim: true },
+  });
+  const resolveRetryReady = await prisma.storedAsset.findMany({
+    where: { businessId: businessA.id, status: "READY", purpose: "BUSINESS_VAULT" },
+  });
+  check(
+    "Storage resolve retry completes once with one vault READY asset and matching used bytes",
+    resolveRetry.applied === true &&
+      resolveRetry.status === 200 &&
+      resolveRetry.hello === true &&
+      resolveRetryAgreement.lifecycleStatus === "COMPLETE" &&
+      resolveRetryAgreement.vaultRecordId &&
+      resolveRetryAgreement.completionClaim?.signedVersionId === resolveFailSend.version.id &&
+      afterResolveRetry.vaults === beforeResolveFail.vaults + 1 &&
+      afterResolveRetry.readyCount === beforeResolveFail.readyCount + 1 &&
+      afterResolveRetry.pending === beforeResolveFail.pending &&
+      afterResolveRetry.used === beforeResolveFail.used + resolveFailPdf.byteLength &&
+      resolveRetryReady.filter((row) => row.id === resolveRetryAgreement.vaultRecord?.storedAssetId).length === 1,
+  );
+
+  const writeFailNda = await readyNda(prisma, ownerA, "Write-fail retry NDA");
+  const writeFailSend = await sendAgreementForEsign(prisma, ownerA, {
+    agreementId: writeFailNda.id,
+    signerName: "Pat Counterparty",
+    signerEmail: "pat@example.com",
+    sendAttemptKey: randomUUID(),
+  });
+  const writeFailPdf = fake.getRequest(writeFailSend.requestId)?.signedPdf ?? Buffer.from("");
+  const beforeWriteFail = await snapshotEsignStorage();
+  esignWebhookTestHooks.afterIngestBeforeCommit = async () => {
+    esignWebhookTestHooks.afterIngestBeforeCommit = undefined;
+    throw new Error("injected completion write failure");
+  };
+  const writeFailPayload = fake.buildSignedWebhookPayload({ requestId: writeFailSend.requestId });
+  const writeFailResult = await dispatchEsignWebhook(prisma, {
+    rawJson: writeFailPayload.rawJson,
+    storage,
+  });
+  const afterWriteFail = await snapshotEsignStorage();
+  const writeFailAgreement = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: writeFailNda.id },
+  });
+  check(
+    "Completion write failure returns 503 and releases the ingested READY asset",
+    writeFailResult.status === 503 &&
+      writeFailResult.hello === false &&
+      writeFailResult.reason === "completion_failed" &&
+      writeFailAgreement.lifecycleStatus === "SENT" &&
+      !writeFailAgreement.signedVersionId &&
+      afterWriteFail.pending === beforeWriteFail.pending &&
+      afterWriteFail.readyCount === beforeWriteFail.readyCount &&
+      afterWriteFail.vaults === beforeWriteFail.vaults &&
+      afterWriteFail.used === beforeWriteFail.used &&
+      afterWriteFail.reserved === beforeWriteFail.reserved,
+  );
+  const writeRetry = await dispatchEsignWebhook(prisma, {
+    rawJson: writeFailPayload.rawJson,
+    storage,
+  });
+  const afterWriteRetry = await snapshotEsignStorage();
+  const writeRetryAgreement = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: writeFailNda.id },
+    include: { vaultRecord: true, completionClaim: true },
+  });
+  check(
+    "Completion write retry completes once with one vault READY asset and matching used bytes",
+    writeRetry.applied === true &&
+      writeRetry.status === 200 &&
+      writeRetry.hello === true &&
+      writeRetryAgreement.lifecycleStatus === "COMPLETE" &&
+      writeRetryAgreement.vaultRecordId &&
+      writeRetryAgreement.completionClaim?.signedVersionId === writeFailSend.version.id &&
+      afterWriteRetry.vaults === beforeWriteFail.vaults + 1 &&
+      afterWriteRetry.readyCount === beforeWriteFail.readyCount + 1 &&
+      afterWriteRetry.used === beforeWriteFail.used + writeFailPdf.byteLength,
+  );
+
   const demoteNda = await readyNda(prisma, ownerA, "Demoted actor NDA");
   const demoteSend = await sendAgreementForEsign(prisma, ownerA, {
     agreementId: demoteNda.id,
@@ -968,6 +1128,8 @@ try {
 
   check("No real Dropbox Sign request id was created", ![sent.requestId, concurrentSend.requestId, otherSend.requestId, quotaSend.requestId].some((id) => !String(id).startsWith("fake_sr_")));
 } finally {
+  esignWebhookTestHooks.beforeResolveStorageProvider = undefined;
+  esignWebhookTestHooks.afterIngestBeforeCommit = undefined;
   await prisma.$disconnect();
   const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
   try {
