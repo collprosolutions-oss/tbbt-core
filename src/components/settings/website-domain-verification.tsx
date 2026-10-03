@@ -1,5 +1,8 @@
 import { Badge } from "@/components/ui/badge";
-import { websiteDomainApexATargetsLabel } from "@/lib/website-engine/domain-dns-targets";
+import {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  websiteDomainApexATargetsLabel,
+} from "@/lib/website-engine/domain-dns-targets";
 import type { WebsiteDomainVerification } from "@/lib/website-engine/domain-verification";
 
 function statusVariant(state: WebsiteDomainVerification["state"]) {
@@ -20,11 +23,14 @@ export function WebsiteDomainVerificationCard({
         <div>
           <p className="font-medium">Custom domain verification</p>
           <p className="text-xs text-muted-foreground">
-            Read-only OWNER check of the newest binding. Every CNAME and A
-            record must point at TBBT — a Vercel CNAME, project vercel-dns
-            target, or apex A at {websiteDomainApexATargetsLabel()}. This does not
-            change DNS, publish the website, or mark a typed website URL as
-            connected. Public routing still uses the stored host status.
+            Read-only OWNER check of the newest binding. For an apex host,
+            add A {websiteDomainApexATargetsLabel()}. For www and other
+            subdomains, add a CNAME to {WEBSITE_DOMAIN_DNS_CNAME_TARGET}.
+            This project&apos;s Vercel Domains card is authoritative and
+            those values can differ. Every CNAME and A record must point at
+            TBBT. This does not change DNS, publish the website, or mark a
+            typed website URL as connected. Public routing still uses the
+            stored host status.
           </p>
         </div>
         <Badge variant={statusVariant(verification.state)}>{verification.label}</Badge>

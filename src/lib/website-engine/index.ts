@@ -91,9 +91,15 @@ export {
 } from "@/lib/website-engine/draft";
 export { loadWebsitePublishPanelData } from "@/lib/website-engine/editor";
 export {
+  VERCEL_GENERAL_PURPOSE_APEX_A,
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
-  WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
+  WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  resetWebsiteDomainProjectRecommendedA,
+  setWebsiteDomainProjectRecommendedA,
+  websiteDomainApexAAllowlist,
+  websiteDomainApexAInstructionAddresses,
+  websiteDomainApexAMatchAddresses,
   websiteDomainApexATargetsLabel,
   WEBSITE_DOMAIN_VERIFICATION_LABELS,
   WEBSITE_DOMAIN_VERIFICATION_STATES,

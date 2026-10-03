@@ -26,9 +26,15 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { classifyCustomDomain, goLiveCardById } = await import("@/lib/go-live");
 const {
+  VERCEL_GENERAL_PURPOSE_APEX_A,
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
-  WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
+  WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  resetWebsiteDomainProjectRecommendedA,
+  setWebsiteDomainProjectRecommendedA,
+  websiteDomainApexAAllowlist,
+  websiteDomainApexAInstructionAddresses,
+  websiteDomainApexAMatchAddresses,
   websiteDomainApexATargetsLabel,
   buildPublicSitemap,
   defaultWebsiteDomainDnsLookup,
@@ -150,47 +156,58 @@ check(
     !sitemapSrc.includes("verifyHostnameForBusiness"),
 );
 check(
-  "Website Publish instructions use the same apex A targets as verification",
+  "Tenant instructions use documented Vercel targets, not CollPro's observed apex",
   settingsCard.includes("websiteDomainApexATargetsLabel") &&
-    websiteDomainApexATargetsLabel() === [...WEBSITE_DOMAIN_VERCEL_A_ADDRESSES].join(" / ") &&
-    WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("216.198.79.1") &&
-    !WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("76.76.21.21") &&
-    !WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("76.76.21.22") &&
-    !settingsCard.includes("76.76.21.21") &&
-    !settingsCard.includes("76.76.21.22") &&
-    readme.includes("`216.198.79.1`") &&
-    certification.includes("`216.198.79.1`") &&
-    !readme.includes("76.76.21.") &&
-    !certification.includes("76.76.21."),
+    settingsCard.includes("Vercel Domains card is authoritative") &&
+    websiteDomainApexATargetsLabel() === VERCEL_GENERAL_PURPOSE_APEX_A &&
+    websiteDomainApexAInstructionAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+    !websiteDomainApexAInstructionAddresses().includes("216.198.79.1") &&
+    !websiteDomainApexATargetsLabel().includes("216.198.79.1") &&
+    !settingsCard.includes("216.198.79.1") &&
+    readme.includes("`76.76.21.21`") &&
+    certification.includes("`76.76.21.21`") &&
+    !readme.includes("single universal") &&
+    websiteDomainApexAAllowlist().some(
+      (row) =>
+        row.source === "vercel-general-purpose" &&
+        row.address === VERCEL_GENERAL_PURPOSE_APEX_A &&
+        row.tenantFacing,
+    ) &&
+    websiteDomainApexAAllowlist().some(
+      (row) =>
+        row.source === "platform-observed" &&
+        row.address === "216.198.79.1" &&
+        !row.tenantFacing,
+    ),
 );
 check(
   "Display matching accepts Vercel apex A and project CNAMEs",
-  isVercelApexAddress("216.198.79.1") &&
-    !isVercelApexAddress("76.76.21.21") &&
-    !isVercelApexAddress("76.76.21.22") &&
-    dnsRecordsPointAtTbbt({ cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] }) &&
+  isVercelApexAddress(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+    isVercelApexAddress("216.198.79.1") &&
+    websiteDomainApexAMatchAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+    websiteDomainApexAMatchAddresses().includes("216.198.79.1") &&
+    dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
     dnsRecordsPointAtTbbt({
       cnames: [],
-      addresses: [...WEBSITE_DOMAIN_VERCEL_A_ADDRESSES],
+      addresses: websiteDomainApexAMatchAddresses(),
     }) &&
     dnsRecordsPointAtTbbt({ cnames: ["abc.vercel-dns-017.com"], addresses: [] }) &&
     dnsRecordsPointAtTbbt({ cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET], addresses: [] }) &&
     dnsRecordsPointAtTbbt({
       cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
-      addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A],
     }) &&
-    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }) &&
-    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["76.76.21.21"] }),
+    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }),
 );
 check(
   "A single good record cannot verify a host that also has a hostile record",
   !dnsRecordsPointAtTbbt({
     cnames: [],
-    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0], "203.0.113.10"],
+    addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, "203.0.113.10"],
   }) &&
     !dnsRecordsPointAtTbbt({
       cnames: ["evil.attacker.net"],
-      addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A],
     }) &&
     !dnsRecordsPointAtTbbt({
       cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
@@ -211,6 +228,113 @@ check(
       cnames: ["cname.vercel-dns.com.attacker.net"],
       addresses: [],
     }),
+);
+{
+  const projectCardA = "198.51.100.21";
+  setWebsiteDomainProjectRecommendedA([projectCardA]);
+  check(
+    "Allowlist accepts general-purpose, project-specific, and observed apex A",
+    isVercelApexAddress(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+      isVercelApexAddress(projectCardA) &&
+      isVercelApexAddress("216.198.79.1") &&
+      websiteDomainApexAInstructionAddresses().includes(projectCardA) &&
+      !websiteDomainApexAInstructionAddresses().includes("216.198.79.1") &&
+      dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
+      dnsRecordsPointAtTbbt({ cnames: [], addresses: [projectCardA] }) &&
+      dnsRecordsPointAtTbbt({ cnames: [], addresses: ["216.198.79.1"] }),
+  );
+  resetWebsiteDomainProjectRecommendedA();
+  check(
+    "Project-specific A is not tenant-facing unless configured",
+    !websiteDomainApexAInstructionAddresses().includes(projectCardA) &&
+      !isVercelApexAddress(projectCardA),
+  );
+}
+check(
+  "Hostile and lookalike A records never match",
+  [
+    "10.0.0.1",
+    "10.1.2.3",
+    "127.0.0.1",
+    "169.254.1.1",
+    "169.254.0.1",
+    "203.0.113.10",
+    "76.76.21.210",
+    "76.76.21.2",
+    "::1",
+    "2600:1f18:0:0:0:0:0:1",
+  ].every(
+    (address) =>
+      !isVercelApexAddress(address) &&
+      !dnsRecordsPointAtTbbt({ cnames: [], addresses: [address] }),
+  ) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, "10.0.0.1"],
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, "203.0.113.10"],
+    }) &&
+    !dnsRecordsPointAtTbbt({ cnames: [], addresses: [] }) &&
+    !dnsRecordsPointAtTbbt(null) &&
+    !dnsRecordsPointAtTbbt({ cnames: [null], addresses: [undefined] }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: Array.from({ length: WEBSITE_DOMAIN_MAX_DNS_RECORDS + 1 }, () => VERCEL_GENERAL_PURPOSE_APEX_A),
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, "::1"],
+    }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: [],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, VERCEL_GENERAL_PURPOSE_APEX_A],
+    }),
+);
+check(
+  "Trailing dots and case still match documented targets",
+  isVercelApexAddress("76.76.21.21.") &&
+    isVercelApexAddress(" 76.76.21.21 ") &&
+    dnsRecordsPointAtTbbt({
+      cnames: ["CNAME.VERCEL-DNS.COM."],
+      addresses: [],
+    }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: ["Abc.Vercel-Dns-017.COM."],
+      addresses: [],
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: ["cname.vercel-dns.com.evil.com"],
+      addresses: [],
+    }) &&
+    !isVercelDnsCname("cname.vercel-dns.com.evil.com"),
+);
+check(
+  "Apex, www, and subdomain host shapes use the same allowlist",
+  dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
+      addresses: [],
+    }) &&
+    dnsRecordsPointAtTbbt({
+      cnames: ["582a09a051cfdac1.vercel-dns-017.com"],
+      addresses: [],
+    }) &&
+    !dnsRecordsPointAtTbbt({
+      cnames: ["cname.vercel-dns.com.evil.com"],
+      addresses: [VERCEL_GENERAL_PURPOSE_APEX_A],
+    }),
+);
+check(
+  "Mutation: rejecting 76.76.21.21 or using CollPro apex as the only tenant target fails",
+  VERCEL_GENERAL_PURPOSE_APEX_A === "76.76.21.21" &&
+    isVercelApexAddress("76.76.21.21") &&
+    websiteDomainApexAInstructionAddresses().join(",") !== "216.198.79.1" &&
+    websiteDomainApexAInstructionAddresses()[0] === "76.76.21.21" &&
+    websiteDomainApexAMatchAddresses().includes("76.76.21.21") &&
+    websiteDomainApexAAllowlist().filter((row) => row.tenantFacing).length >= 1 &&
+    !websiteDomainApexAAllowlist().every((row) => row.address === "216.198.79.1"),
 );
 check(
   "Pending is a first-class verification state",
@@ -253,6 +377,32 @@ console.log("\nUNIT — Default DNS lookup timeout");
       outcome.code === "ETIMEOUT" &&
       elapsed >= WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS - 250 &&
       elapsed < WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS + 1500,
+  );
+  let resolve4Calls = 0;
+  const wwwLookup = await defaultWebsiteDomainDnsLookup("www.tenant.example.test", {
+    resolveCname: async () => ["582a09a051cfdac1.vercel-dns-017.com."],
+    resolve4: async () => {
+      resolve4Calls += 1;
+      return ["216.150.16.129"];
+    },
+  });
+  const apexLookup = await defaultWebsiteDomainDnsLookup("tenant.example.test", {
+    resolveCname: async () => {
+      const error = new Error("no cname");
+      error.code = "ENODATA";
+      throw error;
+    },
+    resolve4: async () => [VERCEL_GENERAL_PURPOSE_APEX_A],
+  });
+  check(
+    "Default lookup resolves CNAME first so www does not fail the apex A check",
+    wwwLookup.cnames.includes("582a09a051cfdac1.vercel-dns-017.com") &&
+      wwwLookup.addresses.length === 0 &&
+      resolve4Calls === 0 &&
+      dnsRecordsPointAtTbbt(wwwLookup) &&
+      apexLookup.cnames.length === 0 &&
+      apexLookup.addresses.includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
+      dnsRecordsPointAtTbbt(apexLookup),
   );
 }
 
@@ -448,7 +598,7 @@ try {
     unknownApex.state === "FAILED" && unknownApex.hostname === hostA,
   );
 
-  dnsByHost.set(hostA, { cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] });
+  dnsByHost.set(hostA, { cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] });
   const apexA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
     "Vercel apex A record can complete display verification",
@@ -462,9 +612,50 @@ try {
     projectCname.state === "VERIFIED" && projectCname.hostname === hostA,
   );
 
+  const apexHost = `apex-${randomUUID().slice(0, 8)}.example.test`;
+  const wwwHost = `www.shop-${randomUUID().slice(0, 8)}.example.test`;
+  const subHost = `app.shop-${randomUUID().slice(0, 8)}.example.test`;
+  const observedApexHost = `observed-${randomUUID().slice(0, 8)}.example.test`;
+  await prisma.websiteHostBinding.createMany({
+    data: [
+      { businessId: businessA.id, hostname: apexHost, status: "VERIFIED" },
+      { businessId: businessA.id, hostname: wwwHost, status: "VERIFIED" },
+      { businessId: businessA.id, hostname: subHost, status: "VERIFIED" },
+      { businessId: businessA.id, hostname: observedApexHost, status: "VERIFIED" },
+    ],
+  });
+  dnsByHost.set(apexHost, { cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] });
+  dnsByHost.set(wwwHost, {
+    cnames: ["582a09a051cfdac1.vercel-dns-017.com"],
+    addresses: [],
+  });
+  dnsByHost.set(subHost, {
+    cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
+    addresses: [],
+  });
+  dnsByHost.set(observedApexHost, { cnames: [], addresses: ["216.198.79.1"] });
+  const apexHostResult = await verifyHostnameForBusiness(prisma, businessA.id, apexHost);
+  const wwwHostResult = await verifyHostnameForBusiness(prisma, businessA.id, wwwHost);
+  const subHostResult = await verifyHostnameForBusiness(prisma, businessA.id, subHost);
+  const observedApexResult = await verifyHostnameForBusiness(
+    prisma,
+    businessA.id,
+    observedApexHost,
+  );
+  check(
+    "Apex, www, subdomain, and observed CollPro apex hosts verify when records match",
+    apexHostResult.state === "VERIFIED" &&
+      wwwHostResult.state === "VERIFIED" &&
+      subHostResult.state === "VERIFIED" &&
+      observedApexResult.state === "VERIFIED",
+  );
+  await prisma.websiteHostBinding.deleteMany({
+    where: { hostname: { in: [apexHost, wwwHost, subHost, observedApexHost] } },
+  });
+
   dnsByHost.set(hostA, {
     cnames: [],
-    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0], "203.0.113.10"],
+    addresses: [VERCEL_GENERAL_PURPOSE_APEX_A, "203.0.113.10"],
   });
   const mixedA = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
@@ -474,7 +665,7 @@ try {
 
   dnsByHost.set(hostA, {
     cnames: ["evil.attacker.net"],
-    addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
+    addresses: [VERCEL_GENERAL_PURPOSE_APEX_A],
   });
   const attackerCname = await verifyConfiguredWebsiteDomain(prisma, businessA.id);
   check(
@@ -654,6 +845,7 @@ try {
   console.error("FAIL - website domain verification live suite", error);
 } finally {
   resetWebsiteDomainDnsLookup();
+  resetWebsiteDomainProjectRecommendedA();
   await prisma.$disconnect();
 }
 
