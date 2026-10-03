@@ -4,6 +4,7 @@
  * SaaS subscription events and Connect invoice/deposit events share one
  * URL and one signature check, then split. Do not mix their records.
  */
+import { applyRecordedConnectInvoicePayment } from "@/lib/connect-invoice-webhook";
 import {
   applyVerifiedCheckoutPayment,
   getStripeWebhookSecret,
@@ -48,6 +49,11 @@ export async function dispatchStripeWebhookEvent(
   const payment = parseCheckoutPaymentEvent(event);
   if (!payment) {
     return { received: true as const, applied: false as const, system: null };
+  }
+
+  if (payment.purpose === "invoice_balance") {
+    const result = await applyRecordedConnectInvoicePayment(db, event, payment);
+    return { system: "connect" as const, received: true as const, ...result };
   }
 
   const result = await applyVerifiedCheckoutPayment(db, payment);

@@ -47,6 +47,10 @@ import { loadProjectLinkActiveByJobIds } from "@/lib/project-link-data";
 import { loadLaunchWorkspace } from "@/lib/business-launch-data";
 import { dayRange, formatISODate, startOfDay } from "@/lib/schedule";
 import {
+  CONNECT_INVOICE_WEBHOOK_OWNER_TITLE,
+  listUnappliedConnectInvoiceWebhookEvents,
+} from "@/lib/connect-invoice-webhook";
+import {
   getBusinessPaymentStatus,
   listOpenStripeCreditMismatchReviews,
   STRIPE_CREDIT_MISMATCH_OWNER_TITLE,
@@ -353,6 +357,11 @@ export default async function DashboardPage() {
     access.businessId,
     ATTENTION_TAKE,
   );
+  const unappliedConnectInvoiceEvents = await listUnappliedConnectInvoiceWebhookEvents(
+    prisma,
+    access.businessId,
+    { take: ATTENTION_TAKE },
+  );
 
   const outstandingPayments = await listPaymentsGroupedByInvoiceId(
     prisma,
@@ -494,6 +503,17 @@ export default async function DashboardPage() {
         meta: formatMoney(payment.amount),
         href: payment.invoiceId ? `/invoices/${payment.invoiceId}` : "/invoices",
         action: "Review",
+      })),
+    },
+    {
+      title: CONNECT_INVOICE_WEBHOOK_OWNER_TITLE,
+      count: unappliedConnectInvoiceEvents.length,
+      items: unappliedConnectInvoiceEvents.map((event) => ({
+        key: event.id,
+        name: event.reasonLabel,
+        meta: formatMoney(event.amountCents / 100),
+        href: event.invoiceId ? `/invoices/${event.invoiceId}` : "/invoices",
+        action: "Retry",
       })),
     },
     {

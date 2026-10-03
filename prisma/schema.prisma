@@ -373,6 +373,7 @@ model Business {
   estimatingDefaults       BusinessEstimatingDefault[]
   payments                 Payment[]
   invoiceCheckoutSessions  InvoiceCheckoutSession[]
+  connectInvoiceWebhookEvents ConnectInvoiceWebhookEvent[]
   unavailableDates         BusinessUnavailableDate[]
   supplierPreferences      BusinessSupplierPreference[]
   materialSupplierMappings BusinessMaterialSupplierMapping[]
@@ -2217,6 +2218,38 @@ model Payment {
   @@index([estimateId])
   @@index([jobId])
   @@index([invoiceId])
+}
+
+/// Authenticated Connect invoice Checkout events that TBBT verified
+/// and attempted to apply. The webhook still returns HTTP 200 when
+/// applied is false, so Stripe will not retry. OWNER lists tenant-scoped
+/// unapplied rows and retries the frozen verified event. Distinct from
+/// SaasBillingWebhookEvent. Never stores customer names, emails, or secrets.
+model ConnectInvoiceWebhookEvent {
+  id                  String    @id @default(cuid())
+  stripeEventId       String    @unique
+  businessId          String
+  invoiceId           String?
+  checkoutSessionId   String
+  amountCents         Int
+  currency            String
+  purpose             String
+  paymentStatus       String
+  eventType           String
+  /// Frozen VerifiedCheckoutPayment. OWNER retry uses this, not Stripe.
+  verifiedPaymentJson Json
+  applied             Boolean   @default(false)
+  reason              String
+  lastAttemptedAt     DateTime  @default(now())
+  appliedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, applied])
+  @@index([businessId, invoiceId])
+  @@index([checkoutSessionId])
 }
 
 /// Expected Stripe Checkout amount at session creation. Webhooks that

@@ -147,6 +147,14 @@ export const CAPABILITIES = {
    */
   RESOLVE_STRIPE_CREDIT_MISMATCH: "RESOLVE_STRIPE_CREDIT_MISMATCH",
   /**
+   * OWNER-only retry of a stored verified Connect invoice Checkout event
+   * that returned HTTP 200 while remaining unapplied. Tenant-scoped.
+   * Reuses applyVerifiedCheckoutPayment (invoice lock + unique session /
+   * payment-intent). Never charges Stripe again and never retries another
+   * business's event.
+   */
+  RETRY_CONNECT_INVOICE_WEBHOOK: "RETRY_CONNECT_INVOICE_WEBHOOK",
+  /**
    * Owner/admin Expenses management: record, review, and allocate
    * business-wide expenses. MEMBER must never receive this -- employee
    * field submission is a later, separately scoped feature.
@@ -248,6 +256,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.DECIDE_TIME_CORRECTIONS,
   CAPABILITIES.RECORD_INVOICE_CREDIT,
   CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
+  CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK,
   CAPABILITIES.TRANSFER_OWNERSHIP,
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,

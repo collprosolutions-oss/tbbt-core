@@ -268,6 +268,7 @@ try {
     CAPABILITIES.DECIDE_TIME_CORRECTIONS,
     CAPABILITIES.RECORD_INVOICE_CREDIT,
     CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH,
+    CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK,
     CAPABILITIES.TRANSFER_OWNERSHIP,
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
@@ -613,6 +614,15 @@ try {
   });
   await expectAllowed("OWNER can pass the Stripe credit-mismatch resolve gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.RESOLVE_STRIPE_CREDIT_MISMATCH);
+  });
+  check("OWNER has RETRY_CONNECT_INVOICE_WEBHOOK", roleHasCapability("OWNER", CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK));
+  check("ADMIN does not have RETRY_CONNECT_INVOICE_WEBHOOK", !roleHasCapability("ADMIN", CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK));
+  check("MEMBER does not have RETRY_CONNECT_INVOICE_WEBHOOK", !roleHasCapability("MEMBER", CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK));
+  await expectForbidden("ADMIN cannot pass the Connect invoice webhook retry gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK);
+  });
+  await expectAllowed("OWNER can pass the Connect invoice webhook retry gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.RETRY_CONNECT_INVOICE_WEBHOOK);
   });
 
   console.log("\nTEST 11 — Expenses management is OWNER/ADMIN-only");
