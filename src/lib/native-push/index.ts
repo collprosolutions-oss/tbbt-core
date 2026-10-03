@@ -1,9 +1,12 @@
 export {
   DISCONNECTED_NATIVE_PUSH_PROVIDER,
+  EXPO_NATIVE_PUSH_PROVIDER,
   FAKE_NATIVE_PUSH_PROVIDER,
   NATIVE_PUSH_MAX_ATTEMPTS,
   NATIVE_PUSH_PENDING_STALE_MS,
   NATIVE_PUSH_SEND_TIMEOUT_MS,
+  getExpoAccessToken,
+  isExpoNativePushConfigured,
   isFakeNativePushAdapterEnabled,
   isNativePushConfigured,
   setNativePushPendingStaleMs,
@@ -25,6 +28,7 @@ export {
   NATIVE_PUSH_JSON_MAX_BYTES,
   NATIVE_PUSH_PLATFORM_REQUIRED,
   NATIVE_PUSH_TOKEN_REQUIRED,
+  NATIVE_PUSH_EXPO_TOKEN_REQUIRED,
 } from "@/lib/native-push/devices";
 export {
   assignmentAlertIdempotencyKey,
@@ -50,6 +54,17 @@ export {
   setNativePushProvider,
 } from "@/lib/native-push/provider";
 export { createFakeNativePushProvider } from "@/lib/native-push/fake";
+export {
+  EXPO_PUSH_API_ORIGIN,
+  EXPO_PUSH_SEND_PATH,
+  EXPO_PUSH_SEND_URL,
+  EXPO_PUSH_TOKEN_PATTERN,
+  createExpoNativePushProvider,
+  expoFailureRevokesDevice,
+  expoPushMessageFromAlert,
+  isExpoPushToken,
+  sanitizeNativePushFailureReason,
+} from "@/lib/native-push/expo";
 export {
   ensureNativePushSchema,
   nativePushDeviceTablePresent,

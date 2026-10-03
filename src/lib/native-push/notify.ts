@@ -23,6 +23,7 @@ import {
   nativePushPayloadHasForbiddenFields,
   rescheduleAlertIdempotencyKey,
 } from "@/lib/native-push/payload";
+import { sanitizeNativePushFailureReason } from "@/lib/native-push/expo";
 import { getNativePushProvider } from "@/lib/native-push/provider";
 import { ensureNativePushSchema } from "@/lib/native-push/schema";
 import type {
@@ -418,16 +419,29 @@ async function deliverToOptedInDevices(
               sentCount += 1;
               lastProviderMessageId = result.providerMessageId;
             } else {
-              lastError = result.error;
+              lastError = sanitizeNativePushFailureReason(result.error);
+              if (result.revokeDevice) {
+                await db.nativePushDevice.updateMany({
+                  where: { id: device.id, revokedAt: null },
+                  data: {
+                    optedIn: false,
+                    revokedAt: new Date(),
+                  },
+                });
+              }
             }
           } catch (error) {
-            lastError = error instanceof Error ? error.message : "Push provider failed.";
+            lastError = sanitizeNativePushFailureReason(
+              error instanceof Error ? error.message : "Push provider failed.",
+            );
           }
         }
       });
     });
   } catch (error) {
-    lastError = error instanceof Error ? error.message : "Push provider failed.";
+    lastError = sanitizeNativePushFailureReason(
+      error instanceof Error ? error.message : "Push provider failed.",
+    );
   }
 
   if (sentCount > 0) {

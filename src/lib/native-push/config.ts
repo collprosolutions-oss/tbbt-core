@@ -1,10 +1,12 @@
 /**
  * Native field push is provider-neutral. Development and scripts use the
- * fake adapter. Vercel production cannot enable the fake adapter and
- * stays disconnected — this slice never talks to Expo, FCM, or APNs.
+ * fake adapter. Expo Push is the connected provider when EXPO_ACCESS_TOKEN
+ * is set. Vercel production cannot enable the fake adapter. Missing
+ * credentials stay disconnected — TBBT never invents a delivery.
  */
 export const DISCONNECTED_NATIVE_PUSH_PROVIDER = "disconnected";
 export const FAKE_NATIVE_PUSH_PROVIDER = "fake";
+export const EXPO_NATIVE_PUSH_PROVIDER = "expo";
 export const NATIVE_PUSH_MAX_ATTEMPTS = 3;
 export const NATIVE_PUSH_PENDING_STALE_MS = 30_000;
 /** Well below the stale PENDING reclaim window so a hung send fails first. */
@@ -28,6 +30,15 @@ export function isFakeNativePushAdapterEnabled() {
   return process.env.TBBT_NATIVE_PUSH_ADAPTER === "fake";
 }
 
+export function getExpoAccessToken(): string | null {
+  const value = process.env.EXPO_ACCESS_TOKEN?.trim();
+  return value || null;
+}
+
+export function isExpoNativePushConfigured() {
+  return getExpoAccessToken() !== null;
+}
+
 export function isNativePushConfigured() {
-  return isFakeNativePushAdapterEnabled();
+  return isFakeNativePushAdapterEnabled() || isExpoNativePushConfigured();
 }

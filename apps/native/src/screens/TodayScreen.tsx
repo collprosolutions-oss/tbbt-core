@@ -27,7 +27,7 @@ import {
   registerNativePushDevice,
   revokeNativePushDevice,
 } from "../api";
-import { readOrCreateNativePushDeviceToken } from "../session";
+import { readNativePushDeviceToken, readOptInNativePushDeviceToken } from "../session";
 import { applyLostAssignment, nextNativeRequestGeneration, shouldApplyNativeResponse } from "../recovery";
 import type {
   NativeAssignedStopsMaps,
@@ -102,8 +102,11 @@ function JobAlertsCard({
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const deviceToken = await readOrCreateNativePushDeviceToken();
-    const result = await loadNativePushPreference(token, deviceToken);
+    const resolved = await readOptInNativePushDeviceToken();
+    const result = await loadNativePushPreference(
+      token,
+      resolved.ok ? resolved.token : undefined,
+    );
     if (isApiError(result)) {
       if (isSessionExpired(result)) {
         onSessionExpired();
@@ -124,14 +127,44 @@ function JobAlertsCard({
     if (busy) return;
     setBusy(true);
     try {
-      const deviceToken = await readOrCreateNativePushDeviceToken();
-      const result = preference?.thisDeviceOptedIn
-        ? await revokeNativePushDevice(token, deviceToken)
-        : await registerNativePushDevice(token, {
-            token: deviceToken,
-            platform: nativePushPlatform(Platform.OS),
-            optedIn: true,
-          });
+      const turningOn = !preference?.thisDeviceOptedIn;
+      if (turningOn) {
+        const resolved = await readOptInNativePushDeviceToken({ requestPermission: true });
+        if (!resolved.ok) {
+          setError(resolved.error);
+          setPreference((current) =>
+            current
+              ? { ...current, thisDeviceOptedIn: false, optedIn: current.optedIn }
+              : current,
+          );
+          return;
+        }
+        const result = await registerNativePushDevice(token, {
+          token: resolved.token,
+          platform: nativePushPlatform(Platform.OS),
+          optedIn: true,
+        });
+        if (isApiError(result)) {
+          if (isSessionExpired(result)) {
+            onSessionExpired();
+            return;
+          }
+          setError(result.error);
+          return;
+        }
+        setPreference(result);
+        setError(null);
+        return;
+      }
+      const deviceToken = await readNativePushDeviceToken();
+      if (!deviceToken) {
+        setPreference((current) =>
+          current ? { ...current, thisDeviceOptedIn: false } : current,
+        );
+        setError(null);
+        return;
+      }
+      const result = await revokeNativePushDevice(token, deviceToken);
       if (isApiError(result)) {
         if (isSessionExpired(result)) {
           onSessionExpired();

@@ -21,6 +21,13 @@
     },
     "plugins": [
       [
+        "expo-notifications",
+        {
+          "sounds": [],
+          "defaultChannel": "job-alerts"
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Allow TBBT Field to attach job photos.",

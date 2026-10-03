@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { setNativeRuntimeOs } from "./src/config";
+import * as Notifications from "expo-notifications";
 import { isApiError, loadNativeSession, revokeNativePushDevice, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
@@ -18,6 +19,10 @@ import {
   clearAllTimeCardDrafts,
 } from "./src/time-card-drafts";
 import {
+  configureNativeJobAlertHandler,
+  jobIdFromNativePushNotification,
+} from "./src/push-token";
+import {
   clearNativePushDeviceToken,
   clearSessionToken,
   readNativePushDeviceToken,
@@ -26,6 +31,7 @@ import {
 import type { NativeViewer, NativeWorkspace } from "./src/types";
 
 setNativeRuntimeOs(Platform.OS);
+configureNativeJobAlertHandler();
 
 type SessionState = {
   token: string;
@@ -84,6 +90,20 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    function openAssignedJobFromAlert(data: unknown) {
+      const nextJobId = jobIdFromNativePushNotification(data);
+      if (nextJobId) setJobId(nextJobId);
+    }
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      openAssignedJobFromAlert(response.notification.request.content.data);
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [session]);
 
   async function expireSession() {
     await clearSessionToken();

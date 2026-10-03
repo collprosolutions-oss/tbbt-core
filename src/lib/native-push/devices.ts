@@ -7,6 +7,11 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { hashToken } from "@/lib/auth-crypto";
 import type { NativeFieldAccess } from "@/lib/native-session";
 import { NATIVE_SESSION_TOO_LARGE } from "@/lib/native-session-limits";
+import {
+  isExpoNativePushConfigured,
+  isFakeNativePushAdapterEnabled,
+} from "@/lib/native-push/config";
+import { isExpoPushToken } from "@/lib/native-push/expo";
 import { NATIVE_PUSH_ALERT_DISCLAIMER } from "@/lib/native-push/payload";
 import { ensureNativePushSchema, nativePushDeviceTablePresent } from "@/lib/native-push/schema";
 import {
@@ -24,6 +29,8 @@ export const NATIVE_PUSH_DEVICE_UNAVAILABLE = "Job alerts are not available.";
 export const NATIVE_PUSH_MEMBERSHIP_INACTIVE = "That workspace is not available.";
 export const NATIVE_PUSH_DEVICE_NOT_OWNED = "That device is not on this workspace.";
 export const NATIVE_PUSH_TOKEN_REQUIRED = "A device token is required.";
+export const NATIVE_PUSH_EXPO_TOKEN_REQUIRED =
+  "Job alerts need an Expo push token from this device.";
 export const NATIVE_PUSH_PLATFORM_REQUIRED = "Choose a device platform.";
 export const NATIVE_PUSH_DEVICE_TOKEN_HEADER = "x-tbbt-device-token";
 
@@ -103,6 +110,16 @@ function validateToken(token: string) {
   }
   if (token.length > NATIVE_PUSH_TOKEN_MAX_CHARS) {
     return NATIVE_SESSION_TOO_LARGE;
+  }
+  return null;
+}
+
+function validateTokenForConnectedProvider(token: string) {
+  const basic = validateToken(token);
+  if (basic) return basic;
+  if (isFakeNativePushAdapterEnabled()) return null;
+  if (isExpoNativePushConfigured() && !isExpoPushToken(token)) {
+    return NATIVE_PUSH_EXPO_TOKEN_REQUIRED;
   }
   return null;
 }
@@ -234,7 +251,7 @@ export async function registerNativePushDevice(
   const membership = await requireActiveMembership(db, access);
   if (!membership.ok) return membership;
   const token = readToken(input.token);
-  const tokenError = validateToken(token);
+  const tokenError = validateTokenForConnectedProvider(token);
   if (tokenError) {
     return { ok: false, status: 400, error: tokenError };
   }
