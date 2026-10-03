@@ -8,14 +8,20 @@
  * FOR NO KEY UPDATE on the material-deposit path in that file.
  *
  * OWNER retry uses the frozen verified payment JSON. It never calls
- * Stripe and never applies another business's event.
+ * Stripe and never applies another business's event. Preview skips
+ * migrate; inbound apply falls back to applyVerifiedCheckoutPayment
+ * when ConnectInvoiceWebhookEvent is missing so the webhook does not
+ * 500. Owner list/retry stay fail-closed.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { applyVerifiedCheckoutPayment } from "@/lib/payments";
 import type { VerifiedCheckoutPayment } from "@/lib/payments/types";
-import { assertRequiredTablesExist } from "@/lib/request-path-schema";
+import {
+  assertRequiredTablesExist,
+  isRequestPathSchemaUnavailableError,
+} from "@/lib/request-path-schema";
 import { writeSettingsAuditLog } from "@/lib/settings-ops";
 
 type InboxDb = PrismaClient | Prisma.TransactionClient;
@@ -139,6 +145,20 @@ export async function ensureConnectInvoiceWebhookEventTable(db: InboxDb) {
     );
   }
   await ensureTablePromise;
+}
+
+export function isConnectInvoiceWebhookInboxUnavailable(error: unknown) {
+  if (isRequestPathSchemaUnavailableError(error)) {
+    return true;
+  }
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return (
+      (error.code === "P2021" || error.code === "P2022") &&
+      /ConnectInvoiceWebhookEvent/i.test(error.message)
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /ConnectInvoiceWebhookEvent/i.test(message) && /does not exist/i.test(message);
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -303,23 +323,32 @@ export async function applyRecordedConnectInvoicePayment(
     return applyVerifiedCheckoutPayment(db, payment);
   }
 
-  const row = await recordConnectInvoiceWebhookEvent(db, {
-    stripeEventId,
-    eventType: readEventType(event),
-    payment,
-  });
-  const stored = parseStoredVerifiedCheckoutPayment(row.verifiedPaymentJson);
-  if (!stored || stored.businessId !== row.businessId) {
-    await markConnectInvoiceWebhookEventResult(db, row.id, row.businessId, {
-      applied: false,
-      reason: "business_mismatch",
+  try {
+    const row = await recordConnectInvoiceWebhookEvent(db, {
+      stripeEventId,
+      eventType: readEventType(event),
+      payment,
     });
-    return { applied: false, reason: "business_mismatch" };
-  }
+    const stored = parseStoredVerifiedCheckoutPayment(row.verifiedPaymentJson);
+    if (!stored || stored.businessId !== row.businessId) {
+      await markConnectInvoiceWebhookEventResult(db, row.id, row.businessId, {
+        applied: false,
+        reason: "business_mismatch",
+      });
+      return { applied: false, reason: "business_mismatch" };
+    }
 
-  const result = await applyVerifiedCheckoutPayment(db, stored);
-  await markConnectInvoiceWebhookEventResult(db, row.id, row.businessId, result);
-  return result;
+    const result = await applyVerifiedCheckoutPayment(db, stored);
+    await markConnectInvoiceWebhookEventResult(db, row.id, row.businessId, result);
+    return result;
+  } catch (error) {
+    // Preview shares Production and skips migrate. Apply the verified
+    // payment without the inbox so the webhook does not 500.
+    if (isConnectInvoiceWebhookInboxUnavailable(error)) {
+      return applyVerifiedCheckoutPayment(db, payment);
+    }
+    throw error;
+  }
 }
 
 function toOwnerItem(row: {

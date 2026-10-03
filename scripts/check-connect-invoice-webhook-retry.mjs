@@ -14,7 +14,7 @@
  */
 import { createRequire, register } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -48,6 +48,18 @@ assertLocalDatabaseUrl(baseUrl, "connect-invoice-webhook-retry disposable databa
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+}
+
+function duplicateMigrationPrefixes(names) {
+  const byPrefix = new Map();
+  for (const name of names) {
+    const prefix = name.slice(0, 14);
+    if (!/^\d{14}$/.test(prefix)) continue;
+    const list = byPrefix.get(prefix) ?? [];
+    list.push(name);
+    byPrefix.set(prefix, list);
+  }
+  return [...byPrefix.entries()].filter(([, dirs]) => dirs.length > 1);
 }
 
 let failures = 0;
@@ -144,6 +156,51 @@ check(
     inboxSrc.includes("readIntegerCents(record.amountCents)"),
 );
 
+const CONNECT_INVOICE_WEBHOOK_MIGRATION =
+  "20261003150000_connect_invoice_webhook_event";
+const migrationDirs = readdirSync(new URL("../prisma/migrations", import.meta.url), {
+  withFileTypes: true,
+})
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name);
+const migrationPrefixDups = duplicateMigrationPrefixes(migrationDirs);
+check(
+  "duplicate 14-digit prefix helper fails a colliding pair",
+  duplicateMigrationPrefixes([
+    "20261003150000_connect_invoice_webhook_event",
+    "20261003150000_email_failed_destination",
+  ]).length === 1,
+);
+check(
+  "Connect invoice webhook migration prefix is unique and later than #341",
+  existsSync(
+    fileURLToPath(
+      new URL(`../prisma/migrations/${CONNECT_INVOICE_WEBHOOK_MIGRATION}/migration.sql`, import.meta.url),
+    ),
+  ) &&
+    !existsSync(
+      fileURLToPath(
+        new URL(
+          "../prisma/migrations/20261003120000_connect_invoice_webhook_event/migration.sql",
+          import.meta.url,
+        ),
+      ),
+    ) &&
+    Number(CONNECT_INVOICE_WEBHOOK_MIGRATION.slice(0, 14)) > 20261003120000 &&
+    migrationDirs.filter((name) => name.slice(0, 14) === CONNECT_INVOICE_WEBHOOK_MIGRATION.slice(0, 14))
+      .length === 1,
+);
+check(
+  "no two 20261003+ migration directories share a 14-digit prefix",
+  migrationPrefixDups.filter(([prefix]) => prefix >= "20261003000000").length === 0,
+);
+check(
+  "applyRecorded falls back to direct apply when the inbox table is missing",
+  inboxSrc.includes("isConnectInvoiceWebhookInboxUnavailable") &&
+    inboxSrc.includes("Preview shares Production and skips migrate") &&
+    inboxSrc.includes("return applyVerifiedCheckoutPayment(db, payment);"),
+);
+
 let session = null;
 let prisma;
 let testUrl;
@@ -171,12 +228,14 @@ const { applyVerifiedCheckoutPayment } = await import("@/lib/payments");
 const { dispatchStripeWebhookEvent, verifyStripeWebhookPayload } = await import(
   "@/lib/stripe-webhook-dispatch"
 );
+const { isRequestPathSchemaUnavailableError } = await import("@/lib/request-path-schema");
 const {
   CONNECT_INVOICE_WEBHOOK_NOT_IN_WORKSPACE,
   CONNECT_INVOICE_WEBHOOK_OWNER_TITLE,
   connectInvoiceWebhookInboxWhere,
   listUnappliedConnectInvoiceWebhookEvents,
   parseStoredVerifiedCheckoutPayment,
+  resetConnectInvoiceWebhookEventTableEnsure,
   retryConnectInvoiceWebhookEvent,
 } = await import("@/lib/connect-invoice-webhook");
 const { invoiceRemainingReadTestHooks } = await import("@/lib/project-payments");
@@ -1050,6 +1109,66 @@ try {
       writeFileSync(guardFile, original);
     }
   }
+
+  console.log("\nTEST — Preview without the inbox table still applies the verified payment");
+  const previewInvoice = await seedInvoice({
+    businessId: businessA.business.id,
+    customerId: businessA.customer.id,
+    propertyId: businessA.property.id,
+    status: "SENT",
+    total: "55.00",
+  });
+  const previewSession = await provider.createInvoiceCheckoutSession({
+    connectedAccountId: businessA.accountId,
+    invoiceId: previewInvoice.invoice.id,
+    businessId: businessA.business.id,
+    amountCents: 5500,
+    currency: "usd",
+    description: "Preview fallback",
+    successUrl: "http://connect-invoice-retry.test/ok?session_id={CHECKOUT_SESSION_ID}",
+    cancelUrl: "http://connect-invoice-retry.test/cancel",
+  });
+  provider.completeCheckout(previewSession.id);
+  const previewEvent = connectCheckoutEvent({
+    id: `evt_preview_${randomUUID().slice(0, 8)}`,
+    account: businessA.accountId,
+    sessionId: previewSession.id,
+    invoiceId: previewInvoice.invoice.id,
+    businessId: businessA.business.id,
+    amountCents: 5500,
+  });
+  await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "ConnectInvoiceWebhookEvent"`);
+  resetConnectInvoiceWebhookEventTableEnsure();
+  const previewPosted = await dispatchSigned(previewEvent);
+  const previewHttp = await httpSigned(previewEvent);
+  const previewHttpBody = await previewHttp.json();
+  const previewAfter = await prisma.invoice.findUnique({
+    where: { id: previewInvoice.invoice.id },
+  });
+  const previewPayments = await prisma.payment.count({
+    where: { invoiceId: previewInvoice.invoice.id, businessId: businessA.business.id },
+  });
+  check(
+    "missing inbox table applies the verified payment instead of 500",
+    previewPosted.result.applied === true &&
+      previewPosted.result.reason === "paid" &&
+      previewHttp.status === 200 &&
+      previewHttpBody.received === true &&
+      previewHttpBody.applied === false &&
+      previewHttpBody.reason === "already_paid" &&
+      previewAfter?.status === "PAID" &&
+      previewPayments === 1,
+  );
+  let missingTableListError = null;
+  try {
+    await listUnappliedConnectInvoiceWebhookEvents(prisma, businessA.business.id);
+  } catch (error) {
+    missingTableListError = error;
+  }
+  check(
+    "owner inbox stays fail-closed when the table is missing",
+    isRequestPathSchemaUnavailableError(missingTableListError),
+  );
 
   }
 
