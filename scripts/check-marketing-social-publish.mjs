@@ -443,7 +443,8 @@ try {
       facebookSrc.includes("FACEBOOK_SOCIAL_PUBLISHING_PROVIDER") &&
       facebookSrc.includes("graph.facebook.com") &&
       instagramSrc.includes("INSTAGRAM_SOCIAL_PUBLISHING_PROVIDER") &&
-      instagramSrc.includes("graph.facebook.com"),
+      instagramSrc.includes("FACEBOOK_GRAPH_API_HOST") &&
+      facebookSrc.includes("graph.facebook.com"),
   );
   check(
     "Caption plus hashtags compose the Facebook message",
