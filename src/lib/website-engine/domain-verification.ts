@@ -20,9 +20,11 @@ import {
 } from "@/lib/website-engine/domain-dns-targets";
 
 export {
+  PLATFORM_OBSERVED_APEX_A,
   VERCEL_GENERAL_PURPOSE_APEX_A,
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  parseWebsiteDomainProjectRecommendedA,
   resetWebsiteDomainProjectRecommendedA,
   setWebsiteDomainProjectRecommendedA,
   websiteDomainApexAAllowlist,

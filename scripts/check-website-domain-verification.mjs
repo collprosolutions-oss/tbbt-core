@@ -26,10 +26,12 @@ const { ForbiddenError } = await import("@/lib/authorization");
 const { loadGoLiveCenter } = await import("@/lib/go-live-data");
 const { classifyCustomDomain, goLiveCardById } = await import("@/lib/go-live");
 const {
+  PLATFORM_OBSERVED_APEX_A,
   VERCEL_GENERAL_PURPOSE_APEX_A,
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
   WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  parseWebsiteDomainProjectRecommendedA,
   resetWebsiteDomainProjectRecommendedA,
   setWebsiteDomainProjectRecommendedA,
   websiteDomainApexAAllowlist,
@@ -131,6 +133,8 @@ const settingsCard = read("src/components/settings/website-domain-verification.t
 const goLiveData = read("src/lib/go-live-data.ts");
 const readme = read("README.md");
 const certification = read("docs/PRODUCTION_CERTIFICATION.md");
+const envExample = read(".env.example");
+const targetsSrc = read("src/lib/website-engine/domain-dns-targets.ts");
 check(
   "Verification never writes DNS, publish, or stored VERIFIED from text",
   verificationSrc.includes("Never writes DNS") &&
@@ -161,11 +165,16 @@ check(
     settingsCard.includes("Vercel Domains card is authoritative") &&
     websiteDomainApexATargetsLabel() === VERCEL_GENERAL_PURPOSE_APEX_A &&
     websiteDomainApexAInstructionAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
-    !websiteDomainApexAInstructionAddresses().includes("216.198.79.1") &&
-    !websiteDomainApexATargetsLabel().includes("216.198.79.1") &&
-    !settingsCard.includes("216.198.79.1") &&
+    !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
+    !websiteDomainApexATargetsLabel().includes(PLATFORM_OBSERVED_APEX_A) &&
+    !settingsCard.includes(PLATFORM_OBSERVED_APEX_A) &&
+    settingsCard.includes("cname.vercel-dns.com") &&
     readme.includes("`76.76.21.21`") &&
     certification.includes("`76.76.21.21`") &&
+    envExample.includes("WEBSITE_DOMAIN_PROJECT_RECOMMENDED_A") &&
+    envExample.includes("four decimal octets 0-255") &&
+    certification.includes("WEBSITE_DOMAIN_PROJECT_RECOMMENDED_A") &&
+    readme.includes("WEBSITE_DOMAIN_PROJECT_RECOMMENDED_A") &&
     !readme.includes("single universal") &&
     websiteDomainApexAAllowlist().some(
       (row) =>
@@ -176,16 +185,16 @@ check(
     websiteDomainApexAAllowlist().some(
       (row) =>
         row.source === "platform-observed" &&
-        row.address === "216.198.79.1" &&
+        row.address === PLATFORM_OBSERVED_APEX_A &&
         !row.tenantFacing,
     ),
 );
 check(
   "Display matching accepts Vercel apex A and project CNAMEs",
   isVercelApexAddress(VERCEL_GENERAL_PURPOSE_APEX_A) &&
-    isVercelApexAddress("216.198.79.1") &&
+    isVercelApexAddress(PLATFORM_OBSERVED_APEX_A) &&
     websiteDomainApexAMatchAddresses().includes(VERCEL_GENERAL_PURPOSE_APEX_A) &&
-    websiteDomainApexAMatchAddresses().includes("216.198.79.1") &&
+    websiteDomainApexAMatchAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
     dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
     dnsRecordsPointAtTbbt({
       cnames: [],
@@ -230,24 +239,112 @@ check(
     }),
 );
 {
-  const projectCardA = "198.51.100.21";
+  const projectCardA = "1.2.3.4";
   setWebsiteDomainProjectRecommendedA([projectCardA]);
   check(
     "Allowlist accepts general-purpose, project-specific, and observed apex A",
     isVercelApexAddress(VERCEL_GENERAL_PURPOSE_APEX_A) &&
       isVercelApexAddress(projectCardA) &&
-      isVercelApexAddress("216.198.79.1") &&
+      isVercelApexAddress(PLATFORM_OBSERVED_APEX_A) &&
       websiteDomainApexAInstructionAddresses().includes(projectCardA) &&
-      !websiteDomainApexAInstructionAddresses().includes("216.198.79.1") &&
+      !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
       dnsRecordsPointAtTbbt({ cnames: [], addresses: [VERCEL_GENERAL_PURPOSE_APEX_A] }) &&
       dnsRecordsPointAtTbbt({ cnames: [], addresses: [projectCardA] }) &&
-      dnsRecordsPointAtTbbt({ cnames: [], addresses: ["216.198.79.1"] }),
+      dnsRecordsPointAtTbbt({ cnames: [], addresses: [PLATFORM_OBSERVED_APEX_A] }),
   );
   resetWebsiteDomainProjectRecommendedA();
   check(
     "Project-specific A is not tenant-facing unless configured",
     !websiteDomainApexAInstructionAddresses().includes(projectCardA) &&
       !isVercelApexAddress(projectCardA),
+  );
+}
+{
+  const rejectedProjectA = {
+    private: "10.1.2.3",
+    private172: "172.16.1.1",
+    private192: "192.168.1.1",
+    loopback: "127.0.0.1",
+    linkLocal: "169.254.1.1",
+    cgnat: "100.64.0.1",
+    multicast: "224.0.0.1",
+    reserved: "240.0.0.1",
+    broadcast: "255.255.255.255",
+    documentation: "203.0.113.10",
+    thisNetwork: "0.1.2.3",
+    ipv6: "2001:db8::1",
+    ipv6Mapped: "::ffff:1.2.3.4",
+    hostname: "cname.vercel-dns.com",
+    cidr: "1.2.3.4/32",
+    url: "https://1.2.3.4",
+    port: "1.2.3.4:443",
+    leadingZero: "01.2.3.4",
+    leadingZeroMid: "1.02.3.4",
+    whitespace: "1.2.3.4 ",
+    whitespaceLead: " 1.2.3.4",
+  };
+  check(
+    "Valid public IPv4 is accepted as a project A-record",
+    parseWebsiteDomainProjectRecommendedA("1.2.3.4") === "1.2.3.4" &&
+      parseWebsiteDomainProjectRecommendedA(PLATFORM_OBSERVED_APEX_A) ===
+        PLATFORM_OBSERVED_APEX_A &&
+      parseWebsiteDomainProjectRecommendedA(VERCEL_GENERAL_PURPOSE_APEX_A) ===
+        VERCEL_GENERAL_PURPOSE_APEX_A,
+  );
+  check(
+    "Each rejected project A-record class is dropped",
+    Object.values(rejectedProjectA).every(
+      (value) => parseWebsiteDomainProjectRecommendedA(value) === null,
+    ) &&
+      parseWebsiteDomainProjectRecommendedA("10.0.0.1") === null &&
+      parseWebsiteDomainProjectRecommendedA("127.0.0.1") === null,
+  );
+  setWebsiteDomainProjectRecommendedA(Object.values(rejectedProjectA));
+  check(
+    "Invalid project A-records fall back to 76.76.21.21 and are not shown",
+    websiteDomainApexAInstructionAddresses().join(",") === VERCEL_GENERAL_PURPOSE_APEX_A &&
+      websiteDomainApexATargetsLabel() === VERCEL_GENERAL_PURPOSE_APEX_A &&
+      WEBSITE_DOMAIN_DNS_CNAME_TARGET === "cname.vercel-dns.com" &&
+      !websiteDomainApexAInstructionAddresses().some((address) =>
+        Object.values(rejectedProjectA).includes(address),
+      ),
+  );
+  resetWebsiteDomainProjectRecommendedA();
+  check(
+    "216.198.79.1 is match-only unless the operator sets it",
+    !websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
+      isVercelApexAddress(PLATFORM_OBSERVED_APEX_A) &&
+      websiteDomainApexAAllowlist().some(
+        (row) =>
+          row.address === PLATFORM_OBSERVED_APEX_A &&
+          row.source === "platform-observed" &&
+          !row.tenantFacing,
+      ),
+  );
+  setWebsiteDomainProjectRecommendedA([PLATFORM_OBSERVED_APEX_A]);
+  check(
+    "Explicit 216.198.79.1 project A-record stays tenant-facing after dedupe",
+    websiteDomainApexAInstructionAddresses().includes(PLATFORM_OBSERVED_APEX_A) &&
+      websiteDomainApexATargetsLabel().includes(PLATFORM_OBSERVED_APEX_A) &&
+      websiteDomainApexAAllowlist().some(
+        (row) =>
+          row.address === PLATFORM_OBSERVED_APEX_A &&
+          row.source === "project-recommended" &&
+          row.tenantFacing,
+      ) &&
+      websiteDomainApexAAllowlist().filter((row) => row.address === PLATFORM_OBSERVED_APEX_A)
+        .length === 1 &&
+      isVercelApexAddress(PLATFORM_OBSERVED_APEX_A),
+  );
+  resetWebsiteDomainProjectRecommendedA();
+  check(
+    "Mutation: loosening the public-IPv4 validator to accept private/loopback fails",
+    parseWebsiteDomainProjectRecommendedA("10.0.0.1") === null &&
+      parseWebsiteDomainProjectRecommendedA("127.0.0.1") === null &&
+      targetsSrc.includes("{ base: [10, 0, 0, 0], bits: 8 }") &&
+      targetsSrc.includes("{ base: [127, 0, 0, 0], bits: 8 }") &&
+      targetsSrc.includes("STRICT_DOTTED_QUAD") &&
+      targetsSrc.includes("isRejectedSpecialPurposeIpv4"),
   );
 }
 check(
@@ -633,7 +730,7 @@ try {
     cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
     addresses: [],
   });
-  dnsByHost.set(observedApexHost, { cnames: [], addresses: ["216.198.79.1"] });
+  dnsByHost.set(observedApexHost, { cnames: [], addresses: [PLATFORM_OBSERVED_APEX_A] });
   const apexHostResult = await verifyHostnameForBusiness(prisma, businessA.id, apexHost);
   const wwwHostResult = await verifyHostnameForBusiness(prisma, businessA.id, wwwHost);
   const subHostResult = await verifyHostnameForBusiness(prisma, businessA.id, subHost);
