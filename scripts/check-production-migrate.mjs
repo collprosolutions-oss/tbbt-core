@@ -2179,6 +2179,19 @@ check(
     hostedRecovery.includes("GetObject") &&
     hostedRecovery.includes("NO-GO"),
 );
+check(
+  "Hosted recovery runbook uses documented Neon --parent timestamp and confirms parent_timestamp",
+  hostedRecovery.includes('--parent "$T"') &&
+    hostedRecovery.includes("parent_timestamp") &&
+    hostedRecovery.includes("neon projects get \"$PROJECT\" --output json") &&
+    hostedRecovery.includes("--no-secrets") &&
+    hostedRecovery.includes("unrecoverable") &&
+    hostedRecovery.includes("lifecycle") &&
+    !hostedRecovery.includes("--timestamp \"$T\"") &&
+    !hostedRecovery.includes("--parent production") &&
+    !hostedRecovery.includes("135 local") &&
+    !hostedRecovery.includes("20261002193000_esign_signature_request_id"),
+);
 
 console.log(
   failed === 0

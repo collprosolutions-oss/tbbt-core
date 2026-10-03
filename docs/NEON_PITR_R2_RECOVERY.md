@@ -65,10 +65,11 @@ not decrypted.
 | `database_NEON_PROJECT_ID` | Present, secret, length 21 — value not read |
 | Founder read-only probe | `TBBT_FOUNDER_PRODUCTION_READONLY_DATABASE_URL` and `TBBT_FOUNDER_PRODUCTION_READONLY_CONFIRM` are **absent** on `collpro-reno` |
 
-Free-plan Instant Restore window (Neon docs, not live-read from the
-project): **6 hours**, capped at **1 GB** of change history. Free also
-caps the project at **10 branches** and **1 manual snapshot**. This
-agent could not `GET /projects/{id}` to confirm `history_retention_seconds`.
+On the Free plan, anything older than **6 hours** or beyond the **1 GB**
+history cap is **unrecoverable**. Do not lengthen retention to reach it.
+Free also caps the project at **10 branches** and **1 manual snapshot**.
+This agent could not `GET /projects/{id}` to confirm
+`history_retention_seconds`.
 
 `scripts/production-migrate-policy.mjs` still treats the unused
 `workspace` Vercel project (`prj_93RU249o7PH0npog4XAuKAFZN0hd`) as
@@ -94,10 +95,12 @@ provider HeadObjects to confirm finalize; it never lists the bucket.
 
 ### Local migration ledger (repo, not Production)
 
-`prisma/migrations` has **135** applied-name folders. Oldest:
-`20260823000000_init`. Newest:
-`20261002193000_esign_signature_request_id`. Provider lock:
-PostgreSQL. This is the local side of `_prisma_migrations` comparison.
+Provider lock is PostgreSQL (`prisma/migrations/migration_lock.toml`).
+The local side of the comparison is every
+`prisma/migrations/<name>/migration.sql` directory, via
+`listLocalMigrationNames` / `listLocalMigrationChecksums` in
+`scripts/production-migrate-policy.mjs`. Recompute that list at verify
+time. A count or newest-folder name written here will go stale.
 Production applied rows were **not** read.
 
 ---
@@ -130,13 +133,16 @@ Do this order. Reversing it creates dangling `storageKey` rows or
 orphaned objects.
 
 1. **Record** incident time `T` as RFC 3339 UTC (and LSN if Neon shows one).
-2. **Confirm** the Free 6-hour / 1 GB history window still covers `T`.
-   Do not lengthen retention.
+2. **Confirm** the Free history window still covers `T`. On Free,
+   anything older than 6 hours / 1 GB is unrecoverable. Do not lengthen
+   retention.
 3. **Time Travel Assist** (read-only) at `T` on the Production **root**.
    Pick the exact moment. Do not restore.
-4. **Create an isolated Neon branch** from `production@T` (or keep using
-   Time Travel if the checks fit in the ephemeral endpoint). Do **not**
-   `neon branches restore` the Production root.
+4. **Create an isolated Neon branch** with `--parent "$T"` (or keep
+   using Time Travel if the checks fit in the ephemeral endpoint).
+   Confirm that branch's `parent_timestamp` equals `T` before any
+   verification SQL. Do **not** `neon branches restore` the Production
+   root.
 5. **Migration-ledger** verification on that isolated connection
    (`planProductionMigrateDeploy`). No `migrate deploy`.
 6. **Tenant-isolation** SQL on that same connection.
@@ -167,35 +173,72 @@ still lacks write rights. It is the substitute for a live restore.
 2. Confirm local ledger: `npm run test:production-migrate`.
 3. Confirm isolation contract still exists: `npm run test:isolation`
    (localhost DB). That is not a Production restore.
-4. Record `T`, the Vercel store id, and the Free-plan 6-hour cap.
+4. Record `T`, the Vercel store id, and that Free-plan data older than
+   6 hours / 1 GB is unrecoverable.
 
 ### 4.2 When Neon read is granted
 
 ```bash
 # Replace PROJECT with the decrypted database_NEON_PROJECT_ID or the
 # Console id for empty-cherry-05140338. Do not paste secrets into git.
-neon projects get --project-id "$PROJECT"
-# Expect history_retention_seconds <= 21600 on Free. Do not PATCH it.
+# Table output omits history_retention_seconds — use JSON.
+neon projects get "$PROJECT" --output json
+# Read .project.history_retention_seconds (or .history_retention_seconds).
+# Free max is 21600 seconds. Do not PATCH it. If T is older than that
+# window or the 1 GB cap, stop: it is unrecoverable.
 
-neon branches list --project-id "$PROJECT"
-# Note the Production root name (often production or main), branch id,
-# and whether the 10-branch Free cap is already full.
+neon branches list --project-id "$PROJECT" --output json
+# Note the Production root, whether it is [default], and whether the
+# 10-branch Free cap is already full. --parent "$T" forks the default
+# root at T. If Production is not the default, stop and do not guess.
+```
 
-# Read-only Time Travel. Ephemeral compute; gone after ~30s idle.
+Time Travel in the Neon Console SQL Editor is read-only and prints no
+connection URI. Prefer that. A bare `neon connection-string` always
+prints the role password (`--no-secrets` is not documented on that
+command). If you must use the CLI, connect with `--psql` and do not
+copy the URI into logs or tickets:
+
+```bash
 neon connection-string "production@${T}" --project-id "$PROJECT" --psql
 ```
 
 Time Travel rejects writes. Run the SQL in sections 5–7 against that
 connection. If checks need more than 30s, create a **child** branch
-from the timestamp instead of restoring the root:
+from the timestamp instead of restoring the root.
+
+`--parent` takes a branch name, id, RFC 3339 timestamp, or LSN
+([Neon CLI branches](https://neon.com/docs/cli/branches)). A timestamp
+parent is an instant-restore branch from the default root at `T`.
+There is no `--timestamp` flag. Do not pass a branch name plus a
+separate timestamp option — an ignored unknown flag would fork HEAD.
+
+`--no-secrets` omits connection credentials from command output
+(documented on `neon projects create`, CLI 4.9.0+). Pass it on create
+so `connection_uris` are not printed.
 
 ```bash
+VERIFY_NAME="tbbt-pitr-verify-$(date -u +%Y%m%dT%H%M%SZ)"
 neon branches create \
-  --name "tbbt-pitr-verify-$(date -u +%Y%m%dT%H%M%SZ)" \
+  --name "$VERIFY_NAME" \
   --project-id "$PROJECT" \
-  --parent production \
-  --timestamp "$T"
+  --parent "$T" \
+  --no-secrets
 ```
+
+Before any verification SQL, confirm the branch was cut at `T`, not
+HEAD. Table output for `branches get` does not show
+`parent_timestamp` — use JSON, and print only those fields (create
+JSON can include passwords):
+
+```bash
+neon branches get "$VERIFY_NAME" --project-id "$PROJECT" --output json \
+  | jq '{id, name, parent_id, parent_timestamp, parent_lsn}'
+```
+
+`parent_timestamp` must equal `T` (same RFC 3339 instant). If it is
+missing, null, or a later/HEAD time, delete the branch and stop. Do
+not verify against the wrong state.
 
 Connect to **that** branch only. Drop it after the decision. Creating
 this branch is copy-on-write; it is not an in-place Production restore.
@@ -272,8 +315,9 @@ WHERE table_schema = 'public'
   AND table_name <> '_prisma_migrations';
 ```
 
-Compare to local folders (`listLocalMigrationNames` /
-`listLocalMigrationChecksums`). Decision:
+Compare to the **current** local folders from `listLocalMigrationNames`
+/ `listLocalMigrationChecksums` (recompute from
+`prisma/migrations/*/migration.sql` at verify time). Decision:
 
 | Ledger at `T` | Meaning | Action |
 | --- | --- | --- |
@@ -281,12 +325,9 @@ Compare to local folders (`listLocalMigrationNames` /
 | Applied name missing locally | Divergent history | NO-GO |
 | Applied checksum ≠ sha256 of `migration.sql` | Edited applied migration | NO-GO |
 | Unfinished row (`finished_at` null, `rolled_back_at` null) | Interrupted migrate | NO-GO until understood |
-| Applied names are a **prefix** of the 135 local names | Expected for an older `T` | Do not migrate during verify. Cut over only with an app SHA that matches that prefix, **or** migrate the isolated branch after GO — never Production during verify |
-| Applied set equals local 135 names, checksums match | Current schema at `T` | Continue isolation + file checks |
+| Applied names are a **prefix** of the current local folder list | Expected for an older `T` | Do not migrate during verify. Cut over only with an app SHA that matches that prefix, **or** migrate the isolated branch after GO — never Production during verify |
+| Applied set equals the current local folder list, checksums match | Current schema at `T` | Continue isolation + file checks |
 | `_prisma_migrations` missing and `user_tables = 0` | Empty database | NO-GO for tenant recovery |
-
-Local newest name to expect on a current-schema restore:
-`20261002193000_esign_signature_request_id`.
 
 Do not run `prisma migrate deploy` to "fix" a historical ledger during
 this drill. Preview builds already skip migrate because they share
@@ -469,6 +510,24 @@ Mismatch after restoring Postgres to `T` while leaving live R2:
 
 There is no `ListObjectVersions` recovery path on R2.
 
+### 7.3 R2 versioning and lifecycle (operator console)
+
+R2 does **not** support S3 object versioning (`GetBucketVersioning` is
+unsupported). This runbook does not enable versioning, edit lifecycle
+rules, or copy objects.
+
+Before treating HeadObject 404s as "maybe recoverable later," the
+operator with Cloudflare **Account.Workers R2 Storage:Read** must open
+the bucket Settings and record:
+
+1. Versioning is unavailable / off (expected).
+2. Whether any **object lifecycle** rule expires or deletes keys under
+   `businesses/`.
+
+If a lifecycle rule already removed objects that existed at `T`, those
+bytes are gone. This environment did not authenticate Cloudflare, so
+that console check was **not performed** here.
+
 ---
 
 ## 8. Rollback decision
@@ -477,9 +536,10 @@ Record the decision before anyone touches the Production root.
 
 ### GO — all of these
 
-- `T` is inside the observed history window (Free: ≤ 6 hours / 1 GB).
-- Verification used Time Travel or an isolated child branch — Production
-  root was not overwritten.
+- `T` is inside the observed history window. On Free, anything older
+  than 6 hours / 1 GB is unrecoverable.
+- Verification used Time Travel or an isolated child branch whose
+  `parent_timestamp` equals `T` — Production root was not overwritten.
 - `_prisma_migrations` readable; no missing-local names; no checksum
   mismatch; no unfinished row you do not understand.
 - Isolation SQL returned zero cross-tenant rows.
@@ -492,7 +552,9 @@ Record the decision before anyone touches the Production root.
 
 ### NO-GO — any of these
 
-- `T` is outside the window (do not extend retention to reach it).
+- `T` is outside the window (unrecoverable on Free; do not extend
+  retention to reach it).
+- Isolated verify branch `parent_timestamp` does not equal `T`.
 - Free branch cap (10) blocks an isolated verify branch and Time Travel
   is unavailable.
 - Ledger fail-closed reasons in section 5.
