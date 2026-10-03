@@ -222,7 +222,10 @@ check(
 );
 check(
   "Auth proxy still treats public website paths as unauthenticated-safe",
-  proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+  proxySrc.includes("isPublicWebsitePath(pathname)") &&
+    proxySrc.includes("isStripeWebhookPath(pathname)") &&
+    proxySrc.includes("isPlaidWebhookPath(pathname)") &&
+    proxySrc.includes("continueWithRequestHost"),
 );
 check(
   "Auth proxy 308s tbbtool.com apex to www before serving any homepage",

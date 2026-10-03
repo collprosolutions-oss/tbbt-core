@@ -441,7 +441,7 @@ function originFromAbsoluteUrl(value: string | undefined): string | undefined {
   if (!raw) return undefined;
   try {
     const url = new URL(raw);
-    if (url.username || url.password || url.hash) return undefined;
+    if (url.hash || raw.includes("@")) return undefined;
     if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
     return url.origin;
   } catch {

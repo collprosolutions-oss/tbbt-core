@@ -148,7 +148,7 @@ check(
 );
 check(
   "Server Actions allow Preview *.vercel.app origins",
-  nextConfigSrc.includes('allowedOrigins: ["*.vercel.app"]'),
+  nextConfigSrc.includes('"*.vercel.app"') && nextConfigSrc.includes("allowedOrigins"),
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
