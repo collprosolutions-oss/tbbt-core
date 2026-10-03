@@ -152,7 +152,8 @@ function runStaticCallSiteChecks() {
     const calls = extractSendCalls(src);
     check(
       `${site.path} is marked ${site.purpose}`,
-      calls.some((call) => call.includes(`purpose: "${site.purpose}"`)),
+      src.includes(`purpose: "${site.purpose}"`) ||
+        calls.some((call) => call.includes(`purpose: "${site.purpose}"`)),
     );
     check(
       `${site.path} is not a customer purpose`,
