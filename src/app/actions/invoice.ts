@@ -120,7 +120,7 @@ export async function markInvoiceSent(
   if (invoice.jobId) {
     revalidatePath(`/jobs/${invoice.jobId}`);
   }
-  return sent.warning ? { warning: sent.warning } : {};
+  return "warning" in sent && sent.warning ? { warning: sent.warning } : {};
 }
 
 export async function markInvoicePaid(
