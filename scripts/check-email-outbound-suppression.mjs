@@ -1,6 +1,7 @@
 /**
  * Bounce/complaint suppression at sendTransactionalEmail, the single
- * outbound-email chokepoint. Fake provider and disposable DB only.
+ * outbound-email chokepoint. Customer-facing purposes are suppressed;
+ * system-exempt purposes are not. Fake provider and disposable DB only.
  *
  * Run with:
  *   npm run test:email-outbound-suppression
@@ -53,26 +54,51 @@ function walkSrc(dir) {
   return out;
 }
 
-const OUTBOUND_CALL_SITES = [
-  { file: "src/lib/communications/engine.ts", path: "compose" },
-  { file: "src/app/actions/estimate.ts", path: "estimate" },
-  { file: "src/lib/complete-job-invoice.ts", path: "invoice" },
-  { file: "src/lib/reviews-ops.ts", path: "review request" },
-  { file: "src/lib/appointment-notify.ts", path: "appointment" },
-  { file: "src/lib/referral-ops.ts", path: "referral/follow-up" },
-  { file: "src/lib/automation/email.ts", path: "automation/follow-up" },
-  { file: "src/app/actions/team.ts", path: "team invite" },
-  { file: "src/lib/password-reset.ts", path: "password reset" },
-  { file: "src/lib/request-notify.ts", path: "new-request company notify" },
+function extractSendCalls(src) {
+  const calls = [];
+  let idx = 0;
+  const needle = "sendTransactionalEmail(";
+  while (idx < src.length) {
+    const start = src.indexOf(needle, idx);
+    if (start < 0) break;
+    let i = start + needle.length;
+    let depth = 1;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") depth -= 1;
+      i += 1;
+    }
+    calls.push(src.slice(start, i));
+    idx = i;
+  }
+  return calls;
+}
+
+const CUSTOMER_CALL_SITES = [
+  { file: "src/lib/communications/engine.ts", path: "compose", purpose: "customer" },
+  { file: "src/app/actions/estimate.ts", path: "estimate", purpose: "customer" },
+  { file: "src/lib/complete-job-invoice.ts", path: "invoice", purpose: "customer" },
+  { file: "src/lib/reviews-ops.ts", path: "review request/reminder", purpose: "customer" },
+  { file: "src/lib/appointment-notify.ts", path: "appointment", purpose: "customer" },
+  { file: "src/lib/referral-ops.ts", path: "referral/follow-up", purpose: "customer" },
+  { file: "src/lib/automation/email.ts", path: "automation", purpose: "automation" },
+];
+
+const EXEMPT_CALL_SITES = [
+  { file: "src/app/actions/team.ts", path: "team invite", purpose: "system-exempt-team" },
+  { file: "src/lib/password-reset.ts", path: "password reset", purpose: "system-exempt-password-reset" },
+  { file: "src/lib/request-notify.ts", path: "new-request company notify", purpose: "system-exempt-request-notify" },
 ];
 
 const PROVIDER_DIRECT = /new\s+Resend\b|resend\.emails|api\.resend\.com/;
+const CUSTOMER_PURPOSES = new Set(["customer", "automation"]);
 
 function runStaticCallSiteChecks() {
-  console.log("\nSTATIC — every outbound email path uses the chokepoint");
+  console.log("\nSTATIC — chokepoint inventory, no bypass, customer businessId");
   const srcRoot = join(root, "src");
   const files = walkSrc(srcRoot);
-  let stray = [];
+  const stray = [];
   for (const file of files) {
     const rel = relative(root, file).replaceAll("\\", "/");
     if (rel === "src/lib/mail.ts") continue;
@@ -85,21 +111,57 @@ function runStaticCallSiteChecks() {
   );
   if (stray.length) console.error("  stray provider sites:", stray.join(", "));
 
-  for (const site of OUTBOUND_CALL_SITES) {
-    const src = readFileSync(join(root, site.file), "utf8");
-    check(
-      `${site.path} calls sendTransactionalEmail with businessId`,
-      src.includes("sendTransactionalEmail") && src.includes("businessId:"),
-    );
-  }
-
   const mailSrc = readFileSync(join(root, "src/lib/mail.ts"), "utf8");
   check(
-    "Chokepoint checks suppression immediately before the provider",
-    mailSrc.includes("blockedOutboundEmailReason") &&
+    "Call-site inventory lists customer vs system-exempt callers",
+    CUSTOMER_CALL_SITES.every((site) => mailSrc.includes(site.file)) &&
+      EXEMPT_CALL_SITES.every((site) => mailSrc.includes(site.file)) &&
+      mailSrc.includes("system-exempt-team") &&
+      mailSrc.includes("system-exempt-password-reset") &&
+      mailSrc.includes("system-exempt-request-notify"),
+  );
+  check(
+    "Chokepoint checks customer purposes immediately before the provider",
+    mailSrc.includes("isCustomerEmailPurpose(input.purpose)") &&
+      mailSrc.includes("blockedOutboundEmailReason") &&
       mailSrc.indexOf("blockedOutboundEmailReason") < mailSrc.indexOf("injectedEmailSender") &&
       mailSrc.indexOf("blockedOutboundEmailReason") < mailSrc.indexOf("new Resend"),
   );
+
+  for (const site of CUSTOMER_CALL_SITES) {
+    const src = readFileSync(join(root, site.file), "utf8");
+    const calls = extractSendCalls(src);
+    const customerCalls = calls.filter(
+      (call) =>
+        call.includes(`purpose: "${site.purpose}"`) || call.includes(`purpose: '${site.purpose}'`),
+    );
+    check(
+      `${site.path} uses purpose ${site.purpose} and businessId`,
+      customerCalls.length > 0 &&
+        customerCalls.every((call) => /businessId\s*:/.test(call)),
+    );
+    const omitted = calls.filter((call) => {
+      const purpose = call.match(/purpose:\s*["']([^"']+)["']/);
+      return purpose && CUSTOMER_PURPOSES.has(purpose[1]) && !/businessId\s*:/.test(call);
+    });
+    check(`${site.path} has no customer-purpose call omitting businessId`, omitted.length === 0);
+  }
+
+  for (const site of EXEMPT_CALL_SITES) {
+    const src = readFileSync(join(root, site.file), "utf8");
+    const calls = extractSendCalls(src);
+    check(
+      `${site.path} is marked ${site.purpose}`,
+      calls.some((call) => call.includes(`purpose: "${site.purpose}"`)),
+    );
+    check(
+      `${site.path} is not a customer purpose`,
+      !calls.some((call) => {
+        const purpose = call.match(/purpose:\s*["']([^"']+)["']/);
+        return purpose && CUSTOMER_PURPOSES.has(purpose[1]);
+      }),
+    );
+  }
 }
 
 if (!MUTATION_CHILD) {
@@ -136,6 +198,32 @@ function makeAccess(businessId, role, membershipId, userId) {
   };
 }
 
+function oddStoredDest(email) {
+  const trimmed = email.trim();
+  const [local, domain] = trimmed.split("@");
+  return `  ${local[0].toUpperCase()}${local.slice(1).toLowerCase()}@${domain[0].toUpperCase()}${domain.slice(1).toLowerCase()} `;
+}
+
+function isSuppressedOutcome(value) {
+  if (!value || typeof value !== "object") return false;
+  if (value.suppressed === true) return true;
+  if (value.status === "SUPPRESSED" || value.status === "BLOCKED") return true;
+  if (value.lastEmailStatus === "SUPPRESSED") return true;
+  const text = `${value.failureReason ?? ""} ${value.warning ?? ""} ${value.error ?? ""} ${value.message ?? ""}`;
+  return /Not sent: this address reported a (complaint|bounce)/.test(text);
+}
+
+function itemMarkedSent(value, pathName) {
+  if (!value || typeof value !== "object") return false;
+  if (pathName === "invoice") return value.customerNotified === true;
+  if (pathName === "appointment") return value.sent === true;
+  if (pathName === "compose") return value.status === "SENT" || value.ok === true;
+  if (pathName.startsWith("automation")) return value.status === "SENT";
+  if (pathName === "estimate") return Boolean(value.id) && !value.suppressed && !value.error;
+  if (pathName === "review reminder") return value.lastEmailStatus === "SENT";
+  return value.status === "SENT";
+}
+
 await withDisposableTestDatabase(
   {
     databaseUrl: previous.DATABASE_URL,
@@ -154,14 +242,16 @@ await withDisposableTestDatabase(
       resetTransactionalEmailSender,
       sendTransactionalEmail,
     } = await import("@/lib/mail");
-    const { EMAIL_COMPLAINT_BLOCK_REASON } = await import("@/lib/mail-failed-destination");
+    const { EMAIL_OUTBOUND_SUPPRESSED_COMPLAINT } = await import(
+      "@/lib/mail-outbound-suppression"
+    );
     const {
       outboundEmailSuppressionTestHooks,
       resetOutboundEmailSuppressionTestHooks,
     } = await import("@/lib/mail-outbound-suppression");
     const { notifyCustomerAppointmentProposed } = await import("@/lib/appointment-notify");
     const { sendDraftInvoiceIfNeeded } = await import("@/lib/complete-job-invoice");
-    const { sendReviewRequest } = await import("@/lib/reviews-ops");
+    const { sendReviewRequest, sendReviewRequestReminder } = await import("@/lib/reviews-ops");
     const { sendReferralRequest, sendCustomerFollowUp } = await import("@/lib/referral-ops");
     const { attemptAutomationEmail } = await import("@/lib/automation/email");
     const { requestPasswordResetOp } = await import("@/lib/password-reset");
@@ -203,11 +293,12 @@ await withDisposableTestDatabase(
     }
 
     async function recordFailedDest(businessId, email, reason = "COMPLAINT") {
+      const stored = oddStoredDest(email);
       return prisma.emailFailedDestination.create({
         data: {
           businessId,
-          destinationFingerprint: emailDestinationFingerprint(businessId, email),
-          destinationLast4: email.split("@")[0].slice(-4),
+          destinationFingerprint: emailDestinationFingerprint(businessId, stored),
+          destinationLast4: stored.trim().split("@")[0].slice(-4),
           reason,
           provider: "resend",
           providerEventId: `evt_${randomUUID()}`,
@@ -263,7 +354,7 @@ await withDisposableTestDatabase(
                 businessId: tenant.business.id,
                 destinationFingerprint: emailDestinationFingerprint(
                   tenant.business.id,
-                  cust.email,
+                  oddStoredDest(cust.email),
                 ),
                 destinationLast4: cust.email.split("@")[0].slice(-4),
                 reason: "COMPLAINT",
@@ -306,6 +397,7 @@ await withDisposableTestDatabase(
         html: email.html,
         text: email.text,
         kind: "estimate",
+        purpose: "customer",
         idempotencyKey: estimateEmailIdempotencyKey(`est_${randomUUID()}`, attempt),
         businessId: tenant.business.id,
         db: prisma,
@@ -342,6 +434,21 @@ await withDisposableTestDatabase(
         },
       });
       return sendReviewRequest(prisma, tenant.access, { requestId: request.id });
+    }
+
+    async function runReviewReminder(tenant, cust) {
+      const request = await prisma.reviewRequest.create({
+        data: {
+          businessId: tenant.business.id,
+          customerId: cust.id,
+          status: "SENT",
+          requestedAt: new Date(),
+          requestText: "Please leave an honest review.",
+          createdByMembershipId: tenant.membership.id,
+          lastEmailStatus: "SENT",
+        },
+      });
+      return sendReviewRequestReminder(prisma, tenant.access, { requestId: request.id });
     }
 
     async function runAppointment(tenant, cust) {
@@ -392,25 +499,106 @@ await withDisposableTestDatabase(
       return sendCustomerFollowUp(prisma, tenant.access, { followUpId: row.id });
     }
 
-    async function runAutomation(tenant, cust) {
-      const estimate = await prisma.estimate.create({
-        data: {
-          businessId: tenant.business.id,
-          customerId: cust.id,
-          status: "SENT",
-          publicToken: randomUUID(),
-          total: 75,
-        },
-      });
+    async function runAutomation(tenant, cust, purpose) {
+      const payload = {};
+      let subjectType = "ESTIMATE";
+      let subjectId;
+
+      if (purpose === "ESTIMATE_READY" || purpose === "ESTIMATE_FOLLOW_UP") {
+        const estimate = await prisma.estimate.create({
+          data: {
+            businessId: tenant.business.id,
+            customerId: cust.id,
+            status: "SENT",
+            publicToken: randomUUID(),
+            total: 75,
+          },
+        });
+        subjectType = "ESTIMATE";
+        subjectId = estimate.id;
+      } else if (purpose === "INVOICE_READY" || purpose === "PAYMENT_REMINDER") {
+        const prop = await property(tenant, cust);
+        const createdJob = await jobFor(tenant, cust, prop);
+        const invoice = await prisma.invoice.create({
+          data: {
+            businessId: tenant.business.id,
+            customerId: cust.id,
+            jobId: createdJob.id,
+            status: "SENT",
+            total: 50,
+          },
+        });
+        subjectType = "INVOICE";
+        subjectId = invoice.id;
+      } else if (
+        purpose === "APPOINTMENT_CONFIRMATION" ||
+        purpose === "SCHEDULE_CHANGE" ||
+        purpose === "APPOINTMENT_REMINDER"
+      ) {
+        const scheduledAt = new Date("2026-10-10T15:00:00.000Z");
+        const prop = await property(tenant, cust);
+        const createdJob = await jobFor(tenant, cust, prop, {
+          status: "SCHEDULED",
+          scheduledAt,
+          appointmentProposalId: 1,
+        });
+        subjectType = "JOB";
+        subjectId = createdJob.id;
+        payload.proposalId = 1;
+        payload.scheduledAt = scheduledAt.toISOString();
+      } else if (purpose === "REVIEW_REQUEST") {
+        const request = await prisma.reviewRequest.create({
+          data: {
+            businessId: tenant.business.id,
+            customerId: cust.id,
+            status: "READY",
+            requestText: "Please leave an honest review.",
+            createdByMembershipId: tenant.membership.id,
+          },
+        });
+        subjectType = "REVIEW_REQUEST";
+        subjectId = request.id;
+        payload.requestText = request.requestText;
+      } else if (purpose === "REFERRAL_REQUEST") {
+        const request = await prisma.referralRequest.create({
+          data: {
+            businessId: tenant.business.id,
+            customerId: cust.id,
+            status: "READY",
+            requestText: "If you know someone, send them our way.",
+            createdByMembershipId: tenant.membership.id,
+          },
+        });
+        subjectType = "REFERRAL_REQUEST";
+        subjectId = request.id;
+        payload.requestText = request.requestText;
+      } else if (purpose === "JOB_FOLLOW_UP" || purpose === "REPEAT_FOLLOW_UP") {
+        const row = await prisma.customerFollowUp.create({
+          data: {
+            businessId: tenant.business.id,
+            customerId: cust.id,
+            kind: purpose === "REPEAT_FOLLOW_UP" ? "REPEAT" : "JOB_COMPLETE",
+            status: "OPEN",
+            origin: "COMMUNICATION",
+            notes: "Checking in after the job.",
+            createdByMembershipId: tenant.membership.id,
+          },
+        });
+        subjectType = "CUSTOMER_FOLLOW_UP";
+        subjectId = row.id;
+      } else {
+        throw new Error(`unknown automation purpose ${purpose}`);
+      }
+
       return attemptAutomationEmail(prisma, {
         businessId: tenant.business.id,
         runId: randomUUID(),
-        purpose: "ESTIMATE_READY",
-        subjectType: "ESTIMATE",
-        subjectId: estimate.id,
+        purpose,
+        subjectType,
+        subjectId,
         customerId: cust.id,
         businessName: tenant.business.name,
-        payload: {},
+        payload,
       });
     }
 
@@ -423,6 +611,7 @@ await withDisposableTestDatabase(
         html: "<p>Set your password.</p>",
         text: "Set your password.",
         kind: "team",
+        purpose: "system-exempt-team",
         idempotencyKey: `team-invite/${tenant.business.id}/${email}`,
         businessId: tenant.business.id,
         db: prisma,
@@ -469,7 +658,21 @@ await withDisposableTestDatabase(
       });
     }
 
-    const paths = [
+    const AUTOMATION_KINDS = [
+      "ESTIMATE_READY",
+      "ESTIMATE_FOLLOW_UP",
+      "INVOICE_READY",
+      "PAYMENT_REMINDER",
+      "APPOINTMENT_CONFIRMATION",
+      "SCHEDULE_CHANGE",
+      "APPOINTMENT_REMINDER",
+      "REVIEW_REQUEST",
+      "REFERRAL_REQUEST",
+      "JOB_FOLLOW_UP",
+      "REPEAT_FOLLOW_UP",
+    ];
+
+    const customerPaths = [
       {
         name: "compose",
         async suppressed(tenant, email) {
@@ -518,6 +721,18 @@ await withDisposableTestDatabase(
         },
       },
       {
+        name: "review reminder",
+        async suppressed(tenant, email) {
+          await recordFailedDest(tenant.business.id, email);
+          const cust = await customer(tenant, email, "Reminder Suppressed");
+          return runReviewReminder(tenant, cust);
+        },
+        async allowed(tenant, email) {
+          const cust = await customer(tenant, email, "Reminder Allowed");
+          return runReviewReminder(tenant, cust);
+        },
+      },
+      {
         name: "appointment",
         async suppressed(tenant, email) {
           await recordFailedDest(tenant.business.id, email);
@@ -553,84 +768,101 @@ await withDisposableTestDatabase(
           return runFollowUp(tenant, cust);
         },
       },
-      {
-        name: "automation/follow-up",
+      ...AUTOMATION_KINDS.map((purpose) => ({
+        name: `automation ${purpose}`,
         async suppressed(tenant, email) {
           await recordFailedDest(tenant.business.id, email);
-          const cust = await customer(tenant, email, "Auto Suppressed");
-          return runAutomation(tenant, cust);
+          const cust = await customer(tenant, email, `Auto ${purpose} Suppressed`);
+          return runAutomation(tenant, cust, purpose);
         },
         async allowed(tenant, email) {
-          const cust = await customer(tenant, email, "Auto Allowed");
-          return runAutomation(tenant, cust);
+          const cust = await customer(tenant, email, `Auto ${purpose} Allowed`);
+          return runAutomation(tenant, cust, purpose);
         },
-      },
+      })),
+    ];
+
+    const exemptPaths = [
       {
         name: "team invite",
-        async suppressed(tenant, email) {
+        async run(tenant, email) {
           await recordFailedDest(tenant.business.id, email);
-          return runTeam(tenant, email);
-        },
-        async allowed(tenant, email) {
           return runTeam(tenant, email);
         },
       },
       {
         name: "password reset",
-        async suppressed(tenant, email) {
+        async run(tenant, email) {
           await recordFailedDest(tenant.business.id, email);
-          return runPasswordReset(tenant, email);
-        },
-        async allowed(tenant, email) {
           return runPasswordReset(tenant, email);
         },
       },
       {
         name: "new-request company notify",
-        async suppressed(tenant, email) {
+        async run(tenant, email) {
           await recordFailedDest(tenant.business.id, email);
-          return runCompanyNotify(tenant, email);
-        },
-        async allowed(tenant, email) {
           return runCompanyNotify(tenant, email);
         },
       },
     ];
 
-    console.log("\nTEST — each outbound path honors suppression at send time");
-    for (const path of paths) {
+    console.log("\nTEST — each customer path honors suppression at send time");
+    for (const path of customerPaths) {
       const suppressedEmail = `blocked.${path.name.replace(/\W+/g, ".")}.${randomUUID().slice(0, 8)}@example.com`;
       const otherEmail = `clean.${path.name.replace(/\W+/g, ".")}.${randomUUID().slice(0, 8)}@example.com`;
       const beforeBlocked = sentBefore();
-      await path.suppressed(tenantA, suppressedEmail);
+      const suppressedResult = await path.suppressed(tenantA, suppressedEmail);
       check(
         `${path.name}: suppressed address makes zero provider calls`,
         fake.sent.length === beforeBlocked,
       );
+      check(`${path.name}: outcome is suppressed`, isSuppressedOutcome(suppressedResult));
+      check(`${path.name}: item not marked SENT`, !itemMarkedSent(suppressedResult, path.name));
 
       const beforeOther = sentBefore();
-      await path.allowed(tenantB, suppressedEmail);
+      const otherResult = await path.allowed(tenantB, suppressedEmail);
       check(
         `${path.name}: same address in another business still sends`,
         fake.sent.length === beforeOther + 1 &&
           fake.sent[fake.sent.length - 1].to.toLowerCase() === suppressedEmail.toLowerCase() &&
           fake.sent[fake.sent.length - 1].businessId === tenantB.business.id,
       );
+      check(
+        `${path.name}: other-business send is not suppressed`,
+        !isSuppressedOutcome(otherResult) && itemMarkedSent(otherResult, path.name),
+      );
 
       const beforeClean = sentBefore();
-      await path.allowed(tenantA, otherEmail);
+      const cleanResult = await path.allowed(tenantA, otherEmail);
       check(
-        `${path.name}: non-suppressed address still sends`,
+        `${path.name}: non-suppressed address still sends exactly once`,
         fake.sent.length === beforeClean + 1 &&
           fake.sent[fake.sent.length - 1].to.toLowerCase() === otherEmail.toLowerCase(),
       );
+      check(
+        `${path.name}: clean send is not suppressed`,
+        !isSuppressedOutcome(cleanResult) && itemMarkedSent(cleanResult, path.name),
+      );
+    }
+
+    console.log("\nTEST — system-exempt mail still sends to a suppressed address");
+    for (const path of exemptPaths) {
+      const email = `exempt.${path.name.replace(/\W+/g, ".")}.${randomUUID().slice(0, 8)}@example.com`;
+      const before = sentBefore();
+      const result = await path.run(tenantA, email);
+      check(
+        `${path.name}: exempt purpose still calls the provider once`,
+        fake.sent.length === before + 1 &&
+          fake.sent[fake.sent.length - 1].to.toLowerCase() === email.toLowerCase(),
+      );
+      check(`${path.name}: exempt outcome is not suppressed`, !isSuppressedOutcome(result));
     }
 
     console.log("\nTEST — fingerprint normalization and fail-closed lookup");
     const canon = `canon.${randomUUID().slice(0, 8)}@example.com`;
     await recordFailedDest(tenantA.business.id, canon);
     const beforeNorm = sentBefore();
-    await sendTransactionalEmail({
+    const normalized = await sendTransactionalEmail({
       apiKey: "re_test_outbound_suppression",
       from: "Suppress Co <suppress@example.com>",
       to: `  ${canon.split("@")[0].toUpperCase()}@${canon.split("@")[1].toUpperCase()}  `,
@@ -638,13 +870,14 @@ await withDisposableTestDatabase(
       html: "<p>n</p>",
       text: "n",
       kind: "customer",
+      purpose: "customer",
       idempotencyKey: `norm-${randomUUID()}`,
       businessId: tenantA.business.id,
       db: prisma,
     });
     check(
       "Case/whitespace matches the fingerprint and does not send",
-      fake.sent.length === beforeNorm,
+      fake.sent.length === beforeNorm && normalized.suppressed === true,
     );
 
     const plus = `${canon.split("@")[0]}+tag@${canon.split("@")[1]}`;
@@ -657,6 +890,7 @@ await withDisposableTestDatabase(
       html: "<p>p</p>",
       text: "p",
       kind: "customer",
+      purpose: "customer",
       idempotencyKey: `plus-${randomUUID()}`,
       businessId: tenantA.business.id,
       db: prisma,
@@ -678,6 +912,7 @@ await withDisposableTestDatabase(
       html: "<p>x</p>",
       text: "x",
       kind: "customer",
+      purpose: "customer",
       idempotencyKey: `lookup-${randomUUID()}`,
       businessId: tenantA.business.id,
       db: prisma,
@@ -686,13 +921,30 @@ await withDisposableTestDatabase(
     check(
       "DB lookup error does not send to a known complaint address",
       fake.sent.length === beforeFail &&
-        failedLookup.error ===
-          "This email could not be sent because destination eligibility could not be confirmed.",
+        failedLookup.suppressed === true &&
+        failedLookup.reason === "UNAVAILABLE",
     );
     check(
       "Suppression errors do not include the destination address",
-      !String(failedLookup.error).includes(complaintEmail) &&
-        !EMAIL_COMPLAINT_BLOCK_REASON.includes("@"),
+      !String(failedLookup.message).includes(complaintEmail) &&
+        !EMAIL_OUTBOUND_SUPPRESSED_COMPLAINT.includes("@"),
+    );
+
+    const missingBusiness = await sendTransactionalEmail({
+      apiKey: "re_test_outbound_suppression",
+      from: "Suppress Co <suppress@example.com>",
+      to: `missing.${randomUUID().slice(0, 8)}@example.com`,
+      subject: "Missing business",
+      html: "<p>x</p>",
+      text: "x",
+      kind: "review",
+      purpose: "customer",
+      idempotencyKey: `missing-biz-${randomUUID()}`,
+      db: prisma,
+    });
+    check(
+      "Customer purpose without businessId is fail-closed and does not send",
+      missingBusiness.suppressed === true && missingBusiness.reason === "UNAVAILABLE",
     );
 
     resetCommunicationEmailSender();
@@ -700,14 +952,16 @@ await withDisposableTestDatabase(
 ).finally(restoreEnv);
 
 if (!MUTATION_CHILD) {
-  console.log("\nMUTATION — removing the chokepoint check fails every path test");
+  console.log("\nMUTATION — skipping review and automation checks fails those path tests");
   const mailPath = join(root, "src/lib/mail.ts");
   const original = readFileSync(mailPath, "utf8");
   const guard =
-    "  const blocked = await blockedOutboundEmailReason(db, input.businessId, input.to);\n  if (blocked) {\n    return { error: blocked };\n  }\n\n";
-  check("Chokepoint guard is present for mutation", original.includes(guard));
+    "  if (isCustomerEmailPurpose(input.purpose)) {\n    const db = input.db ?? prisma;\n    const blocked = await blockedOutboundEmailReason(db, input.businessId ?? \"\", input.to);\n    if (blocked) {\n      return {\n        suppressed: true,\n        reason: blocked.reason,\n        message: blocked.message,\n      };\n    }\n  }";
+  const mutated =
+    "  if (isCustomerEmailPurpose(input.purpose) && input.kind !== \"review\" && input.purpose !== \"automation\") {\n    const db = input.db ?? prisma;\n    const blocked = await blockedOutboundEmailReason(db, input.businessId ?? \"\", input.to);\n    if (blocked) {\n      return {\n        suppressed: true,\n        reason: blocked.reason,\n        message: blocked.message,\n      };\n    }\n  }";
+  check("Chokepoint customer-purpose guard is present for mutation", original.includes(guard));
   if (original.includes(guard)) {
-    writeFileSync(mailPath, original.replace(guard, ""));
+    writeFileSync(mailPath, original.replace(guard, mutated));
     try {
       const child = spawnSync(
         process.execPath,
@@ -719,28 +973,32 @@ if (!MUTATION_CHILD) {
         },
       );
       const output = `${child.stdout || ""}\n${child.stderr || ""}`;
-      const pathNames = [
-        "compose",
-        "estimate",
-        "invoice",
+      const mustFail = [
         "review request",
-        "appointment",
-        "referral",
-        "follow-up",
-        "automation/follow-up",
-        "team invite",
-        "password reset",
-        "new-request company notify",
+        "review reminder",
+        ...[
+          "ESTIMATE_READY",
+          "ESTIMATE_FOLLOW_UP",
+          "INVOICE_READY",
+          "PAYMENT_REMINDER",
+          "APPOINTMENT_CONFIRMATION",
+          "SCHEDULE_CHANGE",
+          "APPOINTMENT_REMINDER",
+          "REVIEW_REQUEST",
+          "REFERRAL_REQUEST",
+          "JOB_FOLLOW_UP",
+          "REPEAT_FOLLOW_UP",
+        ].map((purpose) => `automation ${purpose}`),
       ];
-      const failedEveryPath = pathNames.every((name) =>
+      const failedTargeted = mustFail.every((name) =>
         output.includes(`FAIL - ${name}: suppressed address makes zero provider calls`),
       );
       check(
-        "Removing the chokepoint check fails every path test",
-        child.status !== 0 && failedEveryPath,
+        "Removing the review and automation checks fails those path tests",
+        child.status !== 0 && failedTargeted,
       );
-      if (child.status === 0 || !failedEveryPath) {
-        console.error(output.slice(-4000));
+      if (child.status === 0 || !failedTargeted) {
+        console.error(output.slice(-6000));
       }
     } finally {
       writeFileSync(mailPath, original);

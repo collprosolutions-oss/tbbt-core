@@ -11,8 +11,10 @@ import {
   isUsableEmail,
   referralRequestEmailIdempotencyKey,
   reviewRequestEmailIdempotencyKey,
+  isTransactionalEmailSuppressed,
   sendTransactionalEmail,
   senderFrom,
+  transactionalEmailSendError,
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import {
@@ -25,7 +27,7 @@ import { tenantEstimateUrl, tenantInvoiceUrl, tenantProjectUrl } from "@/lib/ten
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export type AutomationEmailResult = {
-  status: "SENT" | "NOT_SENT" | "FAILED" | "SKIPPED";
+  status: "SENT" | "NOT_SENT" | "FAILED" | "SKIPPED" | "SUPPRESSED";
   failureReason?: string;
 };
 
@@ -61,12 +63,17 @@ async function sendOwnedCustomerEmail(
     text: input.text,
     html: input.html,
     kind: input.kind,
+    purpose: "automation",
     idempotencyKey: input.idempotencyKey,
     businessId: input.businessId,
     db,
   });
-  if ("error" in sent) {
-    return { status: "FAILED", failureReason: sent.error };
+  if (isTransactionalEmailSuppressed(sent)) {
+    return { status: "SUPPRESSED", failureReason: sent.message };
+  }
+  const sendError = transactionalEmailSendError(sent);
+  if (sendError) {
+    return { status: "FAILED", failureReason: sendError };
   }
   return { status: "SENT" };
 }

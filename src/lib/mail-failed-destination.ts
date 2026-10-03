@@ -3,7 +3,9 @@
  * complaint webhooks. Request paths only assert the migrate-owned table.
  *
  * Outbound suppression is enforced in sendTransactionalEmail immediately
- * before the provider call, keyed by businessId + destination fingerprint.
+ * before the provider call, keyed by businessId + destination fingerprint,
+ * for customer-facing purposes only. System-exempt purposes (team invite,
+ * password reset, owner new-request notify) skip this lookup by design.
  * Compose eligibility also reads these rows for the Communications UI.
  */
 import { createHash } from "node:crypto";

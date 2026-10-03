@@ -9,7 +9,14 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability } from "@/lib/authorization";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
 import { attemptReviewReminderSms, attemptReviewRequestSms } from "@/lib/customer-messaging";
-import { getMailConfig, isUsableEmail, reviewRequestEmailIdempotencyKey, sendTransactionalEmail, senderFrom } from "@/lib/mail";
+import {
+  customerEmailAttemptStatus,
+  getMailConfig,
+  isUsableEmail,
+  reviewRequestEmailIdempotencyKey,
+  sendTransactionalEmail,
+  senderFrom,
+} from "@/lib/mail";
 import {
   channelDeliveryAccepted,
   isReviewPlatform,
@@ -463,10 +470,11 @@ async function attemptReviewRequestEmail(
     html: `<p>${input.requestText.replace(/\n/g, "<br />")}</p>`,
     idempotencyKey: reviewRequestEmailIdempotencyKey(input.reviewRequestId, input.attemptKey),
     kind: "review",
+    purpose: "customer",
     businessId: input.businessId,
     db,
   });
-  return "error" in sent ? "FAILED" : "SENT";
+  return customerEmailAttemptStatus(sent);
 }
 
 export async function cancelReviewRequest(

@@ -7,6 +7,7 @@ import {
   attemptRepeatFollowUpSms,
 } from "@/lib/customer-messaging/workflows";
 import {
+  customerEmailAttemptStatus,
   followUpEmailIdempotencyKey,
   getMailConfig,
   isUsableEmail,
@@ -187,10 +188,11 @@ async function attemptOwnedCustomerEmail(
     html: `<p>${input.text.replace(/\n/g, "<br />")}</p>`,
     idempotencyKey: input.idempotencyKey,
     kind: input.kind,
+    purpose: "customer",
     businessId: input.businessId,
     db,
   });
-  return "error" in sent ? "FAILED" : "SENT";
+  return customerEmailAttemptStatus(sent);
 }
 
 export async function sendReferralRequest(

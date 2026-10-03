@@ -34,12 +34,13 @@ import {
   getMailConfig,
   isUsableEmail,
   resetTransactionalEmailSender,
+  isTransactionalEmailSuppressed,
   sendTransactionalEmail,
   senderFrom,
   setTransactionalEmailSender,
+  transactionalEmailSendError,
   type TransactionalEmailKind,
 } from "@/lib/mail";
-import { isOutboundEmailSuppressedError } from "@/lib/mail-outbound-suppression";
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { DEFAULT_SETTINGS_PREFERENCES } from "@/lib/settings";
@@ -74,8 +75,9 @@ type EmailSender = (input: {
   text: string;
   idempotencyKey: string;
   kind: TransactionalEmailKind;
+  purpose: "customer";
   businessId: string;
-}) => Promise<{ id?: string; error?: string }>;
+}) => Promise<{ id?: string; error?: string; suppressed?: true; message?: string }>;
 
 export const EMAIL_DISPATCH_CLAIM_LEASE_MS = 2 * 60 * 1000;
 
@@ -674,12 +676,14 @@ async function sendRecordedEmail(
           html: `<p>${escapeHtml(input.body).replaceAll("\n", "<br />")}</p>`,
           idempotencyKey: input.idempotencyKey,
           kind: "customer",
+          purpose: "customer",
           businessId: input.access.businessId,
           db,
         });
-        if (sent.error) {
-          status = isOutboundEmailSuppressedError(sent.error) ? "BLOCKED" : "FAILED";
-          failureReason = sent.error;
+        const sendError = transactionalEmailSendError(sent);
+        if (sendError) {
+          status = isTransactionalEmailSuppressed(sent) ? "BLOCKED" : "FAILED";
+          failureReason = sendError;
         } else {
           status = "SENT";
           providerMessageId = sent.id ?? input.idempotencyKey;

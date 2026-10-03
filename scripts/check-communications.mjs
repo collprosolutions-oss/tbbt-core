@@ -222,8 +222,9 @@ check(
   mailSrc.includes("kind: TransactionalEmailKind"),
 );
 check(
-  "sendTransactionalEmail requires a businessId for suppression",
-  mailSrc.includes("businessId: string") &&
+  "sendTransactionalEmail requires a purpose and a businessId for customer mail",
+  mailSrc.includes("purpose: TransactionalEmailPurpose") &&
+    mailSrc.includes("isCustomerEmailPurpose") &&
     mailSrc.includes("blockedOutboundEmailReason"),
 );
 check(

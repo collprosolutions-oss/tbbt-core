@@ -17,6 +17,7 @@ import {
   getMailConfig,
   passwordResetIdempotencyKey,
   sendTransactionalEmail,
+  transactionalEmailSendError,
   type MailConfig,
 } from "@/lib/mail";
 import { buildPasswordResetEmail } from "@/lib/password-reset-mail";
@@ -186,13 +187,15 @@ export async function requestPasswordResetOp(
     html: emailContent.html,
     text: emailContent.text,
     kind: "password-reset",
+    purpose: "system-exempt-password-reset",
     idempotencyKey: passwordResetIdempotencyKey(user.id, token.id),
     businessId: membership?.businessId ?? user.id,
     db,
   });
 
-  if (sent.error) {
-    mailer.logError?.(sent.error);
+  const sendError = transactionalEmailSendError(sent);
+  if (sendError) {
+    mailer.logError?.(sendError);
     return { message: PASSWORD_RESET_REQUEST_MESSAGE, outcome: "send-failed" };
   }
 

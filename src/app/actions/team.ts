@@ -192,6 +192,7 @@ export async function addTeamMember(
       html: invite.html,
       text: invite.text,
       kind: "team",
+      purpose: "system-exempt-team",
       idempotencyKey: teamInviteIdempotencyKey(access.businessId, email),
       businessId: access.businessId,
       db: prisma,

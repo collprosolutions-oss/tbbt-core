@@ -5,6 +5,7 @@ import {
   newRequestCompanyEmailIdempotencyKey,
   senderFrom,
   sendTransactionalEmail,
+  transactionalEmailSendError,
   type MailConfig,
 } from "@/lib/mail";
 
@@ -163,12 +164,13 @@ export async function notifyBusinessNewPublicRequest(
     html: email.html,
     text: email.text,
     kind: "request",
+    purpose: "system-exempt-request-notify",
     idempotencyKey: newRequestCompanyEmailIdempotencyKey(request.id),
     businessId: business.id,
     db: "emailFailedDestination" in db ? (db as never) : undefined,
   });
 
-  if (sent.error) {
+  if (transactionalEmailSendError(sent)) {
     return { sent: false, to: recipient, skipped: "send_failed" };
   }
 

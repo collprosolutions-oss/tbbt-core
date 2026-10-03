@@ -12,6 +12,7 @@ export type FakeTransactionalEmailInput = {
   text: string;
   idempotencyKey: string;
   kind: string;
+  purpose?: string;
   businessId: string;
 };
 

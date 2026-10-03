@@ -7,11 +7,88 @@ import {
   isFakeEmailAdapterEnabled,
   type FakeTransactionalEmailInput,
 } from "@/lib/mail-fake";
-import { blockedOutboundEmailReason } from "@/lib/mail-outbound-suppression";
+import {
+  blockedOutboundEmailReason,
+  type OutboundEmailSuppression,
+} from "@/lib/mail-outbound-suppression";
 
 export { isFakeEmailAdapterEnabled } from "@/lib/mail-fake";
 
-type TransactionalEmailSendResult = { id?: string; error?: string };
+/**
+ * Call-site inventory for sendTransactionalEmail (the only provider send).
+ *
+ * Customer-facing — purpose "customer" or "automation", businessId required,
+ * bounce/complaint suppression enforced immediately before the provider:
+ * - src/lib/communications/engine.ts          compose / customer
+ * - src/app/actions/estimate.ts               estimate send
+ * - src/lib/complete-job-invoice.ts           invoice notify
+ * - src/lib/reviews-ops.ts                    review request + review reminder
+ * - src/lib/appointment-notify.ts             appointment proposed / notify
+ * - src/lib/referral-ops.ts                   referral request + follow-up
+ * - src/lib/automation/email.ts               every automation kind
+ *
+ * Non-customer system mail — explicit exempt purpose, suppression skipped
+ * by design (a static test distinguishes these from customer purposes):
+ * - src/app/actions/team.ts                   system-exempt-team
+ * - src/lib/password-reset.ts                 system-exempt-password-reset
+ * - src/lib/request-notify.ts                 system-exempt-request-notify
+ */
+export const CUSTOMER_EMAIL_PURPOSES = ["customer", "automation"] as const;
+export const SYSTEM_EXEMPT_EMAIL_PURPOSES = [
+  "system-exempt-team",
+  "system-exempt-password-reset",
+  "system-exempt-request-notify",
+] as const;
+
+export type CustomerEmailPurpose = (typeof CUSTOMER_EMAIL_PURPOSES)[number];
+export type SystemExemptEmailPurpose = (typeof SYSTEM_EXEMPT_EMAIL_PURPOSES)[number];
+export type TransactionalEmailPurpose = CustomerEmailPurpose | SystemExemptEmailPurpose;
+
+export function isCustomerEmailPurpose(
+  purpose: string | null | undefined,
+): purpose is CustomerEmailPurpose {
+  return (CUSTOMER_EMAIL_PURPOSES as readonly string[]).includes(purpose ?? "");
+}
+
+export function isSystemExemptEmailPurpose(
+  purpose: string | null | undefined,
+): purpose is SystemExemptEmailPurpose {
+  return (SYSTEM_EXEMPT_EMAIL_PURPOSES as readonly string[]).includes(purpose ?? "");
+}
+
+export type TransactionalEmailSuppressedResult = {
+  suppressed: true;
+  reason: OutboundEmailSuppression["reason"];
+  message: string;
+};
+
+export type TransactionalEmailSendResult =
+  | { id?: string }
+  | { error: string }
+  | TransactionalEmailSuppressedResult;
+
+export function isTransactionalEmailSuppressed(
+  result: TransactionalEmailSendResult,
+): result is TransactionalEmailSuppressedResult {
+  return "suppressed" in result && result.suppressed === true;
+}
+
+export function transactionalEmailSendError(
+  result: TransactionalEmailSendResult,
+): string | undefined {
+  if (isTransactionalEmailSuppressed(result)) return result.message;
+  if ("error" in result) return result.error;
+  return undefined;
+}
+
+export function customerEmailAttemptStatus(
+  result: TransactionalEmailSendResult,
+): "SENT" | "FAILED" | "SUPPRESSED" {
+  if (isTransactionalEmailSuppressed(result)) return "SUPPRESSED";
+  if ("error" in result && result.error) return "FAILED";
+  return "SENT";
+}
+
 type TransactionalEmailSender = (
   input: FakeTransactionalEmailInput,
 ) => Promise<TransactionalEmailSendResult>;
@@ -263,13 +340,20 @@ export async function sendTransactionalEmail(input: {
   text: string;
   idempotencyKey: string;
   kind: TransactionalEmailKind;
-  businessId: string;
+  purpose: TransactionalEmailPurpose;
+  businessId?: string;
   db?: PrismaClient | Prisma.TransactionClient;
-}) {
-  const db = input.db ?? prisma;
-  const blocked = await blockedOutboundEmailReason(db, input.businessId, input.to);
-  if (blocked) {
-    return { error: blocked };
+}): Promise<TransactionalEmailSendResult> {
+  if (isCustomerEmailPurpose(input.purpose)) {
+    const db = input.db ?? prisma;
+    const blocked = await blockedOutboundEmailReason(db, input.businessId ?? "", input.to);
+    if (blocked) {
+      return {
+        suppressed: true,
+        reason: blocked.reason,
+        message: blocked.message,
+      };
+    }
   }
 
   const providerInput: FakeTransactionalEmailInput = {
@@ -281,7 +365,8 @@ export async function sendTransactionalEmail(input: {
     text: input.text,
     idempotencyKey: input.idempotencyKey,
     kind: input.kind,
-    businessId: input.businessId,
+    purpose: input.purpose,
+    businessId: input.businessId ?? "",
   };
 
   if (injectedEmailSender) {
