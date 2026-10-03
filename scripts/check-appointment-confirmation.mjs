@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
+register(new URL("./estimate-options-test-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
@@ -65,6 +65,7 @@ function check(label, ok) {
 const jobActionSrc = readRepo("src/app/actions/job.ts");
 const publicSrc = readRepo("src/app/actions/public-appointment.ts");
 const fieldSrc = readRepo("src/app/actions/field-job.ts");
+const fieldOpsSrc = readRepo("src/lib/field-job-ops.ts");
 const portalSrc = readRepo("src/app/p/[token]/page.tsx");
 const portalActionsSrc = readRepo("src/components/portal/portal-appointment-actions.tsx");
 const ownerJobSrc = readRepo("src/app/(app)/jobs/[jobId]/page.tsx");
@@ -72,6 +73,26 @@ const ownerBannerSrc = readRepo("src/components/jobs/owner-appointment-attention
 const notifySrc = readRepo("src/lib/appointment-notify.ts");
 const mailSrc = readRepo("src/lib/mail.ts");
 const accessSrc = readRepo("src/lib/property-access.ts");
+const startAssignedJobFnSrc = fieldSrc.slice(
+  fieldSrc.indexOf("export async function startAssignedJob"),
+  fieldSrc.indexOf("export async function completeAssignedJob"),
+);
+const startFieldFnSrc = fieldOpsSrc.slice(
+  fieldOpsSrc.indexOf("export async function startAssignedFieldJob"),
+  fieldOpsSrc.indexOf("export async function reportAssignedJobProblem"),
+);
+const startJobFnSrc = jobActionSrc.slice(
+  jobActionSrc.indexOf("export async function startJob"),
+  jobActionSrc.indexOf("export async function markJobComplete"),
+);
+
+function form(fields) {
+  const data = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value != null) data.set(key, String(value));
+  }
+  return data;
+}
 
 console.log("\nSTATIC — Security and lifecycle contracts");
 check(
@@ -90,13 +111,20 @@ check(
 );
 check(
   "Field start has no owner override",
-  fieldSrc.includes("CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT") &&
-    !fieldSrc.includes("startWithoutConfirmation"),
+  fieldSrc.includes("startAssignedFieldJob") &&
+    startAssignedJobFnSrc.includes("startAssignedFieldJob") &&
+    !startAssignedJobFnSrc.includes("startWithoutConfirmation") &&
+    !startAssignedJobFnSrc.includes("overrideReason") &&
+    !startFieldFnSrc.includes("startWithoutConfirmation") &&
+    !startFieldFnSrc.includes("parseStartWithoutConfirmationReason") &&
+    startFieldFnSrc.includes("startJobRequiresCustomerConfirmation") &&
+    startFieldFnSrc.includes("CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT"),
 );
 check(
   "Owner start override requires OPERATE_JOBS path and a reason",
-  jobActionSrc.includes("startWithoutConfirmation") &&
-    jobActionSrc.includes("parseStartWithoutConfirmationReason"),
+  startJobFnSrc.includes("requireBusinessCapability(access, CAPABILITIES.OPERATE_JOBS)") &&
+    startJobFnSrc.includes("startWithoutConfirmation") &&
+    startJobFnSrc.includes("parseStartWithoutConfirmationReason"),
 );
 check(
   "Portal appointment actions stay on /p/{token}",
@@ -508,6 +536,7 @@ const testDbName = "tbbt_appointment_confirmation_test";
 const parsed = new URL(baseUrl);
 parsed.pathname = `/${testDbName}`;
 const testUrl = parsed.toString();
+process.env.DATABASE_URL = testUrl;
 const push = spawnSync(
   "npx",
   ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
@@ -922,16 +951,156 @@ try {
     appointmentConfirmationStatus: "AWAITING_CUSTOMER",
   });
   check("Unconfirmed appointment blocks normal start", startJobRequiresCustomerConfirmation(overrideJob));
-  const started = await prisma.job.update({
-    where: { id: overrideJob.id },
+
+  const memberUser = await prisma.user.create({
     data: {
-      status: "IN_PROGRESS",
-      startWithoutConfirmationAt: new Date(),
-      startWithoutConfirmationReason: "Confirmed by phone",
-      startWithoutConfirmationByMembershipId: membership.memberships[0].id,
+      name: "Field Member",
+      email: `member-${randomUUID()}@example.com`,
+      passwordHash: "x",
+      memberships: { create: { businessId: businessA.id, role: "MEMBER" } },
+    },
+    include: { memberships: true },
+  });
+  const memberMembership = memberUser.memberships[0];
+  const fieldUnconfirmed = await makeJob(businessA.id, {
+    status: "SCHEDULED",
+    scheduledAt: start,
+    scheduledDurationMinutes: 60,
+    appointmentProposalId: 1,
+    appointmentConfirmationStatus: "AWAITING_CUSTOMER",
+    job: { assignedMembershipId: memberMembership.id },
+  });
+  const fieldConfirmed = await makeJob(businessA.id, {
+    status: "SCHEDULED",
+    scheduledAt: start,
+    scheduledDurationMinutes: 60,
+    appointmentProposalId: 1,
+    appointmentConfirmationStatus: "CONFIRMED",
+    job: {
+      assignedMembershipId: memberMembership.id,
+      appointmentConfirmedForProposalId: 1,
+      propertyAccessMethod: "CUSTOMER_PRESENT",
     },
   });
-  check("Override can start the job without marking it customer-confirmed", started.status === "IN_PROGRESS" && !isCurrentAppointmentConfirmed(started));
+
+  const { assertBusinessRecord, businessScope } = await import("@/lib/access-scope");
+  const { ForbiddenError } = await import("@/lib/authorization");
+  const { startJob } = await import("@/app/actions/job");
+  const { startAssignedFieldJob } = await import("@/lib/field-job-ops");
+  const { setTestAccess } = await import("./estimate-options-test-access.mjs");
+
+  function makeAccess(business, role, actorMembership, userId) {
+    return {
+      businessId: business.id,
+      workspace: {
+        role,
+        membership: { id: actorMembership.id },
+        user: { id: userId },
+        business: {
+          id: business.id,
+          name: business.name,
+          slug: business.slug,
+          tradeCode: business.tradeCode,
+        },
+      },
+      scope: businessScope(business.id),
+      assertOwned(record) {
+        return assertBusinessRecord(record, business.id);
+      },
+      assertAttachable(record) {
+        return assertBusinessRecord(record, business.id);
+      },
+    };
+  }
+
+  const ownerAccess = makeAccess(
+    businessA,
+    "OWNER",
+    membership.memberships[0],
+    membership.id,
+  );
+  const memberAccess = makeAccess(businessA, "MEMBER", memberMembership, memberUser.id);
+
+  const fieldRefused = await startAssignedFieldJob(
+    prisma,
+    { businessId: businessA.id, membershipId: memberMembership.id },
+    fieldUnconfirmed.id,
+  );
+  const fieldUnconfirmedAfter = await prisma.job.findUnique({
+    where: { id: fieldUnconfirmed.id },
+  });
+  check(
+    "Assigned field start refuses an unconfirmed appointment",
+    fieldRefused.ok === false &&
+      fieldRefused.error === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT &&
+      fieldUnconfirmedAfter?.status === "SCHEDULED" &&
+      fieldUnconfirmedAfter?.startWithoutConfirmationAt == null,
+  );
+
+  const fieldStarted = await startAssignedFieldJob(
+    prisma,
+    { businessId: businessA.id, membershipId: memberMembership.id },
+    fieldConfirmed.id,
+  );
+  const fieldConfirmedAfter = await prisma.job.findUnique({
+    where: { id: fieldConfirmed.id },
+  });
+  check(
+    "Assigned field start succeeds after customer confirmation",
+    fieldStarted.ok === true && fieldConfirmedAfter?.status === "IN_PROGRESS",
+  );
+
+  setTestAccess(memberAccess);
+  let memberOwnerStartThrew = false;
+  try {
+    await startJob({}, form({ jobId: overrideJob.id }));
+  } catch (error) {
+    memberOwnerStartThrew = error instanceof ForbiddenError;
+  }
+  check(
+    "MEMBER cannot use the owner start path (OPERATE_JOBS)",
+    memberOwnerStartThrew &&
+      (await prisma.job.findUnique({ where: { id: overrideJob.id } }))?.status ===
+        "SCHEDULED",
+  );
+
+  setTestAccess(ownerAccess);
+  const blockedOwnerStart = await startJob({}, form({ jobId: overrideJob.id }));
+  check(
+    "Owner start without override is refused until the customer confirms",
+    blockedOwnerStart?.error === CUSTOMER_HAS_NOT_CONFIRMED_APPOINTMENT,
+  );
+
+  const ownerStartWithoutReason = await startJob(
+    {},
+    form({ jobId: overrideJob.id, startWithoutConfirmation: "1" }),
+  );
+  check(
+    "Owner override still requires a reason",
+    ownerStartWithoutReason?.error ===
+      "Choose why you are starting without customer confirmation.",
+  );
+
+  const started = await startJob(
+    {},
+    form({
+      jobId: overrideJob.id,
+      startWithoutConfirmation: "1",
+      overrideReason: "PHONE",
+    }),
+  );
+  const afterOwnerOverride = await prisma.job.findUnique({
+    where: { id: overrideJob.id },
+  });
+  check("OWNER startJob with a phone-confirmation reason succeeded", !started?.error);
+  check(
+    "Override can start the job without marking it customer-confirmed",
+    afterOwnerOverride?.status === "IN_PROGRESS" &&
+      afterOwnerOverride?.startWithoutConfirmationReason === "Confirmed by phone" &&
+      afterOwnerOverride?.startWithoutConfirmationByMembershipId ===
+        membership.memberships[0].id &&
+      !isCurrentAppointmentConfirmed(afterOwnerOverride),
+  );
 
   const pickup = validateAccessArrangement({
     method: "KEY_PICKUP_REQUIRED",
