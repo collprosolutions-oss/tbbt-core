@@ -55,7 +55,7 @@ Production secrets never belong in git. See `.env.example` for the real names:
 - Hosted Postgres: `DATABASE_URL`
 - SaaS Stripe (the trade business pays TBBT): `STRIPE_SAAS_PRICE_ID` (Founder), optional `STRIPE_SAAS_WEBHOOK_SECRET`. Optional later plan prices: `STRIPE_SAAS_PRICE_ID_STARTER`, `STRIPE_SAAS_PRICE_ID_BUSINESS`, `STRIPE_SAAS_PRICE_ID_ENTERPRISE`, or `STRIPE_SAAS_PLAN_PRICE_MAP`. Starter / Business / Enterprise are not purchasable until the catalog marks them LIVE and an approved price exists.
 - Connect Stripe (customer job payments): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
-- Resend: `RESEND_API_KEY`, `EMAIL_FROM`, optional `RESEND_WEBHOOK_SECRET` for verified bounce/complaint webhooks at `/api/mail/webhook`
+- Resend: `RESEND_API_KEY`, `EMAIL_FROM`, optional `RESEND_WEBHOOK_SECRET` for verified bounce/complaint webhooks at `/api/mail/webhook`. Failed-destination suppression currently applies only to `composeCustomerCommunication` and the Communications compose UI. Estimate, invoice, review, appointment, referral, and automation emails call `sendTransactionalEmail` directly and are not suppressed.
 - Twilio SMS: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, plus a messaging service or from-number
 - Cloudflare R2 (website photos): `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`
 

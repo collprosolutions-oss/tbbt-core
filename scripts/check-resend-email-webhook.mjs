@@ -14,8 +14,9 @@
  *   npm run test:resend-email-webhook
  */
 import { register } from "node:module";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withDisposableTestDatabase } from "./disposable-test-database.mjs";
@@ -37,19 +38,8 @@ const previous = {
   VERCEL_ENV: process.env.VERCEL_ENV,
 };
 
-if (!previous.DATABASE_URL) {
-  console.error("DATABASE_URL must be set to run this check.");
-  process.exit(1);
-}
-
 const WEBHOOK_SECRET = `whsec_${Buffer.from("resend_webhook_test_secret").toString("base64")}`;
-
-delete process.env.VERCEL_ENV;
-process.env.TBBT_EMAIL_ADAPTER = "fake";
-process.env.RESEND_API_KEY = "re_test_bounce_complaint";
-process.env.EMAIL_FROM = "TBBT <bounce@example.com>";
-process.env.NEXT_PUBLIC_APP_URL = "http://mail-webhook.test";
-process.env.RESEND_WEBHOOK_SECRET = WEBHOOK_SECRET;
+const TOLERANCE_MUTATION_CHILD = process.env.RESEND_WEBHOOK_TOLERANCE_MUTATION_CHILD === "1";
 
 let failures = 0;
 function check(label, condition) {
@@ -59,6 +49,65 @@ function check(label, condition) {
     failures += 1;
   }
 }
+
+async function runTimestampToleranceUnitChecks() {
+  const { signResendWebhook, verifyResendWebhookSignature, SVIX_TOLERANCE_SECONDS } = await import(
+    "@/lib/mail-webhook-signature"
+  );
+  const payload = JSON.stringify({
+    type: "email.bounced",
+    data: { email_id: "re_stale_tolerance" },
+  });
+  const stale = signResendWebhook({
+    secret: WEBHOOK_SECRET,
+    payload,
+    timestamp: Math.floor(Date.now() / 1000) - (SVIX_TOLERANCE_SECONDS + 45),
+  });
+  const fresh = signResendWebhook({ secret: WEBHOOK_SECRET, payload });
+  check(
+    "Stale timestamp outside +/-300s is rejected",
+    Boolean(stale) &&
+      verifyResendWebhookSignature({
+        secret: WEBHOOK_SECRET,
+        payload,
+        headers: { id: stale.id, timestamp: stale.timestamp, signature: stale.signature },
+      }) === false,
+  );
+  check(
+    "Current timestamp verifies",
+    Boolean(fresh) &&
+      verifyResendWebhookSignature({
+        secret: WEBHOOK_SECRET,
+        payload,
+        headers: { id: fresh.id, timestamp: fresh.timestamp, signature: fresh.signature },
+      }) === true,
+  );
+}
+
+if (TOLERANCE_MUTATION_CHILD) {
+  await runTimestampToleranceUnitChecks();
+  if (failures > 0) {
+    console.error(`\n${failures} check(s) failed.`);
+    process.exit(1);
+  }
+  console.log("\nTimestamp tolerance mutation child passed.");
+  process.exit(0);
+}
+
+console.log("\nSTATIC — timestamp tolerance");
+await runTimestampToleranceUnitChecks();
+
+if (!previous.DATABASE_URL) {
+  console.error("DATABASE_URL must be set to run this check.");
+  process.exit(1);
+}
+
+delete process.env.VERCEL_ENV;
+process.env.TBBT_EMAIL_ADAPTER = "fake";
+process.env.RESEND_API_KEY = "re_test_bounce_complaint";
+process.env.EMAIL_FROM = "TBBT <bounce@example.com>";
+process.env.NEXT_PUBLIC_APP_URL = "http://mail-webhook.test";
+process.env.RESEND_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
 function restoreEnv() {
   for (const [key, value] of Object.entries(previous)) {
@@ -116,10 +165,11 @@ await withDisposableTestDatabase(
     namePrefix: "tbbt_resend_email_webhook",
     setProcessEnv: true,
   },
-  async ({ prisma }) => {
+  async ({ prisma, createClient }) => {
     const {
       composeCustomerCommunication,
       emailDestinationFingerprint,
+      emailDestinationFingerprintOrNull,
       evaluateEmailEligibility,
     } = await import("@/lib/communications");
     const { createFakeTransactionalEmailSender, signFakeResendWebhook } = await import(
@@ -142,7 +192,9 @@ await withDisposableTestDatabase(
     const { MAIL_WEBHOOK_PATH, isMailWebhookPath, RESEND_MAIL_PROVIDER } = await import(
       "@/lib/mail-webhook-path"
     );
-    const { verifyResendWebhookSignature } = await import("@/lib/mail-webhook-signature");
+    const { verifyResendWebhookSignature, SVIX_TOLERANCE_SECONDS } = await import(
+      "@/lib/mail-webhook-signature"
+    );
 
     const fakeEmail = createFakeTransactionalEmailSender();
     setCommunicationEmailSender(fakeEmail.send.bind(fakeEmail));
@@ -182,7 +234,15 @@ await withDisposableTestDatabase(
     }
 
     async function recordSendHistory(input) {
-      const fingerprint = emailDestinationFingerprint(input.businessId, input.email);
+      const fingerprint =
+        input.destinationFingerprint === null
+          ? null
+          : (input.destinationFingerprint ??
+            emailDestinationFingerprintOrNull(input.businessId, input.email));
+      const last4 =
+        input.destinationFingerprint === null
+          ? null
+          : (input.email ?? "").split("@")[0].slice(-4);
       return prisma.customerCommunication.create({
         data: {
           businessId: input.businessId,
@@ -192,9 +252,11 @@ await withDisposableTestDatabase(
           purpose: "GENERAL",
           subject: "Recorded customer email",
           idempotencyKey: input.idempotencyKey ?? `email-sent-${randomUUID()}`,
-          destinationLast4: input.email.split("@")[0].slice(-4),
+          destinationLast4: last4 || null,
           destinationFingerprint: fingerprint,
-          consentContext: "sms:UNKNOWN;email:AVAILABLE;channel:EMAIL",
+          consentContext: fingerprint
+            ? "sms:UNKNOWN;email:AVAILABLE;channel:EMAIL"
+            : "sms:UNKNOWN;email:UNAVAILABLE;channel:EMAIL",
           bodySnapshot: "Recorded send history for webhook tests.",
           status: "SENT",
           provider: RESEND_MAIL_PROVIDER,
@@ -505,9 +567,294 @@ await withDisposableTestDatabase(
         (await destCount(tenantA.business.id)) === 2,
     );
 
+    console.log("\nTEST — null destination has no fingerprint and writes no dest row");
+    check(
+      "Null or unusable destination has no fingerprint",
+      emailDestinationFingerprintOrNull(tenantA.business.id, null) === null &&
+        emailDestinationFingerprintOrNull(tenantA.business.id, undefined) === null &&
+        emailDestinationFingerprintOrNull(tenantA.business.id, "") === null &&
+        emailDestinationFingerprintOrNull(tenantA.business.id, "not-an-email") === null,
+    );
+    const missingEmailElig = evaluateEmailEligibility({
+      businessId: tenantA.business.id,
+      email: null,
+      deliveryConfigured: true,
+    });
+    check(
+      "Null destination is missing_email, not failed_destination",
+      missingEmailElig.permitted === false &&
+        missingEmailElig.reason === "missing_email" &&
+        missingEmailElig.fingerprint === null,
+    );
+    const noEmailCustomer = await prisma.customer.create({
+      data: { businessId: tenantA.business.id, name: "No Email", email: null },
+    });
+    const missingDestId = `re_missing_${randomUUID()}`;
+    const destsBeforeMissing = await destCount();
+    await recordSendHistory({
+      businessId: tenantA.business.id,
+      customerId: noEmailCustomer.id,
+      email: null,
+      destinationFingerprint: null,
+      providerMessageId: missingDestId,
+    });
+    const missingParsed = parseResendDeliveryEvent(
+      signedFixture({
+        type: MAIL_WEBHOOK_EVENT_BOUNCE,
+        emailId: missingDestId,
+        to: "",
+      }).payload,
+    );
+    check("Null-destination bounce payload parses", Boolean(missingParsed));
+    const missingApply = missingParsed
+      ? await applyVerifiedMailDeliveryEvent(prisma, missingParsed)
+      : { applied: false, reason: "unparsed" };
+    const missingFixture = signedFixture({
+      type: MAIL_WEBHOOK_EVENT_BOUNCE,
+      emailId: missingDestId,
+      to: "",
+    });
+    const missingHttp = await handleMailWebhookRequest(prisma, webhookRequest(missingFixture.signed));
+    const missingCompose = await composeCustomerCommunication(prisma, tenantA.access, {
+      customerId: noEmailCustomer.id,
+      channel: "EMAIL",
+      purpose: "GENERAL",
+      subject: "Should not send without an address",
+      body: "Null destination compose.",
+      idempotencyKey: `email-null-${randomUUID()}`,
+    });
+    check(
+      "Null-destination webhook writes no dest row and completes the claim",
+      missingApply.applied === false &&
+        missingApply.reason === "missing_destination" &&
+        missingHttp.status === 200 &&
+        missingHttp.body.ok === true &&
+        (await destCount()) === destsBeforeMissing,
+    );
+    check(
+      "Compose with a null destination is blocked as missing email",
+      missingCompose.ok === false &&
+        missingCompose.status === "BLOCKED" &&
+        missingCompose.failureReason === "Customer has no usable email address.",
+    );
+
+    console.log("\nTEST — stale timestamp is rejected over HTTP");
+    const destsBeforeStale = await destCount();
+    const eventsBeforeStale = await eventCount();
+    const staleFixture = signedFixture({
+      type: MAIL_WEBHOOK_EVENT_BOUNCE,
+      emailId: bounceId,
+      to: sharedEmail,
+      timestamp: Math.floor(Date.now() / 1000) - (SVIX_TOLERANCE_SECONDS + 45),
+    });
+    const staleHttp = await handleMailWebhookRequest(prisma, webhookRequest(staleFixture.signed));
+    check(
+      "Stale timestamp HTTP is rejected",
+      staleHttp.status === 400 && staleHttp.body.error === "Invalid signature.",
+    );
+    check(
+      "Stale timestamp writes nothing",
+      (await destCount()) === destsBeforeStale && (await eventCount()) === eventsBeforeStale,
+    );
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    const raceA = createClient();
+    const raceB = createClient();
+
+    console.log("\nTEST — two-client concurrent same-event deliveries stay idempotent");
+    let sameEventOk = 0;
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      const email = `race.${iteration}.${randomUUID().slice(0, 8)}@example.com`;
+      const customer = await prisma.customer.create({
+        data: {
+          businessId: tenantA.business.id,
+          name: `Race ${iteration}`,
+          email,
+        },
+      });
+      const emailId = `re_race_${iteration}_${randomUUID()}`;
+      await recordSendHistory({
+        businessId: tenantA.business.id,
+        customerId: customer.id,
+        email,
+        providerMessageId: emailId,
+      });
+      const fixture = signedFixture({
+        type: MAIL_WEBHOOK_EVENT_BOUNCE,
+        emailId,
+        to: email,
+        svixId: `msg_race_${iteration}_${randomUUID()}`,
+      });
+      const request = webhookRequest(fixture.signed);
+      const clients = [raceA, raceB];
+      const stagger = iteration % 5;
+      const settled = await Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          (async () => {
+            if (stagger > 0 && index > 0) {
+              await sleep((index % stagger) * (1 + (iteration % 4)));
+            }
+            try {
+              const result = await handleMailWebhookRequest(clients[index % 2], request);
+              return { ok: true, status: result.status, error: null };
+            } catch (error) {
+              return { ok: false, status: 0, error };
+            }
+          })(),
+        ),
+      );
+      const dests = await prisma.emailFailedDestination.findMany({
+        where: {
+          businessId: tenantA.business.id,
+          destinationFingerprint: emailDestinationFingerprint(tenantA.business.id, email),
+        },
+      });
+      const events = await prisma.customerMessagingWebhookEvent.findMany({
+        where: {
+          provider: RESEND_MAIL_PROVIDER,
+          providerEventId: `${emailId}:${MAIL_WEBHOOK_EVENT_BOUNCE}`,
+        },
+      });
+      if (
+        settled.every((row) => row.ok && row.status >= 200 && row.status < 300) &&
+        dests.length === 1 &&
+        events.length === 1
+      ) {
+        sameEventOk += 1;
+      } else if (iteration === 0) {
+        console.error(" first same-event race", {
+          statuses: settled.map((row) => [row.ok, row.status, row.error?.message ?? null]),
+          dests: dests.length,
+          events: events.length,
+        });
+      }
+    }
+    check(
+      "Same event id x6 across two clients stays one row and 2xx (>=20 iterations)",
+      sameEventOk === 20,
+    );
+
+    console.log("\nTEST — bounce vs complaint race ends as COMPLAINT");
+    let complaintWins = 0;
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      const email = `swap.${iteration}.${randomUUID().slice(0, 8)}@example.com`;
+      const customer = await prisma.customer.create({
+        data: {
+          businessId: tenantA.business.id,
+          name: `Swap ${iteration}`,
+          email,
+        },
+      });
+      const bounceMsg = `re_swap_b_${iteration}_${randomUUID()}`;
+      const complaintMsg = `re_swap_c_${iteration}_${randomUUID()}`;
+      await recordSendHistory({
+        businessId: tenantA.business.id,
+        customerId: customer.id,
+        email,
+        providerMessageId: bounceMsg,
+      });
+      await recordSendHistory({
+        businessId: tenantA.business.id,
+        customerId: customer.id,
+        email,
+        providerMessageId: complaintMsg,
+      });
+      const bounceFix = signedFixture({
+        type: MAIL_WEBHOOK_EVENT_BOUNCE,
+        emailId: bounceMsg,
+        to: email,
+        svixId: `msg_swap_b_${iteration}_${randomUUID()}`,
+      });
+      const complaintFix = signedFixture({
+        type: MAIL_WEBHOOK_EVENT_COMPLAINT,
+        emailId: complaintMsg,
+        to: email,
+        svixId: `msg_swap_c_${iteration}_${randomUUID()}`,
+      });
+      const bounceFirst = iteration % 2 === 0;
+      const first = bounceFirst
+        ? () => handleMailWebhookRequest(raceA, webhookRequest(bounceFix.signed))
+        : () => handleMailWebhookRequest(raceA, webhookRequest(complaintFix.signed));
+      const second = bounceFirst
+        ? () => handleMailWebhookRequest(raceB, webhookRequest(complaintFix.signed))
+        : () => handleMailWebhookRequest(raceB, webhookRequest(bounceFix.signed));
+      const delay = iteration % 4;
+      let threw = false;
+      const settled = await Promise.all([
+        first().catch((error) => {
+          threw = true;
+          return { status: 0, body: { error: String(error) } };
+        }),
+        (async () => {
+          if (delay > 0) await sleep(delay);
+          return second();
+        })().catch((error) => {
+          threw = true;
+          return { status: 0, body: { error: String(error) } };
+        }),
+      ]);
+      const dests = await prisma.emailFailedDestination.findMany({
+        where: {
+          businessId: tenantA.business.id,
+          destinationFingerprint: emailDestinationFingerprint(tenantA.business.id, email),
+        },
+      });
+      if (
+        !threw &&
+        settled.every((row) => row.status >= 200 && row.status < 300) &&
+        dests.length === 1 &&
+        dests[0].reason === "COMPLAINT"
+      ) {
+        complaintWins += 1;
+      } else if (iteration === 0) {
+        console.error(" first bounce/complaint race", {
+          statuses: settled.map((row) => row.status),
+          dests: dests.map((row) => row.reason),
+        });
+      }
+    }
+    check(
+      "Bounce vs complaint on one address ends as COMPLAINT (>=20 iterations)",
+      complaintWins === 20,
+    );
+
     resetCommunicationEmailSender();
   },
 ).finally(restoreEnv);
+
+console.log("\nMUTATION — removing +/-300s timestamp tolerance fails the stale check");
+const signaturePath = join(root, "src/lib/mail-webhook-signature.ts");
+const signatureOriginal = readFileSync(signaturePath, "utf8");
+const toleranceGuard = "  if (Math.abs(now - ts) > SVIX_TOLERANCE_SECONDS) return false;\n";
+check("Timestamp tolerance guard is present for mutation", signatureOriginal.includes(toleranceGuard));
+if (signatureOriginal.includes(toleranceGuard)) {
+  writeFileSync(signaturePath, signatureOriginal.replace(toleranceGuard, ""));
+  try {
+    const child = spawnSync(
+      process.execPath,
+      ["--experimental-strip-types", fileURLToPath(import.meta.url)],
+      {
+        env: { ...process.env, RESEND_WEBHOOK_TOLERANCE_MUTATION_CHILD: "1" },
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    check(
+      "Removing +/-300s tolerance fails the stale-timestamp unit check",
+      child.status !== 0 &&
+        (child.stdout + child.stderr).includes("Stale timestamp outside +/-300s is rejected"),
+    );
+    if (child.status === 0) {
+      console.error((child.stdout || "").slice(-1500));
+      console.error((child.stderr || "").slice(-800));
+    }
+  } finally {
+    writeFileSync(signaturePath, signatureOriginal);
+  }
+}
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed.`);

@@ -1,6 +1,12 @@
 /**
  * Failed email destinations recorded from verified Resend bounce and
  * complaint webhooks. Request paths only assert the migrate-owned table.
+ *
+ * Suppression currently applies only to composeCustomerCommunication and
+ * the Communications compose UI, which read these rows through
+ * evaluateEmailEligibility. Estimate, invoice, review, appointment,
+ * referral, and automation emails call sendTransactionalEmail directly
+ * and are not suppressed here.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { assertRequiredTablesExist } from "@/lib/request-path-schema";

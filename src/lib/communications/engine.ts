@@ -4,6 +4,7 @@ import {
   evaluateComposeChannelEligibility,
   consentContextSnapshot,
   emailDestinationFingerprint,
+  emailDestinationFingerprintOrNull,
 } from "@/lib/communications/consent";
 import { findEmailFailedDestination } from "@/lib/mail-failed-destination";
 import { productCapabilityForPurpose } from "@/lib/communications/entitlements";
@@ -311,9 +312,10 @@ export async function composeCustomerCommunication(
     },
   });
 
-  const emailFingerprint = isUsableEmail(customer.email)
-    ? emailDestinationFingerprint(access.businessId, customer.email)
-    : null;
+  const emailFingerprint = emailDestinationFingerprintOrNull(
+    access.businessId,
+    customer.email,
+  );
   const failedDestination = emailFingerprint
     ? await findEmailFailedDestination(db, {
         businessId: access.businessId,

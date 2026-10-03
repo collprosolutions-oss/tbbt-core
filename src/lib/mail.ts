@@ -128,7 +128,7 @@ export function senderFrom(businessName: string, fromAddress: string) {
   return `${display} <${fromAddress}>`;
 }
 
-export function isUsableEmail(value: string | null | undefined) {
+export function isUsableEmail(value: string | null | undefined): value is string {
   return Boolean(value && EMAIL_PATTERN.test(value.trim()));
 }
 

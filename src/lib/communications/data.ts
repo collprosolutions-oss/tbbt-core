@@ -1,13 +1,12 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { ensureDefaultAutomationRules } from "@/lib/automation/rules";
 import {
-  emailDestinationFingerprint,
+  emailDestinationFingerprintOrNull,
   evaluateComposeChannelEligibility,
 } from "@/lib/communications/consent";
 import type { CommunicationAccess } from "@/lib/communications/engine";
 import { listFailedSmsDeliveries } from "@/lib/communications/failed-delivery";
 import { listEmailFailedDestinationsByFingerprints } from "@/lib/mail-failed-destination";
-import { isUsableEmail } from "@/lib/mail";
 import { getReceptionistReadiness } from "@/lib/communications/receptionist";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { loadCustomerCommunicationHistory } from "@/lib/communications/timeline";
@@ -87,11 +86,13 @@ export async function loadCommunicationsWorkspace(
   const preferences = settings ?? DEFAULT_SETTINGS_PREFERENCES;
   const failedDestinations = await listEmailFailedDestinationsByFingerprints(db, {
     businessId: access.businessId,
-    fingerprints: customers.flatMap((row) =>
-      isUsableEmail(row.email) ? [emailDestinationFingerprint(access.businessId, row.email!)] : [],
-    ),
+    fingerprints: customers.flatMap((row) => {
+      const fingerprint = emailDestinationFingerprintOrNull(access.businessId, row.email);
+      return fingerprint ? [fingerprint] : [];
+    }),
   });
   const composeCustomers = customers.map((row) => {
+    const fingerprint = emailDestinationFingerprintOrNull(access.businessId, row.email);
     const email = evaluateComposeChannelEligibility({
       businessId: access.businessId,
       channel: "EMAIL",
@@ -101,9 +102,7 @@ export async function loadCommunicationsWorkspace(
       purpose: purposeForComposeTemplate("general"),
       preferences,
       smsEntitled,
-      failedDestinationReason: isUsableEmail(row.email)
-        ? failedDestinations.get(emailDestinationFingerprint(access.businessId, row.email!)) ?? null
-        : null,
+      failedDestinationReason: fingerprint ? failedDestinations.get(fingerprint) ?? null : null,
     });
     const sms = evaluateComposeChannelEligibility({
       businessId: access.businessId,
@@ -135,11 +134,13 @@ export async function loadCommunicationsWorkspace(
           purpose: purposeForComposeTemplate("general"),
           preferences,
           smsEntitled,
-          failedDestinationReason: isUsableEmail(selected.email)
-            ? failedDestinations.get(
-                emailDestinationFingerprint(access.businessId, selected.email!),
-              ) ?? null
-            : null,
+          failedDestinationReason: (() => {
+            const fingerprint = emailDestinationFingerprintOrNull(
+              access.businessId,
+              selected.email,
+            );
+            return fingerprint ? failedDestinations.get(fingerprint) ?? null : null;
+          })(),
         }),
         sms: evaluateComposeChannelEligibility({
           businessId: access.businessId,

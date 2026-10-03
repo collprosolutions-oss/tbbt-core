@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
-const SVIX_TOLERANCE_SECONDS = 5 * 60;
+export const SVIX_TOLERANCE_SECONDS = 5 * 60;
 const WHSEC_PREFIX = "whsec_";
 
 export type ResendWebhookHeaders = {

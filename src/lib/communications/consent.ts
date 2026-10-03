@@ -52,6 +52,15 @@ export function emailDestinationFingerprint(businessId: string, email: string) {
     .digest("hex");
 }
 
+/** Null / unusable destinations have no fingerprint and are not suppressed. */
+export function emailDestinationFingerprintOrNull(
+  businessId: string,
+  email: string | null | undefined,
+) {
+  if (!isUsableEmail(email)) return null;
+  return emailDestinationFingerprint(businessId, email);
+}
+
 export function emailDestinationLast4(email: string) {
   const local = email.trim().split("@")[0] ?? "";
   return local.slice(-4) || email.trim().slice(-4);
