@@ -78,7 +78,9 @@ export async function sendReferralRequestAction(
       message:
         updated.status === "SENT"
           ? "Referral request sent through a connected adapter."
-          : "No connected email or SMS accepted the referral request. It is FAILED and can be retried or marked sent manually.",
+          : updated.lastEmailStatus === "SUPPRESSED"
+            ? "Not sent: this address reported a complaint or bounce. It can be retried or marked sent manually."
+            : "No connected email or SMS accepted the referral request. It is FAILED and can be retried or marked sent manually.",
     };
   } catch (error) {
     return { error: referralErrorMessage(error, "That referral request could not be sent.") };
@@ -169,7 +171,9 @@ export async function sendFollowUpAction(
       message:
         updated.status === "SENT"
           ? "Follow-up sent through a connected adapter."
-          : "No connected email or SMS accepted the follow-up. It is FAILED and can be retried or marked sent manually.",
+          : updated.lastEmailStatus === "SUPPRESSED"
+            ? "Not sent: this address reported a complaint or bounce. It can be retried or marked sent manually."
+            : "No connected email or SMS accepted the follow-up. It is FAILED and can be retried or marked sent manually.",
     };
   } catch (error) {
     return { error: referralErrorMessage(error, "That follow-up could not be sent.") };
@@ -212,9 +216,16 @@ export async function sendReviewReminderAction(
 ): Promise<ReferralActionState> {
   try {
     const access = await requireOperatingBusinessAccess();
-    await sendReviewRequestReminder(prisma, access, { requestId: readString(formData, "requestId") });
+    const updated = await sendReviewRequestReminder(prisma, access, {
+      requestId: readString(formData, "requestId"),
+    });
     refresh();
-    return { message: "Reminder attempted through connected adapters." };
+    return {
+      message:
+        updated.lastEmailStatus === "SUPPRESSED"
+          ? "Not sent: this address reported a complaint or bounce."
+          : "Reminder attempted through connected adapters.",
+    };
   } catch (error) {
     return { error: reviewsErrorMessage(error, "That reminder could not be sent.") };
   }

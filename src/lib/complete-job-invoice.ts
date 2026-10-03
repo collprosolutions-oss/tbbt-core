@@ -31,6 +31,7 @@ import {
   isUsableEmail,
   senderFrom,
   sendTransactionalEmail,
+  transactionalEmailSendError,
 } from "@/lib/mail";
 import { liveOutboundProjectToken } from "@/lib/project-link-data";
 import { tenantInvoiceUrl } from "@/lib/tenant-app-url";
@@ -276,16 +277,19 @@ async function notifyCustomerInvoiceReady(
     html: email.html,
     text: email.text,
     kind: "invoice",
+    purpose: "customer",
     idempotencyKey: invoiceReadyIdempotencyKey(input.invoiceId),
+    businessId: input.businessId,
+    db,
   });
 
   await queueSms();
 
-  if (sent.error) {
+  const sendError = transactionalEmailSendError(sent);
+  if (sendError) {
     return {
       sent: false,
-      warning:
-        "Invoice is available in the customer portal, but the invoice email could not be sent.",
+      warning: sendError,
     };
   }
 

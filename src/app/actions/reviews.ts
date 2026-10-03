@@ -114,7 +114,9 @@ export async function sendReviewRequestAction(
       message:
         updated.status === "SENT"
           ? "Request sent through a connected adapter."
-          : "No connected email or SMS accepted the request. It is FAILED and can be retried or marked sent manually.",
+          : updated.lastEmailStatus === "SUPPRESSED"
+            ? "Not sent: this address reported a complaint or bounce. It can be retried or marked sent manually."
+            : "No connected email or SMS accepted the request. It is FAILED and can be retried or marked sent manually.",
     };
   } catch (error) {
     return { error: reviewsErrorMessage(error, "That review request could not be sent.") };

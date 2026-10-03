@@ -20,6 +20,7 @@ export { getOrCreateCustomerThread } from "@/lib/communications/thread";
 export {
   consentContextSnapshot,
   emailDestinationFingerprint,
+  emailDestinationFingerprintOrNull,
   evaluateComposeChannelEligibility,
   evaluateEmailEligibility,
 } from "@/lib/communications/consent";

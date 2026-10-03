@@ -183,6 +183,8 @@
     "test:supplier-quote-compare": "node --experimental-strip-types scripts/check-supplier-quote-compare.mjs",
     "test:communications-department": "node --experimental-strip-types scripts/check-communications-department.mjs",
     "test:voice-missed-call-webhook": "node --experimental-strip-types scripts/check-voice-missed-call-webhook.mjs",
+    "test:resend-email-webhook": "node --experimental-strip-types scripts/check-resend-email-webhook.mjs",
+    "test:email-outbound-suppression": "node --experimental-strip-types scripts/check-email-outbound-suppression.mjs",
     "test:receptionist-recovery-center": "node --experimental-strip-types scripts/check-receptionist-recovery-center.mjs",
     "test:growth-department": "node --experimental-strip-types scripts/check-growth-department.mjs",
     "test:business-protection": "node --experimental-strip-types scripts/check-business-protection.mjs",

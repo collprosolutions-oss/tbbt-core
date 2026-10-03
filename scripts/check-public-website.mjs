@@ -82,6 +82,7 @@ const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
   "@/lib/public-website-paths"
 );
 const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import("@/lib/stripe-webhook-path");
+const { isMailWebhookPath, MAIL_WEBHOOK_PATH } = await import("@/lib/mail-webhook-path");
 const { shouldServeTbbtMarketingHome } = await import("@/lib/tbbt-marketing-host");
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:43217";
@@ -324,6 +325,15 @@ check(
   "Auth proxy matcher excludes the e-sign webhook so Dropbox Sign POSTs are not redirected",
   proxySrc.includes("api/esign/webhook") &&
     proxySrc.includes("isEsignWebhookPath(pathname)"),
+);
+check(
+  "Auth proxy matcher excludes the Resend webhook so bounce and complaint POSTs are not redirected",
+  MAIL_WEBHOOK_PATH === "/api/mail/webhook" &&
+    isMailWebhookPath(MAIL_WEBHOOK_PATH) &&
+    !isMailWebhookPath(`${MAIL_WEBHOOK_PATH}/extra`) &&
+    !isPublicWebsitePath(MAIL_WEBHOOK_PATH) &&
+    proxySrc.includes("api/mail/webhook") &&
+    proxySrc.includes("isMailWebhookPath(pathname)"),
 );
 check("Services page does not repeat a pre-footer quote CTA",
   !readRepo("src/app/hire/[slug]/services/page.tsx").includes("PublicCtaBar") &&

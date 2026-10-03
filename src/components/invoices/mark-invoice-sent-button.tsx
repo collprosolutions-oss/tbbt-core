@@ -20,8 +20,8 @@ export function MarkInvoiceSentButton({ invoiceId }: { invoiceId: string }) {
   const errorId = useId();
 
   useEffect(() => {
-    if (state.error) errorRef.current?.focus();
-  }, [state.error]);
+    if (state.error || state.warning) errorRef.current?.focus();
+  }, [state.error, state.warning]);
 
   return (
     <form action={formAction}>
@@ -35,6 +35,16 @@ export function MarkInvoiceSentButton({ invoiceId }: { invoiceId: string }) {
           className="mb-2"
         >
           <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {state.warning && !state.error ? (
+        <Alert
+          ref={errorRef}
+          id={errorId}
+          tabIndex={-1}
+          className="mb-2"
+        >
+          <AlertDescription>{state.warning}</AlertDescription>
         </Alert>
       ) : null}
       <Button

@@ -4,7 +4,9 @@ import {
   evaluateComposeChannelEligibility,
   consentContextSnapshot,
   emailDestinationFingerprint,
+  emailDestinationFingerprintOrNull,
 } from "@/lib/communications/consent";
+import { findEmailFailedDestination } from "@/lib/mail-failed-destination";
 import { productCapabilityForPurpose } from "@/lib/communications/entitlements";
 import { assertRelatedRecordForCustomer } from "@/lib/communications/related";
 import { departmentSmsComposeRequiresAddon } from "@/lib/communications/sms-policy";
@@ -31,8 +33,12 @@ import {
 import {
   getMailConfig,
   isUsableEmail,
+  resetTransactionalEmailSender,
+  isTransactionalEmailSuppressed,
   sendTransactionalEmail,
   senderFrom,
+  setTransactionalEmailSender,
+  transactionalEmailSendError,
   type TransactionalEmailKind,
 } from "@/lib/mail";
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
@@ -69,9 +75,9 @@ type EmailSender = (input: {
   text: string;
   idempotencyKey: string;
   kind: TransactionalEmailKind;
-}) => Promise<{ id?: string; error?: string }>;
-
-let emailSender: EmailSender = sendTransactionalEmail;
+  purpose: "customer";
+  businessId: string;
+}) => Promise<{ id?: string; error?: string; suppressed?: true; message?: string }>;
 
 export const EMAIL_DISPATCH_CLAIM_LEASE_MS = 2 * 60 * 1000;
 
@@ -111,11 +117,11 @@ async function finishMaintenanceMarkSent(
 }
 
 export function setCommunicationEmailSender(sender: EmailSender | null) {
-  emailSender = sender ?? sendTransactionalEmail;
+  setTransactionalEmailSender(sender as Parameters<typeof setTransactionalEmailSender>[0]);
 }
 
 export function resetCommunicationEmailSender() {
-  emailSender = sendTransactionalEmail;
+  resetTransactionalEmailSender();
 }
 
 export function requireCommunicationsCapability(access: CommunicationAccess) {
@@ -310,6 +316,17 @@ export async function composeCustomerCommunication(
     },
   });
 
+  const emailFingerprint = emailDestinationFingerprintOrNull(
+    access.businessId,
+    customer.email,
+  );
+  const failedDestination = emailFingerprint
+    ? await findEmailFailedDestination(db, {
+        businessId: access.businessId,
+        destinationFingerprint: emailFingerprint,
+      })
+    : null;
+
   const eligibility = evaluateComposeChannelEligibility({
     businessId: access.businessId,
     channel: input.channel,
@@ -319,6 +336,7 @@ export async function composeCustomerCommunication(
     purpose,
     preferences: settings ?? DEFAULT_SETTINGS_PREFERENCES,
     smsEntitled,
+    failedDestinationReason: failedDestination?.reason ?? null,
   });
 
   const thread = await getOrCreateCustomerThread(db, {
@@ -649,7 +667,7 @@ async function sendRecordedEmail(
       provider = "disconnected";
     } else {
       try {
-        const sent = await emailSender({
+        const sent = await sendTransactionalEmail({
           apiKey: config.apiKey,
           from: senderFrom("TBBT", config.fromAddress),
           to: liveEmail,
@@ -658,13 +676,17 @@ async function sendRecordedEmail(
           html: `<p>${escapeHtml(input.body).replaceAll("\n", "<br />")}</p>`,
           idempotencyKey: input.idempotencyKey,
           kind: "customer",
+          purpose: "customer",
+          businessId: input.access.businessId,
+          db,
         });
-        if (sent.error) {
-          status = "FAILED";
-          failureReason = sent.error;
+        const sendError = transactionalEmailSendError(sent);
+        if (sendError) {
+          status = isTransactionalEmailSuppressed(sent) ? "BLOCKED" : "FAILED";
+          failureReason = sendError;
         } else {
           status = "SENT";
-          providerMessageId = sent.id ?? input.idempotencyKey;
+          providerMessageId = ("id" in sent ? sent.id : undefined) ?? input.idempotencyKey;
         }
       } catch {
         status = "FAILED";

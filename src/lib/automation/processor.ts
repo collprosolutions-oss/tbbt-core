@@ -57,7 +57,7 @@ function combineChannelOutcome(attempts: ChannelAttempt[]) {
   if (accepted.length > 0) {
     return { status: "SUCCEEDED" as const, summary: `Partial: ${summary}` };
   }
-  if (attempts.some((row) => row.status === "FAILED")) {
+  if (attempts.some((row) => row.status === "FAILED" || row.status === "SUPPRESSED")) {
     return { status: "FAILED" as const, summary };
   }
   if (attempts.some((row) => row.status === "BLOCKED") && attempts.every((row) => row.channel === "SMS" || row.status === "SKIPPED" || row.status === "NOT_SENT" || row.status === "BLOCKED")) {

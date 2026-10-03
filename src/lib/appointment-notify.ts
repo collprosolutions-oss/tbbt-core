@@ -11,6 +11,7 @@ import {
   isUsableEmail,
   senderFrom,
   sendTransactionalEmail,
+  transactionalEmailSendError,
 } from "@/lib/mail";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { liveOutboundProjectToken } from "@/lib/project-link-data";
@@ -203,15 +204,19 @@ export async function notifyCustomerAppointmentProposed(
     html: email.html,
     text: email.text,
     kind: "appointment",
+    purpose: "customer",
     idempotencyKey: appointmentProposedEmailIdempotencyKey(
       job.id,
       input.proposalId,
       input.sendAttemptId,
     ),
+    businessId: input.businessId,
+    db,
   });
 
-  if (sent.error) {
-    const failed = await fail("FAILED", "The appointment email could not be sent.");
+  const sendError = transactionalEmailSendError(sent);
+  if (sendError) {
+    const failed = await fail("FAILED", sendError);
     await queueSms();
     return failed;
   }

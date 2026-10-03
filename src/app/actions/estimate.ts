@@ -90,6 +90,7 @@ import {
   isUsableEmail,
   senderFrom,
   sendTransactionalEmail,
+  transactionalEmailSendError,
 } from "@/lib/mail";
 import { attemptEstimateReadySms } from "@/lib/customer-messaging";
 import { emitAndProcessBusinessEvent } from "@/lib/automation/events";
@@ -1631,11 +1632,15 @@ export async function emailSentEstimate(
     html: email.html,
     text: email.text,
     kind: "estimate",
+    purpose: "customer",
     idempotencyKey: estimateEmailIdempotencyKey(estimate.id, sendAttemptId),
+    businessId: access.businessId,
+    db: prisma,
   });
 
-  if (sent.error) {
-    return { error: sent.error };
+  const sendError = transactionalEmailSendError(sent);
+  if (sendError) {
+    return { error: sendError };
   }
 
   await attemptEstimateReadySms(prisma, {

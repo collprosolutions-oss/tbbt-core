@@ -222,6 +222,12 @@ check(
   mailSrc.includes("kind: TransactionalEmailKind"),
 );
 check(
+  "sendTransactionalEmail requires a purpose and a businessId for customer mail",
+  mailSrc.includes("purpose: TransactionalEmailPurpose") &&
+    mailSrc.includes("isCustomerEmailPurpose") &&
+    mailSrc.includes("blockedOutboundEmailReason"),
+);
+check(
   "invoice failure is not labeled as an estimate",
   transactionalEmailFailureMessage("invoice") ===
     "The invoice email could not be sent.",
