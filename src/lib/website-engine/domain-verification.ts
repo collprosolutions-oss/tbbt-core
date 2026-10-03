@@ -13,6 +13,26 @@ import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
 import { getAppUrl } from "@/lib/mail";
 import { firstHeaderHost } from "@/lib/vercel-app-host";
+import {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  websiteDomainApexAMatchAddresses,
+} from "@/lib/website-engine/domain-dns-targets";
+
+export {
+  PLATFORM_OBSERVED_APEX_A,
+  VERCEL_GENERAL_PURPOSE_APEX_A,
+  VERCEL_GENERAL_PURPOSE_COMPAT_APEX_A,
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_MAX_DNS_RECORDS,
+  parseWebsiteDomainProjectRecommendedA,
+  resetWebsiteDomainProjectRecommendedA,
+  setWebsiteDomainProjectRecommendedA,
+  websiteDomainApexAAllowlist,
+  websiteDomainApexAInstructionAddresses,
+  websiteDomainApexAMatchAddresses,
+  websiteDomainApexATargetsLabel,
+} from "@/lib/website-engine/domain-dns-targets";
 
 export function normalizeHostname(host: string | null | undefined) {
   return (host ?? "").trim().toLowerCase().replace(/:\d+$/, "");
@@ -29,11 +49,6 @@ export function hostnameFromPublicWebsite(value: string | null | undefined) {
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;
-
-export const WEBSITE_DOMAIN_DNS_CNAME_TARGET = "cname.vercel-dns.com";
-
-/** Public Vercel apex A records used for display matching only. */
-export const WEBSITE_DOMAIN_VERCEL_A_ADDRESSES = ["76.76.21.21", "76.76.21.22"] as const;
 
 export const WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS = 3000;
 
@@ -86,8 +101,9 @@ function dnsErrorCode(error: unknown) {
   return "";
 }
 
-function normalizeDnsName(value: string) {
-  return value.trim().toLowerCase().replace(/\.$/, "");
+function normalizeDnsName(value: unknown) {
+  if (value == null) return "";
+  return String(value).trim().toLowerCase().replace(/\.$/, "");
 }
 
 async function lookupRecordList(
@@ -132,10 +148,14 @@ export async function defaultWebsiteDomainDnsLookup(
   const lookupCname = resolvers.resolveCname ?? resolveCname;
   const lookup4 = resolvers.resolve4 ?? resolve4;
   return withDnsTimeout(
-    Promise.all([
-      lookupRecordList(() => lookupCname(host)),
-      lookupRecordList(() => lookup4(host)),
-    ]).then(([cnames, addresses]) => ({ cnames, addresses })),
+    (async () => {
+      // Resolve CNAME first. Following A records are the target's edge
+      // IPs, not apex A values, and must not fail a www/subdomain match.
+      const cnames = await lookupRecordList(() => lookupCname(host));
+      if (cnames.length > 0) return { cnames, addresses: [] };
+      const addresses = await lookupRecordList(() => lookup4(host));
+      return { cnames: [], addresses };
+    })(),
   );
 }
 
@@ -175,8 +195,15 @@ export function isVercelDnsCname(value: string) {
   return VERCEL_PROJECT_DNS_CNAME.test(host);
 }
 
-export function isVercelApexAddress(value: string) {
-  return (WEBSITE_DOMAIN_VERCEL_A_ADDRESSES as readonly string[]).includes(value.trim());
+function normalizeIpv4Candidate(value: unknown) {
+  if (value == null) return "";
+  return String(value).trim().replace(/\.$/, "");
+}
+
+export function isVercelApexAddress(value: unknown) {
+  const address = normalizeIpv4Candidate(value);
+  if (!address || address.includes(":")) return false;
+  return websiteDomainApexAMatchAddresses().includes(address);
 }
 
 function cnamePointsAtTbbt(value: string) {
@@ -188,10 +215,21 @@ function cnamePointsAtTbbt(value: string) {
   );
 }
 
-export function dnsRecordsPointAtTbbt(records: WebsiteDomainDnsRecords) {
-  const cnames = records.cnames.map(normalizeDnsName).filter(Boolean);
-  const addresses = records.addresses.map((address) => address.trim()).filter(Boolean);
+export function dnsRecordsPointAtTbbt(
+  records: WebsiteDomainDnsRecords | null | undefined,
+) {
+  if (!records) return false;
+  const cnames = (records.cnames ?? []).map(normalizeDnsName).filter(Boolean);
+  const addresses = (records.addresses ?? [])
+    .map(normalizeIpv4Candidate)
+    .filter(Boolean);
   if (cnames.length === 0 && addresses.length === 0) return false;
+  if (
+    cnames.length > WEBSITE_DOMAIN_MAX_DNS_RECORDS ||
+    addresses.length > WEBSITE_DOMAIN_MAX_DNS_RECORDS
+  ) {
+    return false;
+  }
   if (cnames.length > 0 && !cnames.every((cname) => cnamePointsAtTbbt(cname))) {
     return false;
   }
