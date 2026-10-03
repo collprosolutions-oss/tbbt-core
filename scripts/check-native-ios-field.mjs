@@ -2,7 +2,8 @@
  * iOS field-app internal test-build recipe + versioning.
  *
  * Covers the missing iOS simulator recipe for com.tbbt.field, local
- * buildNumber versioning, a reachable https preview API, and one
+ * buildNumber versioning, a pinned https preview API (no live
+ * production fetch unless TBBT_NATIVE_IOS_LIVE_ORIGIN=1), and one
  * disposable test-account walkthrough: sign-in, assigned job, offline
  * time, session expiry, and sign-out.
  *
@@ -153,6 +154,25 @@ check(
     !iosScriptSrc.includes("altool") &&
     !iosScriptSrc.includes("ascAppId"),
 );
+const xcodebuildProbeAt = iosScriptSrc.indexOf("command -v xcodebuild");
+const podProbeAt = iosScriptSrc.indexOf("command -v pod");
+const fullPrebuildAt = iosScriptSrc.indexOf("npx expo prebuild --platform ios\n");
+const workspaceBuild = iosScriptSrc.includes('xcodebuild -workspace "${SCHEME}.xcworkspace"');
+const projectBuildWithoutPods =
+  /xcodebuild[^\n]*-project/.test(iosScriptSrc) && !iosScriptSrc.includes("pod install");
+check(
+  "Full iOS recipe checks xcodebuild and pod before prebuild, runs pod install, and builds the xcworkspace",
+  xcodebuildProbeAt >= 0 &&
+    podProbeAt >= 0 &&
+    fullPrebuildAt >= 0 &&
+    xcodebuildProbeAt < fullPrebuildAt &&
+    podProbeAt < fullPrebuildAt &&
+    iosScriptSrc.includes("pod install") &&
+    workspaceBuild &&
+    projectBuildWithoutPods === false &&
+    !/xcodebuild[^\n]*-project/.test(iosScriptSrc),
+);
+const mailSrc = readRepo("src/lib/mail.ts");
 check(
   "Docs register the iOS proof, reachable https origin, and no store submission",
   docsSrc.includes("test:native-ios-field") &&
@@ -160,43 +180,65 @@ check(
     docsSrc.includes("https://www.collproreno.com") &&
     docsSrc.includes("No Apple credentials") &&
     docsSrc.includes("cannot sign or install") &&
+    docsSrc.includes("NSAllowsLocalNetworking") &&
+    docsSrc.includes("must increase monotonically") &&
     packageSrc.includes("test:native-ios-field") &&
     nativeReadme.includes("ios:prebuild") &&
     nativeReadme.includes("UNVERIFIED") &&
     nativeReadme.includes("www.collproreno.com") &&
+    nativeReadme.includes("-workspace") &&
+    nativeReadme.includes("pod install") &&
+    nativeReadme.includes("NSAllowsLocalNetworking") &&
+    nativeReadme.includes("must increase monotonically") &&
     stampSrc.includes("nativeIosBuildStampLabel") &&
     selfSrc.includes("openDisposableTestDatabase") &&
     selfSrc.includes('namePrefix: "tbbt_native_ios_field"') &&
-    selfSrc.includes("Do not treat this as a successful device install"),
+    selfSrc.includes("Do not treat this as a successful device install") &&
+    selfSrc.includes("TBBT_NATIVE_IOS_LIVE_ORIGIN"),
 );
 check(
   "iOS build stamp uses the iOS build number",
   nativeIosBuildStampLabel() === `TBBT Field ${NATIVE_APP_VERSION} (${NATIVE_IOS_BUILD_NUMBER})`,
 );
 
-console.log("\nNETWORK — preview API origin is reachable https");
+console.log("\nSTATIC — preview API origin is pinned https (no live production fetch)");
 const previewOrigin = String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).replace(/\/$/, "");
-let homeStatus = 0;
-let sessionStatus = 0;
-try {
-  const home = await fetch(previewOrigin, { method: "GET", redirect: "follow" });
-  homeStatus = home.status;
-  const session = await fetch(`${previewOrigin}/api/native/v1/session`, {
-    method: "GET",
-    redirect: "follow",
-  });
-  sessionStatus = session.status;
-} catch (error) {
-  console.error(`  preview fetch failed: ${error instanceof Error ? error.message : error}`);
+check(
+  "eas.json, ios.ts, mail.ts, and docs pin https://www.collproreno.com",
+  previewOrigin === NATIVE_PREVIEW_API_ORIGIN &&
+    isReachablePreviewApiOrigin(previewOrigin) &&
+    mailSrc.includes(`export const PRODUCTION_APP_ORIGIN = "${NATIVE_PREVIEW_API_ORIGIN}"`) &&
+    docsSrc.includes(NATIVE_PREVIEW_API_ORIGIN) &&
+    nativeReadme.includes("www.collproreno.com") &&
+    selfSrc.includes('TBBT_NATIVE_IOS_LIVE_ORIGIN === "1"') &&
+    selfSrc.includes("skipped live origin probe"),
+);
+if (process.env.TBBT_NATIVE_IOS_LIVE_ORIGIN === "1") {
+  console.log("\nNETWORK — opt-in live origin probe (TBBT_NATIVE_IOS_LIVE_ORIGIN=1)");
+  let homeStatus = 0;
+  let sessionStatus = 0;
+  try {
+    const home = await fetch(previewOrigin, { method: "GET", redirect: "follow" });
+    homeStatus = home.status;
+    const session = await fetch(`${previewOrigin}/api/native/v1/session`, {
+      method: "GET",
+      redirect: "follow",
+    });
+    sessionStatus = session.status;
+  } catch (error) {
+    console.error(`  preview fetch failed: ${error instanceof Error ? error.message : error}`);
+  }
+  check(
+    "https://www.collproreno.com answers over HTTPS",
+    homeStatus >= 200 && homeStatus < 400,
+  );
+  check(
+    "Native session route is present on that origin (auth required)",
+    sessionStatus === 401 || sessionStatus === 405 || sessionStatus === 400,
+  );
+} else {
+  console.log("  skipped live origin probe (TBBT_NATIVE_IOS_LIVE_ORIGIN is not 1)");
 }
-check(
-  "https://www.collproreno.com answers over HTTPS",
-  previewOrigin === NATIVE_PREVIEW_API_ORIGIN && homeStatus >= 200 && homeStatus < 400,
-);
-check(
-  "Native session route is present on that origin (auth required)",
-  sessionStatus === 401 || sessionStatus === 405 || sessionStatus === 400,
-);
 
 console.log("\nGENERATED CONFIG — expo prebuild --platform ios --no-install");
 const prebuild = spawnSync("bash", [fileURLToPath(new URL("./ios-simulator-build.sh", import.meta.url)), "--prebuild-only"], {
@@ -228,7 +270,8 @@ check(
     generated.shortVersion === NATIVE_APP_VERSION &&
     generated.bundleVersion === NATIVE_IOS_BUILD_NUMBER &&
     generated.displayName === "TBBT Field" &&
-    generated.allowsArbitraryLoads === false,
+    generated.allowsArbitraryLoads === false &&
+    generated.allowsLocalNetworking === true,
 );
 check(
   "Generated project does not embed an Apple team or store credentials",

@@ -36,11 +36,12 @@ This environment cannot sign or install an iOS build (`xcodebuild` is absent). N
 
 What the recipes actually produce:
 
-- `bash scripts/ios-simulator-build.sh --prebuild-only` / `npm run ios:prebuild`: Expo prebuild for `com.tbbt.field` with `ios.buildNumber` **1**. `--no-install` skips CocoaPods. The wrapper restores tracked `apps/native/package.json`.
-- `bash scripts/ios-simulator-build.sh` / `npm run ios:simulator`: the same prebuild, then `xcodebuild` for the iOS **simulator** with `CODE_SIGNING_ALLOWED=NO`. On Linux this exits 2 and does not install anything.
+- `bash scripts/ios-simulator-build.sh --prebuild-only` / `npm run ios:prebuild`: Expo prebuild for `com.tbbt.field` with `ios.buildNumber` **1**. `--no-install` skips CocoaPods so Linux can inspect the generated project. The wrapper restores tracked `apps/native/package.json`.
+- `bash scripts/ios-simulator-build.sh` / `npm run ios:simulator`: requires `xcodebuild` and `pod` **before** the slow prebuild (exit 2 UNVERIFIED if either is missing). Then Expo prebuild, `pod install` in `ios/`, and `xcodebuild -workspace` for the iOS **simulator** with `CODE_SIGNING_ALLOWED=NO`. A bare `.xcodeproj` build is not used: the generated project has a CocoaPods `[CP] Check Pods Manifest.lock` phase. On Linux this exits 2 and does not install anything.
 - `eas.json` `preview` iOS: `distribution: internal` + `simulator: true`, same https `EXPO_PUBLIC_TBBT_API_URL`. No store submission.
+- Generated `Info.plist` keeps Expo's default `NSAllowsLocalNetworking` **true** (local Metro) and `NSAllowsArbitraryLoads` **false**. The iOS `buildNumber` must increase monotonically for each uploaded build.
 
-Do not claim a device walkthrough succeeded unless that signed/simulator build was installed.
+Do not claim a device or simulator walkthrough succeeded unless that signed/simulator build was installed. This recipe is UNVERIFIED here.
 
 ## Limits
 

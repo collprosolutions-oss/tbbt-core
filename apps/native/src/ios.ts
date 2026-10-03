@@ -41,6 +41,7 @@ export function parseGeneratedIosProject(pbxproj: string, infoPlist = "") {
     bundleVersion: plistString(infoPlist, "CFBundleVersion"),
     displayName: plistString(infoPlist, "CFBundleDisplayName"),
     allowsArbitraryLoads: plistBool(infoPlist, "NSAllowsArbitraryLoads"),
+    allowsLocalNetworking: plistBool(infoPlist, "NSAllowsLocalNetworking"),
   };
 }
 
