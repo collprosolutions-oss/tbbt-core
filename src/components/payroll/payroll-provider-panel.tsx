@@ -63,10 +63,8 @@ export function PayrollProviderPanel({
         ) : null}
         {view.externalCompanyId ? <p>Gusto company {view.externalCompanyId}</p> : null}
         {view.lastSyncedAt ? <p>Last import {view.lastSyncedAt}</p> : null}
-        {view.lastError ? <p>{view.lastError}</p> : null}
-        {view.accessTokenExpired && view.phase === "CONNECTED" ? (
-          <p>The access token is due for refresh. Check connection before importing.</p>
-        ) : null}
+        {view.lastError && view.lastError !== view.headline ? <p>{view.lastError}</p> : null}
+        {view.importCaution && view.importCaution !== view.detail ? <p>{view.importCaution}</p> : null}
         {message ? <p>{message}</p> : null}
         {error ? <p>{error}</p> : null}
 

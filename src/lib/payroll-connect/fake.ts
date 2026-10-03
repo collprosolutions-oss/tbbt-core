@@ -84,6 +84,8 @@ export function createFakePayrollProvider(): FakePayrollProvider {
         throw new Error("network unreachable");
       }
       if (provider.delayMs > GUSTO_HTTP_TIMEOUT_MS) {
+        refreshTokens.delete(input.refreshToken);
+        issuePair();
         await new Promise((resolve) => setTimeout(resolve, GUSTO_HTTP_TIMEOUT_MS));
         throw new PayrollConnectError("PROVIDER");
       }

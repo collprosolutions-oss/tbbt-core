@@ -38,7 +38,10 @@ const {
   GUSTO_HTTP_TIMEOUT_MS,
   GUSTO_NEEDS_RECONNECT_HEADLINE,
   GUSTO_NOT_AVAILABLE_HEADLINE,
+  GUSTO_NOT_CONNECTED_MESSAGE,
   GUSTO_PRODUCTION_HOST,
+  GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+  GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
   GUSTO_PROVIDER,
   GUSTO_REQUIRED_ENV_NAMES,
   GUSTO_RUN_OVERLAP_NOTE,
@@ -54,7 +57,9 @@ const {
   isGustoPayrollCallbackPath,
   loadPayrollConnectView,
   parseGustoPayrollPayload,
+  persistRotatedPair,
   readGustoAvailability,
+  readGustoGoLiveSnapshot,
   refreshPayrollConnection,
   reportedDollarsToCents,
   resetPayrollProvider,
@@ -63,6 +68,49 @@ const {
   shouldKeepConnectionAfterInvalidGrant,
   startPayrollProviderConnect,
 } = await import("@/lib/payroll-connect");
+const { buildGoLiveCenter } = await import("@/lib/go-live");
+const { buildIntegrationCenter } = await import("@/lib/integrations");
+
+const HEALTHY_GUSTO_CURRENT_STATE =
+  "Connected after token exchange and token info for this business. Imported rows are provider-reported facts, not verified bank movement.";
+
+function gustoBoard(snapshot, businessId) {
+  const goLive = buildGoLiveCenter({
+    saas: {
+      configured: false,
+      checkoutPossible: false,
+      entitlementState: "subscription_required",
+      canOperate: false,
+      statusLabel: "Subscription required",
+    },
+    connect: {
+      platformConfigured: false,
+      appUrlConfigured: false,
+      paymentReady: false,
+      status: "not_connected",
+      onlineCheckoutPossible: false,
+    },
+    emailConfigured: false,
+    r2Configured: false,
+    twilio: { platformConfigured: false, dedicatedNumberAssigned: false },
+    aiConnected: false,
+    domain: { verifiedHostname: null, unverifiedHostname: null, failedHostname: null },
+    gustoPayroll: snapshot,
+  });
+  const card = goLive.cards.find((item) => item.id === "gusto_payroll");
+  const center = buildIntegrationCenter({
+    businessId,
+    goLive,
+    entitlement: {
+      businessId,
+      planCode: "FOUNDER",
+      planName: "Founder",
+      capabilities: [],
+    },
+  });
+  const integration = center.items.find((item) => item.key === "gusto_payroll");
+  return { card, integration };
+}
 
 function readRepo(rel) {
   return readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
@@ -906,14 +954,38 @@ try {
     networkFailed = error instanceof PayrollConnectError && error.code === "PROVIDER";
   }
   const afterNetwork = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  const networkView = await loadPayrollConnectView(prisma, ownerA.access);
   check(
-    "Network error on refresh keeps tokens and Connected",
+    "Network error on refresh keeps tokens and records an unverified connection",
     networkFailed &&
       afterNetwork.status === "CONNECTED" &&
       afterNetwork.accessTokenCiphertext === freshPair.accessTokenCiphertext &&
-      afterNetwork.refreshTokenCiphertext === freshPair.refreshTokenCiphertext,
+      afterNetwork.refreshTokenCiphertext === freshPair.refreshTokenCiphertext &&
+      afterNetwork.lastError === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      networkView.phase === "CONNECTED" &&
+      networkView.headline === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      networkView.headline !== GUSTO_CONNECTED_HEADLINE &&
+      networkView.canSync === true &&
+      networkView.importCaution === GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
   );
 
+  const clearedRefresh = await refreshPayrollConnection(prisma, ownerA.access);
+  const clearedPair = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  const clearedView = await loadPayrollConnectView(prisma, ownerA.access);
+  check(
+    "Successful refresh clears the unverified marker",
+    clearedRefresh.rotated === true &&
+      clearedPair.status === "CONNECTED" &&
+      clearedPair.lastError == null &&
+      clearedPair.refreshTokenCiphertext !== freshPair.refreshTokenCiphertext &&
+      clearedView.headline === GUSTO_CONNECTED_HEADLINE &&
+      clearedView.importCaution == null,
+  );
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: { accessTokenExpiresAt: new Date(Date.now() - 120_000) },
+  });
   const delayStarted = Date.now();
   fake.setDelayMs(23_000);
   let delayFailed = false;
@@ -924,13 +996,28 @@ try {
   }
   const delayElapsed = Date.now() - delayStarted;
   const afterDelay = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  const delayView = await loadPayrollConnectView(prisma, ownerA.access);
+  const delaySnapshot = await readGustoGoLiveSnapshot(prisma, ownerA.business.id);
+  const delayBoard = gustoBoard(delaySnapshot, ownerA.business.id);
   check(
-    "Provider delay beyond the timeout keeps tokens and Connected",
+    "Timed-out refresh after server-side rotation stays unverified, not plain Connected",
     delayFailed &&
       delayElapsed < 12_000 &&
       afterDelay.status === "CONNECTED" &&
-      afterDelay.accessTokenCiphertext === freshPair.accessTokenCiphertext &&
-      afterDelay.refreshTokenCiphertext === freshPair.refreshTokenCiphertext,
+      afterDelay.accessTokenCiphertext === clearedPair.accessTokenCiphertext &&
+      afterDelay.refreshTokenCiphertext === clearedPair.refreshTokenCiphertext &&
+      afterDelay.lastError === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      delayView.headline === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      delayView.headline !== GUSTO_CONNECTED_HEADLINE &&
+      delayView.canSync === true &&
+      delaySnapshot.refreshUnverified === true &&
+      delaySnapshot.connectionStatus === "CONNECTED" &&
+      delayBoard.card.currentState === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      delayBoard.card.currentState !== HEALTHY_GUSTO_CURRENT_STATE &&
+      delayBoard.card.status === "PARTIAL" &&
+      delayBoard.integration.currentState === GUSTO_REFRESH_UNVERIFIED_HEADLINE &&
+      delayBoard.integration.statusLabel !== "Connected" &&
+      delayBoard.integration.whatWorks === GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
   );
   fake.setDelayMs(0);
 
@@ -991,11 +1078,89 @@ try {
       reconnectView.canSync === false,
   );
 
+  let racedReconnect = false;
+  let racedMessage = "";
+  try {
+    await refreshPayrollConnection(prisma, ownerA.access);
+  } catch (error) {
+    racedReconnect = error instanceof PayrollConnectError && error.code === "NEEDS_RECONNECT";
+    racedMessage = error instanceof Error ? error.message : "";
+  }
+  check(
+    "A refresh after the lost token says reconnect is required",
+    racedReconnect && racedMessage.includes("Reconnect") && racedMessage !== GUSTO_NOT_CONNECTED_MESSAGE,
+  );
+
   const reconnectStart = await startPayrollProviderConnect(prisma, ownerA.access);
   const reconnectState = new URL(reconnectStart.authorizeUrl).searchParams.get("state");
   await completePayrollProviderOAuth(prisma, ownerA.access, { code: "demo-code", state: reconnectState });
   const restored = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
   check("Reconnect restores Connected ciphertext", restored.status === "CONNECTED" && restored.accessTokenCiphertext?.startsWith("v1."));
+
+  const newerAccess = encryptConnectionToken(GUSTO_PROVIDER, ownerA.business.id, "newer-access-pair");
+  const newerRefresh = encryptConnectionToken(GUSTO_PROVIDER, ownerA.business.id, "newer-refresh-pair");
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: {
+      status: "CONNECTED",
+      accessTokenCiphertext: newerAccess,
+      refreshTokenCiphertext: newerRefresh,
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      lastError: null,
+    },
+  });
+  const stalePair = {
+    accessToken: "stale-access-must-not-land",
+    refreshToken: "stale-refresh-must-not-land",
+    expiresIn: 7200,
+    scope: "payrolls:read employees:read",
+  };
+  await persistRotatedPair(prisma, ownerA.business.id, restored.refreshTokenCiphertext, stalePair);
+  const afterCas = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "persistRotatedPair does not overwrite a newer ciphertext",
+    afterCas.status === "CONNECTED" &&
+      afterCas.accessTokenCiphertext === newerAccess &&
+      afterCas.refreshTokenCiphertext === newerRefresh,
+  );
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: { status: "DISCONNECTED" },
+  });
+  await persistRotatedPair(prisma, ownerA.business.id, newerRefresh, stalePair);
+  const afterDisconnectedWrite = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "persistRotatedPair does not write tokens into a disconnected row",
+    afterDisconnectedWrite.status === "DISCONNECTED" &&
+      afterDisconnectedWrite.accessTokenCiphertext === newerAccess &&
+      afterDisconnectedWrite.refreshTokenCiphertext === newerRefresh,
+  );
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: { status: "NEEDS_RECONNECT" },
+  });
+  await persistRotatedPair(prisma, ownerA.business.id, newerRefresh, stalePair);
+  const afterNeedsWrite = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "persistRotatedPair does not write tokens into a needs-reconnect row",
+    afterNeedsWrite.status === "NEEDS_RECONNECT" &&
+      afterNeedsWrite.accessTokenCiphertext === newerAccess &&
+      afterNeedsWrite.refreshTokenCiphertext === newerRefresh,
+  );
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: {
+      status: "CONNECTED",
+      accessTokenCiphertext: restored.accessTokenCiphertext,
+      refreshTokenCiphertext: restored.refreshTokenCiphertext,
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      lastError: null,
+      disconnectedAt: null,
+    },
+  });
 
   const factCount = await prisma.payrollProviderPayrollFact.count({ where: { businessId: ownerA.business.id } });
   await disconnectPayrollProvider(prisma, ownerA.access);

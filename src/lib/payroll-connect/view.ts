@@ -17,6 +17,8 @@ import {
   GUSTO_NOT_CONNECTED_HEADLINE,
   GUSTO_PARTNER_NOTE,
   GUSTO_PROVIDER,
+  GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+  GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
   GUSTO_REQUIRED_ENV_NAMES,
   GUSTO_RUN_OVERLAP_NOTE,
 } from "@/lib/payroll-connect/copy";
@@ -69,6 +71,7 @@ export type PayrollConnectView = {
   lastSyncedAt: string | null;
   lastError: string | null;
   accessTokenExpired: boolean;
+  importCaution: string | null;
   facts: PayrollConnectFactView[];
 };
 
@@ -106,8 +109,21 @@ function lockedView(): PayrollConnectView {
     lastSyncedAt: null,
     lastError: null,
     accessTokenExpired: false,
+    importCaution: null,
     facts: [],
   };
+}
+
+function refreshDidNotComplete(connection: {
+  status: string;
+  lastError: string | null;
+  accessTokenExpiresAt: Date | null;
+} | null) {
+  if (!connection || connection.status !== "CONNECTED") return false;
+  if (connection.lastError === GUSTO_REFRESH_UNVERIFIED_HEADLINE) return true;
+  return Boolean(
+    connection.accessTokenExpiresAt && connection.accessTokenExpiresAt.getTime() <= Date.now(),
+  );
 }
 
 export async function loadPayrollConnectView(db: Db, access: PayrollConnectAccess): Promise<PayrollConnectView> {
@@ -155,8 +171,10 @@ export async function loadPayrollConnectView(db: Db, access: PayrollConnectAcces
         : status === "DISCONNECTED"
           ? "DISCONNECTED"
           : "NOT_CONNECTED";
-  const headline =
-    phase === "CONNECTED"
+  const refreshUnverified = phase === "CONNECTED" && refreshDidNotComplete(connection ?? null);
+  const headline = refreshUnverified
+    ? GUSTO_REFRESH_UNVERIFIED_HEADLINE
+    : phase === "CONNECTED"
       ? GUSTO_CONNECTED_HEADLINE
       : phase === "NEEDS_RECONNECT"
         ? GUSTO_NEEDS_RECONNECT_HEADLINE
@@ -166,14 +184,16 @@ export async function loadPayrollConnectView(db: Db, access: PayrollConnectAcces
   const accessTokenExpired = Boolean(
     connection?.accessTokenExpiresAt && connection.accessTokenExpiresAt.getTime() <= Date.now(),
   );
+  const importCaution = refreshUnverified ? GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE : null;
   const facts = await loadFacts(db, businessId);
 
   return {
     provider: GUSTO_PROVIDER,
     phase,
     headline,
-    detail:
-      phase === "CONNECTED"
+    detail: refreshUnverified
+      ? GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE
+      : phase === "CONNECTED"
         ? "Token exchange and token info succeeded. Imported rows stay provider-reported facts."
         : phase === "NEEDS_RECONNECT"
           ? connection?.lastError || GUSTO_NEEDS_RECONNECT_HEADLINE
@@ -195,6 +215,7 @@ export async function loadPayrollConnectView(db: Db, access: PayrollConnectAcces
     lastSyncedAt: connection?.lastSyncedAt ? connection.lastSyncedAt.toISOString() : null,
     lastError: connection?.lastError ?? null,
     accessTokenExpired,
+    importCaution,
     facts,
   };
 }
@@ -256,6 +277,7 @@ export async function readGustoGoLiveSnapshot(
 ): Promise<{
   configured: boolean;
   connectionStatus: "NONE" | "CONNECTED" | "NEEDS_RECONNECT" | "DISCONNECTED";
+  refreshUnverified: boolean;
 }> {
   const availability = readGustoAvailability();
   try {
@@ -265,15 +287,20 @@ export async function readGustoGoLiveSnapshot(
     return {
       configured: availability.available,
       connectionStatus: "NONE" as const,
+      refreshUnverified: false,
     };
   }
   const row = await db.payrollConnection.findFirst({
     where: { businessId, provider: GUSTO_PROVIDER },
-    select: { status: true },
+    select: { status: true, lastError: true, accessTokenExpiresAt: true },
   });
   const connectionStatus =
     row?.status === "CONNECTED" || row?.status === "NEEDS_RECONNECT" || row?.status === "DISCONNECTED"
       ? row.status
       : "NONE";
-  return { configured: availability.available, connectionStatus };
+  return {
+    configured: availability.available,
+    connectionStatus,
+    refreshUnverified: refreshDidNotComplete(row),
+  };
 }

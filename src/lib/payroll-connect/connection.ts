@@ -6,8 +6,9 @@
  * SELECT … FOR UPDATE. The provider call is capped at GUSTO_HTTP_TIMEOUT_MS,
  * under the 20s transaction, and the new pair is written immediately after
  * the response. A network or timeout error keeps the existing ciphertext
- * and CONNECTED. A lost race that already stored a different ciphertext
- * does not mark the connection Needs reconnect.
+ * and CONNECTED, and records that the refresh did not complete. A lost race
+ * that already stored a different ciphertext does not mark the connection
+ * Needs reconnect.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { createSecureToken, hashToken } from "@/lib/auth-crypto";
@@ -19,6 +20,7 @@ import {
   GUSTO_HTTP_TIMEOUT_MS,
   GUSTO_OAUTH_STATE_TTL_MS,
   GUSTO_PROVIDER,
+  GUSTO_REFRESH_UNVERIFIED_HEADLINE,
 } from "@/lib/payroll-connect/copy";
 import {
   PayrollConnectError,
@@ -89,7 +91,7 @@ function withProviderDeadline<T>(promise: Promise<T>): Promise<T> {
   });
 }
 
-async function persistRotatedPair(
+export async function persistRotatedPair(
   db: PrismaClient,
   businessId: string,
   previousRefreshCiphertext: string,
@@ -113,6 +115,37 @@ async function persistRotatedPair(
           lastError: null,
           ...encrypted,
         },
+      });
+      return written.count === 1;
+    },
+    { timeout: GUSTO_HTTP_TIMEOUT_MS, maxWait: 5_000 },
+  );
+}
+
+/**
+ * A timeout or network failure never proves the saved refresh token still
+ * works. Record that on the CONNECTED row without clearing ciphertext.
+ * A newer pair, or a row that is no longer CONNECTED, is left alone.
+ */
+async function markRefreshUnverified(
+  db: PrismaClient,
+  businessId: string,
+  attemptedRefreshCiphertext: string,
+) {
+  return db.$transaction(
+    async (tx) => {
+      const locked = await lockConnection(tx, businessId);
+      if (!locked || locked.status !== "CONNECTED") return false;
+      if (locked.refreshTokenCiphertext !== attemptedRefreshCiphertext) return false;
+      const written = await tx.payrollConnection.updateMany({
+        where: {
+          id: locked.id,
+          businessId,
+          provider: GUSTO_PROVIDER,
+          status: "CONNECTED",
+          refreshTokenCiphertext: attemptedRefreshCiphertext,
+        },
+        data: { lastError: GUSTO_REFRESH_UNVERIFIED_HEADLINE },
       });
       return written.count === 1;
     },
@@ -297,12 +330,15 @@ export async function refreshPayrollConnection(db: PrismaClient, access: Payroll
 
   let receivedPair: GustoTokenPair | null = null;
   let previousRefreshCiphertext: string | null = null;
+  let attemptedRefreshCiphertext: string | null = null;
   let outcome: { kind: "ok"; rotated: boolean } | { kind: "needs_reconnect" };
   try {
     outcome = await db.$transaction(
       async (tx) => {
         const row = await lockConnection(tx, businessId);
-        if (!row || row.status !== "CONNECTED") throw new PayrollConnectError("NOT_CONNECTED");
+        if (!row) throw new PayrollConnectError("NOT_CONNECTED");
+        if (row.status === "NEEDS_RECONNECT") throw new PayrollConnectError("NEEDS_RECONNECT");
+        if (row.status !== "CONNECTED") throw new PayrollConnectError("NOT_CONNECTED");
         access.assertOwned({ businessId, id: row.id });
         const expiresAt = row.accessTokenExpiresAt ? new Date(row.accessTokenExpiresAt) : null;
         const stillFresh =
@@ -322,6 +358,7 @@ export async function refreshPayrollConnection(db: PrismaClient, access: Payroll
           await markNeedsReconnect(tx, businessId);
           return { kind: "needs_reconnect" as const };
         }
+        attemptedRefreshCiphertext = row.refreshTokenCiphertext;
         let pair: GustoTokenPair;
         try {
           pair = await withProviderDeadline(
@@ -375,6 +412,11 @@ export async function refreshPayrollConnection(db: PrismaClient, access: Payroll
     if (receivedPair && previousRefreshCiphertext) {
       const saved = await persistRotatedPair(db, businessId, previousRefreshCiphertext, receivedPair);
       if (saved) return { rotated: true };
+    }
+    const providerFailed =
+      !(error instanceof PayrollConnectError) || error.code === "PROVIDER";
+    if (providerFailed && attemptedRefreshCiphertext && !receivedPair) {
+      await markRefreshUnverified(db, businessId, attemptedRefreshCiphertext);
     }
     if (error instanceof PayrollConnectError) throw error;
     throw new PayrollConnectError("PROVIDER");

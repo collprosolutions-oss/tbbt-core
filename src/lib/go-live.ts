@@ -15,6 +15,10 @@ import { getFinanceConnectionProvider } from "@/lib/finance-connections";
 import { resolveEsignProviderStatus } from "@/lib/business-protection-esign";
 import { SMS_COMMERCIAL_BOUNDARY } from "@/lib/communications/sms-policy";
 import { VOICE_NOT_CONNECTED_REASON } from "@/lib/communications/types";
+import {
+  GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+  GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
+} from "@/lib/payroll-connect/copy";
 
 export const GO_LIVE_PATH = "/settings?section=go-live";
 
@@ -213,6 +217,7 @@ export type GoLiveInput = {
   gustoPayroll?: {
     configured: boolean;
     connectionStatus: "NONE" | "CONNECTED" | "NEEDS_RECONNECT" | "DISCONNECTED";
+    refreshUnverified?: boolean;
   };
 };
 
@@ -745,6 +750,17 @@ function gustoPayrollCard(input: GoLiveInput["gustoPayroll"]): GoLiveCard {
       whatDoesNot:
         "No Gusto company is connected. Required names are GUSTO_CLIENT_ID, GUSTO_CLIENT_SECRET, GUSTO_ENV, GUSTO_REDIRECT_URI, and CONNECTION_TOKEN_ENCRYPTION_KEY. Production access needs Gusto partner approval. This card does not show a connection.",
       ownerNextAction: "Wait for Gusto partner approval and credentials. There is no connect action until those are set.",
+    };
+  }
+  if (input.connectionStatus === "CONNECTED" && input.refreshUnverified) {
+    return {
+      ...base,
+      status: "PARTIAL",
+      currentState: GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+      whatWorks: GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
+      whatDoesNot:
+        "The last token refresh did not complete. The saved token may already be dead. TBBT does not run payroll, calculate net pay, move funds, or mark a bank cash-out. Gusto documents no revoke endpoint.",
+      ownerNextAction: "Check connection from Payroll. Reconnect if Gusto rejects the saved token.",
     };
   }
   if (input.connectionStatus === "CONNECTED") {

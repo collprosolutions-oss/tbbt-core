@@ -11,6 +11,17 @@ export const GUSTO_NOT_AVAILABLE_HEADLINE =
 
 export const GUSTO_CONNECTED_HEADLINE = "Connected";
 
+/**
+ * A timed-out or dropped refresh can rotate Gusto's single-use token without
+ * TBBT ever storing the new pair. Keeping the old ciphertext is not proof the
+ * connection still works.
+ */
+export const GUSTO_REFRESH_UNVERIFIED_HEADLINE =
+  "Connected, unverified: the last token refresh did not complete. Check connection.";
+
+export const GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE =
+  "Import can run, but Gusto may reject the saved token and require Reconnect.";
+
 export const GUSTO_NEEDS_RECONNECT_HEADLINE = "Needs reconnect";
 
 export const GUSTO_NOT_CONNECTED_HEADLINE = "Not connected";
