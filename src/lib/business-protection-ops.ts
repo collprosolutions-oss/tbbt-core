@@ -1962,7 +1962,6 @@ export async function completeAgreementFromEsignWebhook(
     filename: `signed-${metadata.agreementId}-${metadata.versionId}.pdf`,
     body: input.signedPdf,
   });
-  await esignWebhookTestHooks.afterIngestBeforeCommit?.();
   const write = async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`
       SELECT 1 FROM "BusinessAgreement"
@@ -2146,6 +2145,7 @@ export async function completeAgreementFromEsignWebhook(
   };
 
   try {
+    await esignWebhookTestHooks.afterIngestBeforeCommit?.();
     const result = await runAgreementTransaction(db, write);
     if (result.reused && asset) {
       await releaseOrphanedProviderSignedAsset(input.storage, metadata.businessId, asset.id);
