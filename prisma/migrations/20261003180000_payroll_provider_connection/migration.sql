@@ -74,10 +74,14 @@ CREATE TABLE IF NOT EXISTS "PayrollProviderPayrollFact" (
     "employerBenefitsCents" INTEGER,
     "reviewStatus" TEXT NOT NULL DEFAULT 'UNREVIEWED',
     "rawPayloadHash" TEXT NOT NULL,
+    "contentChangedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     CONSTRAINT "PayrollProviderPayrollFact_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "PayrollProviderPayrollFact"
+  ADD COLUMN IF NOT EXISTS "contentChangedAt" TIMESTAMP(3);
 
 CREATE UNIQUE INDEX IF NOT EXISTS "PayrollProviderPayrollFact_businessId_provider_providerPayrollId_key"
   ON "PayrollProviderPayrollFact"("businessId", "provider", "providerPayrollId");

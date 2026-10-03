@@ -33,7 +33,9 @@ const {
   GUSTO_API_VERSION,
   GUSTO_CONNECTED_HEADLINE,
   GUSTO_DEMO_HOST,
+  GUSTO_FACT_CHANGED_NOTE,
   GUSTO_FACTS_NOTE,
+  GUSTO_HTTP_TIMEOUT_MS,
   GUSTO_NEEDS_RECONNECT_HEADLINE,
   GUSTO_NOT_AVAILABLE_HEADLINE,
   GUSTO_PRODUCTION_HOST,
@@ -123,6 +125,16 @@ check(
 check(
   "Refresh is serialized on the connection row",
   connectionSrc.includes("FOR UPDATE") && connectionSrc.includes("shouldKeepConnectionAfterInvalidGrant"),
+);
+check(
+  "Gusto HTTP calls abort before the refresh transaction can time out",
+  readRepo("src/lib/payroll-connect/gusto-http.ts").includes("AbortSignal.timeout(GUSTO_HTTP_TIMEOUT_MS)") &&
+    connectionSrc.includes("withProviderDeadline") &&
+    connectionSrc.includes("timeout: 20_000") &&
+    GUSTO_HTTP_TIMEOUT_MS === 8_000 &&
+    GUSTO_HTTP_TIMEOUT_MS < 20_000 &&
+    connectionSrc.includes("markNeedsReconnectIfTokenUnchanged") &&
+    readRepo("src/lib/payroll-connect/import-facts.ts").includes("markNeedsReconnectIfTokenUnchanged"),
 );
 check(
   "Tokens are encrypted for the gusto purpose",
@@ -384,6 +396,41 @@ const production = createGustoHttpPayrollProvider({
 });
 await production.tokenInfo({ accessToken });
 check("Explicit production host is api.gusto.com", productionCalls.includes("api.gusto.com"));
+const hungStarted = Date.now();
+let sawAbortSignal = false;
+const hanging = createGustoHttpPayrollProvider({
+  host: GUSTO_DEMO_HOST,
+  fetchImpl: (_url, init) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("hung past the Gusto timeout")), 12_000);
+      if (!init?.signal) {
+        clearTimeout(timer);
+        reject(new Error("missing abort signal"));
+        return;
+      }
+      sawAbortSignal = true;
+      init.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(init.signal.reason instanceof Error ? init.signal.reason : new Error("aborted"));
+      });
+    }),
+});
+let httpTimedOut = false;
+try {
+  await hanging.exchangeAuthorizationCode({
+    code: "demo-code",
+    redirectUri: "https://example.test/api/payroll/gusto/callback",
+    clientId: "client",
+    clientSecret: "secret",
+  });
+} catch (error) {
+  httpTimedOut = error instanceof PayrollConnectError && error.code === "PROVIDER";
+}
+const httpElapsed = Date.now() - hungStarted;
+check(
+  "Gusto HTTP calls abort within the request timeout",
+  sawAbortSignal && httpTimedOut && httpElapsed < 12_000 && httpElapsed >= GUSTO_HTTP_TIMEOUT_MS - 1_000,
+);
 
 console.log("\nUNIT — availability and production fake guard");
 const envSnapshot = {
@@ -591,6 +638,23 @@ try {
   const adminView = await loadPayrollConnectView(prisma, adminAccess);
   check("ADMIN view is owner-only and has no facts", adminView.phase === "OWNER_ONLY" && adminView.showConnectButton === false && adminView.facts.length === 0);
 
+  fake.setTokenInfoError(true);
+  const tokenInfoStart = await startPayrollProviderConnect(prisma, ownerA.access);
+  const tokenInfoState = new URL(tokenInfoStart.authorizeUrl).searchParams.get("state");
+  let tokenInfoFailed = false;
+  try {
+    await completePayrollProviderOAuth(prisma, ownerA.access, { code: "demo-code", state: tokenInfoState });
+  } catch (error) {
+    tokenInfoFailed = error instanceof PayrollConnectError && error.code === "PROVIDER";
+  }
+  const prematureConnection = await prisma.payrollConnection.findFirst({
+    where: { businessId: ownerA.business.id, provider: GUSTO_PROVIDER },
+  });
+  check(
+    "token_info failure does not mark Connected",
+    tokenInfoFailed && prematureConnection == null,
+  );
+
   const logs = [];
   const originalLog = console.log;
   const originalError = console.error;
@@ -613,6 +677,7 @@ try {
   }
   const stateAfterProbe = await prisma.payrollConnectionOAuthState.findFirst({
     where: { businessId: ownerA.business.id },
+    orderBy: { createdAt: "desc" },
   });
   check("State minted for A is rejected for B and stays unused", crossTenant && stateAfterProbe?.consumedAt == null);
   let wrongMembership = false;
@@ -728,6 +793,34 @@ try {
       run.processedSource == null,
   );
   await reviewPayrollProviderFact(prisma, ownerA.access, { factId: facts[0].id, reviewStatus: "ACCEPTED" });
+  await importProcessedPayrollFacts(prisma, ownerA.access);
+  const unchanged = await prisma.payrollProviderPayrollFact.findFirst({
+    where: { id: facts[0].id, businessId: ownerA.business.id },
+  });
+  check(
+    "Unchanged re-import keeps ACCEPTED",
+    unchanged.reviewStatus === "ACCEPTED" && unchanged.grossTotalCents === 279125 && unchanged.contentChangedAt == null,
+  );
+  let crossReview = false;
+  try {
+    await reviewPayrollProviderFact(prisma, ownerB.access, { factId: facts[0].id, reviewStatus: "IGNORED" });
+  } catch {
+    crossReview = true;
+  }
+  const afterCrossReview = await prisma.payrollProviderPayrollFact.findFirst({
+    where: { id: facts[0].id, businessId: ownerA.business.id },
+  });
+  check(
+    "Business B cannot review business A facts",
+    crossReview && afterCrossReview.reviewStatus === "ACCEPTED" && afterCrossReview.businessId === ownerA.business.id,
+  );
+  await reviewPayrollProviderFact(prisma, ownerA.access, { factId: facts[0].id, reviewStatus: "IGNORED" });
+  await importProcessedPayrollFacts(prisma, ownerA.access);
+  const ignored = await prisma.payrollProviderPayrollFact.findFirst({
+    where: { id: facts[0].id, businessId: ownerA.business.id },
+  });
+  check("Unchanged re-import keeps IGNORED", ignored.reviewStatus === "IGNORED" && ignored.contentChangedAt == null);
+  await reviewPayrollProviderFact(prisma, ownerA.access, { factId: facts[0].id, reviewStatus: "ACCEPTED" });
   fake.setPayrolls([
     {
       ...parseGustoPayrollPayload(PROCESSED_BODY, processedRaw),
@@ -738,7 +831,15 @@ try {
   const reviewed = await prisma.payrollProviderPayrollFact.findFirst({
     where: { id: facts[0].id, businessId: ownerA.business.id },
   });
-  check("Re-import keeps the review status and updates reported gross", reviewed.reviewStatus === "ACCEPTED" && reviewed.grossTotalCents === 280000);
+  const changedView = await loadPayrollConnectView(prisma, ownerA.access);
+  check(
+    "Changed Gusto amounts return the fact to unreviewed",
+    reviewed.reviewStatus === "UNREVIEWED" &&
+      reviewed.grossTotalCents === 280000 &&
+      reviewed.contentChangedAt != null &&
+      changedView.facts[0].reviewStatus === "UNREVIEWED" &&
+      changedView.facts[0].changeNote === GUSTO_FACT_CHANGED_NOTE,
+  );
   const view = await loadPayrollConnectView(prisma, ownerA.access);
   check(
     "Connected view lists provider facts and a read-only payroll-run overlap",
@@ -746,7 +847,6 @@ try {
       view.headline === GUSTO_CONNECTED_HEADLINE &&
       view.factsNote === GUSTO_FACTS_NOTE &&
       view.facts.length === 1 &&
-      view.facts[0].reviewStatus === "ACCEPTED" &&
       view.facts[0].recordedPayrollRuns.length === 1 &&
       view.facts[0].recordedPayrollRuns[0].label.includes(GUSTO_RUN_OVERLAP_NOTE) &&
       !JSON.stringify(view).includes(decryptedAccess),
@@ -792,6 +892,80 @@ try {
   });
   const followUp = await refreshPayrollConnection(prisma, ownerA.access);
   check("The stored refresh token still rotates", followUp.rotated === true && fake.refreshCount === refreshBefore + 2);
+  const freshPair = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: { accessTokenExpiresAt: new Date(Date.now() - 120_000) },
+  });
+  fake.setNetworkErrorNext(true);
+  let networkFailed = false;
+  try {
+    await refreshPayrollConnection(prisma, ownerA.access);
+  } catch (error) {
+    networkFailed = error instanceof PayrollConnectError && error.code === "PROVIDER";
+  }
+  const afterNetwork = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "Network error on refresh keeps tokens and Connected",
+    networkFailed &&
+      afterNetwork.status === "CONNECTED" &&
+      afterNetwork.accessTokenCiphertext === freshPair.accessTokenCiphertext &&
+      afterNetwork.refreshTokenCiphertext === freshPair.refreshTokenCiphertext,
+  );
+
+  const delayStarted = Date.now();
+  fake.setDelayMs(23_000);
+  let delayFailed = false;
+  try {
+    await refreshPayrollConnection(prisma, ownerA.access);
+  } catch (error) {
+    delayFailed = error instanceof PayrollConnectError && error.code === "PROVIDER";
+  }
+  const delayElapsed = Date.now() - delayStarted;
+  const afterDelay = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "Provider delay beyond the timeout keeps tokens and Connected",
+    delayFailed &&
+      delayElapsed < 12_000 &&
+      afterDelay.status === "CONNECTED" &&
+      afterDelay.accessTokenCiphertext === freshPair.accessTokenCiphertext &&
+      afterDelay.refreshTokenCiphertext === freshPair.refreshTokenCiphertext,
+  );
+  fake.setDelayMs(0);
+
+  await prisma.payrollConnection.update({
+    where: { id: untouched.id },
+    data: { accessTokenExpiresAt: new Date(Date.now() + 3_600_000) },
+  });
+  const rotatedAccess = encryptConnectionToken(GUSTO_PROVIDER, ownerA.business.id, "rotated-access-not-stored-as-plaintext");
+  const rotatedRefresh = encryptConnectionToken(GUSTO_PROVIDER, ownerA.business.id, "rotated-refresh-not-stored-as-plaintext");
+  fake.setBeforeList(async () => {
+    await prisma.payrollConnection.update({
+      where: { id: untouched.id },
+      data: {
+        status: "CONNECTED",
+        accessTokenCiphertext: rotatedAccess,
+        refreshTokenCiphertext: rotatedRefresh,
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+  });
+  fake.setListInvalidGrant(true);
+  let importRejected = false;
+  try {
+    await importProcessedPayrollFacts(prisma, ownerA.access);
+  } catch (error) {
+    importRejected = error instanceof PayrollConnectError && error.code === "PROVIDER";
+  }
+  const afterImportRace = await prisma.payrollConnection.findFirst({ where: { id: untouched.id } });
+  check(
+    "Import 401 does not wipe a pair a concurrent refresh just wrote",
+    importRejected &&
+      afterImportRace.status === "CONNECTED" &&
+      afterImportRace.accessTokenCiphertext === rotatedAccess &&
+      afterImportRace.refreshTokenCiphertext === rotatedRefresh,
+  );
 
   await prisma.payrollConnection.update({
     where: { id: untouched.id },

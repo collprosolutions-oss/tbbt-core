@@ -11,7 +11,7 @@ import { GUSTO_PROVIDER } from "@/lib/payroll-connect/copy";
 import { PayrollConnectError } from "@/lib/payroll-connect/errors";
 import { gustoImportDateWindow } from "@/lib/payroll-connect/gusto-http";
 import { getPayrollProvider } from "@/lib/payroll-connect/provider";
-import { refreshPayrollConnection } from "@/lib/payroll-connect/connection";
+import { markNeedsReconnectIfTokenUnchanged, refreshPayrollConnection } from "@/lib/payroll-connect/connection";
 import { ensurePayrollConnectSchema } from "@/lib/payroll-connect/schema";
 import { decryptConnectionToken } from "@/lib/connection-token-crypto";
 
@@ -20,6 +20,47 @@ type Db = PrismaClient | Prisma.TransactionClient;
 function isoDate(value: string | null) {
   if (!value) return null;
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function lineKey(line: {
+  providerEmployeeId: string | null;
+  employeeName: string | null;
+  grossCents: number | null;
+}) {
+  return `${line.providerEmployeeId ?? ""}\n${line.employeeName ?? ""}\n${line.grossCents ?? ""}`;
+}
+
+function reportedFactChanged(
+  existing: {
+    rawPayloadHash: string;
+    grossTotalCents: number | null;
+    employerTaxesCents: number | null;
+    employerBenefitsCents: number | null;
+    lines: Array<{
+      providerEmployeeId: string | null;
+      employeeName: string | null;
+      grossCents: number | null;
+    }>;
+  },
+  draft: {
+    rawPayloadHash: string;
+    grossTotalCents: number | null;
+    employerTaxesCents: number | null;
+    employerBenefitsCents: number | null;
+    lines: Array<{
+      providerEmployeeId: string | null;
+      employeeName: string | null;
+      grossCents: number | null;
+    }>;
+  },
+) {
+  if (existing.rawPayloadHash !== draft.rawPayloadHash) return true;
+  if (existing.grossTotalCents !== draft.grossTotalCents) return true;
+  if (existing.employerTaxesCents !== draft.employerTaxesCents) return true;
+  if (existing.employerBenefitsCents !== draft.employerBenefitsCents) return true;
+  const previous = existing.lines.map(lineKey).sort().join("\n");
+  const next = draft.lines.map(lineKey).sort().join("\n");
+  return previous !== next;
 }
 
 export async function importProcessedPayrollFacts(db: PrismaClient, access: PayrollConnectAccess) {
@@ -57,17 +98,13 @@ export async function importProcessedPayrollFacts(db: PrismaClient, access: Payr
     });
   } catch (error) {
     if (error instanceof PayrollConnectError && error.code === "INVALID_GRANT") {
-      await db.payrollConnection.updateMany({
-        where: { id: current.id, businessId, provider: GUSTO_PROVIDER },
-        data: {
-          status: "NEEDS_RECONNECT",
-          accessTokenCiphertext: null,
-          refreshTokenCiphertext: null,
-          accessTokenExpiresAt: null,
-          lastError: new PayrollConnectError("NEEDS_RECONNECT").message,
-        },
-      });
-      throw new PayrollConnectError("NEEDS_RECONNECT");
+      const cleared = await markNeedsReconnectIfTokenUnchanged(
+        db,
+        businessId,
+        current.accessTokenCiphertext,
+        current.refreshTokenCiphertext,
+      );
+      throw new PayrollConnectError(cleared ? "NEEDS_RECONNECT" : "PROVIDER");
     }
     throw error instanceof PayrollConnectError ? error : new PayrollConnectError("PROVIDER");
   }
@@ -76,48 +113,57 @@ export async function importProcessedPayrollFacts(db: PrismaClient, access: Payr
   for (const draft of drafts) {
     if (!draft.processed) continue;
     await db.$transaction(async (tx) => {
-      const fact = await tx.payrollProviderPayrollFact.upsert({
+      const existing = await tx.payrollProviderPayrollFact.findFirst({
         where: {
-          businessId_provider_providerPayrollId: {
-            businessId,
-            provider: GUSTO_PROVIDER,
-            providerPayrollId: draft.providerPayrollId,
-          },
-        },
-        create: {
           businessId,
           provider: GUSTO_PROVIDER,
           providerPayrollId: draft.providerPayrollId,
-          payPeriodStart: isoDate(draft.payPeriodStart),
-          payPeriodEnd: isoDate(draft.payPeriodEnd),
-          checkDate: isoDate(draft.checkDate),
-          processed: true,
-          grossTotalCents: draft.grossTotalCents,
-          employerTaxesCents: draft.employerTaxesCents,
-          employerBenefitsCents: draft.employerBenefitsCents,
-          reviewStatus: "UNREVIEWED",
-          rawPayloadHash: draft.rawPayloadHash,
         },
-        update: {
-          payPeriodStart: isoDate(draft.payPeriodStart),
-          payPeriodEnd: isoDate(draft.payPeriodEnd),
-          checkDate: isoDate(draft.checkDate),
-          processed: true,
-          grossTotalCents: draft.grossTotalCents,
-          employerTaxesCents: draft.employerTaxesCents,
-          employerBenefitsCents: draft.employerBenefitsCents,
-          rawPayloadHash: draft.rawPayloadHash,
-        },
+        include: { lines: true },
       });
-      if (fact.businessId !== businessId) throw new PayrollConnectError("PROVIDER");
+      const amounts = {
+        payPeriodStart: isoDate(draft.payPeriodStart),
+        payPeriodEnd: isoDate(draft.payPeriodEnd),
+        checkDate: isoDate(draft.checkDate),
+        processed: true,
+        grossTotalCents: draft.grossTotalCents,
+        employerTaxesCents: draft.employerTaxesCents,
+        employerBenefitsCents: draft.employerBenefitsCents,
+        rawPayloadHash: draft.rawPayloadHash,
+      };
+      const changed = existing ? reportedFactChanged(existing, draft) : false;
+      const factId = existing
+        ? existing.id
+        : (
+            await tx.payrollProviderPayrollFact.create({
+              data: {
+                businessId,
+                provider: GUSTO_PROVIDER,
+                providerPayrollId: draft.providerPayrollId,
+                reviewStatus: "UNREVIEWED",
+                ...amounts,
+              },
+            })
+          ).id;
+      if (existing) {
+        const updated = await tx.payrollProviderPayrollFact.updateMany({
+          where: { id: existing.id, businessId, provider: GUSTO_PROVIDER },
+          data: {
+            ...amounts,
+            reviewStatus: changed ? "UNREVIEWED" : existing.reviewStatus,
+            contentChangedAt: changed ? new Date() : existing.contentChangedAt,
+          },
+        });
+        if (updated.count !== 1) throw new PayrollConnectError("PROVIDER");
+      }
       await tx.payrollProviderPayrollFactLine.deleteMany({
-        where: { factId: fact.id, businessId },
+        where: { factId, businessId },
       });
       if (draft.lines.length > 0) {
         await tx.payrollProviderPayrollFactLine.createMany({
           data: draft.lines.map((line) => ({
             businessId,
-            factId: fact.id,
+            factId,
             providerEmployeeId: line.providerEmployeeId,
             employeeName: line.employeeName,
             grossCents: line.grossCents,
@@ -152,6 +198,6 @@ export async function reviewPayrollProviderFact(
   access.assertOwned(fact);
   await db.payrollProviderPayrollFact.updateMany({
     where: { id: fact.id, businessId: access.scope.businessId, provider: GUSTO_PROVIDER },
-    data: { reviewStatus: input.reviewStatus },
+    data: { reviewStatus: input.reviewStatus, contentChangedAt: null },
   });
 }

@@ -3140,6 +3140,9 @@ model PayrollProviderPayrollFact {
   employerBenefitsCents Int?
   reviewStatus          String    @default("UNREVIEWED")
   rawPayloadHash        String
+  /// Set when a later import changes the reported payload or amounts and
+  /// returns an accepted or ignored fact to UNREVIEWED.
+  contentChangedAt      DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 

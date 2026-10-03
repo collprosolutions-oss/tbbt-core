@@ -40,6 +40,16 @@ export const GUSTO_COMPANY_EXCLUSIVITY_NOTE =
 export const GUSTO_RUN_OVERLAP_NOTE =
   "Recorded TBBT payroll run overlaps these dates. This is not a match and not a bank withdrawal.";
 
+export const GUSTO_FACT_CHANGED_NOTE =
+  "Gusto changed the reported amounts after review. This fact is unreviewed again.";
+
+/**
+ * Every Gusto HTTP call aborts at this deadline. It stays under the 20s
+ * refresh transaction so a slow response cannot rotate a single-use refresh
+ * token and then lose the new pair when the transaction times out.
+ */
+export const GUSTO_HTTP_TIMEOUT_MS = 8_000;
+
 export const GUSTO_NEEDS_RECONNECT_MESSAGE =
   "Gusto rejected the saved token. Reconnect is required.";
 

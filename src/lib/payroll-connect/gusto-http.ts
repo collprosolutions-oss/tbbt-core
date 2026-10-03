@@ -13,7 +13,7 @@
  * Docs: https://docs.gusto.com/app-integrations/docs/oauth2
  *       https://docs.gusto.com/app-integrations/docs/authentication
  */
-import { GUSTO_API_VERSION, GUSTO_SCOPES } from "@/lib/payroll-connect/copy";
+import { GUSTO_API_VERSION, GUSTO_HTTP_TIMEOUT_MS, GUSTO_SCOPES } from "@/lib/payroll-connect/copy";
 import { GUSTO_HTTP_PROVIDER } from "@/lib/payroll-connect/config";
 import { PayrollConnectError } from "@/lib/payroll-connect/errors";
 import { parseGustoPayrollPayload } from "@/lib/payroll-connect/parse";
@@ -103,7 +103,10 @@ export function createGustoHttpPayrollProvider(input: {
   async function request(url: string, init: RequestInit, invalidGrantAsError: boolean) {
     let response: Response;
     try {
-      response = await fetchImpl(url, init);
+      response = await fetchImpl(url, {
+        ...init,
+        signal: AbortSignal.timeout(GUSTO_HTTP_TIMEOUT_MS),
+      });
     } catch {
       throw new PayrollConnectError("PROVIDER");
     }

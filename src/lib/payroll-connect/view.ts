@@ -10,6 +10,7 @@ import {
   GUSTO_CONNECTED_HEADLINE,
   GUSTO_DISCONNECTED_HEADLINE,
   GUSTO_DISCONNECT_NOTE,
+  GUSTO_FACT_CHANGED_NOTE,
   GUSTO_FACTS_NOTE,
   GUSTO_NEEDS_RECONNECT_HEADLINE,
   GUSTO_NOT_AVAILABLE_HEADLINE,
@@ -43,6 +44,7 @@ export type PayrollConnectFactView = {
   employerTaxesLabel: string;
   employerBenefitsLabel: string;
   reviewStatus: "UNREVIEWED" | "ACCEPTED" | "IGNORED";
+  changeNote: string | null;
   lines: PayrollConnectFactLineView[];
   recordedPayrollRuns: Array<{ id: string; label: string }>;
 };
@@ -231,6 +233,7 @@ async function loadFacts(db: Db, businessId: string): Promise<PayrollConnectFact
       employerTaxesLabel: formatReportedCents(row.employerTaxesCents),
       employerBenefitsLabel: formatReportedCents(row.employerBenefitsCents),
       reviewStatus,
+      changeNote: row.contentChangedAt ? GUSTO_FACT_CHANGED_NOTE : null,
       lines: row.lines
         .filter((line) => line.businessId === businessId)
         .map((line) => ({

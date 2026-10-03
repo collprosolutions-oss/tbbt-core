@@ -3,9 +3,11 @@
  * single-use refresh, disconnect. Does not run payroll or move funds.
  *
  * Refresh tokens are single-use. The connection row is locked with
- * SELECT … FOR UPDATE, the new pair is written in that transaction, and
- * a lost race that already stored a different ciphertext does not mark
- * the connection Needs reconnect.
+ * SELECT … FOR UPDATE. The provider call is capped at GUSTO_HTTP_TIMEOUT_MS,
+ * under the 20s transaction, and the new pair is written immediately after
+ * the response. A network or timeout error keeps the existing ciphertext
+ * and CONNECTED. A lost race that already stored a different ciphertext
+ * does not mark the connection Needs reconnect.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { createSecureToken, hashToken } from "@/lib/auth-crypto";
@@ -14,6 +16,7 @@ import { requirePayrollConnectOwner, type PayrollConnectAccess } from "@/lib/pay
 import { readGustoAvailability } from "@/lib/payroll-connect/config";
 import {
   GUSTO_ACCESS_TOKEN_SKEW_SECONDS,
+  GUSTO_HTTP_TIMEOUT_MS,
   GUSTO_OAUTH_STATE_TTL_MS,
   GUSTO_PROVIDER,
 } from "@/lib/payroll-connect/copy";
@@ -66,6 +69,83 @@ async function markNeedsReconnect(tx: Db, businessId: string) {
       lastError: new PayrollConnectError("NEEDS_RECONNECT").message,
     },
   });
+}
+
+function withProviderDeadline<T>(promise: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new PayrollConnectError("PROVIDER"));
+    }, GUSTO_HTTP_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function persistRotatedPair(
+  db: PrismaClient,
+  businessId: string,
+  previousRefreshCiphertext: string,
+  pair: GustoTokenPair,
+) {
+  const encrypted = encryptPair(businessId, pair);
+  return db.$transaction(
+    async (tx) => {
+      const locked = await lockConnection(tx, businessId);
+      if (!locked || locked.status !== "CONNECTED") return false;
+      if (locked.refreshTokenCiphertext !== previousRefreshCiphertext) return true;
+      const written = await tx.payrollConnection.updateMany({
+        where: {
+          id: locked.id,
+          businessId,
+          provider: GUSTO_PROVIDER,
+          refreshTokenCiphertext: previousRefreshCiphertext,
+        },
+        data: {
+          status: "CONNECTED",
+          lastError: null,
+          ...encrypted,
+        },
+      });
+      return written.count === 1;
+    },
+    { timeout: GUSTO_HTTP_TIMEOUT_MS, maxWait: 5_000 },
+  );
+}
+
+/**
+ * A 401 during import must not erase a pair a concurrent refresh already
+ * stored. Clear ciphertext only when the locked row still holds the token
+ * that Gusto rejected.
+ */
+export async function markNeedsReconnectIfTokenUnchanged(
+  db: PrismaClient,
+  businessId: string,
+  accessTokenCiphertext: string,
+  refreshTokenCiphertext: string | null,
+) {
+  return db.$transaction(
+    async (tx) => {
+      const locked = await lockConnection(tx, businessId);
+      if (!locked || locked.status === "DISCONNECTED") return false;
+      if (
+        locked.accessTokenCiphertext !== accessTokenCiphertext ||
+        locked.refreshTokenCiphertext !== refreshTokenCiphertext
+      ) {
+        return false;
+      }
+      await markNeedsReconnect(tx, businessId);
+      return true;
+    },
+    { timeout: GUSTO_HTTP_TIMEOUT_MS, maxWait: 5_000 },
+  );
 }
 
 async function lockConnection(tx: Db, businessId: string) {
@@ -215,64 +295,90 @@ export async function refreshPayrollConnection(db: PrismaClient, access: Payroll
   if (!availability.available) throw new PayrollConnectError("NOT_AVAILABLE");
   const businessId = access.scope.businessId;
 
-  const outcome = await db.$transaction(
-    async (tx) => {
-      const row = await lockConnection(tx, businessId);
-      if (!row || row.status !== "CONNECTED") throw new PayrollConnectError("NOT_CONNECTED");
-      access.assertOwned({ businessId, id: row.id });
-      const expiresAt = row.accessTokenExpiresAt ? new Date(row.accessTokenExpiresAt) : null;
-      const stillFresh =
-        expiresAt instanceof Date &&
-        !Number.isNaN(expiresAt.getTime()) &&
-        expiresAt.getTime() > Date.now() + GUSTO_ACCESS_TOKEN_SKEW_SECONDS * 1000 &&
-        Boolean(row.accessTokenCiphertext);
-      if (stillFresh) return { kind: "ok" as const, rotated: false };
-      if (!row.refreshTokenCiphertext) {
-        await markNeedsReconnect(tx, businessId);
-        return { kind: "needs_reconnect" as const };
-      }
-      let refreshToken = "";
-      try {
-        refreshToken = decryptConnectionToken(GUSTO_PROVIDER, businessId, row.refreshTokenCiphertext);
-      } catch {
-        await markNeedsReconnect(tx, businessId);
-        return { kind: "needs_reconnect" as const };
-      }
-      try {
-        const pair = await getPayrollProvider().refreshAccessToken({
-          refreshToken,
-          redirectUri: availability.redirectUri,
-          clientId: availability.clientId,
-          clientSecret: availability.clientSecret,
-        });
+  let receivedPair: GustoTokenPair | null = null;
+  let previousRefreshCiphertext: string | null = null;
+  let outcome: { kind: "ok"; rotated: boolean } | { kind: "needs_reconnect" };
+  try {
+    outcome = await db.$transaction(
+      async (tx) => {
+        const row = await lockConnection(tx, businessId);
+        if (!row || row.status !== "CONNECTED") throw new PayrollConnectError("NOT_CONNECTED");
+        access.assertOwned({ businessId, id: row.id });
+        const expiresAt = row.accessTokenExpiresAt ? new Date(row.accessTokenExpiresAt) : null;
+        const stillFresh =
+          expiresAt instanceof Date &&
+          !Number.isNaN(expiresAt.getTime()) &&
+          expiresAt.getTime() > Date.now() + GUSTO_ACCESS_TOKEN_SKEW_SECONDS * 1000 &&
+          Boolean(row.accessTokenCiphertext);
+        if (stillFresh) return { kind: "ok" as const, rotated: false };
+        if (!row.refreshTokenCiphertext) {
+          await markNeedsReconnect(tx, businessId);
+          return { kind: "needs_reconnect" as const };
+        }
+        let refreshToken = "";
+        try {
+          refreshToken = decryptConnectionToken(GUSTO_PROVIDER, businessId, row.refreshTokenCiphertext);
+        } catch {
+          await markNeedsReconnect(tx, businessId);
+          return { kind: "needs_reconnect" as const };
+        }
+        let pair: GustoTokenPair;
+        try {
+          pair = await withProviderDeadline(
+            getPayrollProvider().refreshAccessToken({
+              refreshToken,
+              redirectUri: availability.redirectUri,
+              clientId: availability.clientId,
+              clientSecret: availability.clientSecret,
+            }),
+          );
+        } catch (error) {
+          if (!isInvalidGrantError(error)) {
+            throw error instanceof PayrollConnectError ? error : new PayrollConnectError("PROVIDER");
+          }
+          const again = await lockConnection(tx, businessId);
+          if (
+            again &&
+            shouldKeepConnectionAfterInvalidGrant(
+              row.refreshTokenCiphertext ?? "",
+              again.refreshTokenCiphertext,
+            )
+          ) {
+            return { kind: "ok" as const, rotated: false };
+          }
+          await markNeedsReconnect(tx, businessId);
+          return { kind: "needs_reconnect" as const };
+        }
+        receivedPair = pair;
+        previousRefreshCiphertext = row.refreshTokenCiphertext;
         const encrypted = encryptPair(businessId, pair);
-        await tx.payrollConnection.updateMany({
-          where: { id: row.id, businessId, provider: GUSTO_PROVIDER },
+        const written = await tx.payrollConnection.updateMany({
+          where: {
+            id: row.id,
+            businessId,
+            provider: GUSTO_PROVIDER,
+            refreshTokenCiphertext: row.refreshTokenCiphertext,
+          },
           data: {
             status: "CONNECTED",
             lastError: null,
             ...encrypted,
           },
         });
+        if (written.count !== 1) throw new PayrollConnectError("PROVIDER");
         return { kind: "ok" as const, rotated: true };
-      } catch (error) {
-        if (!isInvalidGrantError(error)) throw new PayrollConnectError("PROVIDER");
-        const again = await lockConnection(tx, businessId);
-        if (
-          again &&
-          shouldKeepConnectionAfterInvalidGrant(
-            row.refreshTokenCiphertext ?? "",
-            again.refreshTokenCiphertext,
-          )
-        ) {
-          return { kind: "ok" as const, rotated: false };
-        }
-        await markNeedsReconnect(tx, businessId);
-        return { kind: "needs_reconnect" as const };
-      }
-    },
-    { timeout: 20_000, maxWait: 10_000 },
-  );
+      },
+      { timeout: 20_000, maxWait: 10_000 },
+    );
+    receivedPair = null;
+  } catch (error) {
+    if (receivedPair && previousRefreshCiphertext) {
+      const saved = await persistRotatedPair(db, businessId, previousRefreshCiphertext, receivedPair);
+      if (saved) return { rotated: true };
+    }
+    if (error instanceof PayrollConnectError) throw error;
+    throw new PayrollConnectError("PROVIDER");
+  }
   if (outcome.kind === "needs_reconnect") throw new PayrollConnectError("NEEDS_RECONNECT");
   return { rotated: outcome.rotated };
 }

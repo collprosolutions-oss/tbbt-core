@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { FAKE_PAYROLL_PROVIDER } from "@/lib/payroll-connect/config";
+import { GUSTO_HTTP_TIMEOUT_MS } from "@/lib/payroll-connect/copy";
 import { PayrollConnectError } from "@/lib/payroll-connect/errors";
 import { hashRawPayload } from "@/lib/payroll-connect/parse";
 import type {
@@ -15,10 +16,18 @@ export type FakePayrollProvider = PayrollProvider & {
   listCount: number;
   delayMs: number;
   invalidGrantNext: boolean;
+  networkErrorNext: boolean;
+  tokenInfoError: boolean;
+  listInvalidGrant: boolean;
+  beforeList: (() => Promise<void>) | null;
   payrolls: GustoPayrollFactDraft[];
   setCompanyId(value: string): void;
   setDelayMs(value: number): void;
   setInvalidGrantNext(value: boolean): void;
+  setNetworkErrorNext(value: boolean): void;
+  setTokenInfoError(value: boolean): void;
+  setListInvalidGrant(value: boolean): void;
+  setBeforeList(value: (() => Promise<void>) | null): void;
   setPayrolls(value: GustoPayrollFactDraft[]): void;
 };
 
@@ -35,6 +44,10 @@ export function createFakePayrollProvider(): FakePayrollProvider {
     listCount: 0,
     delayMs: 0,
     invalidGrantNext: false,
+    networkErrorNext: false,
+    tokenInfoError: false,
+    listInvalidGrant: false,
+    beforeList: null,
     payrolls: [],
     setCompanyId(value) {
       provider.companyId = value;
@@ -45,6 +58,18 @@ export function createFakePayrollProvider(): FakePayrollProvider {
     setInvalidGrantNext(value) {
       provider.invalidGrantNext = value;
     },
+    setNetworkErrorNext(value) {
+      provider.networkErrorNext = value;
+    },
+    setTokenInfoError(value) {
+      provider.tokenInfoError = value;
+    },
+    setListInvalidGrant(value) {
+      provider.listInvalidGrant = value;
+    },
+    setBeforeList(value) {
+      provider.beforeList = value;
+    },
     setPayrolls(value) {
       provider.payrolls = value;
     },
@@ -54,6 +79,14 @@ export function createFakePayrollProvider(): FakePayrollProvider {
     },
     async refreshAccessToken(input) {
       provider.refreshCount += 1;
+      if (provider.networkErrorNext) {
+        provider.networkErrorNext = false;
+        throw new Error("network unreachable");
+      }
+      if (provider.delayMs > GUSTO_HTTP_TIMEOUT_MS) {
+        await new Promise((resolve) => setTimeout(resolve, GUSTO_HTTP_TIMEOUT_MS));
+        throw new PayrollConnectError("PROVIDER");
+      }
       if (provider.delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, provider.delayMs));
       }
@@ -64,6 +97,10 @@ export function createFakePayrollProvider(): FakePayrollProvider {
       return issuePair();
     },
     async tokenInfo({ accessToken }) {
+      if (provider.tokenInfoError) {
+        provider.tokenInfoError = false;
+        throw new PayrollConnectError("PROVIDER");
+      }
       if (!accessToken.startsWith("fake_gusto_access_")) {
         throw new PayrollConnectError("INVALID_GRANT");
       }
@@ -76,6 +113,15 @@ export function createFakePayrollProvider(): FakePayrollProvider {
     },
     async listProcessedPayrolls() {
       provider.listCount += 1;
+      if (provider.beforeList) {
+        const hook = provider.beforeList;
+        provider.beforeList = null;
+        await hook();
+      }
+      if (provider.listInvalidGrant) {
+        provider.listInvalidGrant = false;
+        throw new PayrollConnectError("INVALID_GRANT");
+      }
       return provider.payrolls.filter((row) => row.processed);
     },
   };

@@ -114,6 +114,7 @@ export function PayrollProviderPanel({
                   Processed as reported. Gross {fact.grossLabel}. Employer taxes {fact.employerTaxesLabel}.
                   Employer benefits {fact.employerBenefitsLabel}. Review {fact.reviewStatus}.
                 </p>
+                {fact.changeNote ? <p>{fact.changeNote}</p> : null}
                 <ul className="mt-2 space-y-1">
                   {fact.lines.map((line, index) => (
                     <li key={`${fact.id}-${line.providerEmployeeId ?? index}`}>
