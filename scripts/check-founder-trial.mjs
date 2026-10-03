@@ -497,6 +497,72 @@ check(
   ended?.founderEligible === false && Boolean(ended?.founderEligibilityEndedAt),
 );
 check("A later restart does not restore founder eligibility", restart === null);
+function applyFounderStatusSequence(start, statuses, now) {
+  const current = { ...start };
+  for (const nextStatus of statuses) {
+    const patch = founderFieldsForSubscriptionStatus({
+      current: {
+        founderEligible: current.founderEligible,
+        founderConvertedAt: current.founderConvertedAt,
+        founderEligibilityEndedAt: current.founderEligibilityEndedAt,
+      },
+      nextStatus,
+      now,
+    });
+    if (patch) Object.assign(current, patch);
+    current.status = nextStatus;
+  }
+  return current;
+}
+const day15 = new Date(windowStart.getTime() + 15 * 24 * 60 * 60 * 1000);
+const paidThenCanceled = applyFounderStatusSequence({ ...trialRow }, ["active", "canceled"], windowStart);
+const paidThenCanceledEntitlement = resolveSaasEntitlement({
+  slug: "new-co",
+  row: paidThenCanceled,
+  now: day15,
+});
+check(
+  "active then canceled on day 15 does not resurrect leftover trial days",
+  Boolean(paidThenCanceled.founderConvertedAt) &&
+    paidThenCanceled.founderEligible === false &&
+    Boolean(paidThenCanceled.founderEligibilityEndedAt) &&
+    paidThenCanceled.trialEndsAt.getTime() > day15.getTime() &&
+    paidThenCanceledEntitlement.state === "subscription_required" &&
+    paidThenCanceledEntitlement.canOperate === false,
+);
+const failedThenPaidThenCanceled = applyFounderStatusSequence(
+  { ...trialRow },
+  ["incomplete", "incomplete_expired", "active", "canceled"],
+  windowStart,
+);
+const failedThenPaidThenCanceledEntitlement = resolveSaasEntitlement({
+  slug: "new-co",
+  row: failedThenPaidThenCanceled,
+  now: day15,
+});
+check(
+  "incomplete then incomplete_expired then active then canceled on day 15 does not resurrect leftover trial days",
+  Boolean(failedThenPaidThenCanceled.founderConvertedAt) &&
+    failedThenPaidThenCanceled.founderEligible === false &&
+    Boolean(failedThenPaidThenCanceled.founderEligibilityEndedAt) &&
+    failedThenPaidThenCanceled.trialEndsAt.getTime() > day15.getTime() &&
+    failedThenPaidThenCanceledEntitlement.state === "subscription_required" &&
+    failedThenPaidThenCanceledEntitlement.canOperate === false,
+);
+const afterIncompleteExpired = applyFounderStatusSequence(
+  { ...trialRow },
+  ["incomplete", "incomplete_expired"],
+  windowStart,
+);
+const afterLaterActive = applyFounderStatusSequence(afterIncompleteExpired, ["active"], windowStart);
+check(
+  "active after incomplete_expired records founderConvertedAt even though eligibility already ended",
+  afterIncompleteExpired.founderConvertedAt == null &&
+    Boolean(afterIncompleteExpired.founderEligibilityEndedAt) &&
+    afterIncompleteExpired.founderEligible === false &&
+    Boolean(afterLaterActive.founderConvertedAt) &&
+    afterLaterActive.founderEligible === false,
+);
 const scheduledCancelFields = founderFieldsForSubscriptionStatus({
   current: {
     founderEligible: true,
@@ -676,6 +742,52 @@ try {
     }))?.status === "incomplete_expired" &&
       createdExpiredEntitlement.state === "trial_active" &&
       createdExpiredEntitlement.canOperate === true,
+  );
+
+  console.log("\nTEST — Paid-then-canceled leftover trial cannot revive after a failed first payment");
+  const leftoverNow = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000);
+  const leftover = await seedBusiness("Leftover Trial Revival Co", {
+    firstRunSetupCompletedAt: now,
+    starterServicesSetupCompletedAt: now,
+    websiteSetupCompletedAt: now,
+  });
+  await startFounderTrialIfEligible(prisma, {
+    businessId: leftover.business.id,
+    slug: leftover.business.slug,
+    changedByMembershipId: leftover.membership.id,
+    now,
+  });
+  for (const [id, status, type] of [
+    ["evt_leftover_incomplete", "incomplete", "customer.subscription.updated"],
+    ["evt_leftover_incomplete_expired", "incomplete_expired", "customer.subscription.updated"],
+    ["evt_leftover_active", "active", "customer.subscription.updated"],
+    ["evt_leftover_canceled", "canceled", "customer.subscription.deleted"],
+  ]) {
+    await applySaasBillingStripeEvent(
+      prisma,
+      saasSubscriptionEvent({
+        id,
+        type,
+        businessId: leftover.business.id,
+        customerId: "cus_leftover_revival",
+        subscriptionId: "sub_leftover_revival",
+        status,
+      }),
+    );
+  }
+  const leftoverRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: leftover.business.id },
+  });
+  const leftoverEntitlement = await loadSaasEntitlement(prisma, leftover.business, leftoverNow);
+  check(
+    "Webhook sequence incomplete → incomplete_expired → active → canceled stays subscription_required on day 15",
+    leftoverRow?.status === "canceled" &&
+      Boolean(leftoverRow?.founderConvertedAt) &&
+      leftoverRow?.founderEligible === false &&
+      leftoverRow?.trialEndsAt instanceof Date &&
+      leftoverRow.trialEndsAt.getTime() > leftoverNow.getTime() &&
+      leftoverEntitlement.state === "subscription_required" &&
+      leftoverEntitlement.canOperate === false,
   );
 
   console.log("\nTEST — Existing businesses and CollPro stay usable");

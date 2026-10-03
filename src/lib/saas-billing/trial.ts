@@ -93,12 +93,17 @@ export function founderFieldsForSubscriptionStatus(input: {
 }) {
   const now = input.now ?? new Date();
   const current = input.current;
-  if (!current?.founderEligible || current.founderEligibilityEndedAt) {
-    return null;
-  }
+  if (!current) return null;
+  // A real paid/trialing Stripe subscription always records conversion so
+  // leftover trial days cannot revive after a later cancel. Do this even
+  // when incomplete_expired already ended Founder eligibility — that failed
+  // first payment is not a conversion, but the later active/trialing one is.
   if (input.nextStatus === "active" || input.nextStatus === "trialing") {
     if (current.founderConvertedAt) return null;
     return { founderConvertedAt: now };
+  }
+  if (!current.founderEligible || current.founderEligibilityEndedAt) {
+    return null;
   }
   // Scheduling cancellation for period end is not termination. The
   // contractor stays continuously subscribed, so Founder eligibility stays.
