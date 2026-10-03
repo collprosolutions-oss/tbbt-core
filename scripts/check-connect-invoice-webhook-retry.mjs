@@ -277,7 +277,7 @@ async function seedApprovedEstimateJobInvoice(input) {
       customerId: input.customerId,
       propertyId: input.propertyId,
       status: "APPROVED",
-      total: new Prisma.Decimal("550.00"),
+      total: new Prisma.Decimal("1000.00"),
       publicToken: randomUUID(),
     },
   });
@@ -288,8 +288,8 @@ async function seedApprovedEstimateJobInvoice(input) {
       description: "Labor",
       type: "LABOR",
       quantity: new Prisma.Decimal("1"),
-      unitPrice: new Prisma.Decimal("350.00"),
-      total: new Prisma.Decimal("350.00"),
+      unitPrice: new Prisma.Decimal("700.00"),
+      total: new Prisma.Decimal("700.00"),
     },
   });
   await prisma.lineItem.create({
@@ -299,8 +299,8 @@ async function seedApprovedEstimateJobInvoice(input) {
       description: "Materials",
       type: "MATERIAL",
       quantity: new Prisma.Decimal("1"),
-      unitPrice: new Prisma.Decimal("200.00"),
-      total: new Prisma.Decimal("200.00"),
+      unitPrice: new Prisma.Decimal("300.00"),
+      total: new Prisma.Decimal("300.00"),
     },
   });
   const job = await prisma.job.create({
@@ -320,10 +320,30 @@ async function seedApprovedEstimateJobInvoice(input) {
       jobId: job.id,
       kind: "ORIGINAL",
       status: input.status ?? "DRAFT",
-      total: new Prisma.Decimal("550.00"),
+      total: new Prisma.Decimal("1000.00"),
     },
   });
   return { estimate, job, invoice };
+}
+
+async function withArrivalBarrier(work, extraDelayMs = 0) {
+  const previous = invoiceRemainingReadTestHooks.afterRead;
+  let arrived = 0;
+  let release = () => {};
+  const opened = new Promise((resolve) => {
+    release = resolve;
+  });
+  invoiceRemainingReadTestHooks.afterRead = async () => {
+    arrived += 1;
+    if (arrived >= 2) release();
+    await Promise.race([opened, sleep(3000)]);
+    if (extraDelayMs) await sleep(extraDelayMs);
+  };
+  try {
+    return await work();
+  } finally {
+    invoiceRemainingReadTestHooks.afterRead = previous;
+  }
 }
 
 function isDeadlockError(error) {
@@ -860,26 +880,40 @@ try {
     where: { invoiceId: dual.invoice.id, businessId: businessA.business.id },
     orderBy: { createdAt: "asc" },
   });
+  const inboxBeforeRetry = await listUnappliedConnectInvoiceWebhookEvents(
+    prisma,
+    businessA.business.id,
+    { invoiceId: dual.invoice.id },
+  );
   const firstDual = await retryConnectInvoiceWebhookEvent(prisma, ownerA, dualRows[0].id);
-  const secondDual = await retryConnectInvoiceWebhookEvent(prisma, ownerA, dualRows[1].id);
   const dualPayments = await prisma.payment.findMany({
     where: { invoiceId: dual.invoice.id, businessId: businessA.business.id },
   });
-  const dualInbox = await listUnappliedConnectInvoiceWebhookEvents(
+  const dualAfter = await prisma.connectInvoiceWebhookEvent.findMany({
+    where: { invoiceId: dual.invoice.id, businessId: businessA.business.id },
+    orderBy: { createdAt: "asc" },
+  });
+  const inboxAfterFirst = await listUnappliedConnectInvoiceWebhookEvents(
     prisma,
     businessA.business.id,
     { invoiceId: dual.invoice.id },
   );
   check(
-    "second stored event on the same invoice does not double-apply",
+    "distinct second event on the same invoice stays isolated after the first retry",
     dualRows.length === 2 &&
+      inboxBeforeRetry.length === 2 &&
       dualRows[0].stripeEventId !== dualRows[1].stripeEventId &&
       dualRows[0].checkoutSessionId !== dualRows[1].checkoutSessionId &&
       firstDual.applied === true &&
-      secondDual.applied === false &&
-      (secondDual.reason === "already_paid" || secondDual.reason === "already_applied") &&
+      firstDual.reason === "paid" &&
+      dualAfter[0].applied === true &&
+      dualAfter[0].reason === "paid" &&
+      dualAfter[1].applied === false &&
+      dualAfter[1].reason === "not_sent" &&
       dualPayments.length === 1 &&
-      dualInbox.length === 0,
+      dualPayments[0].stripeCheckoutSessionId === dualRows[0].checkoutSessionId &&
+      inboxAfterFirst.length === 1 &&
+      inboxAfterFirst[0].id === dualRows[1].id,
   );
 
   console.log("\nTEST — OWNER invoice retry races deposit apply on the same job");
@@ -897,9 +931,9 @@ try {
       connectedAccountId: businessA.accountId,
       invoiceId: fixture.invoice.id,
       businessId: businessA.business.id,
-      amountCents: 35000,
+      amountCents: 100000,
       currency: "usd",
-      description: "Balance after deposit",
+      description: "Invoice balance",
       successUrl: "http://connect-invoice-retry.test/ok?session_id={CHECKOUT_SESSION_ID}",
       cancelUrl: "http://connect-invoice-retry.test/cancel",
     });
@@ -910,7 +944,7 @@ try {
       sessionId: invoiceCheckout.id,
       invoiceId: fixture.invoice.id,
       businessId: businessA.business.id,
-      amountCents: 35000,
+      amountCents: 100000,
     });
     await dispatchSigned(invoiceEvent);
     await prisma.invoice.update({
@@ -927,28 +961,29 @@ try {
       checkoutSessionId: `cs_test_dep_${i}_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
       businessId: businessA.business.id,
       connectedAccountId: businessA.accountId,
-      amountCents: 20000,
+      amountCents: 30000,
       currency: "usd",
       paymentReference: `pi_dep_${i}_${randomUUID().slice(0, 8)}`,
       paymentStatus: "paid",
     };
-    const previous = invoiceRemainingReadTestHooks.afterRead;
-    invoiceRemainingReadTestHooks.afterRead = async () => sleep(80);
     const invoiceClient = session.createClient();
     const depositClient = session.createClient();
     let invoiceResult;
     let depositResult;
     try {
-      [invoiceResult, depositResult] = await Promise.all([
-        retryConnectInvoiceWebhookEvent(invoiceClient, ownerA, invoiceRow.id).catch(
-          (error) => ({ error }),
-        ),
-        applyVerifiedCheckoutPayment(depositClient, depositPayment).catch((error) => ({
-          error,
-        })),
-      ]);
+      [invoiceResult, depositResult] = await withArrivalBarrier(
+        () =>
+          Promise.all([
+            retryConnectInvoiceWebhookEvent(invoiceClient, ownerA, invoiceRow.id).catch(
+              (error) => ({ error }),
+            ),
+            applyVerifiedCheckoutPayment(depositClient, depositPayment).catch((error) => ({
+              error,
+            })),
+          ]),
+        40,
+      );
     } finally {
-      invoiceRemainingReadTestHooks.afterRead = previous;
       await Promise.all([invoiceClient.$disconnect(), depositClient.$disconnect()]);
     }
     if (isDeadlockError(invoiceResult?.error) || isDeadlockError(depositResult?.error)) {
@@ -966,6 +1001,16 @@ try {
     const depositOk = depositResult?.applied === true && !depositResult?.error;
     if (!(invoiceOk && depositOk && deposits.length === 1 && invoicePays.length === 1)) {
       raceFailures += 1;
+      if (raceFailures === 1) {
+        console.error("deposit-race debug", {
+          invoiceResult,
+          depositResult,
+          payments: payments.map((row) => ({
+            purpose: row.purpose,
+            amount: String(row.amount),
+          })),
+        });
+      }
     }
   }
   check(
