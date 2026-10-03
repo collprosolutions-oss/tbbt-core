@@ -758,109 +758,139 @@ export async function resolveStripeCreditMismatchReview(
   return { resolved: true, alreadyResolved: false, paymentId: payment.id };
 }
 
+const DEPOSIT_APPLY_ESTIMATE_SELECT = {
+  id: true,
+  businessId: true,
+  customerId: true,
+  status: true,
+  total: true,
+  approvedOptionId: true,
+  approvedOption: { select: { id: true, total: true } },
+  approvedVersion: {
+    select: {
+      total: true,
+      lineItems: { select: { type: true, total: true, description: true, optionId: true } },
+    },
+  },
+  lineItems: { select: { type: true, total: true, description: true, optionId: true } },
+  jobs: {
+    select: { id: true, invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } } },
+    take: 1,
+  },
+} as const;
+
 async function applyVerifiedDepositPayment(
   db: PaymentsClient,
   payment: VerifiedCheckoutPayment,
 ): Promise<{ applied: boolean; reason: string }> {
-  if (!payment.estimateId) {
+  const estimateId = payment.estimateId;
+  if (!estimateId) {
     return { applied: false, reason: "estimate_not_found" };
   }
-  const estimate = await db.estimate.findFirst({
-    where: { id: payment.estimateId },
-    select: {
-      id: true,
-      businessId: true,
-      customerId: true,
-      status: true,
-      total: true,
-      approvedOptionId: true,
-      approvedOption: { select: { id: true, total: true } },
-      approvedVersion: {
-        select: {
-          total: true,
-          lineItems: { select: { type: true, total: true, description: true, optionId: true } },
-        },
-      },
-      lineItems: { select: { type: true, total: true, description: true, optionId: true } },
-      jobs: {
-        select: { id: true, invoices: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } } },
-        take: 1,
-      },
-    },
-  });
-  if (!estimate) {
-    return { applied: false, reason: "estimate_not_found" };
-  }
-  if (estimate.businessId !== payment.businessId) {
-    return { applied: false, reason: "business_mismatch" };
-  }
-  if (estimate.status !== "APPROVED") {
-    return { applied: false, reason: "not_approved" };
-  }
 
-  const account = await db.businessPaymentAccount.findUnique({
-    where: { businessId: estimate.businessId },
-    select: { stripeAccountId: true },
-  });
-  if (!account || account.stripeAccountId !== payment.connectedAccountId) {
-    return { applied: false, reason: "account_mismatch" };
-  }
-
-  const chosen = resolveChosenCommercialScope({
-    total: estimate.total,
-    lineItems: estimate.lineItems,
-    approvedOptionId: estimate.approvedOptionId,
-    approvedOption: estimate.approvedOption,
-    approvedVersion: estimate.approvedVersion,
-  });
-  const lines = chosen.lineItems;
-  const total = chosen.total;
-  const required = requiredDepositFromLines(lines, total);
-  const existingPayments = await listProjectPayments(db, {
-    businessId: estimate.businessId,
-    estimateId: estimate.id,
-  });
-  const alreadyPaid = existingPayments
-    .filter((row) => row.purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT)
-    .reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0));
-  const due = required.sub(alreadyPaid);
-  if (due.lte(0)) {
-    return { applied: false, reason: "already_paid" };
-  }
-  const expectedCents = invoiceAmountToCents(due);
-  if (payment.amountCents !== expectedCents) {
-    return { applied: false, reason: "amount_mismatch" };
-  }
-
-  const job = estimate.jobs[0] ?? null;
-  const invoiceId = job?.invoices[0]?.id ?? null;
-  const recorded = await recordSucceededPayment(db, {
-    businessId: estimate.businessId,
-    customerId: estimate.customerId,
-    estimateId: estimate.id,
-    jobId: job?.id ?? null,
-    invoiceId,
-    purpose: PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
-    amount: centsToDecimal(payment.amountCents),
-    method: "STRIPE",
-    stripeCheckoutSessionId: payment.checkoutSessionId,
-    stripePaymentIntentId: payment.paymentReference.startsWith("pi_")
-      ? payment.paymentReference
-      : null,
-  });
-  if (!recorded.created) {
-    return { applied: false, reason: "already_paid" };
-  }
-  if (invoiceId) {
-    const invoice = await db.invoice.findFirst({
-      where: { id: invoiceId, businessId: estimate.businessId },
-      select: { id: true, businessId: true, status: true },
+  const applyLocked = async (tx: Prisma.TransactionClient) => {
+    const claimed = await tx.estimate.findUnique({
+      where: { id: estimateId },
+      select: { id: true, businessId: true },
     });
-    if (invoice) {
-      await maybeMarkInvoicePaid(db, invoice, payment.paymentReference);
+    if (!claimed) {
+      return { applied: false, reason: "estimate_not_found" };
     }
-  }
-  return { applied: true, reason: "paid" };
+    if (claimed.businessId !== payment.businessId) {
+      return { applied: false, reason: "business_mismatch" };
+    }
+
+    // ESTIMATE_DEPOSIT_FOR_NO_KEY_UPDATE
+    // NO KEY so Payment FK inserts (FOR KEY SHARE on Estimate) from the
+    // invoice-balance path cannot deadlock against this lock.
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "Estimate"
+      WHERE id = ${estimateId} AND "businessId" = ${payment.businessId}
+      FOR NO KEY UPDATE
+    `;
+    if (locked.length === 0) {
+      return { applied: false, reason: "estimate_not_found" };
+    }
+
+    const estimate = await tx.estimate.findFirst({
+      where: { id: estimateId, businessId: payment.businessId },
+      select: DEPOSIT_APPLY_ESTIMATE_SELECT,
+    });
+    if (!estimate) {
+      return { applied: false, reason: "estimate_not_found" };
+    }
+    if (estimate.status !== "APPROVED") {
+      return { applied: false, reason: "not_approved" };
+    }
+
+    const account = await tx.businessPaymentAccount.findUnique({
+      where: { businessId: estimate.businessId },
+      select: { stripeAccountId: true },
+    });
+    if (!account || account.stripeAccountId !== payment.connectedAccountId) {
+      return { applied: false, reason: "account_mismatch" };
+    }
+
+    const chosen = resolveChosenCommercialScope({
+      total: estimate.total,
+      lineItems: estimate.lineItems,
+      approvedOptionId: estimate.approvedOptionId,
+      approvedOption: estimate.approvedOption,
+      approvedVersion: estimate.approvedVersion,
+    });
+    const lines = chosen.lineItems;
+    const total = chosen.total;
+    const required = requiredDepositFromLines(lines, total);
+    const existingPayments = await listProjectPayments(tx, {
+      businessId: estimate.businessId,
+      estimateId: estimate.id,
+    });
+    const alreadyPaid = existingPayments
+      .filter((row) => row.purpose === PAYMENT_PURPOSE_MATERIAL_DEPOSIT)
+      .reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0));
+    const due = required.sub(alreadyPaid);
+    if (due.lte(0)) {
+      return { applied: false, reason: "already_paid" };
+    }
+    const expectedCents = invoiceAmountToCents(due);
+    if (payment.amountCents !== expectedCents) {
+      return { applied: false, reason: "amount_mismatch" };
+    }
+    await invoiceRemainingReadTestHooks.afterRead();
+
+    const job = estimate.jobs[0] ?? null;
+    const invoiceId = job?.invoices[0]?.id ?? null;
+    const recorded = await recordSucceededPayment(tx, {
+      businessId: estimate.businessId,
+      customerId: estimate.customerId,
+      estimateId: estimate.id,
+      jobId: job?.id ?? null,
+      invoiceId,
+      purpose: PAYMENT_PURPOSE_MATERIAL_DEPOSIT,
+      amount: centsToDecimal(payment.amountCents),
+      method: "STRIPE",
+      stripeCheckoutSessionId: payment.checkoutSessionId,
+      stripePaymentIntentId: payment.paymentReference.startsWith("pi_")
+        ? payment.paymentReference
+        : null,
+    });
+    if (!recorded.created) {
+      return { applied: false, reason: "already_paid" };
+    }
+    if (invoiceId) {
+      const invoice = await tx.invoice.findFirst({
+        where: { id: invoiceId, businessId: estimate.businessId },
+        select: { id: true, businessId: true, status: true },
+      });
+      if (invoice) {
+        await maybeMarkInvoicePaid(tx, invoice, payment.paymentReference);
+      }
+    }
+    return { applied: true, reason: "paid" };
+  };
+
+  return isPrismaClient(db) ? db.$transaction(applyLocked) : applyLocked(db);
 }
 
 const DEPOSIT_ESTIMATE_SELECT = {
