@@ -27,6 +27,9 @@ const { getFakePaymentProvider } = await import("@/lib/payments/provider");
 const { isFakeStripeTestCheckoutPath, isPublicWebsitePath } = await import(
   "@/lib/public-website-paths"
 );
+const { isStripeWebhookPath, STRIPE_WEBHOOK_PATH } = await import(
+  "@/lib/stripe-webhook-path"
+);
 const { parseCheckoutPaymentEvent } = await import("@/lib/payments/events");
 const { dispatchStripeWebhookEvent } = await import("@/lib/stripe-webhook-dispatch");
 const { SAAS_CHECKOUT_PURPOSE } = await import("@/lib/saas-billing");
@@ -720,11 +723,28 @@ try {
       !paymentEventsSrc.includes("invoice.paid"),
   );
   const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
+  const proxyCollapsed = proxySrc
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/\s+/g, " ");
+  const webhookPathCall = proxyCollapsed.search(/isStripeWebhookPath\s*\(/);
+  const unauthenticatedSignIn = proxyCollapsed.search(
+    /redirectOnCurrentDeployment\s*\(\s*["']\/sign-in["']/,
+  );
+  const passthroughBeforeSignIn =
+    webhookPathCall >= 0 && unauthenticatedSignIn > webhookPathCall
+      ? proxyCollapsed.slice(webhookPathCall, unauthenticatedSignIn)
+      : "";
   check(
     "Auth proxy does not redirect unauthenticated Stripe webhook POSTs to sign-in",
-    proxySrc.includes("isStripeWebhookPath") &&
-      proxySrc.includes("api/stripe/webhook") &&
-      proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+    isStripeWebhookPath(STRIPE_WEBHOOK_PATH) &&
+      isStripeWebhookPath("/api/stripe/webhook") &&
+      !isStripeWebhookPath("/api/stripe/webhook/extra") &&
+      /from\s+["']@\/lib\/stripe-webhook-path["']/.test(proxyCollapsed) &&
+      webhookPathCall >= 0 &&
+      /return NextResponse\.next\s*\(/.test(passthroughBeforeSignIn) &&
+      !/redirectOnCurrentDeployment\s*\(\s*["']\/sign-in["']/.test(passthroughBeforeSignIn) &&
+      /api\/stripe\/webhook/.test(proxySrc),
   );
   check(
     "invoice checkout uses an explicit card allowlist the connected account can charge",
