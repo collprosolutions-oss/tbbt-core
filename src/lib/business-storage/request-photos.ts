@@ -3,6 +3,7 @@ import {
   abortManagedUpload,
   authorizeManagedUpload,
   bestEffortCleanupOwnedObject,
+  claimReadyUsedBytesOnce,
   ensureBusinessStorageAccount,
   finalizeManagedUpload,
   resolveStorageProvider,
@@ -188,7 +189,7 @@ export function remainingIntakePhotoSlots(attachedCount: number) {
 }
 
 async function claimUnattachedRequestPhotoInTx(
-  tx: Db,
+  tx: Prisma.TransactionClient,
   businessId: string,
   assetId: string,
   now: Date,
@@ -213,23 +214,19 @@ async function claimUnattachedRequestPhotoInTx(
     select: { id: true },
   });
   if (referenced) return null;
-  const fileSizeBytes = Number(asset.fileSizeBytes);
-  const updated = await tx.storedAsset.updateMany({
-    where: {
-      id: asset.id,
-      businessId,
+  const claimed = await claimReadyUsedBytesOnce(tx, {
+    businessId,
+    assetId: asset.id,
+    accountId: asset.storageAccountId,
+    now,
+    nextStatus: "FAILED",
+    match: {
       purpose: PUBLIC_REQUEST_PHOTO_PURPOSE,
-      status: "READY",
+      category: "CUSTOMER_PHOTO",
+      visibility: "PRIVATE",
     },
-    data: { status: "FAILED", deletedAt: now, publicPath: null },
   });
-  if (updated.count !== 1) return null;
-  if (fileSizeBytes > 0) {
-    await tx.businessStorageAccount.update({
-      where: { id: asset.storageAccountId },
-      data: { storageUsedBytes: { decrement: fileSizeBytes } },
-    });
-  }
+  if (!claimed.claimed) return null;
   return {
     bucket: account.bucketName,
     storageKey: asset.storageKey,

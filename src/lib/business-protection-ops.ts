@@ -62,10 +62,16 @@ import {
 import {
   abortManagedUpload,
   authorizeManagedUpload,
+  bestEffortCleanupOwnedObject,
+  claimReadyUsedBytesOnce,
   finalizeManagedUpload,
-  resolveStorageProvider,
   type StorageServiceDeps,
 } from "@/lib/business-storage/service";
+
+/** Proof hook for the delete-versus-vault READY used-bytes race. */
+export const vaultReleaseTestHooks: {
+  afterStatusRead?: () => Promise<void>;
+} = {};
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -606,32 +612,26 @@ export async function releaseUnreferencedVaultAsset(
     await abortManagedUpload(deps, access.businessId, asset.id);
     return { released: true as const, reason: "aborted", assetId: asset.id };
   }
-  try {
-    const provider = await resolveStorageProvider(deps);
-    await provider.deleteObject({
-      bucket: asset.storageAccount.bucketName,
-      key: asset.storageKey,
-    }).catch(() => undefined);
-  } catch {
-    // Provider absence still allows the tenant-scoped DB cleanup below.
-  }
-  await deps.db.$transaction(async (tx) => {
-    // LOCK_ACCOUNT_BEFORE_ASSET: vault release must match delete/discard (account, then asset).
-    await tx.$queryRaw`
-      SELECT id FROM "BusinessStorageAccount" WHERE id = ${asset.storageAccountId} FOR UPDATE
-    `;
-    await tx.storedAsset.update({
-      where: { id: asset.id },
-      data: { status: "DELETED", deletedAt: now, publicPath: null },
+  await vaultReleaseTestHooks.afterStatusRead?.();
+  const claimed = await deps.db.$transaction(async (tx) => {
+    // LOCK_ACCOUNT_BEFORE_ASSET: vault release uses the shared READY claim.
+    const result = await claimReadyUsedBytesOnce(tx, {
+      businessId: access.businessId,
+      assetId: asset.id,
+      accountId: asset.storageAccountId,
+      now,
+      nextStatus: "DELETED",
     });
-    if (asset.status === "READY" && asset.fileSizeBytes > 0) {
-      await tx.businessStorageAccount.update({
-        where: { id: asset.storageAccountId },
-        data: { storageUsedBytes: { decrement: asset.fileSizeBytes } },
-      });
-    }
+    return result.claimed;
   });
-  return { released: true as const, reason: "deleted", assetId: asset.id };
+  if (claimed) {
+    await bestEffortCleanupOwnedObject(deps, access.businessId, {
+      bucket: asset.storageAccount.bucketName,
+      storageKey: asset.storageKey,
+    });
+    return { released: true as const, reason: "deleted", assetId: asset.id };
+  }
+  return { released: false as const, reason: "already_deleted", assetId: asset.id };
 }
 
 export async function authorizeVaultDocumentUpload(

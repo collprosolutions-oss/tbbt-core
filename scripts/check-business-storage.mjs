@@ -45,6 +45,11 @@ const {
   readPublicStoredAsset,
 } = await import("@/lib/business-storage/service");
 const { servePublicStoredAsset } = await import("@/lib/business-storage/public-serve");
+const { VAULT_DOCUMENT_PURPOSE } = await import("@/lib/business-protection");
+const {
+  releaseUnreferencedVaultAsset,
+  vaultReleaseTestHooks,
+} = await import("@/lib/business-protection-ops");
 const {
   authorizeWebsitePhotoUploadOp,
   finalizeWebsitePhotoUploadOp,
@@ -1274,6 +1279,143 @@ try {
         raced.deleted.status === "DELETED" &&
         raced.repeat.status === "DELETED" &&
         raced.repeat.id === raced.seeded.ready.id,
+    );
+  }
+
+  console.log("\nDB — Delete versus vault READY used-bytes claim");
+  const vaultOpsSrc = readRepo("src/lib/business-protection-ops.ts");
+  const vaultReleaseSrc = vaultOpsSrc.slice(
+    vaultOpsSrc.indexOf("export async function releaseUnreferencedVaultAsset"),
+    vaultOpsSrc.indexOf("export async function authorizeVaultDocumentUpload"),
+  );
+  check(
+    "Vault release claims READY used bytes through the shared service",
+    vaultReleaseSrc.includes("claimReadyUsedBytesOnce") &&
+      vaultReleaseSrc.includes("afterStatusRead") &&
+      vaultReleaseSrc.indexOf("afterStatusRead") < vaultReleaseSrc.indexOf("$transaction") &&
+      vaultReleaseSrc.indexOf("$transaction") <
+        vaultReleaseSrc.indexOf("bestEffortCleanupOwnedObject") &&
+      !vaultReleaseSrc.includes('if (asset.status === "READY" && asset.fileSizeBytes > 0)'),
+  );
+
+  async function seedReadyVaultTarget(label) {
+    const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+    const user = await prisma.user.create({
+      data: {
+        name: `Vault race ${label}`,
+        email: `vault-race-${label}-${suffix}@example.com`,
+        passwordHash: "x",
+      },
+    });
+    const business = await prisma.business.create({
+      data: {
+        name: `Vault race ${label} ${suffix}`,
+        slug: `vault-race-${label}-${suffix}`,
+        tradeCode: "HANDYMAN",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: user.id, businessId: business.id, role: "OWNER" },
+    });
+    const access = makeAccess(business.id, "OWNER", membership.id);
+    const raceProvider = new MemoryStorageProvider();
+    const raceDeps = {
+      db: prisma,
+      provider: raceProvider,
+      bucketName: "tbbt-managed-test",
+      defaultLimitBytes: 1_000_000,
+    };
+    const body = Buffer.from(`%PDF-1.4 vault-race-${suffix}\n`);
+    const authorized = await authorizeManagedUpload(raceDeps, business.id, {
+      category: "DOCUMENT",
+      purpose: VAULT_DOCUMENT_PURPOSE,
+      originalFilename: `${label}.pdf`,
+      mimeType: "application/pdf",
+      fileSizeBytes: body.byteLength,
+      visibility: "PRIVATE",
+    });
+    await raceProvider.putObject({
+      bucket: authorized.account.bucketName,
+      key: authorized.asset.storageKey,
+      body,
+      contentType: "application/pdf",
+    });
+    const ready = await finalizeManagedUpload(raceDeps, business.id, authorized.asset.id);
+    return {
+      business,
+      access,
+      ready,
+      provider: raceProvider,
+      fileSize: Number(ready.fileSizeBytes),
+    };
+  }
+
+  async function runDeleteVaultCommitOrder(firstWriter) {
+    const seeded = await seedReadyVaultTarget(firstWriter);
+    const before = await accountSnapshot(seeded.business.id);
+    const deleteClient = new PrismaClient({ datasourceUrl: testUrl });
+    const vaultClient = new PrismaClient({ datasourceUrl: testUrl });
+    const barrier = createCommitBarrier();
+    const deleteDeps = {
+      db: deleteClient,
+      provider: seeded.provider,
+      bucketName: "tbbt-managed-test",
+      defaultLimitBytes: 1_000_000,
+    };
+    const vaultDeps = {
+      db: vaultClient,
+      provider: seeded.provider,
+      bucketName: "tbbt-managed-test",
+      defaultLimitBytes: 1_000_000,
+    };
+    try {
+      if (firstWriter === "vault") {
+        managedStorageWriteTestHooks.afterDeleteStatusRead = barrier.wait;
+        const deleteHeld = deleteStoredAsset(deleteDeps, seeded.access, seeded.ready.id);
+        await withTimeout(barrier.arrived, 4000, "delete read READY before vault commit");
+        const vaulted = await releaseUnreferencedVaultAsset(vaultDeps, seeded.access, seeded.ready.id);
+        barrier.release();
+        const deleted = await deleteHeld;
+        const repeat = await deleteStoredAsset(deleteDeps, seeded.access, seeded.ready.id);
+        return { seeded, before, vaulted, deleted, repeat };
+      }
+      vaultReleaseTestHooks.afterStatusRead = barrier.wait;
+      const vaultHeld = releaseUnreferencedVaultAsset(vaultDeps, seeded.access, seeded.ready.id);
+      await withTimeout(barrier.arrived, 4000, "vault read READY before delete commit");
+      const deleted = await deleteStoredAsset(deleteDeps, seeded.access, seeded.ready.id);
+      barrier.release();
+      const vaulted = await vaultHeld;
+      const repeat = await deleteStoredAsset(deleteDeps, seeded.access, seeded.ready.id);
+      return { seeded, before, vaulted, deleted, repeat };
+    } finally {
+      delete managedStorageWriteTestHooks.afterDeleteStatusRead;
+      delete vaultReleaseTestHooks.afterStatusRead;
+      await deleteClient.$disconnect();
+      await vaultClient.$disconnect();
+    }
+  }
+
+  for (const firstWriter of ["vault", "delete"]) {
+    const raced = await runDeleteVaultCommitOrder(firstWriter);
+    const after = await accountSnapshot(raced.seeded.business.id);
+    const row = await prisma.storedAsset.findUniqueOrThrow({
+      where: { id: raced.seeded.ready.id },
+    });
+    const readyBytes = (
+      await prisma.storedAsset.findMany({
+        where: { businessId: raced.seeded.business.id, status: "READY" },
+        select: { fileSizeBytes: true },
+      })
+    ).reduce((sum, asset) => sum + Number(asset.fileSizeBytes), 0);
+    check(
+      `${firstWriter}-first delete/vault race claims used bytes once and matches surviving READY assets`,
+      after.used === raced.before.used - raced.seeded.fileSize &&
+        after.used === readyBytes &&
+        after.used >= 0 &&
+        after.reserved === 0 &&
+        row.status === "DELETED" &&
+        raced.deleted.status === "DELETED" &&
+        raced.repeat.status === "DELETED",
     );
   }
 } finally {

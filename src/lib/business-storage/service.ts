@@ -495,11 +495,18 @@ export type DiscardReadyManagedUploadMatch = {
   visibility: StoredAssetVisibility;
 };
 
+export type ReadyUsedBytesClaimMatch = {
+  jobId?: string | null;
+  category?: StoredAssetCategory;
+  purpose?: string | null;
+  visibility?: StoredAssetVisibility;
+};
+
 /**
  * Account then asset. Recheck READY under the lock.
  * updateMany(status: READY) is the single used-bytes claim.
  */
-async function claimReadyUsedBytesOnce(
+export async function claimReadyUsedBytesOnce(
   tx: Prisma.TransactionClient,
   input: {
     businessId: string;
@@ -507,7 +514,7 @@ async function claimReadyUsedBytesOnce(
     accountId: string;
     now: Date;
     nextStatus: "DELETED" | "FAILED";
-    match?: DiscardReadyManagedUploadMatch;
+    match?: ReadyUsedBytesClaimMatch;
   },
 ) {
   // LOCK_ACCOUNT_BEFORE_ASSET: used-bytes release must match finalize.
