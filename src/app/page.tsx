@@ -10,7 +10,6 @@ import {
   isCollProRenoSlug,
   localBusinessJsonLd,
   publicDisplayName,
-  publicHomePath,
   publicLogoSrc,
   publicPhone,
 } from "@/lib/public-site";
@@ -18,11 +17,10 @@ import { buildPublicHomeImagePresentation, loadPublicHomeImages } from "@/lib/pu
 import { prisma } from "@/lib/prisma";
 import { loadDefaultPublicBusiness, loadPublicCatalog } from "@/lib/public-site-data";
 import { readRequestHost } from "@/lib/request-host";
-import { tbbtMarketingMetadata } from "@/lib/tbbt-marketing-seo";
 import { shouldServeTbbtMarketingHome } from "@/lib/tbbt-marketing-host";
 import { loadPublicWebsiteView, snapshotToImageRows } from "@/lib/website-engine/public";
 import { resolvePublicRoot } from "@/lib/website-engine/hosts";
-import { viewHomeMetadata } from "@/lib/website-engine/seo";
+import { publicRootPageMetadata } from "@/lib/website-engine/root-metadata";
 import {
   publishedHeroImageAlt,
   publishedLocalBusinessDescription,
@@ -33,43 +31,7 @@ import { publicCanonicalUrl } from "@/lib/public-site-seo";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const host = await readRequestHost();
-  const resolved = await resolvePublicRoot(prisma, host);
-  if (resolved.kind === "marketing" || shouldServeTbbtMarketingHome(host)) {
-    return tbbtMarketingMetadata({ page: "home", pathname: "/", host });
-  }
-  if (resolved.kind === "unknown") {
-    return { title: { absolute: "Not found" }, robots: { index: false, follow: false } };
-  }
-  const view = await loadPublicWebsiteView(resolved.slug);
-  if (view?.snapshot) {
-    const snapshotMeta =
-      viewHomeMetadata(view, "/", resolved.origin) ??
-      viewHomeMetadata(view, publicHomePath(view.site.business.slug), resolved.origin);
-    if (snapshotMeta) return snapshotMeta;
-  }
-  if (view && isCollProRenoSlug(view.site.business.slug) && !view.snapshot) {
-    return {
-      title: { absolute: `${COLLPRO_RENO_DISPLAY_NAME} | Handyman Services` },
-      description:
-        "Request handyman services from CollPro Reno Handyman Services. Choose one or more tasks for a single visit request.",
-    };
-  }
-  if (view) {
-    const name = publicDisplayName(view.site.business);
-    return {
-      title: { absolute: `${name} | Services` },
-      description:
-        view.about ||
-        `Request services from ${name}. Choose one or more tasks for a single visit request.`,
-      alternates: { canonical: publicCanonicalUrl(view.site.business.slug, "/", resolved.origin) },
-    };
-  }
-  return {
-    title: { absolute: `${COLLPRO_RENO_DISPLAY_NAME} | Handyman Services` },
-    description:
-      "Request handyman services from CollPro Reno Handyman Services. Choose one or more tasks for a single visit request.",
-  };
+  return publicRootPageMetadata(prisma, await readRequestHost());
 }
 
 export default async function HomePage() {

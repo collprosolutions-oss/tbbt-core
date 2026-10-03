@@ -50,6 +50,7 @@ const {
   authorizedPublicOrigin,
   publishedSitemapPaths,
   snapshotPageMetadata,
+  publicRootPageMetadata,
   snapshotIntakeSchemasByTrade,
   snapshotServiceAreaRecords,
   publicServiceAreaFromView,
@@ -154,6 +155,7 @@ const settingsPage = read("src/app/(app)/settings/page.tsx");
 const settingsWorkspace = read("src/components/settings/settings-workspace.tsx");
 const hireHome = read("src/app/hire/[slug]/page.tsx");
 const collproHome = read("src/app/page.tsx");
+const rootMetadata = read("src/lib/website-engine/root-metadata.ts");
 const serviceDetail = read("src/app/hire/[slug]/services/[serviceSlug]/page.tsx");
 const sitemap = read("src/app/sitemap.ts");
 const sitemapBuilder = read("src/lib/website-engine/sitemap.ts");
@@ -396,8 +398,19 @@ check(
     hireHome.includes("publishedLocalBusinessDescription") &&
     collproHome.includes("publishedLocalBusinessDescription") &&
     servicesPage.includes("publishedServicesHeroDescription") &&
-    collproHome.includes("viewHomeMetadata") &&
+    rootMetadata.includes("viewHomeMetadata") &&
+    collproHome.includes("publicRootPageMetadata") &&
     requestPage.includes("snapshot.seo.request"),
+);
+check(
+  "CollPro compatibility homepage metadata adds a CollPro-host-only canonical",
+  rootMetadata.includes("isCollProPublicHost") &&
+    rootMetadata.includes("alternates") &&
+    rootMetadata.includes("publicCanonicalUrl") &&
+    /if \(!isCollProPublicHost\(host\)\) return metadata/.test(rootMetadata) &&
+    collproHome.includes("publicRootPageMetadata") &&
+    !robotsSrc.includes("publicRootPageMetadata") &&
+    !sitemap.includes("publicRootPageMetadata"),
 );
 check(
   "Rollback copies source snapshot into a new version",
@@ -1345,6 +1358,50 @@ try {
   check("Unknown custom host fails closed at /", rootUnknown.kind === "unknown");
   check("Marketing host stays on TBBT marketing", rootMarketing.kind === "marketing");
   check("CollPro host stays on CollPro", rootCollpro.kind === "site" && rootCollpro.slug === "collpro-reno");
+  function metadataCanonical(meta) {
+    const value = meta?.alternates?.canonical;
+    return typeof value === "string" ? value : value == null ? null : String(value);
+  }
+  const expectedCollproHomeCanonical = publicCanonicalUrl(
+    "collpro-reno",
+    "/",
+    authorizedPublicOrigin({ kind: "collpro", slug: "collpro-reno" }, "www.collproreno.com"),
+  );
+  const apexHomeMeta = await publicRootPageMetadata(prisma, "collproreno.com");
+  const wwwHomeMeta = await publicRootPageMetadata(prisma, "www.collproreno.com");
+  const tenantHomeMeta = await publicRootPageMetadata(prisma, hostAName);
+  const unknownHomeMeta = await publicRootPageMetadata(
+    prisma,
+    `nobody-${randomUUID().slice(0, 8)}.example.test`,
+  );
+  const previewHomeMeta = await publicRootPageMetadata(prisma, "tbbt-preview.vercel.app");
+  check(
+    "CollPro apex homepage metadata publishes the CollPro canonical",
+    metadataCanonical(apexHomeMeta) === expectedCollproHomeCanonical &&
+      metadataCanonical(apexHomeMeta) !== `https://${hostAName}/` &&
+      !String(metadataCanonical(apexHomeMeta) ?? "").includes(hostAName),
+  );
+  check(
+    "CollPro www homepage metadata publishes the same CollPro canonical",
+    metadataCanonical(wwwHomeMeta) === expectedCollproHomeCanonical &&
+      metadataCanonical(wwwHomeMeta) === metadataCanonical(apexHomeMeta),
+  );
+  check(
+    "Tenant homepage metadata uses that host, not a CollPro canonical",
+    metadataCanonical(tenantHomeMeta) === `https://${hostAName}/` &&
+      metadataCanonical(tenantHomeMeta) !== expectedCollproHomeCanonical &&
+      !String(metadataCanonical(tenantHomeMeta) ?? "").includes("collproreno"),
+  );
+  check(
+    "Unknown host homepage metadata is noindex and has no CollPro canonical",
+    unknownHomeMeta.robots?.index === false &&
+      metadataCanonical(unknownHomeMeta) == null &&
+      !JSON.stringify(unknownHomeMeta).includes("collproreno"),
+  );
+  check(
+    "Preview homepage metadata does not publish a CollPro canonical",
+    metadataCanonical(previewHomeMeta) == null,
+  );
   const originA = authorizedPublicOrigin(hostA, hostAName);
   const originB = authorizedPublicOrigin(await resolvePublicHost(prisma, hostBVerifiedName), hostBVerifiedName);
   check(
