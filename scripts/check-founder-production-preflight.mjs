@@ -40,6 +40,9 @@ const {
 } = await import("./disposable-test-database.mjs");
 const { queryDuplicateRootConversionJobs, runProductionReadonlyProbe, withReadOnlyTransaction } =
   await import("./founder-production-preflight-db.mjs");
+const { authorizeStudioWeeklyReminderCron, classifyStudioWeeklyReminderCronAuth } = await import(
+  "@/lib/marketing-studio-reminder"
+);
 
 let passed = 0;
 let failed = 0;
@@ -185,7 +188,6 @@ const libSrc = read("src/lib/founder-production-preflight.ts");
 const dbSrc = read("scripts/founder-production-preflight-db.mjs");
 const cliSrc = read("scripts/founder-production-preflight.mjs");
 const proxySrc = read("src/proxy.ts");
-const cronSrc = read("src/lib/marketing-studio-reminder.ts");
 const packageJson = JSON.parse(read("package.json"));
 const migrationSql = read(`prisma/migrations/${CONVERSION_MIGRATION_NAME}/migration.sql`);
 
@@ -220,7 +222,30 @@ check(
     proxySrc.includes("isPublicWebsitePath") &&
     proxySrc.includes("isScheduleCalendarFeedPath"),
 );
-check("cron authorization still fails closed without a secret", cronSrc.includes("if (!secret) return false"));
+{
+  const previousCronSecret = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "";
+  try {
+    const denied = classifyStudioWeeklyReminderCronAuth(
+      new Headers({ authorization: "Bearer not-a-real-secret" }),
+    );
+    const deniedHeader = classifyStudioWeeklyReminderCronAuth(
+      new Headers({ "x-cron-secret": "not-a-real-secret" }),
+    );
+    check(
+      "cron authorization still fails closed without a secret",
+      denied.ok === false &&
+        denied.reason === "secret_missing" &&
+        deniedHeader.ok === false &&
+        deniedHeader.reason === "secret_missing" &&
+        authorizeStudioWeeklyReminderCron(new Headers({ authorization: "Bearer not-a-real-secret" })) ===
+          false,
+    );
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+}
 check("npm preflight script is present", packageJson.scripts["preflight:founder"]?.includes("scripts/founder-production-preflight.mjs") === true);
 check("npm test script is present", packageJson.scripts["test:founder-production-preflight"]?.includes("scripts/check-founder-production-preflight.mjs") === true);
 check("build does not run the preflight", !packageJson.scripts.build.includes("preflight"));

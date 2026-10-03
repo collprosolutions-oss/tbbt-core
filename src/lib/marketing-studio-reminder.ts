@@ -211,10 +211,6 @@ function cronSecretEquals(provided: string, expected: string) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-export function isStudioWeeklyReminderCronSecretConfigured() {
-  return Boolean(process.env.CRON_SECRET?.trim());
-}
-
 export function classifyStudioWeeklyReminderCronAuth(headers: {
   get(name: string): string | null;
 }): StudioWeeklyReminderCronAuth {
