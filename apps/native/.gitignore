@@ -6,3 +6,5 @@ android
 ios
 *.apk
 *.aab
+*.ipa
+*.xcarchive

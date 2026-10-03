@@ -124,7 +124,7 @@ check(
   easJson.build.preview.android.buildType === "apk" &&
     easJson.build.preview.distribution === "internal" &&
     String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).startsWith("https://") &&
-    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL.includes("REPLACE-WITH-REACHABLE-TBBT-ORIGIN") &&
+    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL === "https://www.collproreno.com" &&
     !String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).includes("10.0.2.2") &&
     easJson.build.production == null &&
     easJson.build.submit == null,

@@ -54,7 +54,7 @@ If the network drops, write helpers return an error instead of leaving the Job s
 - A standalone time clock, owner/admin checklist editor, a second Job-detail maps URL, owner accept/decline of time corrections, or worker milestone completion
 - Route optimization, geocoding, or ETA claims on the assigned-stops maps link
 - Owner/admin Today, Reports, invoices, payroll edits, or management console
-- App Store / Play distribution or device attestation. A local debug APK recipe (`apps/native` `android:debug-apk`, `eas.json` preview) is UNVERIFIED without an Android SDK/device: `assembleDebug` is a debug shell that still needs Metro, and the preview profile is a release-type APK that requires an operator-supplied **https** `EXPO_PUBLIC_TBBT_API_URL` placeholder replacement. `expo prebuild` rewrites `apps/native/package.json` android/ios scripts; the wrapper restores the tracked file. Not store submission. Cleartext HTTP is not enabled.
+- App Store / Play distribution or device attestation. A local debug APK recipe (`apps/native` `android:debug-apk`, `eas.json` preview) is UNVERIFIED without an Android SDK/device: `assembleDebug` is a debug shell that still needs Metro, and the preview profile is a release-type APK. The same preview profile also has an iOS simulator recipe (`ios:prebuild` / `ios:simulator`, `ios.buildNumber` 1, bundle `com.tbbt.field`) that is UNVERIFIED without Xcode: this environment cannot sign or install. Preview `EXPO_PUBLIC_TBBT_API_URL` is the reachable https origin `https://www.collproreno.com`. `expo prebuild` rewrites `apps/native/package.json` android/ios scripts; the wrappers restore the tracked file. Not store submission. No Apple credentials. Cleartext HTTP is not enabled.
 - FCM/APNs direct credentials, or a verified physical-device receipt. Expo Push is wired when `EXPO_ACCESS_TOKEN` is set; real-device delivery stays **UNVERIFIED** until a device is available. Development/scripts still use the fake adapter.
 - Website UI changes
 - Cookie fallback on native routes
@@ -78,6 +78,7 @@ npm run test:native-job-milestones
 npm run test:native-field-recovery
 npm run test:native-push-alerts
 npm run test:native-android-field
+npm run test:native-ios-field
 npx tsc --noEmit
 npm run build
 cd apps/native && npx tsc --noEmit && npm run build

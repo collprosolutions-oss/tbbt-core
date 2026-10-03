@@ -9,8 +9,11 @@
       "android": {
         "buildType": "apk"
       },
+      "ios": {
+        "simulator": true
+      },
       "env": {
-        "EXPO_PUBLIC_TBBT_API_URL": "https://REPLACE-WITH-REACHABLE-TBBT-ORIGIN.example"
+        "EXPO_PUBLIC_TBBT_API_URL": "https://www.collproreno.com"
       }
     },
     "development": {

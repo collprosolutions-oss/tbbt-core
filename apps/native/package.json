@@ -10,6 +10,8 @@
     "android:assemble-debug": "cd android && ./gradlew assembleDebug",
     "android:debug-apk": "bash ../../scripts/android-debug-apk.sh",
     "ios": "expo start --ios",
+    "ios:prebuild": "bash ../../scripts/ios-simulator-build.sh --prebuild-only",
+    "ios:simulator": "bash ../../scripts/ios-simulator-build.sh",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
   },
