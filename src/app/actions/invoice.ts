@@ -25,6 +25,7 @@ import { prisma } from "@/lib/prisma";
 
 export type InvoiceActionState = {
   error?: string;
+  warning?: string;
 };
 
 function readString(formData: FormData, key: string) {
@@ -119,7 +120,7 @@ export async function markInvoiceSent(
   if (invoice.jobId) {
     revalidatePath(`/jobs/${invoice.jobId}`);
   }
-  return {};
+  return sent.warning ? { warning: sent.warning } : {};
 }
 
 export async function markInvoicePaid(
