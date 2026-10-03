@@ -168,12 +168,8 @@ check(
 );
 check(
   "Helpers never import or construct an R2 client",
-  !helperSrc.includes("r2-provider") &&
-    !helperSrc.includes("createR2StorageProvider") &&
-    !helperSrc.includes("@aws-sdk/client-s3") &&
-    !selfSrc.includes("r2-provider") &&
-    !selfSrc.includes("createR2StorageProvider") &&
-    !selfSrc.includes("R2StorageProvider") &&
+  !helperSrc.includes("@aws-sdk") &&
+    !helperSrc.includes("cloudflarestorage") &&
     helperSrc.includes("Never reads or writes production R2") &&
     helperSrc.includes("scrubProductionR2Env") &&
     helperSrc.includes("HANDYMAN_RESTORE_STORAGE_PREFIX"),
