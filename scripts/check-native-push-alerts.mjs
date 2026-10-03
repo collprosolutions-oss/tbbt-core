@@ -305,7 +305,7 @@ check(
     nativeEnvExample.includes("EXPO_PUBLIC_PROJECT_ID") &&
     !nativeEnvExample.includes("EXPO_ACCESS_TOKEN") &&
     todaySrc.includes("requestPermission: turningOn") &&
-    !todaySrc.includes("nativePushPlatform"),
+    todaySrc.includes("nativePushPlatform(Platform.OS)"),
 );
 check(
   "Docs mark real-device Expo delivery UNVERIFIED",
