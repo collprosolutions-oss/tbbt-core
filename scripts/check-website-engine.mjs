@@ -292,10 +292,12 @@ check(
     builder.includes("continue") &&
     publicView.includes("snapshotIntakeSchemasByTrade") &&
     publicView.includes("loadPublicWebsiteIntakeOverlays") &&
+    publicView.includes("snapshotServiceAreaRecords") &&
+    publicView.includes("publicIntakeServiceAreas") &&
     intakeSrc.includes("publishedSnapshot") &&
     intakeSrc.includes("snapshotIntakeSchemaForTrade") &&
     intakeSrc.includes("snapshotTenantIntakeStateForTrade") &&
-    intakeSrc.includes("snapshotServiceAreaRecords") &&
+    intakeSrc.includes("publicIntakeServiceAreas") &&
     requestPage.includes("snapshot.seo.request") &&
     requestPage.includes("snapshotIntakeSchemasByTrade") &&
     requestPage.includes("loadPublicWebsiteIntakeOverlays") &&
