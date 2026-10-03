@@ -151,6 +151,17 @@ export function digestBytes(body) {
   return createHash("sha256").update(Buffer.from(body)).digest("hex");
 }
 
+/** Same-length corruption: flip one byte so size checks cannot hide a digest miss. */
+export function flipOneByte(body, index = 0) {
+  const buf = Buffer.from(body);
+  if (buf.byteLength === 0) {
+    throw new Error("Cannot flip a byte in an empty buffer.");
+  }
+  const at = ((index % buf.byteLength) + buf.byteLength) % buf.byteLength;
+  buf[at] = buf[at] ^ 0xff;
+  return buf;
+}
+
 export function digestStorageLocator(bucket, key) {
   const safeBucket = assertRestoreDrillBucket(bucket, "digest storage locator");
   const safeKey = assertSafeStorageKey(key, "digest storage locator");
@@ -206,6 +217,7 @@ export function classifyRestoredObject({ expectedSha256, expectedSizeBytes, obje
   if (!object || object.body == null) return "missing";
   const actual = Buffer.from(object.body);
   if (actual.byteLength !== expectedSizeBytes) return "mismatch";
+  // Size-only is not enough: a one-byte flip keeps fileSizeBytes and must still mismatch.
   if (digestBytes(actual) !== expectedSha256) return "mismatch";
   return "ok";
 }

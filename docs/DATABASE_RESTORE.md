@@ -154,9 +154,20 @@ filesystem fixtures under `$TMPDIR/tbbt_handy_restore_storage_*`:
    filenames, emails, phone numbers, and customer names are not logged.
 8. Negative cases:
    - empty fixture → `object-1:missing object-2:missing`
-   - same key, different bytes → `object-1:mismatch object-2:ok`
+   - same key, different-length bytes → `object-1:mismatch object-2:ok`
+   - same-length one-byte flip on a restored private object →
+     `object-1:mismatch object-2:ok` (size matches `fileSizeBytes`;
+     only the sha256 comparison catches it)
+   - same-length swapped content between two restored objects →
+     `object-1:mismatch object-2:mismatch`
    - one object removed → `object-1:ok object-2:missing`
 9. Drop both databases and delete every fixture directory.
+
+Expected bytes come from script constants, not from Postgres.
+`StoredAsset` stores `storageKey`, `fileSizeBytes`, and visibility. It
+has **no checksum column**. This drill does not add one. After restore,
+the classifier hashes fixture bytes and compares them to those
+constants. A same-length one-byte flip would pass a size-only check.
 
 Helpers: `scripts/lib/local-storage-restore.mjs`. They refuse any
 fixture path that is not under the process temp directory with the

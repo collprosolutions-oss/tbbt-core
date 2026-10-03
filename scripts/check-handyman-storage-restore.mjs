@@ -45,6 +45,7 @@ import {
   copyDisposableStorageFixture,
   countFixtureObjects,
   expectedBytesMeta,
+  flipOneByte,
   formatRestoreReport,
   openDisposableStorageFixture,
   redactRestoreLog,
@@ -175,6 +176,13 @@ check(
     helperSrc.includes("HANDYMAN_RESTORE_STORAGE_PREFIX"),
 );
 check(
+  "Classifier compares sha256 after size so a same-length flip cannot pass",
+  helperSrc.includes("digestBytes(actual) !== expectedSha256") &&
+    helperSrc.includes("export function flipOneByte") &&
+    helperSrc.indexOf("actual.byteLength !== expectedSizeBytes") <
+      helperSrc.indexOf("digestBytes(actual) !== expectedSha256"),
+);
+check(
   "Reports are opaque object refs and logs are redacted",
   helperSrc.includes("formatRestoreReport") &&
     helperSrc.includes("redactRestoreLog") &&
@@ -193,6 +201,8 @@ check(
     docsSrc.includes("missing") &&
     docsSrc.includes("mismatch") &&
     docsSrc.includes("Never read or write production R2") &&
+    docsSrc.includes("no checksum column") &&
+    docsSrc.includes("same-length one-byte flip") &&
     !docsSrc.includes("pg_dump Production"),
 );
 check(
@@ -362,9 +372,35 @@ try {
   check("R2 environment is unset before any storage work", false);
 }
 
+function padToLength(body, size, fill) {
+  if (body.byteLength === size) return Buffer.from(body);
+  const out = Buffer.alloc(size, fill);
+  body.copy(out);
+  return out;
+}
+
 const photoBody = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xd9]), Buffer.from(PHOTO_SENTINEL)]);
-const noteBody = Buffer.from(NOTE_SENTINEL);
+const noteBody = padToLength(Buffer.from(NOTE_SENTINEL), photoBody.byteLength, 0x5c);
 const otherBody = Buffer.from("TBBT_RESTORE_DRILL_OTHER_TENANT_PRIVATE_BYTES");
+if (photoBody.byteLength !== noteBody.byteLength || photoBody.equals(noteBody)) {
+  throw new Error("photo and note fixtures must be same-length distinct bytes for the digest proof.");
+}
+
+{
+  const expectedPhoto = expectedBytesMeta(photoBody);
+  const flippedPhoto = flipOneByte(photoBody, photoBody.byteLength - 1);
+  check(
+    "Classifier reports mismatch for a same-length one-byte flip",
+    flippedPhoto.byteLength === photoBody.byteLength &&
+      !flippedPhoto.equals(photoBody) &&
+      classifyRestoredObject({ ...expectedPhoto, object: { body: flippedPhoto } }) === "mismatch",
+  );
+  check(
+    "Classifier reports mismatch when two same-length objects have swapped content",
+    classifyRestoredObject({ ...expectedPhoto, object: { body: noteBody } }) === "mismatch" &&
+      classifyRestoredObject({ ...expectedBytesMeta(noteBody), object: { body: photoBody } }) === "mismatch",
+  );
+}
 
 {
   const isolated = openDisposableStorageFixture({ nameSuffix: "unit" });
@@ -401,6 +437,14 @@ const otherBody = Buffer.from("TBBT_RESTORE_DRILL_OTHER_TENANT_PRIVATE_BYTES");
           contentType: "image/jpeg",
         });
         const mismatched = await resolveRestoredPrivateObjects(refs, (loc) => copy.provider.getObject(loc));
+        const flipped = flipOneByte(photoBody, 0);
+        await copy.provider.putObject({
+          bucket: FAKE_RESTORE_BUCKET,
+          key: "businesses/unit/jobs/demo.jpg",
+          body: flipped,
+          contentType: "image/jpeg",
+        });
+        const flippedIsolated = await resolveRestoredPrivateObjects(refs, (loc) => copy.provider.getObject(loc));
         check(
           "Isolated fixture copy recovers expected bytes after the source directory is removed",
           recovered[0]?.status === "ok" &&
@@ -410,6 +454,10 @@ const otherBody = Buffer.from("TBBT_RESTORE_DRILL_OTHER_TENANT_PRIVATE_BYTES");
         );
         check("Isolated empty fixture reports missing", missing[0]?.status === "missing");
         check("Isolated mutated fixture reports mismatch", mismatched[0]?.status === "mismatch");
+        check(
+          "Isolated same-length one-byte flip reports mismatch",
+          flipped.byteLength === photoBody.byteLength && flippedIsolated[0]?.status === "mismatch",
+        );
       } finally {
         missingFixture.cleanup();
       }
@@ -442,6 +490,8 @@ let snapshotStore = null;
 let restoredStore = null;
 let emptyStore = null;
 let mutatedStore = null;
+let flippedStore = null;
+let swappedStore = null;
 let missingOneStore = null;
 
 try {
@@ -717,6 +767,47 @@ try {
     formatRestoreReport(mismatched) === "object-1:mismatch object-2:ok",
   );
 
+  flippedStore = copyDisposableStorageFixture(restoredStore.rootDir, { nameSuffix: "flip" });
+  const flippedRestored = flipOneByte(photoBody, photoBody.byteLength - 1);
+  await flippedStore.provider.putObject({
+    bucket: FAKE_RESTORE_BUCKET,
+    key: restoredPhoto.storageKey,
+    body: flippedRestored,
+    contentType: "image/jpeg",
+  });
+  const flippedReport = await resolveRestoredPrivateObjects(restoredRefs, (loc) =>
+    flippedStore.provider.getObject(loc),
+  );
+  check(
+    "Same-length one-byte flip on a restored private object is mismatch",
+    flippedRestored.byteLength === photoBody.byteLength &&
+      restoredPhoto.fileSizeBytes === flippedRestored.byteLength &&
+      formatRestoreReport(flippedReport) === "object-1:mismatch object-2:ok",
+  );
+
+  swappedStore = copyDisposableStorageFixture(restoredStore.rootDir, { nameSuffix: "swap" });
+  await swappedStore.provider.putObject({
+    bucket: FAKE_RESTORE_BUCKET,
+    key: restoredPhoto.storageKey,
+    body: noteBody,
+    contentType: "image/jpeg",
+  });
+  await swappedStore.provider.putObject({
+    bucket: FAKE_RESTORE_BUCKET,
+    key: restoredNote.storageKey,
+    body: photoBody,
+    contentType: "text/plain",
+  });
+  const swappedReport = await resolveRestoredPrivateObjects(restoredRefs, (loc) =>
+    swappedStore.provider.getObject(loc),
+  );
+  check(
+    "Same-length swapped content between two restored objects is mismatch for both",
+    photoBody.byteLength === noteBody.byteLength &&
+      restoredPhoto.fileSizeBytes === restoredNote.fileSizeBytes &&
+      formatRestoreReport(swappedReport) === "object-1:mismatch object-2:mismatch",
+  );
+
   missingOneStore = copyDisposableStorageFixture(restoredStore.rootDir, { nameSuffix: "omit" });
   await missingOneStore.provider.deleteObject({
     bucket: FAKE_RESTORE_BUCKET,
@@ -730,7 +821,7 @@ try {
     formatRestoreReport(missingOne) === "object-1:ok object-2:missing",
   );
 
-  const reportText = [recovered, recoveredOther, missingAll, mismatched, missingOne]
+  const reportText = [recovered, recoveredOther, missingAll, mismatched, flippedReport, swappedReport, missingOne]
     .map((rows) => JSON.stringify(rows))
     .join("\n");
   check(
@@ -742,7 +833,16 @@ try {
       !containsSensitiveRestoreLog(reportText),
   );
 } finally {
-  for (const fixture of [missingOneStore, mutatedStore, emptyStore, restoredStore, snapshotStore, sourceStore]) {
+  for (const fixture of [
+    missingOneStore,
+    swappedStore,
+    flippedStore,
+    mutatedStore,
+    emptyStore,
+    restoredStore,
+    snapshotStore,
+    sourceStore,
+  ]) {
     if (fixture) {
       try {
         fixture.cleanup();
