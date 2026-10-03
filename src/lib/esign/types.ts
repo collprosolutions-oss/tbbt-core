@@ -43,6 +43,8 @@ export type EsignSignatureLookupOutcome =
       metadata: EsignRequestMetadata;
     }
   | { status: "not_found_complete" }
+  /** Typed request id returned HTTP 404. Not a complete account scan. */
+  | { status: "request_id_not_found" }
   | { status: "unknown"; reason: string };
 
 export type VerifiedEsignCompletionEvent = {

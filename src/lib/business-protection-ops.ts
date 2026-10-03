@@ -68,6 +68,7 @@ import {
   ESIGN_CANCEL_STUCK_SEND_WARNING,
   ESIGN_RECONCILE_NOT_STUCK_MESSAGE,
   ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE,
   ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE,
   ESIGN_SEND_IN_PROGRESS_MESSAGE,
   ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
@@ -1959,6 +1960,10 @@ export async function reconcileStuckEsignSend(
 
   if (outcome.status === "unknown") {
     throw new BusinessProtectionError(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE);
+  }
+
+  if (outcome.status === "request_id_not_found") {
+    throw new BusinessProtectionError(ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE);
   }
 
   if (outcome.status === "not_found_complete") {

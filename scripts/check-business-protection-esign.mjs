@@ -26,6 +26,7 @@ const {
   ESIGN_RECONCILE_MISSING_MESSAGE,
   ESIGN_RECONCILE_NOT_STUCK_MESSAGE,
   ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE,
+  ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE,
   ESIGN_RECONCILE_REQUEST_MISMATCH_MESSAGE,
   ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE,
   ESIGN_STALE_SEND_MINUTES,
@@ -40,8 +41,15 @@ const { getFakeEsignWebhookKey } = await import("@/lib/esign/config");
 const { resetEsignProviderCache, getFakeEsignProvider } = await import("@/lib/esign/provider");
 const { dispatchEsignWebhook, ESIGN_WEBHOOK_HELLO } = await import("@/lib/esign/dispatch");
 const { ESIGN_WEBHOOK_PATH, isEsignWebhookPath } = await import("@/lib/esign/webhook-path");
-const { DROPBOX_SIGN_API_ORIGIN, DROPBOX_SIGN_GET_PATH, DROPBOX_SIGN_LIST_PATH, DROPBOX_SIGN_SEND_PATH } = await import("@/lib/esign/dropbox-sign");
 const {
+  createDropboxSignEsignProvider,
+  DROPBOX_SIGN_API_ORIGIN,
+  DROPBOX_SIGN_GET_PATH,
+  DROPBOX_SIGN_LIST_PATH,
+  DROPBOX_SIGN_SEND_PATH,
+} = await import("@/lib/esign/dropbox-sign");
+const {
+  decideListScanAfterPageLimit,
   ESIGN_LIST_PAGE_LIMIT,
   scanEsignSignatureRequestPages,
 } = await import("@/lib/esign/lookup-scan");
@@ -233,6 +241,7 @@ check(
     scanSrc.includes("not_found_complete") &&
     scanSrc.includes('reason: "page_cap"') &&
     scanSrc.includes('status: "unknown"') &&
+    scanSrc.includes("decideListScanAfterPageLimit") &&
     ESIGN_LIST_PAGE_LIMIT > 3,
 );
 check(
@@ -243,6 +252,31 @@ check(
     /retry/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
     /Dropbox Sign/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE) &&
     /cancel/i.test(ESIGN_RECONCILE_MISSING_MESSAGE),
+);
+check(
+  "By-id miss copy names the request id and never says cancel or safe",
+  /request id was not found/i.test(ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE) &&
+    !/cancel/i.test(ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE) &&
+    !/\bsafe\b/i.test(ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE) &&
+    ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE !== ESIGN_RECONCILE_MISSING_MESSAGE,
+);
+const pageSrc = readRepo("src/app/(app)/business-protection/page.tsx");
+check(
+  "Business Protection page sets maxDuration under the Hobby 10s limit",
+  pageSrc.includes("export const maxDuration = 10"),
+);
+check(
+  "Live lookup aborts fetch and body reads against the remaining budget",
+  dropboxSrc.includes("AbortSignal") &&
+    dropboxSrc.includes("signal:") &&
+    dropboxSrc.includes("readResponseWithDeadline") &&
+    dropboxSrc.includes("request_id_not_found") &&
+    !dropboxSrc.includes('if (response.status === 404) return { status: "not_found_complete" }'),
+);
+check(
+  "Fake by-id miss is request_id_not_found, never a complete account scan",
+  fakeSrc.includes('if (!row) return { status: "request_id_not_found" }') &&
+    fakeSrc.includes("A typed request id never scans the account"),
 );
 const sendFn = opsSrc.slice(
   opsSrc.indexOf("export async function sendAgreementForEsign"),
@@ -314,7 +348,9 @@ check(
     !reconcileFn.includes("signerEmail") &&
     reconcileFn.includes("esign_request_reconciled") &&
     reconcileFn.includes('outcome.status === "unknown"') &&
-    reconcileFn.includes('outcome.status === "not_found_complete"'),
+    reconcileFn.includes('outcome.status === "request_id_not_found"') &&
+    reconcileFn.includes('outcome.status === "not_found_complete"') &&
+    reconcileFn.includes("ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE"),
 );
 const actionSrc = readRepo("src/app/actions/business-protection.ts");
 const actionReconcile = actionSrc.slice(
@@ -332,6 +368,7 @@ check(
   actionReconcile.includes('lookupStatus === "not_found_complete"') &&
     actionReconcile.includes("ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE") &&
     actionReconcile.includes("error: ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE") &&
+    !actionReconcile.includes('lookupStatus === "request_id_not_found"') &&
     !/cancel/i.test(ESIGN_RECONCILE_OUTCOME_UNKNOWN_MESSAGE),
 );
 const createdAudit = opsSrc.slice(
@@ -447,12 +484,244 @@ const unknownTotal = await scanLookupPages(
   scanQuery,
 );
 check("Unknown page total is unknown", unknownTotal.status === "unknown");
-const mutatedCapToNotFound = oldCapOnFivePages.status === "not_found_complete" || beyondBound.status === "not_found_complete";
+const capReachedDecision = decideListScanAfterPageLimit({ lastNumPages: 5, pageLimit: 3 });
+const coveredCapDecision = decideListScanAfterPageLimit({ lastNumPages: 3, pageLimit: 3 });
 check(
-  "Mutation restoring cap-reached to not-found fails these proofs",
-  mutatedCapToNotFound === false &&
-    oldCapOnFivePages.status === "unknown" &&
-    beyondBound.status === "unknown",
+  "Cap-reached decision is unknown:page_cap, never not_found_complete",
+  capReachedDecision.status === "unknown" &&
+    capReachedDecision.reason === "page_cap" &&
+    coveredCapDecision.status === "unknown" &&
+    coveredCapDecision.reason === "unknown_total",
+);
+const firstMatchPages = [];
+const firstMatchWins = await scanEsignSignatureRequestPages({
+  query: scanQuery,
+  fetchPage: async (page) => {
+    firstMatchPages.push(page);
+    return {
+      ok: true,
+      signatureRequests: [
+        {
+          signature_request_id: "fake_sr_first",
+          metadata: scanQuery,
+        },
+      ],
+      numPages: 4,
+    };
+  },
+});
+check(
+  "First match returns immediately so a later-page duplicate is not observed",
+  firstMatchWins.status === "found" &&
+    firstMatchWins.requestId === "fake_sr_first" &&
+    firstMatchPages.length === 1,
+);
+
+const LIVE_STUB_KEY = "tbbt-test-dropbox-key";
+const liveQuery = {
+  businessId: "biz-live",
+  agreementId: "agr-live",
+  versionId: "ver-live",
+  attemptKey: "22222222-2222-4222-8222-222222222222",
+  actorMembershipId: "actor-live",
+};
+
+function jsonResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function abortError() {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function hangUntilAborted(signal) {
+  return new Promise((_, reject) => {
+    const fail = () => reject(abortError());
+    if (signal?.aborted) {
+      fail();
+      return;
+    }
+    signal?.addEventListener("abort", fail, { once: true });
+  });
+}
+
+function recordLiveFetch(handler) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    const href = String(url);
+    calls.push({
+      url: href,
+      method: init.method ?? "GET",
+      headers: init.headers,
+      signal: init.signal,
+    });
+    return handler(href, init, calls);
+  };
+  return { calls, fetchImpl };
+}
+
+function liveProvider(fetchImpl, extras = {}) {
+  return createDropboxSignEsignProvider({
+    apiKey: LIVE_STUB_KEY,
+    fetch: fetchImpl,
+    budgetMs: extras.budgetMs ?? 200,
+    perRequestCapMs: extras.perRequestCapMs ?? extras.budgetMs ?? 200,
+    now: extras.now,
+    createTimeoutSignal: extras.createTimeoutSignal,
+  });
+}
+
+function emptyListBody(page, numPages) {
+  return {
+    signature_requests: [],
+    list_info: { num_pages: numPages, page },
+  };
+}
+
+function assertLiveLookupHygiene(calls, requestId) {
+  const encoded = requestId ? encodeURIComponent(requestId) : "";
+  return (
+    calls.length > 0 &&
+    calls.every((call) => call.method === "GET") &&
+    calls.every((call) => !call.url.includes(LIVE_STUB_KEY)) &&
+    calls.every((call) => !call.url.includes(DROPBOX_SIGN_SEND_PATH)) &&
+    calls.every((call) => call.url.startsWith(DROPBOX_SIGN_API_ORIGIN)) &&
+    (!requestId || calls.some((call) => call.url.includes(`${DROPBOX_SIGN_GET_PATH}/${encoded}`)))
+  );
+}
+
+console.log("\nLIVE-STUB — by-id 404 is not cancel-safe; budget aborts fetch and body");
+const typoId = "typo-not-a-real-request";
+const { calls: byId404Calls, fetchImpl: byId404Fetch } = recordLiveFetch(() =>
+  jsonResponse(404, { error: { error_msg: "not found" } }),
+);
+const byId404 = await liveProvider(byId404Fetch).lookupSignatureRequest({
+  ...liveQuery,
+  requestId: typoId,
+});
+check(
+  "Live by-id HTTP 404 is request_id_not_found, never not_found_complete",
+  byId404.status === "request_id_not_found" && assertLiveLookupHygiene(byId404Calls, typoId),
+);
+
+const traversalId = "../../v3/account";
+const { calls: traversalCalls, fetchImpl: traversalFetch } = recordLiveFetch(() =>
+  jsonResponse(404, { error: { error_msg: "not found" } }),
+);
+const traversalLookup = await liveProvider(traversalFetch).lookupSignatureRequest({
+  ...liveQuery,
+  requestId: traversalId,
+});
+check(
+  "Live traversal-style request id is encoded and request_id_not_found",
+  traversalLookup.status === "request_id_not_found" &&
+    assertLiveLookupHygiene(traversalCalls, traversalId) &&
+    !traversalCalls.some((call) => call.url.includes("/v3/account")),
+);
+
+for (const status of [401, 403, 500]) {
+  const { calls, fetchImpl } = recordLiveFetch(() => jsonResponse(status, { error: { error_msg: "no" } }));
+  const outcome = await liveProvider(fetchImpl).lookupSignatureRequest({
+    ...liveQuery,
+    requestId: `status-${status}`,
+  });
+  check(
+    `Live by-id HTTP ${status} is unknown, never not_found_complete`,
+    outcome.status === "unknown" &&
+      outcome.reason === "error" &&
+      assertLiveLookupHygiene(calls, `status-${status}`),
+  );
+}
+
+const { calls: byId429Calls, fetchImpl: byId429Fetch } = recordLiveFetch(() =>
+  jsonResponse(429, { error: { error_msg: "slow down" } }),
+);
+const byId429 = await liveProvider(byId429Fetch).lookupSignatureRequest({
+  ...liveQuery,
+  requestId: "status-429",
+});
+check(
+  "Live by-id HTTP 429 is unknown, never not_found_complete",
+  byId429.status === "unknown" &&
+    byId429.reason === "timeout" &&
+    assertLiveLookupHygiene(byId429Calls, "status-429"),
+);
+
+const { calls: byIdThrowCalls, fetchImpl: byIdThrowFetch } = recordLiveFetch(() => {
+  throw new Error("socket hang up");
+});
+const byIdThrow = await liveProvider(byIdThrowFetch).lookupSignatureRequest({
+  ...liveQuery,
+  requestId: "status-throw",
+});
+check(
+  "Live by-id fetch throw is unknown, never not_found_complete",
+  byIdThrow.status === "unknown" &&
+    byIdThrow.reason === "error" &&
+    assertLiveLookupHygiene(byIdThrowCalls, "status-throw"),
+);
+check("Live stub proofs never set DROPBOX_SIGN_API_KEY", !process.env.DROPBOX_SIGN_API_KEY);
+
+const hungBudgetMs = 200;
+const hungStarted = Date.now();
+const { calls: hungCalls, fetchImpl: hungFetch } = recordLiveFetch((url, init) => {
+  const page = Number(new URL(url).searchParams.get("page") || "1");
+  if (page === 1) return jsonResponse(200, emptyListBody(1, 5));
+  return hangUntilAborted(init.signal);
+});
+const hungPage2 = await liveProvider(hungFetch, { budgetMs: hungBudgetMs }).lookupSignatureRequest(liveQuery);
+const hungElapsed = Date.now() - hungStarted;
+check(
+  "Hung page 2 returns unknown:timeout within the short budget plus epsilon",
+  hungPage2.status === "unknown" &&
+    hungPage2.reason === "timeout" &&
+    hungElapsed <= hungBudgetMs + 300 &&
+    hungCalls.some((call) => call.url.includes(`${DROPBOX_SIGN_LIST_PATH}?page=2`)) &&
+    assertLiveLookupHygiene(hungCalls),
+);
+
+const slowBodyStarted = Date.now();
+const { calls: slowBodyCalls, fetchImpl: slowBodyFetch } = recordLiveFetch((_url, init) => ({
+  ok: true,
+  status: 200,
+  json: () => new Promise(() => {}),
+  text: () => new Promise(() => {}),
+  body: { cancel: async () => {} },
+  signal: init.signal,
+}));
+const slowBody = await liveProvider(slowBodyFetch, { budgetMs: hungBudgetMs }).lookupSignatureRequest(liveQuery);
+const slowBodyElapsed = Date.now() - slowBodyStarted;
+check(
+  "Slow body read is covered by the same deadline and returns unknown:timeout",
+  slowBody.status === "unknown" &&
+    slowBody.reason === "timeout" &&
+    slowBodyElapsed <= hungBudgetMs + 300 &&
+    assertLiveLookupHygiene(slowBodyCalls),
+);
+
+let clockMs = 0;
+const { calls: clockCalls, fetchImpl: clockFetch } = recordLiveFetch(() => {
+  clockMs += 90;
+  return jsonResponse(200, emptyListBody(1, 5));
+});
+const clockAccum = await liveProvider(clockFetch, {
+  budgetMs: 200,
+  now: () => clockMs,
+  createTimeoutSignal: () => new AbortController().signal,
+}).lookupSignatureRequest(liveQuery);
+check(
+  "Slow-per-page accumulation with an injectable clock is unknown:timeout",
+  clockAccum.status === "unknown" &&
+    clockAccum.reason === "timeout" &&
+    clockMs >= 200 &&
+    clockCalls.length >= 2 &&
+    clockCalls.length <= 3 &&
+    assertLiveLookupHygiene(clockCalls),
 );
 
 try {
@@ -703,6 +972,74 @@ try {
     "Stale cancel still works after a missing-request lookup",
     missingCancelled.agreement.signingMode === "NOT_CONNECTED" &&
       !missingCancelled.agreement.completionAttemptKey,
+  );
+
+  const typoNda = await readyNda(prisma, ownerA, "By-id typo NDA");
+  const typoKey = randomUUID();
+  const createsBeforeTypo = fake.createdRequestCount();
+  fake.timeoutBeforeSignatureRequest();
+  await expectError("Typo-id send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: typoNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: typoKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  await expectError("By-id typo is request_id_not_found and not cancel-safe", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, {
+      agreementId: typoNda.id,
+      requestId: "typo-not-a-real-request",
+    });
+  }, (error) => {
+    return (
+      error instanceof BusinessProtectionError &&
+      error.message === ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE &&
+      !/cancel/i.test(error.message) &&
+      !/\bsafe\b/i.test(error.message) &&
+      error.message !== ESIGN_RECONCILE_MISSING_MESSAGE
+    );
+  });
+  const afterTypo = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: typoNda.id },
+  });
+  check(
+    "By-id typo leaves the SENDING claim unbound and creates no request",
+    afterTypo.signingMode === "SENDING" &&
+      !afterTypo.esignSignatureRequestId &&
+      fake.createdRequestCount() === createsBeforeTypo,
+  );
+
+  const traversalNda = await readyNda(prisma, ownerA, "By-id traversal NDA");
+  const traversalKey = randomUUID();
+  fake.timeoutBeforeSignatureRequest();
+  await expectError("Traversal-id send stays unknown", () => {
+    return sendAgreementForEsign(prisma, ownerA, {
+      agreementId: traversalNda.id,
+      signerName: "Pat Counterparty",
+      signerEmail: "pat@example.com",
+      sendAttemptKey: traversalKey,
+    });
+  }, (error) => error instanceof BusinessProtectionError && error.message === ESIGN_SEND_OUTCOME_UNKNOWN_MESSAGE);
+  await expectError("Traversal-style request id is request_id_not_found and not cancel-safe", () => {
+    return reconcileStuckEsignSend(prisma, ownerA, {
+      agreementId: traversalNda.id,
+      requestId: "../../v3/account",
+    });
+  }, (error) => {
+    return (
+      error instanceof BusinessProtectionError &&
+      error.message === ESIGN_RECONCILE_REQUEST_ID_NOT_FOUND_MESSAGE &&
+      !/cancel/i.test(error.message) &&
+      error.message !== ESIGN_RECONCILE_MISSING_MESSAGE
+    );
+  });
+  const afterTraversal = await prisma.businessAgreement.findUniqueOrThrow({
+    where: { id: traversalNda.id },
+  });
+  check(
+    "Traversal-style request id leaves the SENDING claim unbound",
+    afterTraversal.signingMode === "SENDING" && !afterTraversal.esignSignatureRequestId,
   );
 
   const wrongHome = await readyNda(prisma, ownerA, "Wrong-id home NDA");

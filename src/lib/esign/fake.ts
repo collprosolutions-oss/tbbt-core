@@ -230,7 +230,9 @@ export class FakeEsignProvider implements EsignProvider {
     }
     if (input.requestId) {
       const row = this.requests.get(input.requestId);
-      if (!row) return { status: "not_found_complete" };
+      // A typed request id never scans the account. A miss is not a complete
+      // "not found" — it is only "that request id was not found".
+      if (!row) return { status: "request_id_not_found" };
       return {
         status: "found",
         requestId: row.requestId,

@@ -13,7 +13,12 @@ import { verifyDropboxSignEventHash } from "@/lib/esign/hmac";
 import { renderEsignAgreementPdf } from "@/lib/esign/signed-pdf";
 import {
   ESIGN_LIST_PAGE_SIZE,
+  ESIGN_LIST_PER_REQUEST_CAP_MS,
+  ESIGN_LIST_SCAN_BUDGET_MS,
+  isLookupAbortError,
+  lookupRequestTimeoutMs,
   readEsignLookupRow,
+  remainingLookupBudgetMs,
   scanEsignSignatureRequestPages,
   type EsignListPageFetch,
 } from "@/lib/esign/lookup-scan";
@@ -30,7 +35,21 @@ export const DROPBOX_SIGN_SEND_PATH = "/v3/signature_request/send";
 export const DROPBOX_SIGN_GET_PATH = "/v3/signature_request";
 export const DROPBOX_SIGN_LIST_PATH = "/v3/signature_request/list";
 export const DROPBOX_SIGN_FILES_PATH = "/v3/signature_request/files";
-export { ESIGN_LIST_PAGE_LIMIT, ESIGN_LIST_PAGE_SIZE, ESIGN_LIST_SCAN_BUDGET_MS } from "@/lib/esign/lookup-scan";
+export {
+  ESIGN_LIST_PAGE_LIMIT,
+  ESIGN_LIST_PAGE_SIZE,
+  ESIGN_LIST_PER_REQUEST_CAP_MS,
+  ESIGN_LIST_SCAN_BUDGET_MS,
+} from "@/lib/esign/lookup-scan";
+
+export type DropboxSignEsignProviderDeps = {
+  fetch?: typeof globalThis.fetch;
+  now?: () => number;
+  budgetMs?: number;
+  perRequestCapMs?: number;
+  apiKey?: string;
+  createTimeoutSignal?: (timeoutMs: number) => AbortSignal;
+};
 export const DROPBOX_SIGN_COMPLETION_EVENTS = new Set([
   "signature_request_all_signed",
   "signature_request_downloadable",
@@ -55,27 +74,90 @@ function metadataFromRecord(value: unknown): EsignRequestMetadata | null {
   return { businessId, agreementId, versionId, attemptKey, actorMembershipId };
 }
 
-async function dropboxSignGet(path: string, apiKey: string) {
-  let response: Response;
+async function dropboxSignGet(
+  path: string,
+  apiKey: string,
+  opts: { fetch: typeof globalThis.fetch; signal: AbortSignal },
+): Promise<{ ok: true; response: Response } | { ok: false; reason: "timeout" | "error" }> {
   try {
-    response = await fetch(`${DROPBOX_SIGN_API_ORIGIN}${path}`, {
+    const response = await opts.fetch(`${DROPBOX_SIGN_API_ORIGIN}${path}`, {
       method: "GET",
       headers: { Authorization: basicAuthHeader(apiKey) },
+      signal: opts.signal,
     });
-  } catch {
-    throw new EsignProviderError(
-      "Dropbox Sign lookup outcome is unknown. Check Dropbox Sign before canceling.",
-      { outcome: "unknown" },
-    );
+    return { ok: true, response };
+  } catch (error) {
+    if (opts.signal.aborted || isLookupAbortError(error)) {
+      return { ok: false, reason: "timeout" };
+    }
+    return { ok: false, reason: "error" };
   }
-  return response;
 }
 
-export function createDropboxSignEsignProvider(): EsignProvider {
+async function readResponseWithDeadline<T>(
+  response: Response,
+  signal: AbortSignal,
+  read: (response: Response) => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; reason: "timeout" | "malformed" }> {
+  if (signal.aborted) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, reason: "timeout" };
+  }
+
+  let finished = false;
+  const bodyRead = (async () => {
+    try {
+      const value = await read(response);
+      return { ok: true as const, value };
+    } catch (error) {
+      if (signal.aborted || isLookupAbortError(error)) {
+        return { ok: false as const, reason: "timeout" as const };
+      }
+      return { ok: false as const, reason: "malformed" as const };
+    } finally {
+      finished = true;
+    }
+  })();
+
+  const aborted = new Promise<{ ok: false; reason: "timeout" }>((resolve) => {
+    const done = () => resolve({ ok: false, reason: "timeout" });
+    if (signal.aborted) {
+      done();
+      return;
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+
+  const result = await Promise.race([bodyRead, aborted]);
+  if (!result.ok && !finished) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+  return result;
+}
+
+export function createDropboxSignEsignProvider(
+  deps: DropboxSignEsignProviderDeps = {},
+): EsignProvider {
+  const fetchImpl = deps.fetch ?? globalThis.fetch.bind(globalThis);
+  const now = deps.now ?? Date.now;
+  const budgetMs = deps.budgetMs ?? ESIGN_LIST_SCAN_BUDGET_MS;
+  const perRequestCapMs = deps.perRequestCapMs ?? ESIGN_LIST_PER_REQUEST_CAP_MS;
+  const createTimeoutSignal =
+    deps.createTimeoutSignal ?? ((timeoutMs: number) => AbortSignal.timeout(timeoutMs));
+  const configuredApiKey = deps.apiKey;
+
   return {
     id: "dropbox_sign",
     async createSignatureRequest(input) {
-      const apiKey = getDropboxSignApiKey();
+      const apiKey = configuredApiKey ?? getDropboxSignApiKey();
       if (!apiKey) {
         throw new EsignProviderError("Dropbox Sign is not configured.");
       }
@@ -151,24 +233,37 @@ export function createDropboxSignEsignProvider(): EsignProvider {
     },
 
     async lookupSignatureRequest(input): Promise<EsignSignatureLookupOutcome> {
-      const apiKey = getDropboxSignApiKey();
+      const apiKey = configuredApiKey ?? getDropboxSignApiKey();
       if (!apiKey) {
         throw new EsignProviderError("Dropbox Sign is not configured.");
       }
+      const started = now();
       if (input.requestId) {
-        const response = await dropboxSignGet(
+        const remainingMs = remainingLookupBudgetMs(started, budgetMs, now);
+        if (remainingMs <= 0) return { status: "unknown", reason: "timeout" };
+        const timeoutMs = lookupRequestTimeoutMs(remainingMs, perRequestCapMs);
+        const signal = createTimeoutSignal(timeoutMs);
+        const got = await dropboxSignGet(
           `${DROPBOX_SIGN_GET_PATH}/${encodeURIComponent(input.requestId)}`,
           apiKey,
+          { fetch: fetchImpl, signal },
         );
-        if (response.status === 404) return { status: "not_found_complete" };
-        const body = (await response.json().catch(() => null)) as {
-          signature_request?: unknown;
-          error?: { error_msg?: unknown };
-        } | null;
-        if (!response.ok) {
-          return { status: "unknown", reason: response.status === 429 ? "timeout" : "error" };
+        if (!got.ok) return { status: "unknown", reason: got.reason };
+        // A by-id 404 never scanned the account. It is not cancel-safe.
+        if (got.response.status === 404) return { status: "request_id_not_found" };
+        const parsed = await readResponseWithDeadline(
+          got.response,
+          signal,
+          (response) => response.json() as Promise<{
+            signature_request?: unknown;
+            error?: { error_msg?: unknown };
+          }>,
+        );
+        if (!parsed.ok) return { status: "unknown", reason: parsed.reason };
+        if (!got.response.ok) {
+          return { status: "unknown", reason: got.response.status === 429 ? "timeout" : "error" };
         }
-        const lookedUp = readEsignLookupRow(body?.signature_request);
+        const lookedUp = readEsignLookupRow(parsed.value?.signature_request);
         if (!lookedUp) {
           return { status: "unknown", reason: "malformed" };
         }
@@ -181,18 +276,30 @@ export function createDropboxSignEsignProvider(): EsignProvider {
 
       return scanEsignSignatureRequestPages({
         query: input,
-        fetchPage: async (page): Promise<EsignListPageFetch> => {
-          const response = await dropboxSignGet(
+        budgetMs,
+        perRequestCapMs,
+        now,
+        createTimeoutSignal,
+        fetchPage: async (page, context): Promise<EsignListPageFetch> => {
+          const got = await dropboxSignGet(
             `${DROPBOX_SIGN_LIST_PATH}?page=${page}&page_size=${ESIGN_LIST_PAGE_SIZE}`,
             apiKey,
+            { fetch: fetchImpl, signal: context.signal },
           );
-          if (!response.ok) {
-            return { ok: false, reason: response.status === 429 ? "timeout" : "error" };
+          if (!got.ok) return { ok: false, reason: got.reason };
+          if (!got.response.ok) {
+            return { ok: false, reason: got.response.status === 429 ? "timeout" : "error" };
           }
-          const body = (await response.json().catch(() => null)) as {
-            signature_requests?: unknown;
-            list_info?: { num_pages?: unknown };
-          } | null;
+          const parsed = await readResponseWithDeadline(
+            got.response,
+            context.signal,
+            (response) => response.json() as Promise<{
+              signature_requests?: unknown;
+              list_info?: { num_pages?: unknown };
+            }>,
+          );
+          if (!parsed.ok) return { ok: false, reason: parsed.reason };
+          const body = parsed.value;
           if (!body || !Array.isArray(body.signature_requests)) {
             return { ok: false, reason: "malformed" };
           }
