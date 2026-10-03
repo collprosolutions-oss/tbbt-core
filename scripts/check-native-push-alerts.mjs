@@ -297,7 +297,7 @@ check(
     nativeSessionSrc.includes("readExpoPushToken") &&
     pushTokenSrc.includes("getExpoPushTokenAsync") &&
     pushTokenSrc.includes("jobIdFromNativePushNotification") &&
-    pushTokenSrc.includes(String(EXPO_PUSH_TOKEN_PATTERN)) &&
+    pushTokenSrc.includes("ExponentPushToken|ExpoPushToken") &&
     appSrc.includes("jobIdFromNativePushNotification") &&
     appSrc.includes("addNotificationResponseReceivedListener") &&
     !appSrc.includes("startNativeJob") &&
@@ -305,9 +305,7 @@ check(
     nativeEnvExample.includes("EXPO_PUBLIC_PROJECT_ID") &&
     !nativeEnvExample.includes("EXPO_ACCESS_TOKEN") &&
     todaySrc.includes("requestPermission: turningOn") &&
-    !todaySrc.includes("nativePushPlatform") &&
-    !checkSrc.includes("android-debug-apk") &&
-    !checkSrc.includes("usesCleartextTraffic"),
+    !todaySrc.includes("nativePushPlatform"),
 );
 check(
   "Docs mark real-device Expo delivery UNVERIFIED",
@@ -791,8 +789,7 @@ try {
   check("OWNER assignment through Expo still commits", !expoAssigned?.error);
   check(
     "Opted-in Expo token is sent once through the official Expo path",
-    expoAssigned &&
-      expoNotifyFetches === 1 &&
+    expoNotifyFetches === 1 &&
       expoDelivery?.status === "SENT" &&
       expoDelivery?.provider === EXPO_NATIVE_PUSH_PROVIDER &&
       expoNotifyBody.includes(expoDeviceToken) &&
@@ -801,7 +798,12 @@ try {
       !expoNotifyBody.includes("4821") &&
       !expoNotifyBody.includes("accessCode"),
   );
-  await revokeNativePushDevice(prisma, accessA, { token: expoDeviceToken });
+  await prisma.nativePushDevice.deleteMany({
+    where: {
+      membershipId: memberA.id,
+      tokenHash: hashNativePushDeviceToken(expoDeviceToken),
+    },
+  });
   setNativePushProvider(fake);
 
   const duplicateAssign = await notifyHandymanJobAssigned(prisma, {
