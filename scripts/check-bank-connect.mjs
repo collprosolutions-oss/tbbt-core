@@ -106,7 +106,6 @@ const { loadOwnedBankReconciliation } = await import("@/lib/bank-reconciliation-
 const {
   BANK_CONNECT_ALREADY_CONNECTED_MESSAGE,
   BANK_CONNECT_NEEDS_REAUTH_MESSAGE,
-  OWNER_ONLY_BANK_CONNECT_MESSAGE,
 } = await import("@/lib/bank-connect-copy");
 
 console.log("\nSTATIC — read-only Plaid feed never claims cash or moves money");
@@ -126,8 +125,8 @@ check(
 check(
   "ops and actions require OWNER capability",
   opsSrc.includes("REVIEW_BANK_RECONCILIATION") &&
-    actionSrc.includes("workspace.role !== \"OWNER\"") &&
-    actionSrc.includes(OWNER_ONLY_BANK_CONNECT_MESSAGE.slice(0, 24)),
+    actionSrc.includes('workspace.role !== "OWNER"') &&
+    actionSrc.includes("OWNER_ONLY_BANK_CONNECT_MESSAGE"),
 );
 check(
   "tokens are AES-256-GCM encrypted",

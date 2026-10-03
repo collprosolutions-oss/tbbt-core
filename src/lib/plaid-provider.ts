@@ -263,14 +263,19 @@ function plaidHost(env: PlaidEnvironment) {
 
 export class LivePlaidProvider implements PlaidProvider {
   readonly id = "plaid" as const;
+  private readonly config: {
+    clientId: string;
+    secret: string;
+    env: PlaidEnvironment;
+  };
 
-  constructor(
-    private readonly config: {
-      clientId: string;
-      secret: string;
-      env: PlaidEnvironment;
-    },
-  ) {}
+  constructor(config: {
+    clientId: string;
+    secret: string;
+    env: PlaidEnvironment;
+  }) {
+    this.config = config;
+  }
 
   private async request<T>(path: string, body: Record<string, unknown>): Promise<T> {
     const response = await fetch(`${plaidHost(this.config.env)}${path}`, {
