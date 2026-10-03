@@ -5,11 +5,12 @@
  *
  * Proves token-only ownership, invalid-token refusal, wrong-tenant
  * isolation, duplicate/retry idempotency, concurrent submit, and the
- * bounded post-outcome portal cooldown on a dedicated local DB. The
- * wait ends at the next calendar day in Business.timezone — never a
- * UTC date. Reuses the existing OWNER JobCallback review path. OWNER
- * can still record an urgent callback during the portal cooldown. Does
- * not create a job, promise warranty coverage, or send a message.
+ * bounded post-outcome portal cooldown on a dedicated local DB.
+ * availableAt is max(resolvedAt + 24 elapsed hours, next
+ * Business.timezone calendar day). Reuses the existing OWNER
+ * JobCallback review path. OWNER can still record an urgent callback
+ * during the portal cooldown. Does not create a job, promise warranty
+ * coverage, or send a message.
  *
  * Run with:
  *   npm run test:portal-job-callback
@@ -51,6 +52,8 @@ const {
   MAX_PORTAL_JOB_CALLBACK_DESCRIPTION_LENGTH,
   MAX_PORTAL_PROJECT_TOKEN_LENGTH,
   PORTAL_JOB_CALLBACK_COOLDOWN_DAYS,
+  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS,
+  PORTAL_JOB_CALLBACK_COOLDOWN_MS,
   formatPortalCallbackDescription,
   isPortalJobCallbackCoolingDown,
   parsePortalJobCallbackDescription,
@@ -188,6 +191,23 @@ const appShellSrc = read("src/components/app-shell.tsx");
 const packageSrc = read("package.json");
 const NY = "America/New_York";
 const LA = "America/Los_Angeles";
+const PHX = "America/Phoenix";
+const AK = "Pacific/Auckland";
+const HAVANA = "America/Havana";
+
+function calendarDayOnlyAvailableAt(resolvedAt, timeZone) {
+  return addZonedCalendarDays(resolvedAt, 1, timeZone);
+}
+
+function utcMidnightOnlyAvailableAt(resolvedAt) {
+  return new Date(
+    Date.UTC(
+      resolvedAt.getUTCFullYear(),
+      resolvedAt.getUTCMonth(),
+      resolvedAt.getUTCDate() + 1,
+    ),
+  );
+}
 
 const DANGEROUS = /\beval\s*\(|new\s+Function\b|Function\s*\(|\$executeRawUnsafe/;
 
@@ -230,8 +250,12 @@ check(
     !portalSrc.includes("recordJobCallbackAction"),
 );
 check(
-  "Portal cooldown is the next Business.timezone calendar day and OWNER record is not cooled down",
-  PORTAL_JOB_CALLBACK_COOLDOWN_DAYS === 1 &&
+  "Portal cooldown is max(elapsed 24h, next Business.timezone day) and OWNER record is not cooled down",
+  PORTAL_JOB_CALLBACK_COOLDOWN_HOURS === 24 &&
+    PORTAL_JOB_CALLBACK_COOLDOWN_MS === 24 * 60 * 60 * 1000 &&
+    PORTAL_JOB_CALLBACK_COOLDOWN_DAYS === 1 &&
+    callbackSrc.includes("resolvedAt.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS") &&
+    callbackSrc.includes("Math.max") &&
     callbackSrc.includes("addZonedCalendarDays") &&
     opsSrc.includes("resolveBusinessTimeZone") &&
     dataSrc.includes("resolveBusinessTimeZone") &&
@@ -241,45 +265,148 @@ check(
     opsSrc.includes("JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE") &&
     dataSrc.includes('status: "cooldown"') &&
     portalSrc.includes("portalJobCallbackCooldownMessage") &&
-    !callbackSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN_MS") &&
-    !callbackSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN_HOURS") &&
+    !opsSrc.includes("input.outcomeAt") &&
+    !opsSrc.includes("input.timezone") &&
+    !opsSrc.includes("input.resolvedAt") &&
+    !opsSrc.includes("input.availableAt") &&
     !ownerOpsSrc.includes("isPortalJobCallbackCoolingDown") &&
     !ownerOpsSrc.includes("PORTAL_JOB_CALLBACK_COOLDOWN") &&
     !ownerActionSrc.includes("isPortalJobCallbackCoolingDown"),
 );
-const nyEvening = new Date("2026-10-03T00:00:00.000Z");
-const utcMidnight = new Date("2026-10-03T00:00:00.000Z");
-const justBeforeNyMidnight = new Date("2026-10-03T03:59:59.000Z");
-const nyMidnight = zonedCivilToUtc(2026, 10, 3, 0, 0, 0, NY);
-const sameInstantLaNow = new Date("2026-10-03T05:00:00.000Z");
-const sharedResolved = new Date("2026-10-03T03:30:00.000Z");
+const lateNy = zonedCivilToUtc(2026, 10, 2, 23, 59, 59, NY);
+const lateNyNextMidnight = addZonedCalendarDays(lateNy, 1, NY);
+const lateNyElapsed = new Date(lateNy.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
 check(
-  "UTC midnight does not end a New York cooldown that is still the prior calendar day",
-  resolveBusinessTimeZone({ timezone: null }) === DEFAULT_BUSINESS_TIMEZONE &&
-    DEFAULT_BUSINESS_TIMEZONE === NY &&
-    isPortalJobCallbackCoolingDown(nyEvening, NY, utcMidnight) === true &&
-    isPortalJobCallbackCoolingDown(nyEvening, NY, justBeforeNyMidnight) === true &&
-    isPortalJobCallbackCoolingDown(nyEvening, NY, nyMidnight) === false &&
-    portalJobCallbackCooldownAvailableAt(nyEvening, NY).getTime() === nyMidnight.getTime(),
-);
-check(
-  "The same resolved instant can be cooling down in Los Angeles after New York's day has rolled",
-  isPortalJobCallbackCoolingDown(sharedResolved, NY, sameInstantLaNow) === false &&
-    isPortalJobCallbackCoolingDown(sharedResolved, LA, sameInstantLaNow) === true &&
-    portalJobCallbackCooldownAvailableAt(sharedResolved, NY).getTime() !==
-      portalJobCallbackCooldownAvailableAt(sharedResolved, LA).getTime(),
-);
-const beforeSpring = zonedCivilToUtc(2026, 3, 8, 0, 0, 0, NY);
-const afterSpring = portalJobCallbackCooldownAvailableAt(beforeSpring, NY);
-check(
-  "Spring-forward day boundary is EDT midnight, not +24 hours",
-  afterSpring.toISOString() === "2026-03-09T04:00:00.000Z" &&
-    afterSpring.getTime() - beforeSpring.getTime() !== 24 * 60 * 60 * 1000 &&
+  "Resolve at 23:59:59 local is not available until resolve+24h, after next midnight",
+  lateNyElapsed.getTime() > lateNyNextMidnight.getTime() &&
+    portalJobCallbackCooldownAvailableAt(lateNy, NY).getTime() === lateNyElapsed.getTime() &&
+    isPortalJobCallbackCoolingDown(lateNy, NY, lateNyNextMidnight) === true &&
     isPortalJobCallbackCoolingDown(
-      beforeSpring,
+      lateNy,
       NY,
-      new Date(beforeSpring.getTime() + 23 * 60 * 60 * 1000),
-    ) === false,
+      new Date(lateNyElapsed.getTime() - 1),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(lateNy, NY, lateNyElapsed) === false,
+);
+const earlyNy = zonedCivilToUtc(2026, 10, 2, 0, 0, 1, NY);
+const earlyNyNextMidnight = addZonedCalendarDays(earlyNy, 1, NY);
+const earlyNyElapsed = new Date(earlyNy.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+check(
+  "Resolve at 00:00:01 on a 24-hour New York day uses resolve+24h, one second after next midnight",
+  earlyNyElapsed.getTime() > earlyNyNextMidnight.getTime() &&
+    earlyNyElapsed.getTime() - earlyNyNextMidnight.getTime() === 1000 &&
+    portalJobCallbackCooldownAvailableAt(earlyNy, NY).getTime() === earlyNyElapsed.getTime() &&
+    isPortalJobCallbackCoolingDown(earlyNy, NY, earlyNyNextMidnight) === true &&
+    isPortalJobCallbackCoolingDown(
+      earlyNy,
+      NY,
+      new Date(earlyNyElapsed.getTime() - 1),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(earlyNy, NY, earlyNyElapsed) === false,
+);
+const earlyFallNy = zonedCivilToUtc(2026, 11, 1, 0, 0, 1, NY);
+const earlyFallNyNextMidnight = addZonedCalendarDays(earlyFallNy, 1, NY);
+const earlyFallNyElapsed = new Date(earlyFallNy.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+check(
+  "Resolve at 00:00:01 on the New York fall-back day uses next midnight, later than resolve+24h",
+  earlyFallNyNextMidnight.getTime() > earlyFallNyElapsed.getTime() &&
+    portalJobCallbackCooldownAvailableAt(earlyFallNy, NY).getTime() ===
+      earlyFallNyNextMidnight.getTime() &&
+    isPortalJobCallbackCoolingDown(earlyFallNy, NY, earlyFallNyElapsed) === true &&
+    isPortalJobCallbackCoolingDown(
+      earlyFallNy,
+      NY,
+      new Date(earlyFallNyNextMidnight.getTime() - 1),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(earlyFallNy, NY, earlyFallNyNextMidnight) === false,
+);
+const springNy = zonedCivilToUtc(2026, 3, 8, 0, 0, 0, NY);
+const springNyNextMidnight = addZonedCalendarDays(springNy, 1, NY);
+const springNyElapsed = new Date(springNy.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+check(
+  "Spring-forward New York day keeps the 24-hour elapsed floor past the 23-hour midnight",
+  springNyNextMidnight.toISOString() === "2026-03-09T04:00:00.000Z" &&
+    springNyElapsed.getTime() - springNy.getTime() === PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    springNyElapsed.getTime() > springNyNextMidnight.getTime() &&
+    portalJobCallbackCooldownAvailableAt(springNy, NY).getTime() === springNyElapsed.getTime() &&
+    isPortalJobCallbackCoolingDown(springNy, NY, springNyNextMidnight) === true &&
+    isPortalJobCallbackCoolingDown(
+      springNy,
+      NY,
+      new Date(springNyElapsed.getTime() - 1),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(springNy, NY, springNyElapsed) === false,
+);
+const fallNy = zonedCivilToUtc(2026, 11, 1, 0, 0, 0, NY);
+const fallNyNextMidnight = addZonedCalendarDays(fallNy, 1, NY);
+const fallNyElapsed = new Date(fallNy.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+check(
+  "Fall-back New York day waits until the 25-hour local midnight, not resolve+24h",
+  fallNyNextMidnight.toISOString() === "2026-11-02T05:00:00.000Z" &&
+    fallNyNextMidnight.getTime() - fallNy.getTime() === 25 * 60 * 60 * 1000 &&
+    fallNyNextMidnight.getTime() > fallNyElapsed.getTime() &&
+    portalJobCallbackCooldownAvailableAt(fallNy, NY).getTime() ===
+      fallNyNextMidnight.getTime(),
+);
+const latePhx = zonedCivilToUtc(2026, 3, 8, 23, 59, 59, PHX);
+const earlyPhx = zonedCivilToUtc(2026, 3, 8, 0, 0, 1, PHX);
+const lateAk = zonedCivilToUtc(2026, 10, 2, 23, 59, 59, AK);
+const earlyAk = zonedCivilToUtc(2026, 10, 2, 0, 0, 1, AK);
+check(
+  "Phoenix (no DST) and Auckland (far offset) still apply max(elapsed 24h, next local midnight)",
+  portalJobCallbackCooldownAvailableAt(latePhx, PHX).getTime() ===
+    latePhx.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    portalJobCallbackCooldownAvailableAt(earlyPhx, PHX).getTime() ===
+      earlyPhx.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    portalJobCallbackCooldownAvailableAt(lateAk, AK).getTime() ===
+      lateAk.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    portalJobCallbackCooldownAvailableAt(earlyAk, AK).getTime() ===
+      earlyAk.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    isPortalJobCallbackCoolingDown(
+      latePhx,
+      PHX,
+      addZonedCalendarDays(latePhx, 1, PHX),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(
+      lateAk,
+      AK,
+      addZonedCalendarDays(lateAk, 1, AK),
+    ) === true,
+);
+const havanaEve = zonedCivilToUtc(2026, 3, 7, 23, 0, 0, HAVANA);
+const havanaNextMidnight = addZonedCalendarDays(havanaEve, 1, HAVANA);
+const havanaAvailable = portalJobCallbackCooldownAvailableAt(havanaEve, HAVANA);
+const havanaElapsed = new Date(havanaEve.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+check(
+  "Skipped Havana midnight (Mar 8 00:00) cannot represent next local day; 24h elapsed floor still holds",
+  havanaNextMidnight.getTime() <= havanaEve.getTime() &&
+    havanaAvailable.getTime() === havanaElapsed.getTime() &&
+    isPortalJobCallbackCoolingDown(havanaEve, HAVANA, havanaNextMidnight) === true &&
+    isPortalJobCallbackCoolingDown(
+      havanaEve,
+      HAVANA,
+      new Date(havanaElapsed.getTime() - 1),
+    ) === true &&
+    isPortalJobCallbackCoolingDown(havanaEve, HAVANA, havanaElapsed) === false,
+);
+const utcResolved = new Date("2026-10-02T14:00:00.000Z");
+check(
+  "Mutation: calendar-day-only or UTC-midnight-only would expire too early",
+  calendarDayOnlyAvailableAt(lateNy, NY).getTime() === lateNyNextMidnight.getTime() &&
+    calendarDayOnlyAvailableAt(lateNy, NY).getTime() !==
+      portalJobCallbackCooldownAvailableAt(lateNy, NY).getTime() &&
+    isPortalJobCallbackCoolingDown(lateNy, NY, calendarDayOnlyAvailableAt(lateNy, NY)) ===
+      true &&
+    utcMidnightOnlyAvailableAt(utcResolved).toISOString() === "2026-10-03T00:00:00.000Z" &&
+    isPortalJobCallbackCoolingDown(
+      utcResolved,
+      NY,
+      utcMidnightOnlyAvailableAt(utcResolved),
+    ) === true &&
+    portalJobCallbackCooldownAvailableAt(utcResolved, NY).getTime() ===
+      utcResolved.getTime() + PORTAL_JOB_CALLBACK_COOLDOWN_MS &&
+    resolveBusinessTimeZone({ timezone: null }) === DEFAULT_BUSINESS_TIMEZONE &&
+    DEFAULT_BUSINESS_TIMEZONE === NY,
 );
 const submitSrc = opsSrc.slice(opsSrc.indexOf("export async function submitPortalJobCallback"));
 const liveIdx = submitSrc.indexOf("findLiveJobByProjectToken");
@@ -300,9 +427,9 @@ check(
     dataSrc.includes("findLiveJobByProjectToken"),
 );
 check(
-  "Cooldown copy states the next-day wait and does not promise a visit or warranty",
-  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("tomorrow") &&
-    !JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("after 24 hours") &&
+  "Cooldown copy states the at-least-24-hour wait and does not promise a visit or warranty",
+  JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("at least 24 hours") &&
+    !JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("tomorrow") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("not a warranty decision") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not promise coverage") &&
     JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE.includes("does not schedule a visit") &&
@@ -726,6 +853,18 @@ try {
     preferredContact: "PHONE",
   });
   const insideView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
+  const forgedShorten = await submitPortalJobCallback(prisma, {
+    token: laterSeed.job.projectToken,
+    description: "Forged timestamps must not shorten the wait",
+    preferredContact: "PHONE",
+    outcomeAt: new Date(0),
+    timezone: "UTC",
+    resolvedAt: new Date(0),
+    availableAt: new Date(0),
+    businessId: businessB.id,
+    customerId: completedB.customer.id,
+    jobId: completedB.job.id,
+  });
   check(
     "A resolve earlier today in America/New_York still refuses a portal re-file",
     laterOutcome.callback.status === "OUTCOME_RECORDED" &&
@@ -733,23 +872,49 @@ try {
       insideBoundary.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
       insideView.status === "cooldown",
   );
+  check(
+    "Forged customer outcomeAt/timezone fields cannot shorten the cooldown",
+    forgedShorten.ok === false &&
+      forgedShorten.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE &&
+      (await prisma.jobCallback.count({
+        where: { businessId: businessA.id, jobId: laterSeed.job.id },
+      })) === 1 &&
+      (await prisma.jobCallback.count({
+        where: { businessId: businessB.id, jobId: completedB.job.id },
+      })) === 1,
+  );
 
-  const previousNyDay = new Date(todayStartNy.getTime() - 1);
+  const justInsideElapsed = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS + 1);
   await prisma.jobCallback.update({
     where: { id: laterFirst.callbackId },
-    data: { outcomeAt: previousNyDay },
+    data: { outcomeAt: justInsideElapsed },
+  });
+  const oneMsInside = await submitPortalJobCallback(prisma, {
+    token: laterSeed.job.projectToken,
+    description: "One millisecond inside the elapsed 24-hour floor",
+    preferredContact: "TEXT",
+  });
+  check(
+    "Exactly resolve+24h-1ms is still refused",
+    oneMsInside.ok === false && oneMsInside.error === JOB_CALLBACK_PORTAL_COOLDOWN_MESSAGE,
+  );
+
+  const atElapsedBoundary = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
+  await prisma.jobCallback.update({
+    where: { id: laterFirst.callbackId },
+    data: { outcomeAt: atElapsedBoundary },
   });
   const laterView = await loadPortalJobCallbackView(prisma, laterSeed.job.projectToken);
   const laterSecond = await submitPortalJobCallback(prisma, {
     token: laterSeed.job.projectToken,
-    description: "Legitimate later request after the New York day rolled",
+    description: "Legitimate later request after 24 elapsed hours",
     preferredContact: "EMAIL",
   });
   const laterCount = await prisma.jobCallback.count({
     where: { businessId: businessA.id, jobId: laterSeed.job.id },
   });
   check(
-    "A later portal request is accepted once the New York calendar day has rolled",
+    "Exactly resolve+24h is accepted when that instant is not before next local midnight",
     laterView.status === "ready" &&
       laterSecond.ok === true &&
       laterSecond.alreadyExists === false &&
@@ -785,8 +950,8 @@ try {
     callbackId: newestResolved.id,
     outcome: "RECORDED_ONLY",
   });
-  const laterCreatedOutside = addZonedCalendarDays(todayStartNy, -2, NY);
-  const earlierCreatedInside = new Date(todayStartNy.getTime() + 60_000);
+  const laterCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS * 2);
+  const earlierCreatedInside = new Date(Date.now() - 60_000);
   await prisma.jobCallback.update({
     where: { id: oldestResolved.callbackId },
     data: { outcomeAt: earlierCreatedInside },
@@ -809,7 +974,7 @@ try {
     description: "Should follow the newest outcomeAt, not createdAt",
     preferredContact: "EMAIL",
   });
-  const earlierCreatedOutside = new Date(todayStartNy.getTime() - 1);
+  const earlierCreatedOutside = new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS);
   await prisma.jobCallback.update({
     where: { id: oldestResolved.callbackId },
     data: { outcomeAt: earlierCreatedOutside },
@@ -829,7 +994,7 @@ try {
     preferredContact: "TEXT",
   });
   check(
-    "Newest resolved callback wins the calendar-day cooldown",
+    "Newest resolved callback wins the elapsed-plus-calendar-day cooldown",
     pickedInside?.id === oldestResolved.callbackId &&
       newestInsideView.status === "cooldown" &&
       newestInsideSubmit.ok === false &&
@@ -868,14 +1033,13 @@ try {
     callbackId: tzLaFirst.callbackId,
     outcome: "RECORDED_ONLY",
   });
-  const todayStartLa = startOfZonedDay(new Date(), LA);
   await prisma.jobCallback.update({
     where: { id: tzNyFirst.callbackId },
-    data: { outcomeAt: new Date(todayStartNy.getTime() + 60_000) },
+    data: { outcomeAt: new Date(Date.now() - 60_000) },
   });
   await prisma.jobCallback.update({
     where: { id: tzLaFirst.callbackId },
-    data: { outcomeAt: new Date(todayStartLa.getTime() - 1) },
+    data: { outcomeAt: new Date(Date.now() - PORTAL_JOB_CALLBACK_COOLDOWN_MS) },
   });
   const tzNyView = await loadPortalJobCallbackView(prisma, tzNySeed.job.projectToken);
   const tzLaView = await loadPortalJobCallbackView(prisma, tzLaSeed.job.projectToken);
@@ -890,7 +1054,7 @@ try {
     preferredContact: "PHONE",
   });
   check(
-    "New York still cooling down does not block a Los Angeles token whose day has rolled",
+    "New York still cooling down does not block a Los Angeles token whose 24-hour wait has elapsed",
     tzNyView.status === "cooldown" &&
       tzNyView.jobId === tzNySeed.job.id &&
       tzNySubmit.ok === false &&
