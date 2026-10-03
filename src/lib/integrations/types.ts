@@ -100,7 +100,7 @@ export type UnsupportedIntegration = {
 };
 
 export const INTEGRATION_CENTER_DISCLAIMER =
-  "This center lists integrations TBBT can actually use today. Status comes from the existing Go-live health classifiers. It does not connect Stripe, change DNS, or change billing. Gusto payroll connect is an owner action on Payroll when partner credentials are configured; this page does not begin that connection.";
+  "This center lists integrations TBBT can actually use today. Status comes from the existing Go-live health classifiers. It does not connect Stripe, change DNS, or change billing. Gusto payroll connect is an owner action on Payroll when partner credentials are configured; this page does not begin that connection. Facebook, Instagram, and Google Business Profile consent is an OWNER action on Marketing, not started from this page.";
 
 export const INTEGRATION_CENTER_READ_ONLY_MESSAGE =
   "Read-only configuration truth for the authenticated business. API keys, webhook secrets, tokens, and connection strings are never shown.";

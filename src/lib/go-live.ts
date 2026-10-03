@@ -803,10 +803,10 @@ function socialCard(): GoLiveCard {
     group: "OPTIONAL_PLANNED",
     status: classifySocialPublishing(),
     requirement: "OPTIONAL",
-    currentState: "Social publishing is disconnected at the platform.",
-    whatWorks: "Internal marketing drafts, OWNER review, and creator-package export still exist. Facebook Page publish is an explicit OWNER action only when that destination is connected.",
-    whatDoesNot: "Instagram and Google stay disconnected. TBBT does not publish autonomously. A DRAFT or planned day is not a publish. Failed provider results are not labeled PUBLISHED.",
-    ownerNextAction: "Facebook publish stays off until that destination is connected. Instagram and Google stay disconnected.",
+    currentState: "Marketing destination consent is an OWNER action on Marketing. This card does not start it.",
+    whatWorks: "Internal marketing drafts, OWNER review, and creator-package export still exist. Facebook Page publish is an explicit OWNER action only when that Page is connected. Connecting a destination does not publish.",
+    whatDoesNot: "Instagram and Google Business Profile publishing are not yet available. TBBT does not publish on connect or autonomously. A DRAFT or planned day is not a publish. Failed provider results are not labeled PUBLISHED.",
+    ownerNextAction: "The OWNER connects a Facebook Page, Instagram professional account, or Google Business Profile location from Marketing. Live use needs Meta app credentials and app review, or Google OAuth credentials plus Business Profile API access approval.",
     settingsHref: "/settings?section=marketing",
   };
 }

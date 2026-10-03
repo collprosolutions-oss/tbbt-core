@@ -349,6 +349,7 @@ model Business {
   marketingStudioWeeklyReminders MarketingStudioWeeklyReminder[]
   marketingSocialDestinations MarketingSocialDestination[]
   marketingSocialPublishAttempts MarketingSocialPublishAttempt[]
+  marketingConnectionOAuthStates MarketingConnectionOAuthState[]
   reviewRequests           ReviewRequest[]
   reviews                  Review[]
   reviewResponses          ReviewResponse[]
@@ -685,6 +686,7 @@ model Membership {
   reviewedMarketingContent MarketingContent[] @relation("MarketingContentReviewer")
   exportedMarketingContent MarketingContent[] @relation("MarketingContentExporter")
   createdSocialPublishAttempts MarketingSocialPublishAttempt[] @relation("MarketingSocialPublishAttemptCreator")
+  marketingConnectionOAuthStates MarketingConnectionOAuthState[]
   createdReviewRequests   ReviewRequest[]    @relation("ReviewRequestCreator")
   recordedReviews         Review[]           @relation("ReviewRecorder")
   createdReviewResponses  ReviewResponse[]   @relation("ReviewResponseCreator")
@@ -3332,17 +3334,35 @@ model MarketingContent {
   @@index([campaignId])
 }
 
-/// One connected social destination per business. FACEBOOK is the only
-/// implemented destination. Instagram and Google stay disconnected.
-/// accessToken is server-side only and is never selected for page loads.
+/// One social destination per business. FACEBOOK publish is the only
+/// implemented post path. Instagram and Google can be connected by the
+/// OWNER; their publish paths stay unavailable. accessToken is the legacy
+/// plaintext column. New writes leave it empty and store ciphertext.
+/// Page loads must not select either token column.
 model MarketingSocialDestination {
   id          String   @id @default(cuid())
   businessId  String
-  /// FACEBOOK
+  /// FACEBOOK | INSTAGRAM | GOOGLE
   destination String
   pageId      String
-  /// Page access token. Server-side only.
+  /// Legacy plaintext Page token. Empty after an encrypted connect.
   accessToken String
+  /// AES-GCM envelope from connection-token-crypto. Server-side only.
+  accessTokenCiphertext  String?
+  refreshTokenCiphertext String?
+  tokenExpiresAt         DateTime?
+  /// Space-separated scopes granted at consent.
+  scopesGranted          String    @default("")
+  /// CONNECTED | NEEDS_RECONNECT | EXPIRED | DISCONNECTED | NOT_CONFIGURED. Empty means a legacy plaintext row.
+  connectionStatus       String    @default("")
+  lastCheckedAt          DateTime?
+  /// Sanitized. Never a token.
+  lastError              String    @default("")
+  displayName            String    @default("")
+  externalAccountId      String    @default("")
+  disconnectedAt         DateTime?
+  /// Honest remote-revoke result. Never a token.
+  remoteRevokeNote       String    @default("")
   connectedAt DateTime @default(now())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -3351,6 +3371,30 @@ model MarketingSocialDestination {
 
   @@unique([businessId, destination])
   @@index([businessId])
+}
+
+/// Hashed single-use OAuth state for marketing destination consent and
+/// the following explicit destination selection. Raw tokens are never stored.
+model MarketingConnectionOAuthState {
+  id                String    @id @default(cuid())
+  businessId        String
+  membershipId      String
+  /// FACEBOOK | INSTAGRAM | GOOGLE
+  destination       String
+  /// CONSENT | SELECTION
+  purpose           String
+  tokenHash         String    @unique
+  expiresAt         DateTime
+  usedAt            DateTime?
+  /// Encrypted selection payload. Empty for consent rows.
+  payloadCiphertext String    @default("")
+  createdAt         DateTime  @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, destination])
+  @@index([membershipId])
 }
 
 /// OWNER publish attempt for one connected destination. Claimed before

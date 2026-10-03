@@ -2563,6 +2563,40 @@ check(
   envHookPoison.status !== 0 && /4\.8\.9|Upgrade first/.test(envHookPoison.stderr),
 );
 
+const marketingConnectionsMigration = readFileSync(
+  new URL("../prisma/migrations/20261003190000_marketing_connections/migration.sql", import.meta.url),
+  "utf8",
+);
+const marketingConnectionsService = readFileSync(
+  new URL("../src/lib/marketing-connections/service.ts", import.meta.url),
+  "utf8",
+);
+const marketingConnectionsSchema = readFileSync(
+  new URL("../src/lib/marketing-connections/schema-guard.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Marketing connections migration is additive and does not drop data",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(marketingConnectionsMigration) &&
+    marketingConnectionsMigration.includes('ADD COLUMN IF NOT EXISTS "accessTokenCiphertext"') &&
+    marketingConnectionsMigration.includes('ADD COLUMN IF NOT EXISTS "refreshTokenCiphertext"') &&
+    marketingConnectionsMigration.includes('ADD COLUMN IF NOT EXISTS "connectionStatus"') &&
+    marketingConnectionsMigration.includes('CREATE TABLE IF NOT EXISTS "MarketingConnectionOAuthState"') &&
+    marketingConnectionsMigration.includes("MarketingConnectionOAuthState_businessId_fkey") &&
+    marketingConnectionsMigration.includes("MarketingConnectionOAuthState_membershipId_fkey") &&
+    marketingConnectionsMigration.includes("IF NOT EXISTS ("),
+);
+check(
+  "Marketing connections request path fail-closes instead of CREATE TABLE",
+  marketingConnectionsSchema.includes("assertRequiredTablesExist") &&
+    marketingConnectionsSchema.includes("assertRequiredColumnsExist") &&
+    marketingConnectionsSchema.includes("never runs DDL") &&
+    marketingConnectionsService.includes("assertMarketingConnectionSchema") &&
+    !marketingConnectionsService.includes("$executeRaw") &&
+    !marketingConnectionsService.includes("CREATE TABLE") &&
+    !marketingConnectionsSchema.includes("$executeRaw"),
+);
+
 console.log(
   failed === 0
     ? `\nAll production-migrate checks passed (${passed}).`

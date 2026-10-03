@@ -50,7 +50,8 @@ import {
   studioPhotosEligible,
 } from "@/lib/marketing";
 import { MarketingError } from "@/lib/marketing-ops";
-import { getSocialPublishingProvider } from "@/lib/social-publishing/provider";
+import { resolveConnectedPublishToken } from "@/lib/marketing-connections/service";
+import { getSocialPublishingProviderForDestination } from "@/lib/social-publishing/provider";
 import type { SocialPublishingProvider } from "@/lib/social-publishing/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -348,7 +349,7 @@ export async function publishMarketingContentToSocial(
 
   if (deps?.beforeProvider) await deps.beforeProvider();
 
-  const provider = deps?.provider ?? getSocialPublishingProvider();
+  const provider = deps?.provider ?? getSocialPublishingProviderForDestination(destination);
   let providerResult: {
     ok: boolean;
     status: "PUBLISHED" | "FAILED" | "UNKNOWN";
@@ -580,13 +581,7 @@ async function claimSocialPublishAttempt(
     throw new MarketingError(SOCIAL_PUBLISH_EMPTY_MESSAGE);
   }
 
-  const destinationRow = await db.marketingSocialDestination.findFirst({
-    where: {
-      businessId: access.businessId,
-      destination: input.destination,
-    },
-    select: { pageId: true, accessToken: true, destination: true },
-  });
+  const destinationRow = await resolveConnectedPublishToken(db, access.businessId, input.destination);
   if (!destinationRow?.pageId?.trim() || !destinationRow.accessToken) {
     throw new MarketingError(SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE);
   }

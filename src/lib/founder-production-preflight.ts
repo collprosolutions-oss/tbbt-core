@@ -163,6 +163,8 @@ export const SENSITIVE_ENV_KEYS = [
   "CONNECTION_TOKEN_ENCRYPTION_KEY",
   "GUSTO_CLIENT_ID",
   "GUSTO_CLIENT_SECRET",
+  "META_APP_SECRET",
+  "GOOGLE_OAUTH_CLIENT_SECRET",
 ] as const;
 
 export type DuplicateConversionGroup = {

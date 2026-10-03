@@ -12,6 +12,10 @@ import { sanitizeFounderPageTokens } from "@/lib/founder-design";
 import type { CuratedIconId } from "@/lib/founder-icons";
 import { parseMarketingArea } from "@/lib/marketing";
 import { loadMarketingSource } from "@/lib/marketing-data";
+import {
+  loadMarketingConnectionCards,
+  loadMarketingConnectionSelection,
+} from "@/lib/marketing-connections/service";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
@@ -21,7 +25,7 @@ export const metadata: Metadata = {
 export default async function MarketingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ area?: string }>;
+  searchParams: Promise<{ area?: string; connectionSelection?: string; connectionError?: string }>;
 }) {
   const access = await requireManagementPageAccess();
 
@@ -36,6 +40,33 @@ export default async function MarketingPage({
   const params = await searchParams;
   const area = parseMarketingArea(params.area);
   const source = await loadMarketingSource(prisma, access.businessId, new Date(), access.workspace.role);
+  const owner = access.workspace.role === "OWNER";
+  const connectionCards = await loadMarketingConnectionCards(prisma, access.businessId, owner);
+  const selectionToken = params.connectionSelection?.trim() ?? "";
+  let connectionSelection: {
+    token: string;
+    label: string;
+    candidates: Array<{ externalId: string; displayName: string }>;
+  } | null = null;
+  let connectionError =
+    params.connectionError === "permission"
+      ? "Needs more permission. Nothing was connected or published."
+      : params.connectionError
+        ? "That connection attempt was rejected. Nothing was published."
+        : null;
+  if (owner && selectionToken) {
+    try {
+      const row = await loadMarketingConnectionSelection(prisma, access, selectionToken);
+      connectionSelection = row
+        ? { token: selectionToken, label: row.label, candidates: row.candidates }
+        : null;
+      if (!connectionSelection && !connectionError) {
+        connectionError = "That connection attempt was rejected. Nothing was published.";
+      }
+    } catch {
+      connectionError = "That connection attempt was rejected. Nothing was published.";
+    }
+  }
 
   const kpis: Array<{
     label: string;
@@ -99,7 +130,14 @@ export default async function MarketingPage({
           </KpiCardsLayout>
         </FounderRegion>
 
-        <MarketingWorkspace area={area} source={source} viewerRole={access.workspace.role} />
+        <MarketingWorkspace
+          area={area}
+          source={source}
+          viewerRole={access.workspace.role}
+          connectionCards={connectionCards}
+          connectionSelection={connectionSelection}
+          connectionError={connectionError}
+        />
       </FounderDesignRoot>
     </PageContainer>
   );

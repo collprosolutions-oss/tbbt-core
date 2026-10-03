@@ -1,3 +1,4 @@
+/** Single destination vocabulary for marketing connect and publish. */
 export const SOCIAL_PUBLISH_DESTINATION_FACEBOOK = "FACEBOOK" as const;
 export const SOCIAL_PUBLISH_DESTINATION_INSTAGRAM = "INSTAGRAM" as const;
 export const SOCIAL_PUBLISH_DESTINATION_GOOGLE = "GOOGLE" as const;
@@ -41,7 +42,7 @@ export type SocialPublishResult = {
 
 export type SocialPublishingProvider = {
   id: string;
-  destination: ImplementedSocialPublishDestination;
+  destination: SocialPublishDestination;
   /**
    * Adapter availability only. A business still needs its own connected
    * Facebook destination record. Tests inject a fake; production uses

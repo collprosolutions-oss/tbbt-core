@@ -11,6 +11,23 @@
  */
 
 import { formatISODateInTimeZone, parseCivilDateInTimeZone, zonedWeekday } from "@/lib/business-timezone";
+import {
+  DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS,
+  IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS,
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+  type ImplementedSocialPublishDestination,
+} from "@/lib/social-publishing/types";
+
+export {
+  DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS,
+  IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS,
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+};
+export type { ImplementedSocialPublishDestination } from "@/lib/social-publishing/types";
 import { marketingAiAssistAvailable as providerAssistAvailable } from "@/lib/marketing-draft";
 import { parseScheduleDate, startOfDay, startOfWeek } from "@/lib/schedule";
 
@@ -209,17 +226,6 @@ export const LEAD_SOURCE_TRACKED_MESSAGE =
 
 export const SOCIAL_MANUAL_COPY_MESSAGE =
   "No Facebook, Instagram, or Google account is connected. Copy approved text and post it yourself. TBBT will not mark this PUBLISHED.";
-
-export const SOCIAL_PUBLISH_DESTINATION_FACEBOOK = "FACEBOOK" as const;
-export const SOCIAL_PUBLISH_DESTINATION_INSTAGRAM = "INSTAGRAM" as const;
-export const SOCIAL_PUBLISH_DESTINATION_GOOGLE = "GOOGLE" as const;
-export const IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS = [SOCIAL_PUBLISH_DESTINATION_FACEBOOK] as const;
-export const DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS = [
-  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
-  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
-] as const;
-export type ImplementedSocialPublishDestination =
-  (typeof IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS)[number];
 
 export const SOCIAL_PUBLISH_ATTEMPT_CLAIMED = "CLAIMED" as const;
 export const SOCIAL_PUBLISH_ATTEMPT_PUBLISHED = "PUBLISHED" as const;
