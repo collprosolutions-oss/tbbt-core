@@ -14,8 +14,10 @@ export {
 export { createFakeSocialPublishingProvider } from "@/lib/social-publishing/fake";
 export { createDisconnectedSocialPublishingProvider } from "@/lib/social-publishing/disconnected";
 export {
+  createUnavailableSocialPublishingProvider,
   disconnectedSocialPublishingProvider,
   getSocialPublishingProvider,
+  getSocialPublishingProviderForDestination,
   resetSocialPublishingProvider,
   setSocialPublishingProvider,
 } from "@/lib/social-publishing/provider";

@@ -4,6 +4,7 @@ import { StudioApprovalQueue } from "@/components/marketing/studio-approval-queu
 import { CreateContentForm } from "@/components/marketing/create-content-form";
 import { ExportPackageButton } from "@/components/marketing/export-package-button";
 import { PublishSocialButton } from "@/components/marketing/publish-social-button";
+import { MarketingConnectionsPanel } from "@/components/marketing/marketing-connections-panel";
 import { ReviewPacketButton } from "@/components/marketing/review-packet-button";
 import { PhotoPermissionButton } from "@/components/marketing/photo-permission-button";
 import { StudioContentCalendar } from "@/components/marketing/studio-content-calendar";
@@ -42,7 +43,14 @@ import {
 } from "@/lib/marketing";
 import { cn } from "@/lib/utils";
 
-export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorkspaceProps) {
+export function MarketingWorkspace({
+  area,
+  source,
+  viewerRole,
+  connectionCards = [],
+  connectionSelection = null,
+  connectionError = null,
+}: MarketingWorkspaceProps) {
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_var(--tbbt-panel-width,300px)]">
       <div className="min-w-0 space-y-4">
@@ -87,7 +95,14 @@ export function MarketingWorkspace({ area, source, viewerRole }: MarketingWorksp
           area === "website-seo" ||
           area === "performance" ||
           !isImplementedMarketingArea(area) ? (
-            <ContentBody area={area} source={source} viewerRole={viewerRole} />
+            <ContentBody
+              area={area}
+              source={source}
+              viewerRole={viewerRole}
+              connectionCards={connectionCards}
+              connectionSelection={connectionSelection}
+              connectionError={connectionError}
+            />
           ) : null}
         </FounderRegion>
 
@@ -310,10 +325,16 @@ function ContentBody({
   area,
   source,
   viewerRole,
+  connectionCards = [],
+  connectionSelection = null,
+  connectionError = null,
 }: {
   area: MarketingArea;
   source: MarketingWorkspaceProps["source"];
   viewerRole: MarketingWorkspaceProps["viewerRole"];
+  connectionCards: MarketingWorkspaceProps["connectionCards"];
+  connectionSelection: MarketingWorkspaceProps["connectionSelection"];
+  connectionError: MarketingWorkspaceProps["connectionError"];
 }) {
   if (!isImplementedMarketingArea(area)) {
     return (
@@ -514,6 +535,14 @@ function ContentBody({
           queue={source.approvalQueue}
           weeklyReminder={source.weeklyReminder}
           viewerRole={viewerRole}
+        />
+      ) : null}
+      {area === "social-posts" || area === "overview" ? (
+        <MarketingConnectionsPanel
+          cards={connectionCards}
+          owner={viewerRole === "OWNER"}
+          selection={connectionSelection}
+          connectionError={connectionError}
         />
       ) : null}
       {area === "social-posts" ? (

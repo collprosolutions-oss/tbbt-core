@@ -38,6 +38,7 @@ import {
   loadMarketingSocialDestinations,
   loadMarketingSocialPublishAttempts,
 } from "@/lib/marketing-social-publish";
+import { loadMarketingConnectionSummaries } from "@/lib/marketing-connections/service";
 import { draftMarketingContent, weeklyContentPlan } from "@/lib/marketing-draft";
 import {
   campaignIdeasFromActivity,
@@ -79,7 +80,7 @@ export async function loadMarketingSource(
 
   const approvalQueueWhere = { ...scope, status: STUDIO_APPROVAL_QUEUE_STATUS } as const;
 
-  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder, socialDestinations, socialPublishAttempts] = await Promise.all([
+  const [business, jobs, contents, catalogItems, serviceRequests, campaigns, settings, invoices, reviews, serviceAreas, unpaidInvoices, approvalQueueRows, approvalQueueTotal, weeklyReminder, socialDestinations, socialPublishAttempts, connectionSummaries] = await Promise.all([
     prisma.business.findFirst({
       where: { id: businessId },
       select: {
@@ -221,6 +222,7 @@ export async function loadMarketingSource(
     loadStudioWeeklyReminderState(prisma, businessId, now),
     loadMarketingSocialDestinations(prisma, businessId),
     loadMarketingSocialPublishAttempts(prisma, businessId),
+    loadMarketingConnectionSummaries(prisma, businessId),
   ]);
 
   const timeZone = resolveBusinessTimeZone(business);
@@ -503,7 +505,13 @@ export async function loadMarketingSource(
       homeDescription: settings?.seoDescriptionHome ?? "",
     },
     channels: presentMarketingSocialDestinations(
-      socialDestinations.map((row) => row.destination),
+      socialDestinations
+        .map((row) => row.destination)
+        .filter((destination) => {
+          const summary = connectionSummaries.find((item) => item.destination === destination);
+          if (!summary?.hasRow) return true;
+          return summary.publishable;
+        }),
     ),
     performance: {
       available: false,

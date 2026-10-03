@@ -254,6 +254,12 @@ export const CAPABILITIES = {
    * but must not inherit this.
    */
   CONNECT_PAYROLL_PROVIDER: "CONNECT_PAYROLL_PROVIDER",
+  /**
+   * OWNER-only connect, reconnect, status, and disconnect of a marketing
+   * destination (Facebook Page, Instagram, Google Business Profile).
+   * Does not publish. ADMIN keeps MANAGE_MARKETING for drafts and review.
+   */
+  CONNECT_MARKETING_DESTINATIONS: "CONNECT_MARKETING_DESTINATIONS",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -270,6 +276,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
   CAPABILITIES.REVIEW_BANK_RECONCILIATION,
   CAPABILITIES.CONNECT_PAYROLL_PROVIDER,
+  CAPABILITIES.CONNECT_MARKETING_DESTINATIONS,
 ]);
 
 /**

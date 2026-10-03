@@ -23,6 +23,7 @@ import type { PaymentProviderStatus } from "@/lib/settings";
 import {
   CHANNELS_DISCONNECTED_MESSAGE,
 } from "@/lib/marketing";
+import { loadMarketingConnectionCards } from "@/lib/marketing-connections/service";
 import { PLATFORMS_DISCONNECTED_MESSAGE } from "@/lib/reviews";
 import { isBusinessStorageConfigured } from "@/lib/business-storage";
 import {
@@ -133,8 +134,9 @@ export type SettingsSnapshot = {
   paymentProviderConnected: boolean;
   payrollProviderConnected: false;
   accountingConnected: false;
-  marketingConnected: false;
+  marketingConnected: boolean;
   reviewPlatformConnected: false;
+  marketingConnectionCards: Array<{ destination: string; label: string; statusLabel: string }>;
   marketingDisconnectedMessage: string;
   reviewDisconnectedMessage: string;
   customers: SettingsCustomerExportRow[];
@@ -293,6 +295,7 @@ export async function loadSettingsSnapshot(
     unavailableDates.map((row) => row.date),
   );
   const policy = schedulingPolicyFromRow(preferencesRow);
+  const marketingConnectionCards = await loadMarketingConnectionCards(prisma, businessId, false);
 
   return {
     business: {
@@ -370,8 +373,13 @@ export async function loadSettingsSnapshot(
     paymentProviderConnected: payment.paymentReady,
     payrollProviderConnected: false,
     accountingConnected: false,
-    marketingConnected: false,
+    marketingConnected: marketingConnectionCards.some((card) => card.statusLabel === "Connected"),
     reviewPlatformConnected: false,
+    marketingConnectionCards: marketingConnectionCards.map((card) => ({
+      destination: card.destination,
+      label: card.label,
+      statusLabel: card.statusLabel,
+    })),
     marketingDisconnectedMessage: CHANNELS_DISCONNECTED_MESSAGE,
     reviewDisconnectedMessage: PLATFORMS_DISCONNECTED_MESSAGE,
     customers: customers.map((customer) => {

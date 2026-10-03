@@ -67,6 +67,7 @@
     "test:marketing-studio-weekly-reminder": "node --experimental-strip-types scripts/check-marketing-studio-weekly-reminder.mjs",
     "test:marketing-owner-content-draft": "node --experimental-strip-types scripts/check-marketing-owner-content-draft.mjs",
     "test:marketing-social-publish": "node --experimental-strip-types scripts/check-marketing-social-publish.mjs",
+    "test:marketing-connections": "node --experimental-strip-types scripts/check-marketing-connections.mjs",
     "test:reviews": "node --experimental-strip-types scripts/check-reviews.mjs",
     "test:pipeline": "node --experimental-strip-types scripts/check-pipeline.mjs",
     "test:knowledge": "node --experimental-strip-types scripts/check-knowledge.mjs",

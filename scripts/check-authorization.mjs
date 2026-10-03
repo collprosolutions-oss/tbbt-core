@@ -274,6 +274,7 @@ try {
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
     CAPABILITIES.REVIEW_BANK_RECONCILIATION,
     CAPABILITIES.CONNECT_PAYROLL_PROVIDER,
+    CAPABILITIES.CONNECT_MARKETING_DESTINATIONS,
   ];
   check(
     "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
@@ -662,6 +663,15 @@ try {
   });
   await expectAllowed("OWNER can pass the payroll provider connection capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.CONNECT_PAYROLL_PROVIDER);
+  });
+  check("OWNER has CONNECT_MARKETING_DESTINATIONS", roleHasCapability("OWNER", CAPABILITIES.CONNECT_MARKETING_DESTINATIONS));
+  check("ADMIN does not have CONNECT_MARKETING_DESTINATIONS", !roleHasCapability("ADMIN", CAPABILITIES.CONNECT_MARKETING_DESTINATIONS));
+  check("MEMBER does not have CONNECT_MARKETING_DESTINATIONS", !roleHasCapability("MEMBER", CAPABILITIES.CONNECT_MARKETING_DESTINATIONS));
+  await expectForbidden("ADMIN cannot connect marketing destinations", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.CONNECT_MARKETING_DESTINATIONS);
+  });
+  await expectAllowed("OWNER can connect marketing destinations", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.CONNECT_MARKETING_DESTINATIONS);
   });
 
   console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");

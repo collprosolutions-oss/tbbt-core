@@ -152,7 +152,8 @@ export const UNSUPPORTED_INTEGRATIONS: readonly UnsupportedIntegration[] = [
     key: "social_publishing",
     category: "Communications",
     goLiveCapabilityId: "social_publishing",
-    reason: "Instagram and Google stay disconnected. Facebook Page publish is an explicit OWNER action only when that destination is connected. TBBT does not publish autonomously.",
+    reason:
+      "Facebook Page, Instagram, and Google Business Profile consent is an OWNER action on Marketing. This center does not start it. Publishing still requires OWNER-approved content and an explicit OWNER publish click. Instagram and Google Business Profile publishing are not yet available.",
   },
 ];
 

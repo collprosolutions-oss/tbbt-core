@@ -936,18 +936,17 @@ function SectionBody(props: SettingsWorkspaceProps) {
     return (
       <SectionCard title="Reviews / marketing connections">
         <div className="space-y-2">
-          {[
-            { label: "Google Business Profile", status: "Not Connected" },
-            { label: "Facebook", status: "Not Connected" },
-            { label: "Instagram", status: "Not Connected" },
-          ].map((row) => (
-            <div key={row.label} className="flex items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+          {snapshot.marketingConnectionCards.map((row) => (
+            <div key={row.destination} className="flex items-center justify-between gap-2 rounded-lg border p-3 text-sm">
               <span>{row.label}</span>
-              <Badge variant="outline">{row.status}</Badge>
+              <Badge variant="outline">{row.statusLabel}</Badge>
             </div>
           ))}
         </div>
         <p className="text-sm text-muted-foreground">{snapshot.marketingDisconnectedMessage}</p>
+        <p className="text-sm text-muted-foreground">
+          Each destination is independent. Settings does not start provider consent or publish. The OWNER connects destinations from Marketing.
+        </p>
         <p className="text-sm text-muted-foreground">{snapshot.reviewDisconnectedMessage}</p>
         <p className="text-sm text-muted-foreground">
           Settings does not publish content, post review responses, or request reviews automatically. Owner approval remains required for public actions.
