@@ -119,3 +119,54 @@ Hosted-database recovery, if it is ever needed, is a provider backup
 restore performed **outside** this script, plus a separate object-storage
 restore, plus the real environment variables. Do not substitute this
 localhost drill for that work.
+
+## Private file-byte restore (disposable storage fixture)
+
+This is the **file-byte half**. It proves that restored `StoredAsset`
+references resolve to the expected private-file bytes in a **separate
+disposable filesystem fixture**. It does **not** replace the
+database-only drill above. Never read or write production R2.
+
+```bash
+# DATABASE_URL must be localhost / 127.0.0.1 / ::1 Postgres.
+# R2_* is scrubbed for the process. The fixture is not Cloudflare R2.
+npm run test:handyman-storage-restore
+```
+
+The script creates two disposable databases and two disposable
+filesystem fixtures under `$TMPDIR/tbbt_handy_restore_storage_*`:
+
+1. Confirm `DATABASE_URL` is local Postgres (same guard as the
+   database-only drill).
+2. Unset `R2_*` so no managed R2 client can be constructed.
+3. Create an empty source database and a disposable filesystem
+   fixture. Seed a Handyman tenant, a private job photo, a second
+   private object, and another tenant’s private object. Bytes go only
+   into the fixture. Object files are stored under a digest of
+   `(bucket, key)` so a directory listing does not reveal storage keys.
+4. Snapshot the fixture by copying it. Dump the source disposable
+   database. Then delete the source fixture so recovery cannot
+   accidentally read the original directory.
+5. Restore the dump into a second empty disposable database.
+6. Restore the snapshot into a second empty disposable fixture.
+7. Resolve each restored `StoredAsset` against the restored fixture.
+   Reports use opaque labels only (`object-1:ok`). Storage keys,
+   filenames, emails, phone numbers, and customer names are not logged.
+8. Negative cases:
+   - empty fixture → `object-1:missing object-2:missing`
+   - same key, different bytes → `object-1:mismatch object-2:ok`
+   - one object removed → `object-1:ok object-2:missing`
+9. Drop both databases and delete every fixture directory.
+
+Helpers: `scripts/lib/local-storage-restore.mjs`. They refuse any
+fixture path that is not under the process temp directory with the
+`tbbt_handy_restore_storage_` prefix, refuse any bucket that is not
+`tbbt-restore-drill-*`, and refuse to open a fixture while `R2_*` is
+set.
+
+| Dependency | Restored by this drill? | Notes |
+| --- | --- | --- |
+| Tenant rows and `StoredAsset` pointers | Yes | Same localhost `pg_dump` / `pg_restore` as the database-only drill. |
+| Disposable filesystem fixture bytes | Yes | Copied separately. Proven by resolving restored references. |
+| Missing or mismatched fixture objects | Reported | Status only (`missing` / `mismatch`). No keys or customer data. |
+| Cloudflare R2 object bytes | **No** | Never read or write production R2. Restore a real bucket separately. |
