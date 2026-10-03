@@ -33,10 +33,13 @@ import {
 import {
   getMailConfig,
   isUsableEmail,
+  resetTransactionalEmailSender,
   sendTransactionalEmail,
   senderFrom,
+  setTransactionalEmailSender,
   type TransactionalEmailKind,
 } from "@/lib/mail";
+import { isOutboundEmailSuppressedError } from "@/lib/mail-outbound-suppression";
 import { hasProductCapability } from "@/lib/product-entitlements/enforce";
 import { PRODUCT_CAPABILITIES } from "@/lib/product-catalog/codes";
 import { DEFAULT_SETTINGS_PREFERENCES } from "@/lib/settings";
@@ -71,9 +74,8 @@ type EmailSender = (input: {
   text: string;
   idempotencyKey: string;
   kind: TransactionalEmailKind;
+  businessId: string;
 }) => Promise<{ id?: string; error?: string }>;
-
-let emailSender: EmailSender = sendTransactionalEmail;
 
 export const EMAIL_DISPATCH_CLAIM_LEASE_MS = 2 * 60 * 1000;
 
@@ -113,11 +115,11 @@ async function finishMaintenanceMarkSent(
 }
 
 export function setCommunicationEmailSender(sender: EmailSender | null) {
-  emailSender = sender ?? sendTransactionalEmail;
+  setTransactionalEmailSender(sender as Parameters<typeof setTransactionalEmailSender>[0]);
 }
 
 export function resetCommunicationEmailSender() {
-  emailSender = sendTransactionalEmail;
+  resetTransactionalEmailSender();
 }
 
 export function requireCommunicationsCapability(access: CommunicationAccess) {
@@ -663,7 +665,7 @@ async function sendRecordedEmail(
       provider = "disconnected";
     } else {
       try {
-        const sent = await emailSender({
+        const sent = await sendTransactionalEmail({
           apiKey: config.apiKey,
           from: senderFrom("TBBT", config.fromAddress),
           to: liveEmail,
@@ -672,9 +674,11 @@ async function sendRecordedEmail(
           html: `<p>${escapeHtml(input.body).replaceAll("\n", "<br />")}</p>`,
           idempotencyKey: input.idempotencyKey,
           kind: "customer",
+          businessId: input.access.businessId,
+          db,
         });
         if (sent.error) {
-          status = "FAILED";
+          status = isOutboundEmailSuppressedError(sent.error) ? "BLOCKED" : "FAILED";
           failureReason = sent.error;
         } else {
           status = "SENT";

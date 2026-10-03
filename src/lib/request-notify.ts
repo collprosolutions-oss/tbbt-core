@@ -164,6 +164,8 @@ export async function notifyBusinessNewPublicRequest(
     text: email.text,
     kind: "request",
     idempotencyKey: newRequestCompanyEmailIdempotencyKey(request.id),
+    businessId: business.id,
+    db: "emailFailedDestination" in db ? (db as never) : undefined,
   });
 
   if (sent.error) {

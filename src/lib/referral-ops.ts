@@ -187,6 +187,8 @@ async function attemptOwnedCustomerEmail(
     html: `<p>${input.text.replace(/\n/g, "<br />")}</p>`,
     idempotencyKey: input.idempotencyKey,
     kind: input.kind,
+    businessId: input.businessId,
+    db,
   });
   return "error" in sent ? "FAILED" : "SENT";
 }

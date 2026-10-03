@@ -62,6 +62,8 @@ async function sendOwnedCustomerEmail(
     html: input.html,
     kind: input.kind,
     idempotencyKey: input.idempotencyKey,
+    businessId: input.businessId,
+    db,
   });
   if ("error" in sent) {
     return { status: "FAILED", failureReason: sent.error };

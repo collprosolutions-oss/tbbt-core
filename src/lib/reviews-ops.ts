@@ -463,6 +463,8 @@ async function attemptReviewRequestEmail(
     html: `<p>${input.requestText.replace(/\n/g, "<br />")}</p>`,
     idempotencyKey: reviewRequestEmailIdempotencyKey(input.reviewRequestId, input.attemptKey),
     kind: "review",
+    businessId: input.businessId,
+    db,
   });
   return "error" in sent ? "FAILED" : "SENT";
 }

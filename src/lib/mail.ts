@@ -1,10 +1,13 @@
 import { Resend } from "resend";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { isTrustedVercelAppHost } from "@/lib/vercel-app-host";
 import {
   createFakeTransactionalEmailSender,
   isFakeEmailAdapterEnabled,
   type FakeTransactionalEmailInput,
 } from "@/lib/mail-fake";
+import { blockedOutboundEmailReason } from "@/lib/mail-outbound-suppression";
 
 export { isFakeEmailAdapterEnabled } from "@/lib/mail-fake";
 
@@ -260,12 +263,32 @@ export async function sendTransactionalEmail(input: {
   text: string;
   idempotencyKey: string;
   kind: TransactionalEmailKind;
+  businessId: string;
+  db?: PrismaClient | Prisma.TransactionClient;
 }) {
+  const db = input.db ?? prisma;
+  const blocked = await blockedOutboundEmailReason(db, input.businessId, input.to);
+  if (blocked) {
+    return { error: blocked };
+  }
+
+  const providerInput: FakeTransactionalEmailInput = {
+    apiKey: input.apiKey,
+    from: input.from,
+    to: input.to,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+    idempotencyKey: input.idempotencyKey,
+    kind: input.kind,
+    businessId: input.businessId,
+  };
+
   if (injectedEmailSender) {
-    return injectedEmailSender(input);
+    return injectedEmailSender(providerInput);
   }
   if (isFakeEmailAdapterEnabled()) {
-    return defaultFakeEmailSender.send(input);
+    return defaultFakeEmailSender.send(providerInput);
   }
 
   const failure = transactionalEmailFailureMessage(input.kind);

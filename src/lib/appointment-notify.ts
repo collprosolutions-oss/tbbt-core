@@ -208,10 +208,12 @@ export async function notifyCustomerAppointmentProposed(
       input.proposalId,
       input.sendAttemptId,
     ),
+    businessId: input.businessId,
+    db,
   });
 
   if (sent.error) {
-    const failed = await fail("FAILED", "The appointment email could not be sent.");
+    const failed = await fail("FAILED", sent.error);
     await queueSms();
     return failed;
   }

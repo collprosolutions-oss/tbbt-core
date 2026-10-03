@@ -222,6 +222,11 @@ check(
   mailSrc.includes("kind: TransactionalEmailKind"),
 );
 check(
+  "sendTransactionalEmail requires a businessId for suppression",
+  mailSrc.includes("businessId: string") &&
+    mailSrc.includes("blockedOutboundEmailReason"),
+);
+check(
   "invoice failure is not labeled as an estimate",
   transactionalEmailFailureMessage("invoice") ===
     "The invoice email could not be sent.",

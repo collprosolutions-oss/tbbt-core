@@ -170,6 +170,11 @@ export async function requestPasswordResetOp(
     });
   });
 
+  const membership = await db.membership.findFirst({
+    where: { userId: user.id, active: true },
+    select: { businessId: true },
+  });
+
   const emailContent = buildPasswordResetEmail({
     resetUrl: resetUrlForToken(appUrl, rawToken),
   });
@@ -182,6 +187,8 @@ export async function requestPasswordResetOp(
     text: emailContent.text,
     kind: "password-reset",
     idempotencyKey: passwordResetIdempotencyKey(user.id, token.id),
+    businessId: membership?.businessId ?? user.id,
+    db,
   });
 
   if (sent.error) {

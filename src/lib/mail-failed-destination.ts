@@ -2,12 +2,11 @@
  * Failed email destinations recorded from verified Resend bounce and
  * complaint webhooks. Request paths only assert the migrate-owned table.
  *
- * Suppression currently applies only to composeCustomerCommunication and
- * the Communications compose UI, which read these rows through
- * evaluateEmailEligibility. Estimate, invoice, review, appointment,
- * referral, and automation emails call sendTransactionalEmail directly
- * and are not suppressed here.
+ * Outbound suppression is enforced in sendTransactionalEmail immediately
+ * before the provider call, keyed by businessId + destination fingerprint.
+ * Compose eligibility also reads these rows for the Communications UI.
  */
+import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { assertRequiredTablesExist } from "@/lib/request-path-schema";
 
@@ -20,6 +19,14 @@ export const EMAIL_BOUNCE_BLOCK_REASON =
   "This email address bounced and is excluded from later sends.";
 export const EMAIL_COMPLAINT_BLOCK_REASON =
   "This email address reported a complaint and is excluded from later sends.";
+export const EMAIL_SUPPRESSION_UNAVAILABLE_REASON =
+  "This email could not be sent because destination eligibility could not be confirmed.";
+
+export function emailDestinationFingerprint(businessId: string, email: string) {
+  return createHash("sha256")
+    .update(`email:${businessId}:${email.trim().toLowerCase()}`)
+    .digest("hex");
+}
 
 export function isEmailFailedDestinationReason(
   value: string | null | undefined,

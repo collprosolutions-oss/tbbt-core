@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isUsableEmail } from "@/lib/mail";
 import {
   communicationPreferenceEnabled,
@@ -18,10 +17,13 @@ import {
 import { isEmailDeliveryConfigured } from "@/lib/settings";
 import { isCustomerMessagingConfigured } from "@/lib/customer-messaging/config";
 import {
+  emailDestinationFingerprint,
   emailFailedDestinationOwnerReason,
   isEmailFailedDestinationReason,
   type EmailFailedDestinationReason,
 } from "@/lib/mail-failed-destination";
+
+export { emailDestinationFingerprint } from "@/lib/mail-failed-destination";
 
 export type ChannelUnavailableReason =
   | "missing_email"
@@ -45,12 +47,6 @@ export type ChannelEligibility = {
   last4: string | null;
   fingerprint: string | null;
 };
-
-export function emailDestinationFingerprint(businessId: string, email: string) {
-  return createHash("sha256")
-    .update(`email:${businessId}:${email.trim().toLowerCase()}`)
-    .digest("hex");
-}
 
 /** Null / unusable destinations have no fingerprint and are not suppressed. */
 export function emailDestinationFingerprintOrNull(

@@ -277,6 +277,8 @@ async function notifyCustomerInvoiceReady(
     text: email.text,
     kind: "invoice",
     idempotencyKey: invoiceReadyIdempotencyKey(input.invoiceId),
+    businessId: input.businessId,
+    db,
   });
 
   await queueSms();
@@ -284,8 +286,7 @@ async function notifyCustomerInvoiceReady(
   if (sent.error) {
     return {
       sent: false,
-      warning:
-        "Invoice is available in the customer portal, but the invoice email could not be sent.",
+      warning: sent.error,
     };
   }
 

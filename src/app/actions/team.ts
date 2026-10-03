@@ -193,6 +193,8 @@ export async function addTeamMember(
       text: invite.text,
       kind: "team",
       idempotencyKey: teamInviteIdempotencyKey(access.businessId, email),
+      businessId: access.businessId,
+      db: prisma,
     });
   }
 

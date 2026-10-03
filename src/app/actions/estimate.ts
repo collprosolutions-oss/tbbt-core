@@ -1632,6 +1632,8 @@ export async function emailSentEstimate(
     text: email.text,
     kind: "estimate",
     idempotencyKey: estimateEmailIdempotencyKey(estimate.id, sendAttemptId),
+    businessId: access.businessId,
+    db: prisma,
   });
 
   if (sent.error) {
