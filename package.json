@@ -126,6 +126,7 @@
     "test:complete-job-invoice": "node --experimental-strip-types scripts/check-complete-job-invoice.mjs",
     "test:revenue-integrity": "node --experimental-strip-types scripts/check-revenue-integrity.mjs",
     "test:payments": "node --experimental-strip-types scripts/check-payments.mjs",
+    "test:deposit-payment-lock": "node --experimental-strip-types scripts/check-deposit-payment-lock.mjs",
     "test:payments-go-live": "node --experimental-strip-types scripts/check-payments-go-live.mjs",
     "test:material-deposit-payments": "node --experimental-strip-types scripts/check-material-deposit-payments.mjs",
     "test:material-price-engine": "node --experimental-strip-types scripts/check-material-price-engine.mjs",
