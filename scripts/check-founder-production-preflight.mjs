@@ -40,9 +40,6 @@ const {
 } = await import("./disposable-test-database.mjs");
 const { queryDuplicateRootConversionJobs, runProductionReadonlyProbe, withReadOnlyTransaction } =
   await import("./founder-production-preflight-db.mjs");
-const { authorizeStudioWeeklyReminderCron, classifyStudioWeeklyReminderCronAuth } = await import(
-  "@/lib/marketing-studio-reminder"
-);
 
 let passed = 0;
 let failed = 0;
@@ -226,6 +223,9 @@ check(
   const previousCronSecret = process.env.CRON_SECRET;
   process.env.CRON_SECRET = "";
   try {
+    const { authorizeStudioWeeklyReminderCron, classifyStudioWeeklyReminderCronAuth } = await import(
+      "@/lib/marketing-studio-reminder"
+    );
     const denied = classifyStudioWeeklyReminderCronAuth(
       new Headers({ authorization: "Bearer not-a-real-secret" }),
     );
@@ -478,6 +478,12 @@ const child = spawnSync(
       STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
       RESEND_API_KEY: RESEND_SECRET,
       DATABASE_URL: decoyUrl,
+      TBBT_PAYMENTS_ADAPTER: "",
+      TBBT_SAAS_BILLING_ADAPTER: "",
+      TBBT_PAYMENTS_FAKE_READY: "",
+      TBBT_CUSTOMER_MESSAGING_ADAPTER: "",
+      TBBT_EMAIL_ADAPTER: "",
+      NEXT_PUBLIC_APP_URL: "",
     },
   },
 );

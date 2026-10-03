@@ -42,7 +42,6 @@ import {
 import { isPublicWebsitePath } from "@/lib/public-website-paths";
 import { SCHEDULE_CALENDAR_FEED_PATH_PREFIX } from "@/lib/schedule-calendar-subscription/contract";
 import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription/path";
-import { STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE } from "@/lib/marketing";
 import {
   isStudioWeeklyReminderCronPath,
   STUDIO_WEEKLY_REMINDER_CRON_PATH,
@@ -1200,7 +1199,7 @@ function evaluateInside(input: {
     requirement: "REQUIRED",
     detail: env.CRON_SECRET
       ? `CRON_SECRET is present. Value omitted. The studio weekly reminder route fails closed without it. Path ${STUDIO_WEEKLY_REMINDER_CRON_PATH} is recognized by isStudioWeeklyReminderCronPath.`
-      : STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE,
+      : "The platform scheduled runner is not authenticated. Ask the operator to set CRON_SECRET in the host environment. This page does not show the secret.",
   });
 
   if (!probe || decision.action === "skip") {
