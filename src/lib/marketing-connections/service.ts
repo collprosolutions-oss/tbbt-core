@@ -25,6 +25,7 @@ import {
   missingScopes,
   type MarketingConnectionDestination,
 } from "@/lib/marketing-connections/config";
+import { IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS } from "@/lib/social-publishing/types";
 import { MarketingConnectionError, sanitizeConnectionError } from "@/lib/marketing-connections/errors";
 import {
   presentMarketingConnectionCards,
@@ -575,7 +576,7 @@ function summaryFromRow(row: {
   const legacyPlaintext = !row.connectionStatus && Boolean(row.accessToken.trim()) && !row.accessTokenCiphertext;
   const blocked = BLOCKED_PUBLISH_STATUSES.has(row.connectionStatus) || Boolean(row.disconnectedAt);
   const publishable =
-    (destination === "FACEBOOK" || destination === "INSTAGRAM") &&
+    (IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS as readonly string[]).includes(destination) &&
     Boolean(row.pageId.trim()) &&
     !blocked &&
     (row.connectionStatus === "CONNECTED" ? Boolean(row.accessTokenCiphertext) : legacyPlaintext);
@@ -824,7 +825,7 @@ export async function resolveConnectedPublishToken(
   db: Db,
   businessId: string,
   destination: string,
-): Promise<{ pageId: string; accessToken: string } | null> {
+): Promise<{ pageId: string; accessToken: string; externalAccountId: string } | null> {
   const row = await db.marketingSocialDestination.findFirst({
     where: { businessId, destination },
     select: {
@@ -834,10 +835,12 @@ export async function resolveConnectedPublishToken(
       connectionStatus: true,
       disconnectedAt: true,
       scopesGranted: true,
+      externalAccountId: true,
     },
   });
   if (!row?.pageId?.trim()) return null;
   if (row.disconnectedAt || BLOCKED_PUBLISH_STATUSES.has(row.connectionStatus)) return null;
+  const externalAccountId = (row.externalAccountId ?? "").trim();
   if (row.connectionStatus === "CONNECTED") {
     const token = decryptFor(destination, businessId, row.accessTokenCiphertext);
     if (!token) return null;
@@ -845,10 +848,26 @@ export async function resolveConnectedPublishToken(
     if (isMarketingConnectionDestination(destination) && granted.length > 0 && missingScopes(destination, granted).length > 0) {
       return null;
     }
-    return { pageId: row.pageId.trim(), accessToken: token };
+    return { pageId: row.pageId.trim(), accessToken: token, externalAccountId };
   }
   if (!row.connectionStatus && row.accessToken.trim()) {
-    return { pageId: row.pageId.trim(), accessToken: row.accessToken };
+    return { pageId: row.pageId.trim(), accessToken: row.accessToken, externalAccountId };
   }
   return null;
+}
+
+export async function markMarketingConnectionNeedsReconnect(
+  db: Db,
+  businessId: string,
+  destination: string,
+  lastError: string,
+) {
+  await db.marketingSocialDestination.updateMany({
+    where: { businessId, destination },
+    data: {
+      connectionStatus: "NEEDS_RECONNECT",
+      lastError: sanitizeConnectionError(lastError),
+      lastCheckedAt: new Date(),
+    },
+  });
 }

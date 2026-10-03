@@ -94,7 +94,7 @@ export function MarketingConnectionsPanel({
       <CardHeader>
         <CardTitle>Marketing connections</CardTitle>
         <CardDescription>
-          Each destination is separate. Connecting does not publish. Facebook and Instagram publish still require an approved package and an explicit OWNER publish click. Instagram uses only an approved public marketing image and never sends a private job or customer photo. Google Business Profile publishing is not yet available.
+          Each destination is separate. Connecting does not publish. Facebook, Instagram, and Google Business Profile publish still require an approved package and an explicit OWNER publish click. Instagram uses only an approved public marketing image and never sends a private job or customer photo. Google local posts do not change rankings.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

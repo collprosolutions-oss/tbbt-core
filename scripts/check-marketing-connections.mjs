@@ -317,15 +317,17 @@ check(
 );
 const googleProvider = getSocialPublishingProviderForDestination("GOOGLE");
 const googleResult = await googleProvider.publish({
-  destination: "FACEBOOK",
+  destination: "GOOGLE",
   pageId: "1",
   accessToken: PAGE_TOKEN,
   message: "nope",
 });
 check(
-  "Google publish stays not yet available",
-  googleResult.ok === false &&
-    googleResult.error === "Google Business Profile publishing is not yet available." &&
+  "Google local-post provider is implemented and refuses an unbound location",
+  googleProvider.connected === true &&
+    googleResult.ok === false &&
+    googleResult.status === "FAILED" &&
+    /bound|STANDARD Google local post|different destination/i.test(googleResult.error ?? "") &&
     !googleResult.error.includes(PAGE_TOKEN),
 );
 
@@ -544,7 +546,7 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
       loaded.find((card) => card.destination === "INSTAGRAM")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "GOOGLE")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "INSTAGRAM")?.publishAvailable === true &&
-      loaded.find((card) => card.destination === "GOOGLE")?.publishAvailable === false &&
+      loaded.find((card) => card.destination === "GOOGLE")?.publishAvailable === true &&
       !JSON.stringify(loaded).includes(PAGE_TOKEN),
   );
 

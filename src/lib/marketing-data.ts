@@ -18,6 +18,7 @@ import {
   presentMarketingSocialDestinations,
   sanitizeSocialPublishProviderError,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   socialPublishDisplay,
   STUDIO_APPROVAL_QUEUE_LIMIT,
@@ -337,6 +338,11 @@ export async function loadMarketingSource(
         content.id,
         SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
       );
+      const googleAttempt = latestSocialPublishAttempt(
+        socialPublishAttempts,
+        content.id,
+        SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      );
       const display = socialPublishDisplay({
         status: facebookAttempt?.status,
         claimedAt: facebookAttempt?.claimedAt,
@@ -355,6 +361,16 @@ export async function loadMarketingSource(
       const instagramLabel = instagramDisplay.label
         ? sanitizeSocialPublishProviderError(instagramDisplay.label)
         : instagramDisplay.label;
+      const googleDisplay = socialPublishDisplay({
+        status: googleAttempt?.status,
+        claimedAt: googleAttempt?.claimedAt,
+        failureLabel: googleAttempt?.failureLabel,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+        now,
+      });
+      const googleLabel = googleDisplay.label
+        ? sanitizeSocialPublishProviderError(googleDisplay.label)
+        : googleDisplay.label;
       return {
         id: content.id,
         contentType: content.contentType,
@@ -411,6 +427,23 @@ export async function loadMarketingSource(
           }),
           label: instagramLabel,
           providerPostId: instagramDisplay.published ? instagramAttempt?.providerPostId ?? null : null,
+        },
+        googleSocialPublish: {
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          attemptId: googleAttempt?.id ?? null,
+          attemptStatus: googleAttempt?.status ?? null,
+          published: googleDisplay.published,
+          unconfirmed: googleDisplay.unconfirmed,
+          inFlight: googleDisplay.inFlight,
+          canResolve: canResolveSocialPublishAttempt({
+            role: viewerRole ?? "",
+            status: googleAttempt?.status,
+            claimedAt: googleAttempt?.claimedAt,
+            failureLabel: googleAttempt?.failureLabel,
+            now,
+          }),
+          label: googleLabel,
+          providerPostId: googleDisplay.published ? googleAttempt?.providerPostId ?? null : null,
         },
       };
     }),

@@ -1,13 +1,14 @@
 /**
- * OWNER Facebook Page and Instagram publish for one connected social
- * destination.
+ * OWNER Facebook Page, Instagram, and Google Business Profile local-post
+ * publish for one connected social destination.
  *
- * Uses the official Graph API v26.0 clients in production and a fake
- * provider in these tests. Proves OWNER authorization, tenant isolation,
- * claim-before-provider, DRAFT/planned-day refusal, retry after FAILED,
- * and that failures are never labeled PUBLISHED. Instagram uses only an
- * approved public marketing image. Google stays disconnected. No live
- * Graph API post.
+ * Uses the official Graph API v26.0 and Google My Business v4 clients in
+ * production and a fake provider in these tests. Proves OWNER
+ * authorization, tenant isolation, claim-before-provider, DRAFT/planned-day
+ * refusal, retry after FAILED, and that failures are never labeled
+ * PUBLISHED. Instagram uses only an approved public marketing image.
+ * Facebook, Instagram, and Google are implemented destinations. No live
+ * Graph or Google API post. Local posts never claim ranking improvements.
  *
  * Run with:
  *   npm run test:marketing-social-publish
@@ -31,7 +32,17 @@ if (generateEarly.status !== 0) {
 const { ForbiddenError } = await import("@/lib/authorization");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const {
+  FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE,
   FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE,
+  GOOGLE_ACCOUNT_BINDING_MESSAGE,
+  GOOGLE_CONNECTED_OTHERS_DISCONNECTED_MESSAGE,
+  GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE,
+  GOOGLE_RECONNECT_NEEDED_MESSAGE,
+  OWNER_GOOGLE_SOCIAL_PUBLISH_MESSAGE,
+  GOOGLE_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
+  GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+  GOOGLE_SOCIAL_PUBLISH_FAILED_MESSAGE,
+  GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
   OWNER_SOCIAL_PUBLISH_MESSAGE,
   PHOTO_PERMISSION_REVOKED_MESSAGE,
   SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
@@ -93,11 +104,23 @@ const {
   instagramMediaContainerUrl,
   instagramMediaPublishUrl,
 } = await import("@/lib/social-publishing/instagram");
+const { createGoogleSocialPublishingProvider } = await import("@/lib/social-publishing/google");
+const { encryptConnectionToken } = await import("@/lib/connection-token-crypto");
+const { marketingTokenPurpose } = await import("@/lib/marketing-connections/config");
 const {
   FACEBOOK_GRAPH_API_HOST,
   FACEBOOK_GRAPH_API_VERSION,
+  GOOGLE_BUSINESS_MANAGE_SCOPE,
+  GOOGLE_LOCAL_POST_TOPIC_STANDARD,
+  GOOGLE_MY_BUSINESS_API_HOST,
+  GOOGLE_MY_BUSINESS_API_VERSION,
+  composeGoogleLocalPostPayload,
   facebookPageFeedUrl,
+  googleLocalPostsUrl,
   isFakeSocialPublishingAdapterEnabled,
+  isGoogleAccountBoundToLocation,
+  normalizeGoogleAccountId,
+  parseGoogleLocationResource,
 } = await import("@/lib/social-publishing");
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -111,7 +134,9 @@ delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
 const opsSrc = readSrc("src/lib/marketing-social-publish.ts");
 const facebookSrc = readSrc("src/lib/social-publishing/facebook.ts");
 const instagramSrc = readSrc("src/lib/social-publishing/instagram.ts");
+const googleSrc = readSrc("src/lib/social-publishing/google.ts");
 const fakeSrc = readSrc("src/lib/social-publishing/fake.ts");
+const typesSrc = readSrc("src/lib/social-publishing/types.ts");
 const actionSrc = readSrc("src/app/actions/marketing.ts");
 const buttonSrc = readSrc("src/components/marketing/publish-social-button.tsx");
 const workspaceSrc = readSrc("src/components/marketing/marketing-workspace.tsx");
@@ -121,6 +146,11 @@ const migrationSql = readSrc(
 );
 const leakNeedle = (value) =>
   typeof value === "string" && (/EAA[A-Za-z0-9]+/.test(value) || value.includes("fake-page-token"));
+
+if (!process.env.CONNECTION_TOKEN_ENCRYPTION_KEY) {
+  process.env.CONNECTION_TOKEN_ENCRYPTION_KEY =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+}
 
 function createReleaseBarrier(count) {
   let released;
@@ -243,6 +273,30 @@ try {
       instagramSrc.includes("instagram-api/guides/content-publishing") &&
       !instagramSrc.includes("graph.instagram.com"),
   );
+  check(
+    "Official Google provider uses My Business API v4 STANDARD localPosts",
+    GOOGLE_MY_BUSINESS_API_VERSION === "v4" &&
+      GOOGLE_MY_BUSINESS_API_HOST === "https://mybusiness.googleapis.com" &&
+      googleLocalPostsUrl("accounts/123/locations/456") ===
+        "https://mybusiness.googleapis.com/v4/accounts/123/locations/456/localPosts" &&
+      GOOGLE_BUSINESS_MANAGE_SCOPE === "https://www.googleapis.com/auth/business.manage" &&
+      googleSrc.includes("accounts.locations.localPosts") &&
+      googleSrc.includes("topicType") &&
+      googleSrc.includes("STANDARD") &&
+      !/improv(?:e|es|ing) rank|rank higher|ranking boost/i.test(`${googleSrc}\n${buttonSrc}`),
+  );
+  check(
+    "Google binding uses #347 externalAccountId and pageId resource names",
+    !existsSync(join(root, "prisma/migrations/20261003234500_google_local_post_account_binding/migration.sql")) &&
+      opsSrc.includes("resolveConnectedPublishToken") &&
+      opsSrc.includes("externalAccountId") &&
+      !opsSrc.includes("accountId: true") &&
+      typesSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
+      typesSrc.includes("SOCIAL_PUBLISH_DESTINATION_GOOGLE") &&
+      /IMPLEMENTED_SOCIAL_PUBLISH_DESTINATIONS = \[[^\]]+INSTAGRAM[\s\S]+GOOGLE/.test(typesSrc) &&
+      typesSrc.includes("DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS = []"),
+  );
+
   check(
     "Public marketing asset helper refuses private job and signed URLs",
     isPublicMarketingAssetUrl("https://example.test/after.jpg") === true &&
@@ -414,17 +468,22 @@ try {
       }),
   );
   check(
-    "Workspace exposes explicit OWNER Publish to Facebook and Instagram actions",
+    "Workspace exposes explicit OWNER Publish to Facebook, Instagram, and Google actions",
     workspaceSrc.includes("PublishSocialButton") &&
       workspaceSrc.includes("canPublishMarketingToSocial") &&
       workspaceSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
+      workspaceSrc.includes("SOCIAL_PUBLISH_DESTINATION_GOOGLE") &&
       workspaceSrc.includes("studioPhotosHavePublicMarketingAsset") &&
       buttonSrc.includes("Publish to Facebook") &&
       buttonSrc.includes("Retry Facebook publish") &&
       buttonSrc.includes("Publish to Instagram") &&
       buttonSrc.includes("Retry Instagram publish") &&
+      buttonSrc.includes("Publish to Google Business Profile") &&
+      buttonSrc.includes("Retry Google Business Profile publish") &&
+      buttonSrc.includes("GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE") &&
       buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_FACEBOOK") &&
       buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_GOOGLE") &&
       actionSrc.includes("publishMarketingContentToSocial") &&
       buttonSrc.includes("Not posted, allow retry") &&
       buttonSrc.includes("It posted") &&
@@ -437,13 +496,14 @@ try {
       opsSrc.includes("select: { destination: true, pageId: true }"),
   );
   check(
-    "Dedicated tests use a fake provider and do not post to Graph API",
+    "Dedicated tests use a fake provider and do not post to Graph or Google",
     fakeSrc.includes("createFakeSocialPublishingProvider") &&
       !fakeSrc.includes("graph.facebook.com") &&
       facebookSrc.includes("FACEBOOK_SOCIAL_PUBLISHING_PROVIDER") &&
       facebookSrc.includes("graph.facebook.com") &&
       instagramSrc.includes("INSTAGRAM_SOCIAL_PUBLISHING_PROVIDER") &&
       instagramSrc.includes("FACEBOOK_GRAPH_API_HOST") &&
+      googleSrc.includes("GOOGLE_SOCIAL_PUBLISHING_PROVIDER") &&
       facebookSrc.includes("graph.facebook.com"),
   );
   check(
@@ -569,6 +629,107 @@ try {
       !igGraphTimeout.error.includes(graphToken) &&
       igGraphPrivate.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
       igGraphPrivate.outcome === "rejected",
+  );
+
+  const googlePayload = composeGoogleLocalPostPayload({
+    summary: "Faucet repair completed in Reno.",
+  });
+  check(
+    "STANDARD local-post payload is summary plus topicType only",
+    googlePayload?.topicType === GOOGLE_LOCAL_POST_TOPIC_STANDARD &&
+      googlePayload?.summary === "Faucet repair completed in Reno." &&
+      !("searchUrl" in googlePayload),
+  );
+  check(
+    "Google location resource binds account and location",
+    parseGoogleLocationResource("accounts/acct-1/locations/loc-9")?.accountId === "acct-1" &&
+      normalizeGoogleAccountId("accounts/acct-1") === "acct-1" &&
+      isGoogleAccountBoundToLocation("acct-1", "accounts/acct-1/locations/loc-9") === true &&
+      isGoogleAccountBoundToLocation("accounts/acct-1", "accounts/acct-1/locations/loc-9") === true &&
+      isGoogleAccountBoundToLocation("other", "accounts/acct-1/locations/loc-9") === false &&
+      isGoogleAccountBoundToLocation("accounts/other", "accounts/acct-1/locations/loc-9") === false &&
+      parseGoogleLocationResource("111222333") === null,
+  );
+
+  const googleToken = "ya29.GoogleAccessTokenLeakXYZ999";
+  let capturedGoogleBody = null;
+  let capturedGoogleAuth = "";
+  const googleRejected = await createGoogleSocialPublishingProvider(async (_url, init) => {
+    capturedGoogleBody = JSON.parse(init.body);
+    capturedGoogleAuth = init.headers.Authorization;
+    return {
+      ok: false,
+      status: 400,
+      async json() {
+        return { error: { message: `Invalid Credentials ${googleToken}` } };
+      },
+    };
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+    pageId: "accounts/acct-1/locations/loc-9",
+    accountId: "acct-1",
+    accessToken: googleToken,
+    message: "hello",
+    localPost: composeGoogleLocalPostPayload({ summary: "hello" }),
+  });
+  const googleTimeout = await createGoogleSocialPublishingProvider(async () => {
+    throw abortError;
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+    pageId: "accounts/acct-1/locations/loc-9",
+    accountId: "acct-1",
+    accessToken: googleToken,
+    message: "hello",
+  });
+  const googleUnbound = await createGoogleSocialPublishingProvider(async () => {
+    throw new Error("should not fetch unbound Google location");
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+    pageId: "accounts/acct-1/locations/loc-9",
+    accountId: "other-account",
+    accessToken: googleToken,
+    message: "hello",
+  });
+  check(
+    "Google HTTP rejection is FAILED/rejected and redacts the OAuth token",
+    googleRejected.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleRejected.outcome === "rejected" &&
+      googleRejected.ok === false &&
+      !googleRejected.error.includes(googleToken) &&
+      googleRejected.error.includes("[redacted]") &&
+      capturedGoogleAuth === `Bearer ${googleToken}` &&
+      capturedGoogleBody?.topicType === "STANDARD" &&
+      capturedGoogleBody?.summary === "hello" &&
+      !("searchUrl" in capturedGoogleBody),
+  );
+  check(
+    "Google timeout is UNKNOWN and unbound account/location is FAILED without fetch",
+    googleTimeout.status === "UNKNOWN" &&
+      googleTimeout.outcome === "unknown" &&
+      !googleTimeout.error.includes(googleToken) &&
+      googleUnbound.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleUnbound.outcome === "rejected",
+  );
+  const googleExpired = await createGoogleSocialPublishingProvider(async () => ({
+    ok: false,
+    status: 401,
+    async json() {
+      return { error: { message: `Invalid Credentials ${googleToken}`, status: "UNAUTHENTICATED" } };
+    },
+  })).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+    pageId: "accounts/acct-1/locations/loc-9",
+    accountId: "accounts/acct-1",
+    accessToken: googleToken,
+    message: "hello",
+    localPost: composeGoogleLocalPostPayload({ summary: "hello" }),
+  });
+  check(
+    "Google 401 surfaces reconnect needed without leaking the token or retrying",
+    googleExpired.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleExpired.outcome === "rejected" &&
+      googleExpired.error === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      !googleExpired.error.includes(googleToken),
   );
 
   const businessA = await prisma.business.create({
@@ -778,7 +939,7 @@ try {
       instagramCalls.published.length === 0,
   );
   await expectError(
-    "Google stays disconnected and never calls the provider",
+    "Google without a bound destination never calls the provider",
     () =>
       publishMarketingContentToSocial(
         prisma,
@@ -792,7 +953,8 @@ try {
       ),
     (error) =>
       error instanceof MarketingError &&
-      error.message === SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
+      error.message === GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE &&
+      instagramCalls.published.length === 0,
   );
 
   const disconnectedBusiness = await prisma.business.create({
@@ -1088,7 +1250,7 @@ try {
       sourceA.channels.destinations.INSTAGRAM.connected === false &&
       sourceA.channels.destinations.GOOGLE.connected === false &&
       sourceA.channels.destinations.INSTAGRAM.implemented === true &&
-      sourceA.channels.destinations.GOOGLE.implemented === false,
+      sourceA.channels.destinations.GOOGLE.implemented === true,
   );
   check(
     "Published attempt is labeled PUBLISHED only after a provider success",
@@ -1911,6 +2073,405 @@ try {
       igRow.instagramPublish.label === INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
       igRow.status === "APPROVED" &&
       igRow.socialPublish.published === false,
+  );
+
+  console.log("\nTEST — Google local-post binding, OWNER publish, retry, and duplicates");
+  const googleLocation = "accounts/acct-alpha/locations/loc-reno";
+  await prisma.marketingSocialDestination.create({
+    data: {
+      businessId: businessA.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      pageId: googleLocation,
+      externalAccountId: "accounts/acct-alpha",
+      accessToken: "ya29.fake-google-token",
+    },
+  });
+  await expectError(
+    "Mismatched Google account/location is refused before the provider",
+    async () => {
+      await prisma.marketingSocialDestination.update({
+        where: {
+          businessId_destination: {
+            businessId: businessA.id,
+            destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          },
+        },
+        data: { externalAccountId: "accounts/acct-other" },
+      });
+      try {
+        await publishMarketingContentToSocial(
+          prisma,
+          ownerA,
+          {
+            contentId: approved.id,
+            destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+            expectedUpdatedAt: approved.updatedAt,
+          },
+          { provider: createFakeSocialPublishingProvider() },
+        );
+      } finally {
+        await prisma.marketingSocialDestination.update({
+          where: {
+            businessId_destination: {
+              businessId: businessA.id,
+              destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+            },
+          },
+          data: { externalAccountId: "accounts/acct-alpha" },
+        });
+      }
+    },
+    (error) => error instanceof MarketingError && error.message === GOOGLE_ACCOUNT_BINDING_MESSAGE,
+  );
+
+  const googleDraft = await createMarketingContent(prisma, adminA, {
+    ...packageInput,
+    title: "Google planned draft",
+    channelIntent: "GOOGLE",
+  });
+  const googleDraftCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Google planned DRAFT never reaches the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: googleDraft.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: googleDraft.updatedAt,
+        },
+        { provider: googleDraftCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE &&
+      googleDraftCalls.callCount === 0,
+  );
+  await expectError(
+    "ADMIN cannot publish a Google local post",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        adminA,
+        {
+          contentId: approved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: approved.updatedAt,
+        },
+        { provider: googleDraftCalls },
+      ),
+    (error) =>
+      error instanceof ForbiddenError === false &&
+      error instanceof MarketingError &&
+      error.message === OWNER_GOOGLE_SOCIAL_PUBLISH_MESSAGE &&
+      googleDraftCalls.callCount === 0,
+  );
+
+  const googleFailApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Google fail then retry",
+    channelIntent: "GOOGLE",
+  });
+  const googleFailing = createFakeSocialPublishingProvider();
+  googleFailing.setFailNext(true);
+  const googleFailed = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: googleFailApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      expectedUpdatedAt: googleFailApproved.updatedAt,
+    },
+    { provider: googleFailing },
+  );
+  const googleFailedRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: googleFailed.attemptId, businessId: businessA.id },
+  });
+  check(
+    "Google provider rejection is FAILED and not PUBLISHED",
+    googleFailed.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleFailed.published === false &&
+      googleFailed.message.includes(GOOGLE_SOCIAL_PUBLISH_FAILED_MESSAGE) &&
+      googleFailedRow?.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleFailedRow.liveKey == null &&
+      googleFailing.published.length === 0,
+  );
+  const googleRetried = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: googleFailApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      expectedUpdatedAt: googleFailApproved.updatedAt,
+    },
+    { provider: googleFailing },
+  );
+  check(
+    "Google retry after FAILED posts a STANDARD local post once",
+    googleRetried.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      googleRetried.published === true &&
+      googleRetried.message === GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      googleFailing.published.length === 1 &&
+      googleFailing.published[0].destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE &&
+      googleFailing.published[0].pageId === googleLocation &&
+      googleFailing.published[0].accountId === "accounts/acct-alpha" &&
+      googleFailing.published[0].localPost?.topicType === "STANDARD" &&
+      googleFailing.published[0].localPost?.summary.includes("Faucet repair completed in Reno."),
+  );
+  const googleContentAfter = await prisma.marketingContent.findFirst({
+    where: { id: googleFailApproved.id, businessId: businessA.id },
+  });
+  check(
+    "Google success does not rewrite MarketingContent.status to PUBLISHED",
+    googleContentAfter.status === "APPROVED",
+  );
+  await expectError(
+    "A later Google click after PUBLISHED does not post again",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: googleFailApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: googleFailApproved.updatedAt,
+        },
+        { provider: googleFailing },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === GOOGLE_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE &&
+      googleFailing.published.length === 1,
+  );
+
+  try {
+    await prisma.marketingSocialDestination.create({
+      data: {
+        businessId: businessB.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+        pageId: googleLocation,
+        externalAccountId: "accounts/acct-alpha",
+        accessToken: "ya29.other-business",
+      },
+    });
+    check("The same Google location can be stored for a second business without a unique pageId index", true);
+  } catch (error) {
+    check(
+      "The same Google location can be stored for a second business without a unique pageId index",
+      false,
+    );
+  }
+  await expectError(
+    "Tenant B cannot publish A's Google local post",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerB,
+        {
+          contentId: googleFailApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: googleFailApproved.updatedAt,
+        },
+        { provider: createFakeSocialPublishingProvider() },
+      ),
+    (error) => error instanceof Error,
+  );
+
+  const sourceWithGoogle = await loadMarketingSource(prisma, businessA.id, new Date(), "OWNER");
+  const googlePublishedRow = sourceWithGoogle.contents.find((row) => row.id === googleFailApproved.id);
+  check(
+    "Loader shows Google connected without ranking claims once the location is bound",
+    sourceWithGoogle.channels.destinations.GOOGLE.connected === true &&
+      sourceWithGoogle.channels.destinations.GOOGLE.implemented === true &&
+      sourceWithGoogle.channels.message === FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE &&
+      !/rank/i.test(sourceWithGoogle.channels.message) &&
+      googlePublishedRow?.googleSocialPublish.published === true &&
+      googlePublishedRow.googleSocialPublish.label === GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      googlePublishedRow.status === "APPROVED" &&
+      GOOGLE_CONNECTED_OTHERS_DISCONNECTED_MESSAGE.includes("explicit OWNER") &&
+      GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE.includes("does not change Google rankings"),
+  );
+
+  console.log("\nTEST — #347 ciphertext Google destination, blocked statuses, and expired token");
+  const cipherBusiness = await prisma.business.create({
+    data: { name: "Cipher Google", slug: `cipher-gbp-${randomUUID().slice(0, 8)}`, tradeCode: "HANDYMAN" },
+  });
+  const cipherUser = await prisma.user.create({
+    data: { name: "Cipher Owner", email: `cipher-gbp-${randomUUID()}@example.com`, passwordHash: "x" },
+  });
+  const cipherMem = await prisma.membership.create({
+    data: { userId: cipherUser.id, businessId: cipherBusiness.id, role: "OWNER" },
+  });
+  const cipherAccess = makeAccess(cipherBusiness.id, "OWNER", cipherMem.id, cipherUser.id);
+  const cipherCustomer = await prisma.customer.create({
+    data: { businessId: cipherBusiness.id, name: "Cee" },
+  });
+  const cipherJob = await prisma.job.create({
+    data: {
+      businessId: cipherBusiness.id,
+      customerId: cipherCustomer.id,
+      status: "COMPLETED",
+      projectToken: randomUUID(),
+    },
+  });
+  const cipherPhoto = await prisma.jobPhoto.create({
+    data: {
+      businessId: cipherBusiness.id,
+      jobId: cipherJob.id,
+      stage: "AFTER",
+      url: "https://example.test/cipher-after.jpg",
+    },
+  });
+  await grantJobPhotoMarketingPermission(prisma, cipherAccess, { photoId: cipherPhoto.id });
+  const cipherApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Cipher Google post",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  const googleCipherToken = "ya29.cipher-google-token-MUST-NOT-LEAK";
+  const google347PageId = "accounts/acct-347/locations/loc-347";
+  await prisma.marketingSocialDestination.create({
+    data: {
+      businessId: cipherBusiness.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      pageId: google347PageId,
+      accessToken: "",
+      accessTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        googleCipherToken,
+      ),
+      connectionStatus: "CONNECTED",
+      externalAccountId: "accounts/acct-347",
+      scopesGranted: GOOGLE_BUSINESS_MANAGE_SCOPE,
+    },
+  });
+  const cipherCalls = createFakeSocialPublishingProvider();
+  const cipherPublished = await publishMarketingContentToSocial(
+    prisma,
+    cipherAccess,
+    {
+      contentId: cipherApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      expectedUpdatedAt: cipherApproved.updatedAt,
+    },
+    { provider: cipherCalls },
+  );
+  check(
+    "#347-style ciphertext Google destination publishes through the fake adapter",
+    cipherPublished.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      cipherPublished.published === true &&
+      cipherCalls.callCount === 1 &&
+      cipherCalls.published[0].pageId === google347PageId &&
+      cipherCalls.published[0].accountId === "accounts/acct-347" &&
+      cipherCalls.published[0].accessToken === googleCipherToken &&
+      cipherCalls.published[0].localPost?.topicType === "STANDARD",
+  );
+
+  const blockedApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Blocked Google statuses",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  for (const status of ["NEEDS_RECONNECT", "DISCONNECTED"]) {
+    await prisma.marketingSocialDestination.update({
+      where: {
+        businessId_destination: {
+          businessId: cipherBusiness.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+        },
+      },
+      data: {
+        connectionStatus: status,
+        disconnectedAt: status === "DISCONNECTED" ? new Date() : null,
+      },
+    });
+    const blockedCalls = createFakeSocialPublishingProvider();
+    await expectError(
+      `${status} Google destination is refused with zero provider calls`,
+      () =>
+        publishMarketingContentToSocial(
+          prisma,
+          cipherAccess,
+          {
+            contentId: blockedApproved.id,
+            destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+            expectedUpdatedAt: blockedApproved.updatedAt,
+          },
+          { provider: blockedCalls },
+        ),
+      (error) =>
+        error instanceof MarketingError &&
+        error.message === GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE &&
+        blockedCalls.callCount === 0,
+    );
+  }
+
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: cipherBusiness.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      },
+    },
+    data: {
+      connectionStatus: "CONNECTED",
+      disconnectedAt: null,
+    },
+  });
+  const expiredApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Expired Google token",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  const expiredCalls = createFakeSocialPublishingProvider();
+  expiredCalls.setExpiredNext(true);
+  const expiredResult = await publishMarketingContentToSocial(
+    prisma,
+    cipherAccess,
+    {
+      contentId: expiredApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      expectedUpdatedAt: expiredApproved.updatedAt,
+    },
+    { provider: expiredCalls },
+  );
+  const expiredRow = await prisma.marketingSocialDestination.findFirst({
+    where: { businessId: cipherBusiness.id, destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE },
+  });
+  const retryAfterExpired = createFakeSocialPublishingProvider();
+  await expectError(
+    "Expired Google token marks NEEDS_RECONNECT and does not retry-post",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        cipherAccess,
+        {
+          contentId: expiredApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: expiredApproved.updatedAt,
+        },
+        { provider: retryAfterExpired },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE &&
+      retryAfterExpired.callCount === 0,
+  );
+  check(
+    "Google 401/expired publish is reconnect needed, FAILED, and not retried",
+    expiredResult.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      expiredResult.published === false &&
+      expiredResult.message === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      expiredCalls.callCount === 1 &&
+      expiredRow?.connectionStatus === "NEEDS_RECONNECT",
   );
 
   console.log("\nTEST — Two-connection liveKey race");

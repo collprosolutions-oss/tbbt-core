@@ -8,11 +8,13 @@ import {
 } from "@/app/actions/marketing";
 import { Button } from "@/components/ui/button";
 import {
+  GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE,
   OWNER_SOCIAL_PUBLISH_MESSAGE,
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
   SOCIAL_PUBLISH_RESOLVE_POSTED,
@@ -36,7 +38,10 @@ export function PublishSocialButton({
 }: {
   contentId: string;
   expectedUpdatedAt: string;
-  destination?: typeof SOCIAL_PUBLISH_DESTINATION_FACEBOOK | typeof SOCIAL_PUBLISH_DESTINATION_INSTAGRAM;
+  destination?:
+    | typeof SOCIAL_PUBLISH_DESTINATION_FACEBOOK
+    | typeof SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
+    | typeof SOCIAL_PUBLISH_DESTINATION_GOOGLE;
   canPublish: boolean;
   destinationConnected: boolean;
   attemptId: string | null;
@@ -117,12 +122,18 @@ export function PublishSocialButton({
     );
   }
 
-  const retryLabel = destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
-    ? "Retry Instagram publish"
-    : "Retry Facebook publish";
-  const publishLabel = destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
-    ? "Publish to Instagram"
-    : "Publish to Facebook";
+  const retryLabel =
+    destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+      ? "Retry Google Business Profile publish"
+      : destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
+        ? "Retry Instagram publish"
+        : "Retry Facebook publish";
+  const publishLabel =
+    destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+      ? "Publish to Google Business Profile"
+      : destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
+        ? "Publish to Instagram"
+        : "Publish to Facebook";
 
   return (
     <form action={formAction} className="space-y-1">
@@ -132,6 +143,9 @@ export function PublishSocialButton({
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Publishing…" : failed ? retryLabel : publishLabel}
       </Button>
+      {destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE ? (
+        <p className="text-xs text-muted-foreground">{GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE}</p>
+      ) : null}
       {failureText ? <p className="text-xs text-destructive">{failureText}</p> : null}
     </form>
   );

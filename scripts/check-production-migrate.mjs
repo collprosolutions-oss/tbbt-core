@@ -5,7 +5,7 @@
  *   node scripts/check-production-migrate.mjs
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2099,6 +2099,24 @@ check(
     !payrollConnectOps.includes("ALTER TABLE") &&
     payrollConnectOps.includes("ensurePayrollConnectSchema") &&
     payrollConnectOps.includes("FOR UPDATE"),
+);
+const marketingConnectionsSchema = readFileSync(
+  new URL("../prisma/schema.prisma", import.meta.url),
+  "utf8",
+);
+check(
+  "Google local-post binding uses #347 externalAccountId and does not add accountId",
+  !existsSync(
+    new URL(
+      "../prisma/migrations/20261003234500_google_local_post_account_binding/migration.sql",
+      import.meta.url,
+    ),
+  ) &&
+    !localNames.includes("20261003234500_google_local_post_account_binding") &&
+    marketingConnectionsSchema.includes("externalAccountId") &&
+    !/model MarketingSocialDestination[\s\S]*?accountId\s+String[\s\S]*?@@unique\(\[destination, pageId\]\)/.test(
+      marketingConnectionsSchema,
+    ),
 );
 
 const projectDocumentReviewMigration = readFileSync(

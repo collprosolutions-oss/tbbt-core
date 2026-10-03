@@ -3334,16 +3334,20 @@ model MarketingContent {
   @@index([campaignId])
 }
 
-/// One social destination per business. FACEBOOK and INSTAGRAM publish
-/// are implemented OWNER post paths. Google can be connected by the
-/// OWNER; its publish path stays unavailable. accessToken is the legacy
-/// plaintext column. New writes leave it empty and store ciphertext.
-/// Page loads must not select either token column.
+/// One social destination per business. FACEBOOK, INSTAGRAM, and GOOGLE
+/// publish paths are implemented. accessToken is the legacy plaintext
+/// column. New writes leave it empty and store ciphertext. Page loads
+/// must not select either token column. A Google location is bound to
+/// this business via externalAccountId (`accounts/{id}`) plus pageId
+/// (`accounts/{accountId}/locations/{locationId}`).
 model MarketingSocialDestination {
   id          String   @id @default(cuid())
   businessId  String
   /// FACEBOOK | INSTAGRAM | GOOGLE
   destination String
+  /// Facebook Page id, Instagram professional id, or Google
+  /// accounts/{accountId}/locations/{locationId}. Google account
+  /// binding uses externalAccountId (`accounts/{id}`) plus this pageId.
   pageId      String
   /// Legacy plaintext Page token. Empty after an encrypted connect.
   accessToken String
