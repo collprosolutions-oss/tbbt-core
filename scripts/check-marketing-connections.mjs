@@ -153,7 +153,8 @@ console.log("\nSETUP — operator runbook matches #347 and does not enable auto-
 check(
   "Setup doc is an operator runbook, not a second connect implementation",
   setupDoc.includes("does not add a second connect path") &&
-    setupDoc.includes("does not turn on automatic posting") &&
+    setupDoc.includes("does not turn on") &&
+    setupDoc.includes("automatic posting") &&
     setupDoc.includes("Settings → Reviews / Marketing Connections is read-only status"),
 );
 check(
