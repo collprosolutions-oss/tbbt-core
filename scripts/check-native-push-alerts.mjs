@@ -7,7 +7,8 @@
  * and material-reschedule alerts, reassignment, deactivation revoke,
  * tenant isolation, provider retries, and duplicate suppression. Payloads
  * stay informational and never include a customer address or access code.
- * No real Expo/FCM/APNs send.
+ * Expo Push is the connected provider; this suite uses a fetch stand-in
+ * and never calls the live Expo host. Real-device delivery is UNVERIFIED.
  *
  * Run with:
  *   npm run test:native-push-alerts
@@ -37,6 +38,12 @@ process.env.TBBT_NATIVE_PUSH_TEST_FLUSH = "1";
 const { writeAssignedMembershipAndLaneWindows } = await import("@/lib/job-assignment-ops");
 const { writeTeamMemberActive } = await import("@/lib/team-member-active-ops");
 const {
+  DISCONNECTED_NATIVE_PUSH_PROVIDER,
+  EXPO_NATIVE_PUSH_PROVIDER,
+  EXPO_PUSH_API_ORIGIN,
+  EXPO_PUSH_SEND_PATH,
+  EXPO_PUSH_SEND_URL,
+  EXPO_PUSH_TOKEN_PATTERN,
   FAKE_NATIVE_PUSH_PROVIDER,
   NATIVE_PUSH_ALERT_DISCLAIMER,
   NATIVE_PUSH_DEVICE_NOT_OWNED,
@@ -48,11 +55,17 @@ const {
   NATIVE_PUSH_SEND_TIMEOUT_MS,
   assignmentAlertIdempotencyKey,
   buildNativePushAlertPayload,
+  createExpoNativePushProvider,
   createFakeNativePushProvider,
+  expoPushMessageFromAlert,
   flushNativePushNotifies,
+  getNativePushProvider,
   hashNativePushDeviceToken,
+  isExpoNativePushConfigured,
+  isExpoPushToken,
   isFakeNativePushAdapterEnabled,
   isHandymanJobForNativePush,
+  isNativePushConfigured,
   listNativePushPreference,
   nativePushAlertAction,
   nativePushPayloadHasForbiddenFields,
@@ -60,6 +73,7 @@ const {
   notifyHandymanJobRescheduled,
   registerNativePushDevice,
   rescheduleAlertIdempotencyKey,
+  resetNativePushProvider,
   resetNativePushSchemaEnsure,
   retryNativePushDelivery,
   revokeNativePushDevice,
@@ -116,13 +130,21 @@ const loaderSrc = readRepo("scripts/ts-alias-loader.mjs");
 const passwordResetSrc = readRepo("src/lib/password-reset.ts");
 const authSrc = readRepo("src/lib/auth.ts");
 const fakeSrc = readRepo("src/lib/native-push/fake.ts");
+const expoSrc = readRepo("src/lib/native-push/expo.ts");
+const providerSrc = readRepo("src/lib/native-push/provider.ts");
 const nativeApi = readRepo("apps/native/src/api.ts");
 const todaySrc = readRepo("apps/native/src/screens/TodayScreen.tsx");
 const appSrc = readRepo("apps/native/App.tsx");
+const pushTokenSrc = readRepo("apps/native/src/push-token.ts");
+const nativeSessionSrc = readRepo("apps/native/src/session.ts");
 const settingsSrc = readRepo("src/components/settings/settings-workspace.tsx");
 const nativePkg = readRepo("apps/native/package.json");
+const nativeEnvExample = readRepo("apps/native/.env.example");
+const gitignore = readRepo(".gitignore");
+const docsSrc = readRepo("docs/NATIVE_FIELD.md");
 const envExample = readRepo(".env.example");
 const checkSrc = readRepo("scripts/check-native-push-alerts.mjs");
+const preflightSrc = readRepo("src/lib/founder-production-preflight.ts");
 
 console.log("\nSTATIC — informational alerts, no real push, reserved migration");
 
@@ -160,8 +182,27 @@ check(
   "Fake adapter cannot enable in Vercel production",
   configSrc.includes('process.env.VERCEL_ENV === "production"') &&
     configSrc.includes("return false") &&
-    configSrc.includes("never talks to Expo, FCM, or APNs") &&
-    envExample.includes("TBBT_NATIVE_PUSH_ADAPTER=fake"),
+    envExample.includes("TBBT_NATIVE_PUSH_ADAPTER=fake") &&
+    envExample.includes("EXPO_ACCESS_TOKEN") &&
+    !/\nEXPO_ACCESS_TOKEN=[^\n"]+/.test(`\n${envExample}`) &&
+    gitignore.includes(".env*") &&
+    gitignore.includes("!.env.example") &&
+    preflightSrc.includes('"EXPO_ACCESS_TOKEN"'),
+);
+check(
+  "Expo Push is the connected provider behind EXPO_ACCESS_TOKEN",
+  configSrc.includes("EXPO_NATIVE_PUSH_PROVIDER") &&
+    configSrc.includes("getExpoAccessToken") &&
+    providerSrc.includes("createExpoNativePushProvider") &&
+    providerSrc.includes("isExpoNativePushConfigured") &&
+    expoSrc.includes(EXPO_PUSH_API_ORIGIN) &&
+    expoSrc.includes(EXPO_PUSH_SEND_PATH) &&
+    expoSrc.includes("Bearer") &&
+    expoSrc.includes("nativePushPayloadHasForbiddenFields") &&
+    expoSrc.includes("isExpoPushToken") &&
+    EXPO_PUSH_SEND_URL === "https://exp.host/--/api/v2/push/send" &&
+    !expoSrc.includes("fcm.googleapis.com") &&
+    !expoSrc.includes("api.push.apple.com"),
 );
 check(
   "Payload builder is informational and omits address/access",
@@ -248,12 +289,40 @@ check(
     !routeSrc.includes("searchParams.get(\"token\")"),
 );
 check(
-  "Native UI and owner settings stay informational; no Expo push SDK",
+  "Native UI stays informational; Expo token registration does not start time",
   todaySrc.includes("never starts your time or accepts an appointment") &&
     nativeApi.includes("/api/native/v1/push-devices") &&
     settingsSrc.includes("Worker assignment alerts are opted in on the field app") &&
-    !nativePkg.includes("expo-notifications") &&
-    !notifySrc.includes("notifyTeamEvents"),
+    nativePkg.includes("expo-notifications") &&
+    nativeSessionSrc.includes("readExpoPushToken") &&
+    pushTokenSrc.includes("getExpoPushTokenAsync") &&
+    pushTokenSrc.includes("jobIdFromNativePushNotification") &&
+    pushTokenSrc.includes(String(EXPO_PUSH_TOKEN_PATTERN)) &&
+    appSrc.includes("jobIdFromNativePushNotification") &&
+    appSrc.includes("addNotificationResponseReceivedListener") &&
+    !appSrc.includes("startNativeJob") &&
+    !notifySrc.includes("notifyTeamEvents") &&
+    nativeEnvExample.includes("EXPO_PUBLIC_PROJECT_ID") &&
+    !nativeEnvExample.includes("EXPO_ACCESS_TOKEN") &&
+    todaySrc.includes("requestPermission: turningOn") &&
+    !todaySrc.includes("nativePushPlatform") &&
+    !checkSrc.includes("android-debug-apk") &&
+    !checkSrc.includes("usesCleartextTraffic"),
+);
+check(
+  "Docs mark real-device Expo delivery UNVERIFIED",
+  docsSrc.includes("UNVERIFIED") &&
+    docsSrc.includes("EXPO_ACCESS_TOKEN") &&
+    docsSrc.includes("never includes a customer address or access code"),
+);
+check(
+  "Fake-provider proofs still cover revoke, opt-out, inactive membership, reassignment, and delivery failure",
+  checkSrc.includes("Worker can revoke their own device token") &&
+    checkSrc.includes("Revoked / opted-out worker does not receive an assignment alert") &&
+    checkSrc.includes("Deactivation revokes every device token on that membership") &&
+    checkSrc.includes("Inactive membership cannot register a new device token") &&
+    checkSrc.includes("Reassignment alerts only the new worker") &&
+    checkSrc.includes("Assignment still commits when the fake provider rejects"),
 );
 check(
   "Test harness refuses a non-localhost DATABASE_URL before connecting",
@@ -277,6 +346,169 @@ process.env.VERCEL_ENV = previousVercel ?? "";
 if (!previousVercel) delete process.env.VERCEL_ENV;
 process.env.TBBT_NATIVE_PUSH_ADAPTER = "fake";
 check("Non-production fake adapter can be enabled for scripts", isFakeNativePushAdapterEnabled() === true);
+
+const previousExpoToken = process.env.EXPO_ACCESS_TOKEN;
+process.env.EXPO_ACCESS_TOKEN = "expo_test_access_token_not_real";
+resetNativePushProvider();
+check("Fake adapter still wins over Expo credentials in non-production", getNativePushProvider().id === FAKE_NATIVE_PUSH_PROVIDER);
+delete process.env.TBBT_NATIVE_PUSH_ADAPTER;
+resetNativePushProvider();
+check("Expo credentials connect the Expo adapter when fake is off", getNativePushProvider().id === EXPO_NATIVE_PUSH_PROVIDER && isExpoNativePushConfigured() === true && isNativePushConfigured() === true);
+process.env.VERCEL_ENV = "production";
+process.env.TBBT_NATIVE_PUSH_ADAPTER = "fake";
+resetNativePushProvider();
+check(
+  "Production with Expo credentials uses Expo, not fake",
+  isFakeNativePushAdapterEnabled() === false && getNativePushProvider().id === EXPO_NATIVE_PUSH_PROVIDER,
+);
+delete process.env.EXPO_ACCESS_TOKEN;
+resetNativePushProvider();
+check(
+  "Production without Expo credentials stays disconnected",
+  getNativePushProvider().id === DISCONNECTED_NATIVE_PUSH_PROVIDER &&
+    getNativePushProvider().connected === false &&
+    isNativePushConfigured() === false,
+);
+if (previousVercel) process.env.VERCEL_ENV = previousVercel;
+else delete process.env.VERCEL_ENV;
+if (previousExpoToken == null) delete process.env.EXPO_ACCESS_TOKEN;
+else process.env.EXPO_ACCESS_TOKEN = previousExpoToken;
+process.env.TBBT_NATIVE_PUSH_ADAPTER = "fake";
+resetNativePushProvider();
+
+const expoToken = "ExponentPushToken[tbbt-test-device]";
+check("Expo token helper accepts official Expo token shapes", isExpoPushToken(expoToken) && isExpoPushToken("ExpoPushToken[abc]") && !isExpoPushToken("device-token-ava"));
+const samplePayload = buildNativePushAlertPayload({ kind: "JOB_ASSIGNED", jobId: "job_expo" });
+const expoMessage = expoPushMessageFromAlert({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: samplePayload,
+});
+check(
+  "Expo message data is job id + flags only",
+  expoMessage.data.jobId === "job_expo" &&
+    expoMessage.data.informational === true &&
+    expoMessage.data.startsTime === false &&
+    expoMessage.data.acceptsAppointment === false &&
+    !Object.prototype.hasOwnProperty.call(expoMessage.data, "address") &&
+    !Object.prototype.hasOwnProperty.call(expoMessage.data, "propertyAccessInstructions") &&
+    !JSON.stringify(expoMessage).includes("address") &&
+    !JSON.stringify(expoMessage).includes("accessCode"),
+);
+
+let expoFetches = 0;
+let lastExpoUrl = "";
+let lastExpoHeaders = {};
+let lastExpoBody = "";
+const expoTicketId = "expo-ticket-test-1";
+const expo = createExpoNativePushProvider(
+  { accessToken: "expo_test_access_token_not_real" },
+  async (url, init) => {
+    expoFetches += 1;
+    lastExpoUrl = url;
+    lastExpoHeaders = init.headers;
+    lastExpoBody = init.body;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { data: [{ status: "ok", id: expoTicketId }] };
+      },
+    };
+  },
+);
+const expoSent = await expo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: samplePayload,
+});
+check("Expo adapter reports SENT with the provider ticket id", expoSent.ok && expoSent.status === "SENT" && expoSent.providerMessageId === expoTicketId);
+check(
+  "Expo send uses the official host, Bearer token, and no address/access",
+  lastExpoUrl === EXPO_PUSH_SEND_URL &&
+    lastExpoHeaders.Authorization === "Bearer expo_test_access_token_not_real" &&
+    lastExpoHeaders["Content-Type"] === "application/json" &&
+    !lastExpoBody.includes("address") &&
+    !lastExpoBody.includes("accessCode") &&
+    !lastExpoBody.includes("42 Secret Garden") &&
+    lastExpoBody.includes(expoToken) &&
+    lastExpoBody.includes(samplePayload.jobId),
+);
+
+const expoFetchesAfterOk = expoFetches;
+const localTokenFailed = await expo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "oken",
+  deviceToken: "device-token-not-expo",
+  payload: samplePayload,
+});
+check(
+  "Non-Expo token is refused without calling Expo",
+  localTokenFailed.ok === false &&
+    localTokenFailed.status === "FAILED" &&
+    expoFetches === expoFetchesAfterOk,
+);
+
+const forbiddenFailed = await expo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: { ...samplePayload, address: "42 Secret Garden" },
+});
+check(
+  "Forbidden address field is refused without calling Expo",
+  forbiddenFailed.ok === false &&
+    forbiddenFailed.status === "FAILED" &&
+    expoFetches === expoFetchesAfterOk &&
+    /forbidden/i.test(forbiddenFailed.error),
+);
+
+const failingExpo = createExpoNativePushProvider(
+  { accessToken: "expo_test_access_token_not_real" },
+  async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        data: [{ status: "error", message: "Device not registered", details: { error: "DeviceNotRegistered" } }],
+      };
+    },
+  }),
+);
+const expoFailed = await failingExpo.send({
+  businessId: "biz",
+  membershipId: "mem",
+  jobId: samplePayload.jobId,
+  kind: samplePayload.kind,
+  deviceId: "dev",
+  tokenLast4: "vice",
+  deviceToken: expoToken,
+  payload: samplePayload,
+});
+check(
+  "Expo DeviceNotRegistered is recorded as FAILED",
+  expoFailed.ok === false && expoFailed.status === "FAILED" && /no longer registered/i.test(expoFailed.error),
+);
+
+console.log("  note - Real-device Expo delivery is UNVERIFIED until a physical device is available.");
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) {
@@ -522,6 +754,55 @@ try {
       fake.sent[0].provider === undefined,
   );
   check("Fake provider id is recorded, not a vendor", fake.id === FAKE_NATIVE_PUSH_PROVIDER);
+
+  const expoDeviceToken = "ExponentPushToken[tbbt-ava-assignment]";
+  const expoRegistered = await registerNativePushDevice(prisma, accessA, {
+    token: expoDeviceToken,
+    platform: "expo",
+    optedIn: true,
+  });
+  let expoNotifyFetches = 0;
+  let expoNotifyBody = "";
+  const expoNotify = createExpoNativePushProvider(
+    { accessToken: "expo_test_access_token_not_real" },
+    async (_url, init) => {
+      expoNotifyFetches += 1;
+      expoNotifyBody = init.body;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { data: [{ status: "ok", id: "expo-ticket-assignment-1" }] };
+        },
+      };
+    },
+  );
+  setNativePushProvider(expoNotify);
+  const expoAssignJob = await createHandymanJob("expo-assign");
+  const expoAssigned = await writeAssignedMembershipAndLaneWindows(prisma, {
+    businessId: businessA.id,
+    job: expoAssignJob,
+    nextAssignedMembershipId: memberA.id,
+    actorMembershipId: ownerMembership.id,
+  });
+  const expoDelivery = await prisma.nativePushDelivery.findFirst({
+    where: { jobId: expoAssignJob.id, kind: "JOB_ASSIGNED" },
+  });
+  check("OWNER assignment through Expo still commits", !expoAssigned?.error);
+  check(
+    "Opted-in Expo token is sent once through the official Expo path",
+    expoAssigned &&
+      expoNotifyFetches === 1 &&
+      expoDelivery?.status === "SENT" &&
+      expoDelivery?.provider === EXPO_NATIVE_PUSH_PROVIDER &&
+      expoNotifyBody.includes(expoDeviceToken) &&
+      expoNotifyBody.includes(expoAssignJob.id) &&
+      !expoNotifyBody.includes("42 Secret Garden") &&
+      !expoNotifyBody.includes("4821") &&
+      !expoNotifyBody.includes("accessCode"),
+  );
+  await revokeNativePushDevice(prisma, accessA, { token: expoDeviceToken });
+  setNativePushProvider(fake);
 
   const duplicateAssign = await notifyHandymanJobAssigned(prisma, {
     businessId: businessA.id,

@@ -124,14 +124,17 @@ function JobAlertsCard({
     if (busy) return;
     setBusy(true);
     try {
-      const deviceToken = await readOrCreateNativePushDeviceToken();
-      const result = preference?.thisDeviceOptedIn
-        ? await revokeNativePushDevice(token, deviceToken)
-        : await registerNativePushDevice(token, {
+      const turningOn = !preference?.thisDeviceOptedIn;
+      const deviceToken = await readOrCreateNativePushDeviceToken({
+        requestPermission: turningOn,
+      });
+      const result = turningOn
+        ? await registerNativePushDevice(token, {
             token: deviceToken,
             platform: nativePushPlatform(Platform.OS),
             optedIn: true,
-          });
+          })
+        : await revokeNativePushDevice(token, deviceToken);
       if (isApiError(result)) {
         if (isSessionExpired(result)) {
           onSessionExpired();

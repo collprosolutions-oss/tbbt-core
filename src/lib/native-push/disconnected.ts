@@ -6,8 +6,8 @@ import type {
 } from "@/lib/native-push/types";
 
 /**
- * Default adapter. Does not talk to Expo, FCM, or APNs and never
- * reports SENT. Used in production and whenever the fake adapter is off.
+ * Default adapter when Expo credentials are missing and the fake adapter
+ * is off. Does not talk to Expo, FCM, or APNs and never reports SENT.
  */
 export function createDisconnectedNativePushProvider(): NativePushProvider {
   return {

@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { readExpoPushToken, requestNativeJobAlertPermission } from "./push-token";
 
 const TOKEN_KEY = "tbbt.native.session.token";
 const DEVICE_TOKEN_KEY = "tbbt.native.push.device-token";
@@ -21,7 +22,15 @@ function randomDeviceToken() {
     .join("");
 }
 
-export async function readOrCreateNativePushDeviceToken() {
+export async function readOrCreateNativePushDeviceToken(options?: { requestPermission?: boolean }) {
+  if (options?.requestPermission) {
+    await requestNativeJobAlertPermission();
+  }
+  const expoToken = await readExpoPushToken();
+  if (expoToken) {
+    await SecureStore.setItemAsync(DEVICE_TOKEN_KEY, expoToken);
+    return expoToken;
+  }
   const existing = await SecureStore.getItemAsync(DEVICE_TOKEN_KEY);
   if (existing && existing.length >= 8) return existing;
   const token = randomDeviceToken();
