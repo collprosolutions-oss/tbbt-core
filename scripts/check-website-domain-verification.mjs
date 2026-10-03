@@ -29,10 +29,12 @@ const {
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS,
   WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
+  websiteDomainApexATargetsLabel,
   buildPublicSitemap,
   defaultWebsiteDomainDnsLookup,
   dnsRecordsPointAtTbbt,
   getWebsiteDomainDnsLookup,
+  isVercelApexAddress,
   isVercelDnsCname,
   loadWebsiteDomainVerification,
   publishWebsite,
@@ -119,7 +121,10 @@ const hostsSrc = read("src/lib/website-engine/hosts.ts");
 const sitemapSrc = read("src/lib/website-engine/sitemap.ts");
 const settingsPage = read("src/app/(app)/settings/page.tsx");
 const settingsWorkspace = read("src/components/settings/settings-workspace.tsx");
+const settingsCard = read("src/components/settings/website-domain-verification.tsx");
 const goLiveData = read("src/lib/go-live-data.ts");
+const readme = read("README.md");
+const certification = read("docs/PRODUCTION_CERTIFICATION.md");
 check(
   "Verification never writes DNS, publish, or stored VERIFIED from text",
   verificationSrc.includes("Never writes DNS") &&
@@ -145,8 +150,25 @@ check(
     !sitemapSrc.includes("verifyHostnameForBusiness"),
 );
 check(
+  "Website Publish instructions use the same apex A targets as verification",
+  settingsCard.includes("websiteDomainApexATargetsLabel") &&
+    websiteDomainApexATargetsLabel() === [...WEBSITE_DOMAIN_VERCEL_A_ADDRESSES].join(" / ") &&
+    WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("216.198.79.1") &&
+    !WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("76.76.21.21") &&
+    !WEBSITE_DOMAIN_VERCEL_A_ADDRESSES.includes("76.76.21.22") &&
+    !settingsCard.includes("76.76.21.21") &&
+    !settingsCard.includes("76.76.21.22") &&
+    readme.includes("`216.198.79.1`") &&
+    certification.includes("`216.198.79.1`") &&
+    !readme.includes("76.76.21.") &&
+    !certification.includes("76.76.21."),
+);
+check(
   "Display matching accepts Vercel apex A and project CNAMEs",
-  dnsRecordsPointAtTbbt({ cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] }) &&
+  isVercelApexAddress("216.198.79.1") &&
+    !isVercelApexAddress("76.76.21.21") &&
+    !isVercelApexAddress("76.76.21.22") &&
+    dnsRecordsPointAtTbbt({ cnames: [], addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]] }) &&
     dnsRecordsPointAtTbbt({
       cnames: [],
       addresses: [...WEBSITE_DOMAIN_VERCEL_A_ADDRESSES],
@@ -157,7 +179,8 @@ check(
       cnames: [WEBSITE_DOMAIN_DNS_CNAME_TARGET],
       addresses: [WEBSITE_DOMAIN_VERCEL_A_ADDRESSES[0]],
     }) &&
-    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }),
+    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["203.0.113.10"] }) &&
+    !dnsRecordsPointAtTbbt({ cnames: [], addresses: ["76.76.21.21"] }),
 );
 check(
   "A single good record cannot verify a host that also has a hostile record",

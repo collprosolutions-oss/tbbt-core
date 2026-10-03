@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { websiteDomainApexATargetsLabel } from "@/lib/website-engine/domain-dns-targets";
 import type { WebsiteDomainVerification } from "@/lib/website-engine/domain-verification";
 
 function statusVariant(state: WebsiteDomainVerification["state"]) {
@@ -21,7 +22,7 @@ export function WebsiteDomainVerificationCard({
           <p className="text-xs text-muted-foreground">
             Read-only OWNER check of the newest binding. Every CNAME and A
             record must point at TBBT — a Vercel CNAME, project vercel-dns
-            target, or apex A at 76.76.21.21 / 76.76.21.22. This does not
+            target, or apex A at {websiteDomainApexATargetsLabel()}. This does not
             change DNS, publish the website, or mark a typed website URL as
             connected. Public routing still uses the stored host status.
           </p>

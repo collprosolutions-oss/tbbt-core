@@ -13,6 +13,16 @@ import type { BusinessAccess } from "@/lib/access";
 import { ForbiddenError, requireBusinessRole } from "@/lib/authorization";
 import { getAppUrl } from "@/lib/mail";
 import { firstHeaderHost } from "@/lib/vercel-app-host";
+import {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
+} from "@/lib/website-engine/domain-dns-targets";
+
+export {
+  WEBSITE_DOMAIN_DNS_CNAME_TARGET,
+  WEBSITE_DOMAIN_VERCEL_A_ADDRESSES,
+  websiteDomainApexATargetsLabel,
+} from "@/lib/website-engine/domain-dns-targets";
 
 export function normalizeHostname(host: string | null | undefined) {
   return (host ?? "").trim().toLowerCase().replace(/:\d+$/, "");
@@ -29,11 +39,6 @@ export function hostnameFromPublicWebsite(value: string | null | undefined) {
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;
-
-export const WEBSITE_DOMAIN_DNS_CNAME_TARGET = "cname.vercel-dns.com";
-
-/** Public Vercel apex A records used for display matching only. */
-export const WEBSITE_DOMAIN_VERCEL_A_ADDRESSES = ["76.76.21.21", "76.76.21.22"] as const;
 
 export const WEBSITE_DOMAIN_DNS_LOOKUP_TIMEOUT_MS = 3000;
 
