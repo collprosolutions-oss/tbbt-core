@@ -29,6 +29,7 @@ import {
   type GoLiveInput,
 } from "@/lib/go-live";
 import { verifyHostnameForBusiness } from "@/lib/website-engine/domain-verification";
+import { readGustoGoLiveSnapshot } from "@/lib/payroll-connect/view";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -70,7 +71,7 @@ export async function loadGoLiveDomainState(
 }
 
 export async function loadGoLiveInput(db: Db, businessId: string): Promise<GoLiveInput> {
-  const [business, saas, payment, domain] = await Promise.all([
+  const [business, saas, payment, domain, gustoPayroll] = await Promise.all([
     db.business.findFirst({
       where: { id: businessId },
       select: { id: true, operationalSmsNumber: true },
@@ -78,6 +79,7 @@ export async function loadGoLiveInput(db: Db, businessId: string): Promise<GoLiv
     loadSaasBillingSnapshot(db as PrismaClient, businessId),
     getBusinessPaymentStatus(db, businessId),
     loadGoLiveDomainState(db, businessId),
+    readGustoGoLiveSnapshot(db, businessId),
   ]);
   if (!business || business.id !== businessId) {
     throw new Error("Business was not found.");
@@ -106,6 +108,7 @@ export async function loadGoLiveInput(db: Db, businessId: string): Promise<GoLiv
     },
     aiConnected: isAiProviderConnected(),
     domain,
+    gustoPayroll,
   };
 }
 

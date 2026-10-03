@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { PayrollProviderPanel } from "@/components/payroll/payroll-provider-panel";
 import { PayrollWorkspace } from "@/components/payroll/payroll-workspace";
 import type { PayrollKpi, PayrollReviewItem, PayrollWorkspaceData } from "@/components/payroll/types";
 import { FounderDesignRoot } from "@/components/founder-design/root";
@@ -7,7 +8,7 @@ import { KpiCardsLayout } from "@/components/founder-design/kpi-cards-layout";
 import { TunableKpiCard } from "@/components/founder-design/tunable-kpi-card";
 import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
-import { requireManagementPageAccess } from "@/lib/access";
+import { requireManagementPageAccess, type BusinessAccess } from "@/lib/access";
 import { resolveBusinessTimeZone } from "@/lib/business-timezone";
 import { roleHasCapability, CAPABILITIES } from "@/lib/authorization";
 import { checkFounderAccess } from "@/lib/founder-access";
@@ -23,6 +24,11 @@ import {
   type PayrollRunStatus,
 } from "@/lib/payroll";
 import { payrollItemExceptions, refreshPayrollRunIfUnlocked } from "@/lib/payroll-ops";
+import {
+  loadPayrollConnectView,
+  payrollConnectPublicMessage,
+} from "@/lib/payroll-connect";
+import { isRequestPathSchemaUnavailableError } from "@/lib/payroll-connect/schema";
 import { prisma } from "@/lib/prisma";
 import { addDays, formatISODate } from "@/lib/schedule";
 import { formatDurationClock } from "@/lib/time-cards";
@@ -39,7 +45,7 @@ function asNumber(value: { toString(): string } | null | undefined): number | nu
 export default async function PayrollPage({
   searchParams,
 }: {
-  searchParams: Promise<{ run?: string; item?: string; start?: string; end?: string }>;
+  searchParams: Promise<{ run?: string; item?: string; start?: string; end?: string; gusto?: string }>;
 }) {
   const access = await requireManagementPageAccess();
   const timeZone = resolveBusinessTimeZone(access.workspace.business);
@@ -303,8 +309,9 @@ export default async function PayrollPage({
     <PageContainer width="2xl">
       <PageHeader
         title="Payroll"
-        description="Review approved time cards, check readiness, and authorize a payroll run. TBBT does not move money or calculate taxes."
+        description="Review approved time cards, check readiness, and authorize a payroll run. TBBT does not move money, calculate taxes, or calculate net pay."
       />
+      <PayrollConnectSection access={access} gustoNotice={params.gusto} />
 
       <FounderDesignRoot
         pageKey="payroll"
@@ -336,4 +343,34 @@ export default async function PayrollPage({
       </FounderDesignRoot>
     </PageContainer>
   );
+}
+
+const GUSTO_PAGE_NOTICES: Record<string, string> = {
+  connected: "Gusto token exchange and token info succeeded. Imported facts are provider-reported, not verified bank movement.",
+  denied: "Gusto did not grant access.",
+  state: "That connection attempt expired or was already used. Start again.",
+  unavailable: "Gusto is not available until partner approval and credentials are set.",
+  forbidden: "Only an owner can connect payroll.",
+  company: "That Gusto company is already connected to another business.",
+  reconnect: "Gusto rejected the saved token. Reconnect is required.",
+  failed: "Gusto connection could not be saved.",
+};
+
+async function PayrollConnectSection({
+  access,
+  gustoNotice,
+}: {
+  access: BusinessAccess;
+  gustoNotice?: string;
+}) {
+  const notice = gustoNotice ? GUSTO_PAGE_NOTICES[gustoNotice] ?? null : null;
+  try {
+    const view = await loadPayrollConnectView(prisma, access);
+    return <PayrollProviderPanel view={view} notice={notice} />;
+  } catch (error) {
+    if (!isRequestPathSchemaUnavailableError(error)) throw error;
+    return (
+      <p className="text-sm text-muted-foreground">{payrollConnectPublicMessage(error)}</p>
+    );
+  }
 }

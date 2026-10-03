@@ -96,6 +96,16 @@ export const INTEGRATION_REGISTRY: readonly IntegrationDefinition[] = [
       "Connected e-sign adapter for OWNER Send of a locked agreement version. Webhooks bind the signed file to that exact business, agreement, and version. Manual upload remains available.",
     settingsHref: "/business-protection?area=agreements",
   },
+  {
+    key: "gusto_payroll",
+    displayName: "Gusto payroll facts",
+    category: "Payroll",
+    requirement: GO_LIVE_CARD_REQUIREMENTS.gusto_payroll,
+    goLiveCapabilityId: "gusto_payroll",
+    description:
+      "Owner-only import of processed Gusto payroll facts for review. Not a payroll run, not a bank withdrawal, and not net pay. A connection is recorded only after token exchange and token info. Missing partner credentials stay unavailable.",
+    settingsHref: "/payroll#gusto-payroll",
+  },
 ];
 
 /**

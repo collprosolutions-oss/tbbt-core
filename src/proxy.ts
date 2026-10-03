@@ -12,6 +12,7 @@ import { isScheduleCalendarFeedPath } from "@/lib/schedule-calendar-subscription
 import { isEsignWebhookPath } from "@/lib/esign/webhook-path";
 import { isMailWebhookPath } from "@/lib/mail-webhook-path";
 import { isPlaidWebhookPath } from "@/lib/plaid-webhook-path";
+import { isGustoPayrollCallbackPath } from "@/lib/payroll-connect/callback-path";
 import { isStripeWebhookPath } from "@/lib/stripe-webhook-path";
 import { tbbtApexWwwRedirectLocation } from "@/lib/tbbt-marketing-host";
 import {
@@ -87,7 +88,8 @@ export function proxy(request: NextRequest) {
     isCustomerMessagingWebhookPath(pathname) ||
     isVoiceWebhookPath(pathname) ||
     isEsignWebhookPath(pathname) ||
-    isMailWebhookPath(pathname)
+    isMailWebhookPath(pathname) ||
+    isGustoPayrollCallbackPath(pathname)
   ) {
     // Vercel may set x-forwarded-host to the primary production domain
     // (www.collproreno.com) while the browser Origin is the custom host
@@ -121,6 +123,6 @@ export const config = {
     // "brand" is public/brand -- static TBBT/business logo assets (see
     // src/lib/business-branding.ts) that must load unauthenticated, same
     // as the other static files already excluded here.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/plaid/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/esign/webhook|api/mail/webhook|api/cron/|api/native/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon.svg|brand/|api/stripe/webhook|api/plaid/webhook|api/customer-messaging/webhook|api/communications/voice-webhook|api/esign/webhook|api/mail/webhook|api/payroll/gusto/callback|api/cron/|api/native/).*)",
   ],
 };

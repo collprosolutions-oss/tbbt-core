@@ -272,6 +272,7 @@ try {
     CAPABILITIES.REQUEST_OFFBOARDING,
     CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
     CAPABILITIES.REVIEW_BANK_RECONCILIATION,
+    CAPABILITIES.CONNECT_PAYROLL_PROVIDER,
   ];
   check(
     "ADMIN has every currently-implemented ordinary business-management capability except OWNER-only capabilities",
@@ -642,6 +643,15 @@ try {
   });
   await expectAllowed("OWNER can pass the bank CSV reconciliation capability gate", () => {
     requireBusinessCapability(ownerA, CAPABILITIES.REVIEW_BANK_RECONCILIATION);
+  });
+  check("OWNER has CONNECT_PAYROLL_PROVIDER", roleHasCapability("OWNER", CAPABILITIES.CONNECT_PAYROLL_PROVIDER));
+  check("ADMIN does not have CONNECT_PAYROLL_PROVIDER", !roleHasCapability("ADMIN", CAPABILITIES.CONNECT_PAYROLL_PROVIDER));
+  check("MEMBER does not have CONNECT_PAYROLL_PROVIDER", !roleHasCapability("MEMBER", CAPABILITIES.CONNECT_PAYROLL_PROVIDER));
+  await expectForbidden("ADMIN cannot pass the payroll provider connection capability gate", () => {
+    requireBusinessCapability(adminA, CAPABILITIES.CONNECT_PAYROLL_PROVIDER);
+  });
+  await expectAllowed("OWNER can pass the payroll provider connection capability gate", () => {
+    requireBusinessCapability(ownerA, CAPABILITIES.CONNECT_PAYROLL_PROVIDER);
   });
 
   console.log("\nTEST 12 — Reports is OWNER/ADMIN-only");

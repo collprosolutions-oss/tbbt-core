@@ -238,6 +238,14 @@ export const CAPABILITIES = {
    * verified bank balance.
    */
   REVIEW_BANK_RECONCILIATION: "REVIEW_BANK_RECONCILIATION",
+  /**
+   * OWNER-only connect, reconnect, disconnect, and import of a payroll
+   * provider (Gusto) that stores reported payroll facts for review.
+   * Does not run payroll, move funds, infer net pay, or mark a bank
+   * cash-out. ADMIN may prepare TBBT payroll runs via MANAGE_PAYROLL
+   * but must not inherit this.
+   */
+  CONNECT_PAYROLL_PROVIDER: "CONNECT_PAYROLL_PROVIDER",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -252,6 +260,7 @@ const OWNER_ONLY_CAPABILITIES = new Set<Capability>([
   CAPABILITIES.REQUEST_OFFBOARDING,
   CAPABILITIES.MANAGE_EXPENSE_RECEIPTS,
   CAPABILITIES.REVIEW_BANK_RECONCILIATION,
+  CAPABILITIES.CONNECT_PAYROLL_PROVIDER,
 ]);
 
 /**

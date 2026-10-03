@@ -2055,6 +2055,51 @@ check(
     localNames.indexOf("20261002193000_esign_signature_request_id") <
       localNames.indexOf("20261003013000_bank_plaid_connection"),
 );
+const payrollProviderConnectionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20261003180000_payroll_provider_connection/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const payrollConnectOps = readFileSync(
+  new URL("../src/lib/payroll-connect/connection.ts", import.meta.url),
+  "utf8",
+);
+check(
+  "Gusto payroll connection migration is additive, idempotent, and after the bank stamp",
+  !/DROP TABLE|DROP COLUMN|DELETE FROM|TRUNCATE/i.test(payrollProviderConnectionMigration) &&
+    payrollProviderConnectionMigration.includes('CREATE TABLE IF NOT EXISTS "PayrollConnection"') &&
+    payrollProviderConnectionMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "PayrollConnectionOAuthState"',
+    ) &&
+    payrollProviderConnectionMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "PayrollProviderPayrollFact"',
+    ) &&
+    payrollProviderConnectionMigration.includes(
+      'CREATE TABLE IF NOT EXISTS "PayrollProviderPayrollFactLine"',
+    ) &&
+    payrollProviderConnectionMigration.includes("IF NOT EXISTS") &&
+    payrollProviderConnectionMigration.includes("PayrollConnection_businessId_fkey") &&
+    payrollProviderConnectionMigration.includes(
+      "PayrollConnection_provider_externalCompanyId_active_key",
+    ) &&
+    payrollProviderConnectionMigration.includes("20261003180000") &&
+    !payrollProviderConnectionMigration.includes('ALTER TABLE "PayrollRun"') &&
+    !payrollProviderConnectionMigration.includes('ALTER TABLE "Payment"') &&
+    localNames.includes("20261003180000_payroll_provider_connection") &&
+    localNames.includes("20261003013000_bank_plaid_connection") &&
+    localNames.indexOf("20261003013000_bank_plaid_connection") <
+      localNames.indexOf("20261003180000_payroll_provider_connection"),
+);
+check(
+  "Gusto payroll connection ops do not run request-time DDL",
+  !payrollConnectOps.includes("$executeRawUnsafe") &&
+    !payrollConnectOps.includes("CREATE TABLE") &&
+    !payrollConnectOps.includes("ALTER TABLE") &&
+    payrollConnectOps.includes("ensurePayrollConnectSchema") &&
+    payrollConnectOps.includes("FOR UPDATE"),
+);
 
 const projectDocumentReviewMigration = readFileSync(
   new URL(

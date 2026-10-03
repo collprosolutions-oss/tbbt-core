@@ -52,6 +52,7 @@
     "test:time-cards": "node --experimental-strip-types scripts/check-time-cards.mjs",
     "test:time-correction-requests": "node --experimental-strip-types scripts/check-time-correction-requests.mjs",
     "test:payroll": "node --experimental-strip-types scripts/check-payroll.mjs",
+    "test:payroll-connect": "node --experimental-strip-types scripts/check-payroll-connect.mjs",
     "test:reports": "node --experimental-strip-types scripts/check-reports.mjs",
     "test:monthly-goals": "node --experimental-strip-types scripts/check-monthly-goals.mjs",
     "test:bsos": "node --experimental-strip-types scripts/check-bsos.mjs",
