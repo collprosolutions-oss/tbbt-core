@@ -40,7 +40,7 @@ export function evaluateNeonCliVersion(text, minimum = MIN_NEON_CLI_VERSION) {
     return {
       ok: false,
       version: null,
-      reason: `Neon CLI is missing. Upgrade to ${minimum} or newer (needed for --no-secrets), then retry. Stop otherwise.`,
+      reason: `Neon CLI is missing. Upgrade first to ${minimum} or newer (needed for --no-secrets), then retry. Stop otherwise.`,
     };
   }
   const parsed = parseNeonCliVersion(raw);
@@ -49,7 +49,7 @@ export function evaluateNeonCliVersion(text, minimum = MIN_NEON_CLI_VERSION) {
     return {
       ok: false,
       version: parsed?.text ?? null,
-      reason: `Neon CLI version output was unreadable (${JSON.stringify(raw.slice(0, 80))}). Upgrade to ${minimum} or newer (needed for --no-secrets), then retry. Stop otherwise.`,
+      reason: `Neon CLI version output was unreadable (${JSON.stringify(raw.slice(0, 80))}). Upgrade first to ${minimum} or newer (needed for --no-secrets), then retry. Stop otherwise.`,
     };
   }
   if (compareParsed(parsed, min) < 0) {

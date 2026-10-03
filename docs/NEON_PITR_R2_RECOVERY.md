@@ -220,9 +220,9 @@ Time Travel in the Neon Console SQL Editor on `$ROOT_BRANCH` at `T` is
 read-only and prints no connection URI. Prefer that.
 
 A bare `neon connection-string` always prints the role password
-(`--no-secrets` is not documented on that command). Do **not** write
-`psql "$(neon connection-string …)"` — command substitution puts the
-password on the next argv and in shell history.
+(`--no-secrets` is not documented on that command). Do **not** wrap
+that command in `$(…)` / command substitution — that puts the password
+on the next argv and in shell history.
 
 To open the **verify** branch without printing secrets into history or
 logs, let the CLI start psql (no `$(…)` wrap, no `set -x`, no paste

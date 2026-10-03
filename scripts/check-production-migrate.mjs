@@ -2208,6 +2208,8 @@ check(
     hostedRecovery.includes("Upgrade first") &&
     hostedRecovery.includes("--psql") &&
     hostedRecovery.includes('neon connection-string "$VERIFY_NAME"') &&
+    hostedRecovery.includes("command substitution") &&
+    hostedRecovery.includes("$(…)") &&
     !hostedRecovery.includes('psql "$(neon connection-string') &&
     !hostedRecovery.includes("neon branches restore production") &&
     !hostedRecovery.includes('restore production "^self'),
