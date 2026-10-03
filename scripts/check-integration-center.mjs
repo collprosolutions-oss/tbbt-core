@@ -142,7 +142,7 @@ check("Registry helper accepts the live registry", true);
 check(
   "Supported keys are the real first-party integrations",
   listSupportedIntegrationKeys().join(",") ===
-    "stripe_saas,stripe_connect,resend,r2,twilio_sms,custom_domain,ai_provider,esign",
+    "stripe_saas,stripe_connect,resend,r2,twilio_sms,custom_domain,ai_provider,esign,gusto_payroll",
 );
 check(
   "Unsupported marketplace placeholders stay out of the live registry",

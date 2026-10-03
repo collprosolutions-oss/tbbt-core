@@ -18,7 +18,7 @@ export default async function IntegrationsPage() {
     <PageContainer width="2xl">
       <PageHeader
         title="Integrations"
-        description={`Supported connections for ${access.workspace.business.name}. This page reports recorded configuration only. It does not connect Stripe, provision email, change DNS, create phone numbers, or start OAuth.`}
+        description={`Supported connections for ${access.workspace.business.name}. This page reports recorded configuration only. It does not connect Stripe, provision email, change DNS, or create phone numbers. Gusto payroll import is an owner action on Payroll when partner credentials exist. This page does not begin that connection.`}
       />
       <IntegrationCenterView center={center} />
     </PageContainer>

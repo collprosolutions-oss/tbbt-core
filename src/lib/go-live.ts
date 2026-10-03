@@ -15,6 +15,10 @@ import { getFinanceConnectionProvider } from "@/lib/finance-connections";
 import { resolveEsignProviderStatus } from "@/lib/business-protection-esign";
 import { SMS_COMMERCIAL_BOUNDARY } from "@/lib/communications/sms-policy";
 import { VOICE_NOT_CONNECTED_REASON } from "@/lib/communications/types";
+import {
+  GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+  GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
+} from "@/lib/payroll-connect/copy";
 
 export const GO_LIVE_PATH = "/settings?section=go-live";
 
@@ -52,6 +56,7 @@ export const GO_LIVE_CAPABILITIES = [
   "esign",
   "voice_receptionist",
   "social_publishing",
+  "gusto_payroll",
 ] as const;
 export type GoLiveCapabilityId = (typeof GO_LIVE_CAPABILITIES)[number];
 
@@ -72,6 +77,7 @@ export const GO_LIVE_CARD_REQUIREMENTS: Record<GoLiveCapabilityId, GoLiveRequire
   esign: "OPTIONAL",
   voice_receptionist: "OPTIONAL",
   social_publishing: "OPTIONAL",
+  gusto_payroll: "OPTIONAL",
 };
 
 export const GO_LIVE_REQUIREMENT_LABELS: Record<GoLiveRequirement, string> = {
@@ -130,7 +136,7 @@ export const GO_LIVE_CONDITIONAL_SUMMARY =
   "Conditional: transactional email if TBBT should send email; R2 storage if intake, job, or website photo uploads are needed; Stripe Connect for online card checkout.";
 
 export const GO_LIVE_OPTIONAL_SUMMARY =
-  "Optional/planned: SMS, AI, domain, bank, suppliers, e-sign, voice, social.";
+  "Optional/planned: SMS, AI, domain, bank, suppliers, e-sign, voice, social, and Gusto payroll facts.";
 
 export const GO_LIVE_READ_ONLY_MESSAGE =
   "This page reports current configuration only. It does not connect providers, start onboarding, or change billing.";
@@ -204,6 +210,15 @@ export type GoLiveInput = {
   };
   aiConnected: boolean;
   domain: GoLiveDomainInput;
+  /**
+   * Optional. Omitted means credentials are not assumed and no business
+   * connection is claimed. Connected is never inferred from env alone.
+   */
+  gustoPayroll?: {
+    configured: boolean;
+    connectionStatus: "NONE" | "CONNECTED" | "NEEDS_RECONNECT" | "DISCONNECTED";
+    refreshUnverified?: boolean;
+  };
 };
 
 const SECRET_KEY_PATTERN =
@@ -718,6 +733,69 @@ function voiceCard(): GoLiveCard {
   };
 }
 
+function gustoPayrollCard(input: GoLiveInput["gustoPayroll"]): GoLiveCard {
+  const base = {
+    id: "gusto_payroll" as const,
+    label: "Gusto payroll facts",
+    group: "OPTIONAL_PLANNED" as const,
+    requirement: GO_LIVE_CARD_REQUIREMENTS.gusto_payroll,
+    settingsHref: "/payroll#gusto-payroll",
+  };
+  if (!input?.configured) {
+    return {
+      ...base,
+      status: "UNAVAILABLE",
+      currentState: "Not available: awaiting Gusto partner approval/credentials.",
+      whatWorks: "TBBT payroll runs from approved time cards still work. They do not move money.",
+      whatDoesNot:
+        "No Gusto company is connected. Required names are GUSTO_CLIENT_ID, GUSTO_CLIENT_SECRET, GUSTO_ENV, GUSTO_REDIRECT_URI, and CONNECTION_TOKEN_ENCRYPTION_KEY. Production access needs Gusto partner approval. This card does not show a connection.",
+      ownerNextAction: "Wait for Gusto partner approval and credentials. There is no connect action until those are set.",
+    };
+  }
+  if (input.connectionStatus === "CONNECTED" && input.refreshUnverified) {
+    return {
+      ...base,
+      status: "PARTIAL",
+      currentState: GUSTO_REFRESH_UNVERIFIED_HEADLINE,
+      whatWorks: GUSTO_REFRESH_UNVERIFIED_IMPORT_NOTE,
+      whatDoesNot:
+        "The last token refresh did not complete. The saved token may already be dead. TBBT does not run payroll, calculate net pay, move funds, or mark a bank cash-out. Gusto documents no revoke endpoint.",
+      ownerNextAction: "Check connection from Payroll. Reconnect if Gusto rejects the saved token.",
+    };
+  }
+  if (input.connectionStatus === "CONNECTED") {
+    return {
+      ...base,
+      status: "READY",
+      currentState:
+        "Connected after token exchange and token info for this business. Imported rows are provider-reported facts, not verified bank movement.",
+      whatWorks: "An owner can import processed payroll facts for review from Payroll.",
+      whatDoesNot:
+        "TBBT does not run payroll, calculate net pay, move funds, or mark a bank cash-out. Gusto documents no revoke endpoint.",
+      ownerNextAction: "Review imported facts on Payroll. Accept or ignore does not change a payroll run.",
+    };
+  }
+  if (input.connectionStatus === "NEEDS_RECONNECT") {
+    return {
+      ...base,
+      status: "PARTIAL",
+      currentState: "Needs reconnect. Gusto rejected the saved token.",
+      whatWorks: "Previously imported facts can stay for review.",
+      whatDoesNot: "Import stays off until an owner connects again. This is not a bank withdrawal.",
+      ownerNextAction: "Reconnect from Payroll as the owner.",
+    };
+  }
+  return {
+    ...base,
+    status: "NOT_CONFIGURED",
+    currentState:
+      "Credentials are present. This business is not connected. A connection is recorded only after token exchange and token info.",
+    whatWorks: "TBBT payroll runs from approved time cards still work.",
+    whatDoesNot: "No Gusto company token is stored for this business. Demo access is not production partner approval.",
+    ownerNextAction: "An owner can connect from Payroll. This page does not begin that connection.",
+  };
+}
+
 function socialCard(): GoLiveCard {
   return {
     id: "social_publishing",
@@ -764,6 +842,7 @@ export function buildGoLiveCenter(input: GoLiveInput): GoLiveCenter {
     esignCard(),
     voiceCard(),
     socialCard(),
+    gustoPayrollCard(input.gustoPayroll),
   ];
   const groups = GO_LIVE_GROUPS.map((id) => buildGroup(id, cards));
   const requiredCards = cards.filter((card) => card.requirement === "REQUIRED");

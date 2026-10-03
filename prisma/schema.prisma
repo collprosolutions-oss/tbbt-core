@@ -334,6 +334,12 @@ model Business {
   payrollRuns              PayrollRun[]
   payrollRunItems          PayrollRunItem[]
   payrollRunEvents         PayrollRunEvent[]
+  /// Owner Gusto payroll-fact connection. Not a bank feed and not a
+  /// payroll processor. One row per provider.
+  payrollConnections       PayrollConnection[]
+  payrollConnectionOAuthStates PayrollConnectionOAuthState[]
+  payrollProviderPayrollFacts PayrollProviderPayrollFact[]
+  payrollProviderPayrollFactLines PayrollProviderPayrollFactLine[]
   expenses                 Expense[]
   /// Owner-recorded tools and vehicles. Not inventory stock.
   equipmentItems           EquipmentItem[]
@@ -670,6 +676,8 @@ model Membership {
   reviewedPayrollRuns    PayrollRun[]       @relation("PayrollRunReviewer")
   authorizedPayrollRuns  PayrollRun[]       @relation("PayrollRunAuthorizer")
   processedPayrollRuns   PayrollRun[]       @relation("PayrollRunProcessor")
+  connectedPayrollConnections PayrollConnection[] @relation("PayrollConnectionConnectedBy")
+  payrollConnectionOAuthStates PayrollConnectionOAuthState[]
   purchasedExpenses      Expense[]          @relation("ExpensePurchaser")
   reviewedExpenses       Expense[]          @relation("ExpenseReviewer")
   marketingPhotoGrants   JobPhoto[]         @relation("JobPhotoMarketingGrant")
@@ -3096,6 +3104,105 @@ model PayrollRunEvent {
 
   @@index([businessId])
   @@index([payrollRunId])
+}
+
+/// One payroll-provider connection for a business. Gusto tokens are
+/// per user and company and refresh tokens are single-use, so an active
+/// Gusto company id belongs to at most one business (partial unique index
+/// in the migration). Ciphertext only — never plaintext tokens.
+/// status: CONNECTED | NEEDS_RECONNECT | DISCONNECTED
+model PayrollConnection {
+  id                      String    @id @default(cuid())
+  businessId              String
+  provider                String
+  externalCompanyId       String?
+  accessTokenCiphertext   String?
+  refreshTokenCiphertext  String?
+  accessTokenExpiresAt    DateTime?
+  scopes                  String?
+  status                  String
+  lastSyncedAt            DateTime?
+  lastError               String?
+  connectedByMembershipId String?
+  disconnectedAt          DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  connectedBy Membership? @relation("PayrollConnectionConnectedBy", fields: [connectedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, provider])
+  @@index([businessId])
+  @@index([provider, externalCompanyId])
+}
+
+/// Single-use expiring OAuth state bound to one business, membership, and
+/// provider. Only the sha256 of the raw state is stored. Named so it does
+/// not collide with a marketing connection state table.
+model PayrollConnectionOAuthState {
+  id           String    @id @default(cuid())
+  businessId   String
+  membershipId String
+  provider     String
+  stateHash    String    @unique
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, membershipId, provider])
+  @@index([expiresAt])
+}
+
+/// Provider-reported processed payroll. Amounts are copied only when the
+/// provider sent them. Net pay is not stored and is not derived.
+/// reviewStatus: UNREVIEWED | ACCEPTED | IGNORED
+model PayrollProviderPayrollFact {
+  id                    String    @id @default(cuid())
+  businessId            String
+  provider              String
+  providerPayrollId     String
+  payPeriodStart        DateTime?
+  payPeriodEnd          DateTime?
+  checkDate             DateTime?
+  processed             Boolean
+  grossTotalCents       Int?
+  employerTaxesCents    Int?
+  employerBenefitsCents Int?
+  reviewStatus          String    @default("UNREVIEWED")
+  rawPayloadHash        String
+  /// Set when a later import changes the reported payload or amounts and
+  /// returns an accepted or ignored fact to UNREVIEWED.
+  contentChangedAt      DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  business Business                         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lines    PayrollProviderPayrollFactLine[]
+
+  @@unique([businessId, provider, providerPayrollId])
+  @@index([businessId])
+  @@index([businessId, reviewStatus])
+}
+
+/// One provider-reported employee compensation line. Name and gross are
+/// null when the provider omitted them.
+model PayrollProviderPayrollFactLine {
+  id                 String   @id @default(cuid())
+  businessId         String
+  factId             String
+  providerEmployeeId String?
+  employeeName       String?
+  grossCents         Int?
+  createdAt          DateTime @default(now())
+
+  business Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  fact     PayrollProviderPayrollFact @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([factId])
 }
 
 /// A business expense recorded by OWNER/ADMIN. Tenant-private financial
