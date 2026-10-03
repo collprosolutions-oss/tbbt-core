@@ -11,6 +11,9 @@
  */
 import { register } from "node:module";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
@@ -37,6 +40,10 @@ const {
   marketingDestinationAvailability,
   marketingTokenPurpose,
 } = await import("@/lib/marketing-connections/config");
+const {
+  GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH,
+  META_MARKETING_CONNECTION_CALLBACK_PATH,
+} = await import("@/lib/marketing-connections/callback-path");
 const { MarketingConnectionError } = await import("@/lib/marketing-connections/errors");
 const { presentMarketingConnectionCards } = await import("@/lib/marketing-connections/presenter");
 const {
@@ -135,6 +142,64 @@ function scriptFor(destination, overrides = {}) {
     ...overrides,
   });
 }
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const setupDoc = readFileSync(join(repoRoot, "docs/MARKETING_CONNECTIONS_SETUP.md"), "utf8");
+const envExample = readFileSync(join(repoRoot, ".env.example"), "utf8");
+const productionMetaRedirect = `https://www.collproreno.com${META_MARKETING_CONNECTION_CALLBACK_PATH}`;
+const productionGoogleRedirect = `https://www.collproreno.com${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`;
+
+console.log("\nSETUP — operator runbook matches #347 and does not enable auto-post");
+check(
+  "Setup doc is an operator runbook, not a second connect implementation",
+  setupDoc.includes("does not add a second connect path") &&
+    setupDoc.includes("does not turn on automatic posting") &&
+    setupDoc.includes("Settings → Reviews / Marketing Connections is read-only status"),
+);
+check(
+  "Production Meta and Google callback URLs match the public routes",
+  META_MARKETING_CONNECTION_CALLBACK_PATH === "/api/marketing/connections/meta/callback" &&
+    GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH === "/api/marketing/connections/google/callback" &&
+    setupDoc.includes(productionMetaRedirect) &&
+    setupDoc.includes(productionGoogleRedirect) &&
+    envExample.includes(productionMetaRedirect) &&
+    envExample.includes(productionGoogleRedirect),
+);
+check(
+  "Production Vercel names are the six credential keys plus the existing encryption key",
+  ["META_APP_ID", "META_APP_SECRET", "META_OAUTH_REDIRECT_URI", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REDIRECT_URI", "CONNECTION_TOKEN_ENCRYPTION_KEY"].every(
+    (name) => setupDoc.includes(`\`${name}\``) && envExample.includes(name),
+  ) &&
+    setupDoc.includes("CONNECTION_TOKEN_ENCRYPTION_KEY` is already set") &&
+    setupDoc.includes("Do not rotate it"),
+);
+check(
+  "Setup doc lists the exact scopes TBBT requests at connect time",
+  FACEBOOK_REQUIRED_SCOPES.join(",") === "pages_show_list,pages_manage_posts,pages_read_engagement" &&
+    INSTAGRAM_REQUIRED_SCOPES.join(",") ===
+      "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement" &&
+    GOOGLE_BUSINESS_MANAGE_SCOPE === "https://www.googleapis.com/auth/business.manage" &&
+    FACEBOOK_REQUIRED_SCOPES.every((scope) => setupDoc.includes(`\`${scope}\``)) &&
+    INSTAGRAM_REQUIRED_SCOPES.every((scope) => setupDoc.includes(`\`${scope}\``)) &&
+    setupDoc.includes(`\`${GOOGLE_BUSINESS_MANAGE_SCOPE}\``),
+);
+check(
+  "Setup doc reports the approvals that block a real connection",
+  setupDoc.includes("Meta Advanced Access") &&
+    setupDoc.includes("instagram_content_publish") &&
+    setupDoc.includes("Instagram publishing is not yet available") &&
+    setupDoc.includes("GBP API access approval (0 QPM)") &&
+    setupDoc.includes("Missing `META_APP_ID`") &&
+    setupDoc.includes("Missing `GOOGLE_OAUTH_CLIENT_ID`"),
+);
+check(
+  "Setup doc and env example refuse fake adapters and automatic posting",
+  setupDoc.includes("Do not set `TBBT_SOCIAL_OAUTH_ADAPTER`") &&
+    setupDoc.includes("TBBT_SOCIAL_PUBLISHING_ADAPTER") &&
+    setupDoc.includes("Do not enable automatic posting") &&
+    !setupDoc.includes("TBBT_SOCIAL_PUBLISHING_ADAPTER=fake") &&
+    envExample.includes("Never set either fake adapter when VERCEL_ENV=production"),
+);
 
 console.log("\nCRYPTO — connection token envelopes");
 process.env.CONNECTION_TOKEN_ENCRYPTION_KEY = KEY;
