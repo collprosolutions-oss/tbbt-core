@@ -70,6 +70,22 @@ export function TbbtPrivacyPage() {
           Website and job files may be stored with the platform object storage
           TBBT is configured to use.
         </p>
+        <h2>Operational text messages</h2>
+        <p>
+          If you opt in on a public request form, TBBT stores your mobile
+          number so the business can send operational texts about that request
+          (estimates, appointments, invoices, and payment reminders). Consent
+          is not required to request work. A stored phone number is not
+          consent.
+        </p>
+        <p>
+          Mobile information collected for these texts is not shared with third parties for their marketing.
+        </p>
+        <p>
+          Reply STOP to opt out or HELP for help. Message and data rates may apply.
+          See{" "}
+          <Link href="/terms">Terms</Link> for program details.
+        </p>
         <h2>Public business websites</h2>
         <p>
           A subscriber&apos;s public site (including CollPro on collproreno.com)
@@ -120,6 +136,24 @@ export function TbbtTermsPage() {
         <p>
           Software is provided as it exists in the running product. Features
           labeled planned are not promised as current functionality.
+        </p>
+        <h2>Operational text messages</h2>
+        <p>
+          TBBT operational customer-care texts cover estimates, appointments,
+          invoices, and payment reminders for a request you opted into. Message
+          frequency varies with that request and job activity.{" "}
+          <strong>Message and data rates may apply.</strong>
+        </p>
+        <p>
+          Reply <strong>STOP</strong> to opt out. Reply <strong>HELP</strong>{" "}
+          for help. Consent is not required to request work. Carriers are not liable
+          for delayed or undelivered messages.
+        </p>
+        <p>
+          Privacy practices for mobile numbers are in the{" "}
+          <Link href="/privacy">Privacy</Link> page. TBBT does not invent a
+          public support email; reply HELP to the business number that sent the
+          text, or use a signed-in workspace once a public inbox is published.
         </p>
       </section>
     </>
