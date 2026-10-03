@@ -25,22 +25,39 @@ export function easConfigIncludesAppleCredentials(value: unknown) {
   );
 }
 
-export function parseGeneratedIosProject(pbxproj: string) {
+export function parseGeneratedIosProject(pbxproj: string, infoPlist = "") {
   const bundleId = firstAssignment(pbxproj, "PRODUCT_BUNDLE_IDENTIFIER");
   const projectVersion = firstAssignment(pbxproj, "CURRENT_PROJECT_VERSION");
   const marketingVersion = firstAssignment(pbxproj, "MARKETING_VERSION");
-  const developmentTeams = [
-    ...pbxproj.matchAll(/DEVELOPMENT_TEAM = ([^;]+);/g),
-  ].map((match) => match[1].replace(/"/g, "").trim()).filter(Boolean);
+  const developmentTeams = [...pbxproj.matchAll(/DEVELOPMENT_TEAM = ([^;]+);/g)]
+    .map((match) => match[1].replace(/"/g, "").trim())
+    .filter(Boolean);
   return {
     bundleId,
     projectVersion,
     marketingVersion,
     developmentTeams,
+    shortVersion: plistString(infoPlist, "CFBundleShortVersionString"),
+    bundleVersion: plistString(infoPlist, "CFBundleVersion"),
+    displayName: plistString(infoPlist, "CFBundleDisplayName"),
+    allowsArbitraryLoads: plistBool(infoPlist, "NSAllowsArbitraryLoads"),
   };
 }
 
 function firstAssignment(source: string, key: string) {
   const match = source.match(new RegExp(`${key} = ([^;]+);`));
   return match?.[1]?.replace(/"/g, "").trim() ?? "";
+}
+
+function plistString(plist: string, key: string) {
+  const match = plist.match(
+    new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`),
+  );
+  return match?.[1] ?? "";
+}
+
+function plistBool(plist: string, key: string) {
+  const match = plist.match(new RegExp(`<key>${key}</key>\\s*<(true|false)/>`));
+  if (!match) return null;
+  return match[1] === "true";
 }

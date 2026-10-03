@@ -27,7 +27,7 @@ restore_pkg() {
 }
 trap restore_pkg EXIT
 
-EXPO_NO_GIT_STATUS=1 npx expo prebuild --platform ios --no-install --non-interactive
+CI=1 EXPO_NO_GIT_STATUS=1 npx expo prebuild --platform ios --no-install
 restore_pkg
 trap - EXIT
 

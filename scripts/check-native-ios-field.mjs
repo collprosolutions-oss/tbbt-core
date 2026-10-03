@@ -219,13 +219,16 @@ const pbxPath = findGeneratedFile(iosDir, "project.pbxproj");
 const plistPath = findGeneratedFile(iosDir, "Info.plist");
 const pbxText = pbxPath && existsSync(pbxPath) ? readFileSync(pbxPath, "utf8") : "";
 const plistText = plistPath && existsSync(plistPath) ? readFileSync(plistPath, "utf8") : "";
-const generated = parseGeneratedIosProject(pbxText);
+const generated = parseGeneratedIosProject(pbxText, plistText);
 check(
   "Generated Xcode project versions com.tbbt.field build 1",
   Boolean(pbxPath) &&
     generated.bundleId === NATIVE_IOS_BUNDLE_IDENTIFIER &&
     generated.projectVersion === NATIVE_IOS_BUILD_NUMBER &&
-    generated.marketingVersion === NATIVE_APP_VERSION,
+    generated.shortVersion === NATIVE_APP_VERSION &&
+    generated.bundleVersion === NATIVE_IOS_BUILD_NUMBER &&
+    generated.displayName === "TBBT Field" &&
+    generated.allowsArbitraryLoads === false,
 );
 check(
   "Generated project does not embed an Apple team or store credentials",
