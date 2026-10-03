@@ -120,6 +120,10 @@ restore performed **outside** this script, plus a separate object-storage
 restore, plus the real environment variables. Do not substitute this
 localhost drill for that work.
 
+Hosted Neon PITR and private R2 recovery are a different procedure.
+See `docs/NEON_PITR_R2_RECOVERY.md`. Do not substitute this localhost
+drill for that work, and do not run this script against Neon.
+
 ## Private file-byte restore (disposable storage fixture)
 
 This is the **file-byte half**. It proves that restored `StoredAsset`

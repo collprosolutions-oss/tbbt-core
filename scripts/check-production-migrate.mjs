@@ -2154,6 +2154,32 @@ check(
     failClosedRequiredSchema({ present: true, name: "Business.publicPhone" }).ok === true,
 );
 
+const hostedRecovery = readFileSync(
+  new URL("../docs/NEON_PITR_R2_RECOVERY.md", import.meta.url),
+  "utf8",
+);
+check(
+  "Hosted Neon PITR + private R2 runbook is documentation-only and not the localhost drill",
+  hostedRecovery.includes("store_2ie8U4PWbJ5J3agg") &&
+    hostedRecovery.includes("empty-cherry-05140338") &&
+    hostedRecovery.includes("planProductionMigrateDeploy") &&
+    hostedRecovery.includes("HeadObject") &&
+    hostedRecovery.includes("Rollback decision") &&
+    hostedRecovery.includes("TBBT_FOUNDER_PRODUCTION_READONLY_DATABASE_URL") &&
+    hostedRecovery.includes("collpro-s-projects5") &&
+    hostedRecovery.includes("businesses/") &&
+    hostedRecovery.includes("docs/DATABASE_RESTORE.md") &&
+    hostedRecovery.includes("not the localhost") &&
+    !hostedRecovery.includes("pg_dump --dbname"),
+);
+check(
+  "Hosted recovery runbook forbids Production restore, retention changes, and customer-byte copies",
+  hostedRecovery.includes("Forbidden until a recorded GO decision") &&
+    hostedRecovery.includes("history_retention_seconds") &&
+    hostedRecovery.includes("GetObject") &&
+    hostedRecovery.includes("NO-GO"),
+);
+
 console.log(
   failed === 0
     ? `\nAll production-migrate checks passed (${passed}).`
