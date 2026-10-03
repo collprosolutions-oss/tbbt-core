@@ -169,11 +169,13 @@ export async function revokeNativePushDevice(
   token: string,
   deviceToken: string,
 ): Promise<NativePushPreferencePayload | NativeApiError> {
+  const headers = jsonHeaders(token);
+  headers[NATIVE_PUSH_DEVICE_TOKEN_HEADER] = deviceToken;
   return requestNativeJson<NativePushPreferencePayload>(
     "/api/native/v1/push-devices",
     {
       method: "DELETE",
-      headers: jsonHeaders(token),
+      headers,
       body: JSON.stringify({ token: deviceToken }),
     },
     "Job alerts could not be updated.",

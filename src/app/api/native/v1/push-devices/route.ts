@@ -2,6 +2,7 @@ import { nativeJson } from "@/lib/native-http";
 import {
   listNativePushPreference,
   parseNativePushDeviceJson,
+  readNativePushDeviceTokenFromParts,
   registerNativePushDevice,
   revokeNativePushDevice,
   updateNativePushDeviceOptIn,
@@ -93,11 +94,22 @@ export async function DELETE(request: Request) {
   if (!resolved.ok) {
     return nativeJson({ error: resolved.error }, resolved.status);
   }
-  const parsed = await readDevicePayload(request);
-  if (!parsed.ok) {
-    return nativeJson({ error: parsed.error }, parsed.status === 413 ? parsed.status : 400);
+  const headerToken = request.headers.get(NATIVE_PUSH_DEVICE_TOKEN_HEADER);
+  const capped = await readCappedRequestText(request, NATIVE_PUSH_JSON_MAX_BYTES);
+  if (!capped.ok) {
+    return nativeJson({ error: capped.error }, capped.status);
   }
-  const token = typeof parsed.payload.token === "string" ? parsed.payload.token : "";
+  let bodyToken: unknown;
+  if (capped.text.trim()) {
+    const parsed = parseNativePushDeviceJson(capped.text);
+    if (!parsed.ok && !headerToken?.trim()) {
+      return nativeJson({ error: parsed.error }, parsed.status === 413 ? parsed.status : 400);
+    }
+    if (parsed.ok) {
+      bodyToken = parsed.payload.token;
+    }
+  }
+  const token = readNativePushDeviceTokenFromParts({ headerToken, bodyToken });
   if (!token) {
     return nativeJson({ error: NATIVE_PUSH_TOKEN_REQUIRED }, 400);
   }

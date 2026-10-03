@@ -2,13 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import {
+  ANDROID_REFRESH_BACKGROUND,
+  ANDROID_REFRESH_COLORS,
+  nativeScreenPaddingTop,
+} from "../android";
+import { useAndroidHardwareBack } from "../use-android-back";
 import {
   NATIVE_NETWORK_ERROR,
   NATIVE_TIME_CARD_OFFLINE_MESSAGE,
@@ -89,6 +97,7 @@ export function JobScreen({
     membershipId: workspace.membershipId,
     jobId,
   };
+  useAndroidHardwareBack(onBack);
 
   function beginAssignedRequest() {
     requestGeneration.current = nextNativeRequestGeneration(requestGeneration.current);
@@ -445,8 +454,19 @@ export function JobScreen({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl onRefresh={retryAssignedJob} refreshing={refreshing} />}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: nativeScreenPaddingTop(Platform.OS, StatusBar.currentHeight) },
+      ]}
+      refreshControl={
+        <RefreshControl
+          colors={[...ANDROID_REFRESH_COLORS]}
+          onRefresh={retryAssignedJob}
+          progressBackgroundColor={ANDROID_REFRESH_BACKGROUND}
+          refreshing={refreshing}
+          tintColor="#86efac"
+        />
+      }
       style={styles.screen}
     >
       <Pressable onPress={onBack}>

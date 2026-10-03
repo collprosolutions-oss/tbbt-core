@@ -2,13 +2,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import {
+  ANDROID_REFRESH_BACKGROUND,
+  ANDROID_REFRESH_COLORS,
+  nativePushPlatform,
+  nativeScreenPaddingTop,
+} from "../android";
+import { NativeBuildStamp } from "./NativeBuildStamp";
 import {
   isApiError,
   isLostAssignment,
@@ -120,7 +129,7 @@ function JobAlertsCard({
         ? await revokeNativePushDevice(token, deviceToken)
         : await registerNativePushDevice(token, {
             token: deviceToken,
-            platform: "expo",
+            platform: nativePushPlatform(Platform.OS),
             optedIn: true,
           });
       if (isApiError(result)) {
@@ -249,11 +258,23 @@ export function TodayScreen({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl onRefresh={refresh} refreshing={refreshing} />}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: nativeScreenPaddingTop(Platform.OS, StatusBar.currentHeight) },
+      ]}
+      refreshControl={
+        <RefreshControl
+          colors={[...ANDROID_REFRESH_COLORS]}
+          onRefresh={refresh}
+          progressBackgroundColor={ANDROID_REFRESH_BACKGROUND}
+          refreshing={refreshing}
+          tintColor="#86efac"
+        />
+      }
       style={styles.screen}
     >
       <Text style={styles.kicker}>{workspace.businessName}</Text>
+      <NativeBuildStamp />
       <Text style={styles.title}>Today</Text>
       <Text style={styles.copy}>
         Only jobs assigned to you, {viewer.name}. Other workers and owner records stay hidden.

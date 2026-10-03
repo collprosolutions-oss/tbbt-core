@@ -61,6 +61,16 @@ export function isNativePushPlatform(value: unknown): value is NativePushPlatfor
   return typeof value === "string" && (NATIVE_PUSH_PLATFORMS as readonly string[]).includes(value);
 }
 
+/** Android DELETE can drop a JSON body; GET already uses the header. */
+export function readNativePushDeviceTokenFromParts(input: {
+  headerToken?: string | null;
+  bodyToken?: unknown;
+}) {
+  const body = typeof input.bodyToken === "string" ? input.bodyToken.trim() : "";
+  const header = typeof input.headerToken === "string" ? input.headerToken.trim() : "";
+  return body || header;
+}
+
 export function parseNativePushDeviceJson(text: string):
   | { ok: true; payload: Record<string, unknown> }
   | { ok: false; status: 400 | 413; error: string } {

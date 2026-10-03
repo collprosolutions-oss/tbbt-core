@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { setNativeRuntimeOs } from "./src/config";
 import { isApiError, loadNativeSession, revokeNativePushDevice, signOutNative } from "./src/api";
 import { JobScreen } from "./src/screens/JobScreen";
 import { SignInScreen } from "./src/screens/SignInScreen";
@@ -23,6 +24,8 @@ import {
   readSessionToken,
 } from "./src/session";
 import type { NativeViewer, NativeWorkspace } from "./src/types";
+
+setNativeRuntimeOs(Platform.OS);
 
 type SessionState = {
   token: string;

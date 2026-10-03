@@ -54,7 +54,7 @@ If the network drops, write helpers return an error instead of leaving the Job s
 - A standalone time clock, owner/admin checklist editor, a second Job-detail maps URL, owner accept/decline of time corrections, or worker milestone completion
 - Route optimization, geocoding, or ETA claims on the assigned-stops maps link
 - Owner/admin Today, Reports, invoices, payroll edits, or management console
-- App Store / Play distribution, device attestation, or compiled iOS/Android binaries
+- App Store / Play distribution or device attestation. A local debug APK recipe (`apps/native` `android:debug-apk`, `eas.json` preview) is UNVERIFIED without an Android SDK/device: `assembleDebug` is a debug shell that still needs Metro, and the preview profile is a release-type APK that requires an operator-supplied **https** `EXPO_PUBLIC_TBBT_API_URL` placeholder replacement. `expo prebuild` rewrites `apps/native/package.json` android/ios scripts; the wrapper restores the tracked file. Not store submission. Cleartext HTTP is not enabled.
 - Real Expo, FCM, or APNs delivery — development uses the fake adapter only
 - Website UI changes
 - Cookie fallback on native routes
@@ -77,6 +77,7 @@ npm run test:native-time-cards
 npm run test:native-job-milestones
 npm run test:native-field-recovery
 npm run test:native-push-alerts
+npm run test:native-android-field
 npx tsc --noEmit
 npm run build
 cd apps/native && npx tsc --noEmit && npm run build
