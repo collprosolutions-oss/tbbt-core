@@ -15,6 +15,7 @@ import {
   ESIGN_LIST_PAGE_SIZE,
   ESIGN_LIST_PER_REQUEST_CAP_MS,
   ESIGN_LIST_SCAN_BUDGET_MS,
+  createLookupTimeoutSignal,
   isLookupAbortError,
   lookupRequestTimeoutMs,
   readEsignLookupRow,
@@ -150,8 +151,7 @@ export function createDropboxSignEsignProvider(
   const now = deps.now ?? Date.now;
   const budgetMs = deps.budgetMs ?? ESIGN_LIST_SCAN_BUDGET_MS;
   const perRequestCapMs = deps.perRequestCapMs ?? ESIGN_LIST_PER_REQUEST_CAP_MS;
-  const createTimeoutSignal =
-    deps.createTimeoutSignal ?? ((timeoutMs: number) => AbortSignal.timeout(timeoutMs));
+  const createTimeoutSignal = deps.createTimeoutSignal ?? createLookupTimeoutSignal;
   const configuredApiKey = deps.apiKey;
 
   return {

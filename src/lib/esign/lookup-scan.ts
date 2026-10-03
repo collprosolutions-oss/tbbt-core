@@ -112,6 +112,27 @@ export function isLookupAbortError(error: unknown) {
 }
 
 /**
+ * Deadline for one lookup HTTP request (fetch + json/text).
+ * Uses AbortSignal.timeout when available. Node unrefs that timer, so a
+ * referenced hold keeps a hung page from stalling past the budget.
+ */
+export function createLookupTimeoutSignal(timeoutMs: number): AbortSignal {
+  const ms = Math.max(1, timeoutMs);
+  const signal =
+    typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(ms)
+      : (() => {
+          const controller = new AbortController();
+          const abortAt = setTimeout(() => controller.abort(), ms);
+          controller.signal.addEventListener("abort", () => clearTimeout(abortAt), { once: true });
+          return controller.signal;
+        })();
+  const hold = setTimeout(() => {}, ms);
+  signal.addEventListener("abort", () => clearTimeout(hold), { once: true });
+  return signal;
+}
+
+/**
  * Decision after the page walker hits its fetch limit without a match.
  * A remaining page past the cap is unknown:page_cap — never not-found.
  */
@@ -141,8 +162,7 @@ export async function scanEsignSignatureRequestPages(input: {
   const budgetMs = input.budgetMs ?? ESIGN_LIST_SCAN_BUDGET_MS;
   const perRequestCapMs = input.perRequestCapMs ?? ESIGN_LIST_PER_REQUEST_CAP_MS;
   const now = input.now ?? Date.now;
-  const createTimeoutSignal = input.createTimeoutSignal ?? ((timeoutMs: number) =>
-    AbortSignal.timeout(timeoutMs));
+  const createTimeoutSignal = input.createTimeoutSignal ?? createLookupTimeoutSignal;
   const started = now();
   const matches: EsignSignatureLookupResult[] = [];
   let lastNumPages: number | null = null;

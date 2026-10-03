@@ -242,6 +242,7 @@ check(
     scanSrc.includes('reason: "page_cap"') &&
     scanSrc.includes('status: "unknown"') &&
     scanSrc.includes("decideListScanAfterPageLimit") &&
+    scanSrc.includes("createLookupTimeoutSignal") &&
     ESIGN_LIST_PAGE_LIMIT > 3,
 );
 check(
@@ -268,6 +269,7 @@ check(
 check(
   "Live lookup aborts fetch and body reads against the remaining budget",
   dropboxSrc.includes("AbortSignal") &&
+    dropboxSrc.includes("createLookupTimeoutSignal") &&
     dropboxSrc.includes("signal:") &&
     dropboxSrc.includes("readResponseWithDeadline") &&
     dropboxSrc.includes("request_id_not_found") &&
