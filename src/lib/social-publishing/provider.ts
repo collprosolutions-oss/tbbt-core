@@ -2,6 +2,7 @@ import { isFakeSocialPublishingAdapterEnabled } from "@/lib/social-publishing/co
 import { createDisconnectedSocialPublishingProvider } from "@/lib/social-publishing/disconnected";
 import { createFacebookSocialPublishingProvider } from "@/lib/social-publishing/facebook";
 import { createFakeSocialPublishingProvider } from "@/lib/social-publishing/fake";
+import { createInstagramSocialPublishingProvider } from "@/lib/social-publishing/instagram";
 import type { SocialPublishDestination, SocialPublishingProvider } from "@/lib/social-publishing/types";
 import {
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
@@ -9,25 +10,39 @@ import {
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
 } from "@/lib/social-publishing/types";
 
-let cached: SocialPublishingProvider | null = null;
+let cachedFacebook: SocialPublishingProvider | null = null;
+let cachedInstagram: SocialPublishingProvider | null = null;
 
 export function getSocialPublishingProvider(): SocialPublishingProvider {
-  if (!cached) {
+  if (!cachedFacebook) {
     if (isFakeSocialPublishingAdapterEnabled()) {
-      cached = createFakeSocialPublishingProvider();
+      cachedFacebook = createFakeSocialPublishingProvider();
     } else {
-      cached = createFacebookSocialPublishingProvider();
+      cachedFacebook = createFacebookSocialPublishingProvider();
     }
   }
-  return cached;
+  return cachedFacebook;
+}
+
+export function getInstagramSocialPublishingProvider(): SocialPublishingProvider {
+  if (!cachedInstagram) {
+    if (isFakeSocialPublishingAdapterEnabled()) {
+      cachedInstagram = createFakeSocialPublishingProvider();
+    } else {
+      cachedInstagram = createInstagramSocialPublishingProvider();
+    }
+  }
+  return cachedInstagram;
 }
 
 export function resetSocialPublishingProvider() {
-  cached = null;
+  cachedFacebook = null;
+  cachedInstagram = null;
 }
 
 export function setSocialPublishingProvider(provider: SocialPublishingProvider | null) {
-  cached = provider;
+  cachedFacebook = provider;
+  cachedInstagram = provider;
 }
 
 export function disconnectedSocialPublishingProvider() {
@@ -62,6 +77,9 @@ export function createUnavailableSocialPublishingProvider(
 export function getSocialPublishingProviderForDestination(destination: string): SocialPublishingProvider {
   if (destination === SOCIAL_PUBLISH_DESTINATION_FACEBOOK) {
     return getSocialPublishingProvider();
+  }
+  if (destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM) {
+    return getInstagramSocialPublishingProvider();
   }
   return createUnavailableSocialPublishingProvider(destination);
 }

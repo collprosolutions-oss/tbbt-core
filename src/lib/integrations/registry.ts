@@ -153,7 +153,7 @@ export const UNSUPPORTED_INTEGRATIONS: readonly UnsupportedIntegration[] = [
     category: "Communications",
     goLiveCapabilityId: "social_publishing",
     reason:
-      "Facebook Page, Instagram, and Google Business Profile consent is an OWNER action on Marketing. This center does not start it. Publishing still requires OWNER-approved content and an explicit OWNER publish click. Instagram and Google Business Profile publishing are not yet available.",
+      "Facebook Page, Instagram, and Google Business Profile consent is an OWNER action on Marketing. This center does not start it. Publishing still requires OWNER-approved content and an explicit OWNER publish click. Instagram uses only an approved public marketing image and never sends private job or customer photos. Google Business Profile publishing is not yet available.",
   },
 ];
 

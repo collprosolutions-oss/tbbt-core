@@ -3,7 +3,9 @@
  * destination's record. An unconnected Instagram or Google card cannot
  * change the Facebook card, and the reverse is also true.
  *
- * Instagram and Google publish stay unavailable: connecting does not post.
+ * Google publish stays unavailable: connecting does not post. Instagram
+ * publish still requires an approved package, a public marketing image,
+ * and an explicit OWNER click.
  */
 import {
   MARKETING_CONNECTION_DESTINATIONS,
@@ -56,7 +58,7 @@ function cardForDestination(
     destination,
     label,
     displayName: summary?.displayName?.trim() ?? "",
-    publishAvailable: destination === "FACEBOOK" && summary?.publishable === true,
+    publishAvailable: (destination === "FACEBOOK" || destination === "INSTAGRAM") && summary?.publishable === true,
   };
 
   const platformReady = availability.available;
@@ -86,6 +88,8 @@ function cardForDestination(
       detail: platformReady
         ? destination === "FACEBOOK"
           ? "No Facebook Page is connected. Connect does not publish."
+          : destination === "INSTAGRAM"
+            ? "No Instagram professional account is connected. Connect does not publish."
           : `${label} is not connected. ${PUBLISH_NOT_AVAILABLE}`
         : availability.message,
       showConnect: owner && platformReady,
@@ -156,6 +160,8 @@ function cardForDestination(
     const publishDetail =
       destination === "FACEBOOK"
         ? "Connected. Publishing still requires an OWNER-approved package and an explicit OWNER publish click. Connect did not post."
+        : destination === "INSTAGRAM"
+          ? `Connected${name ? ` to ${name}` : ""}. Publishing still requires an OWNER-approved package, an approved public marketing image, and an explicit OWNER publish click. Connect did not post. Private job or customer photos are not sent.`
         : `Connected${name ? ` to ${name}` : ""}. ${PUBLISH_NOT_AVAILABLE}`;
     const approval =
       destination === "GOOGLE"

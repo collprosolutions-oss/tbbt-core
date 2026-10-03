@@ -574,8 +574,8 @@ function summaryFromRow(row: {
   }
   const legacyPlaintext = !row.connectionStatus && Boolean(row.accessToken.trim()) && !row.accessTokenCiphertext;
   const blocked = BLOCKED_PUBLISH_STATUSES.has(row.connectionStatus) || Boolean(row.disconnectedAt);
-  const facebookPublishable =
-    destination === "FACEBOOK" &&
+  const publishable =
+    (destination === "FACEBOOK" || destination === "INSTAGRAM") &&
     Boolean(row.pageId.trim()) &&
     !blocked &&
     (row.connectionStatus === "CONNECTED" ? Boolean(row.accessTokenCiphertext) : legacyPlaintext);
@@ -585,7 +585,7 @@ function summaryFromRow(row: {
     displayName: row.displayName,
     lastError: row.lastError,
     remoteRevokeNote: row.remoteRevokeNote,
-    publishable: facebookPublishable,
+    publishable,
     legacyPlaintext,
     hasRow: true,
   };

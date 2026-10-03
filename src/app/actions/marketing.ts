@@ -38,6 +38,7 @@ import {
   MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
   OWNER_SOCIAL_PUBLISH_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
+  socialPublishCopy,
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
@@ -320,12 +321,13 @@ export async function publishMarketingContentToSocialAction(
 ): Promise<MarketingSocialPublishState> {
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const destination = readString(formData, "destination");
     if (access.workspace.role !== "OWNER") {
-      return { error: OWNER_SOCIAL_PUBLISH_MESSAGE, published: false };
+      return { error: socialPublishCopy(destination).owner, published: false };
     }
     const result = await publishMarketingContentToSocial(prisma, access, {
       contentId: readString(formData, "contentId"),
-      destination: readString(formData, "destination"),
+      destination,
       expectedUpdatedAt: readString(formData, "expectedUpdatedAt"),
     });
     revalidateMarketing();
@@ -351,7 +353,7 @@ export async function publishMarketingContentToSocialAction(
     };
   } catch (error) {
     return {
-      error: marketingErrorMessage(error, "That Facebook publish could not be completed."),
+      error: marketingErrorMessage(error, "That social publish could not be completed."),
       published: false,
     };
   }
@@ -379,7 +381,7 @@ export async function resolveMarketingSocialPublishAttemptAction(
     };
   } catch (error) {
     return {
-      error: marketingErrorMessage(error, "That Facebook publish could not be confirmed."),
+      error: marketingErrorMessage(error, "That social publish could not be confirmed."),
       published: false,
     };
   }

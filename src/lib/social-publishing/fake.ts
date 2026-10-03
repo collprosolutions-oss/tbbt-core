@@ -5,7 +5,10 @@ import type {
   SocialPublishResult,
   SocialPublishingProvider,
 } from "@/lib/social-publishing/types";
-import { SOCIAL_PUBLISH_DESTINATION_FACEBOOK } from "@/lib/social-publishing/types";
+import {
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+} from "@/lib/social-publishing/types";
 
 export type FakeSocialPublishingProvider = SocialPublishingProvider & {
   published: SocialPublishInput[];
@@ -91,7 +94,10 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
       return {
         ok: true,
         status: "PUBLISHED",
-        providerPostId: `fake_fb_${randomUUID()}`,
+        providerPostId:
+          input.destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
+            ? `fake_ig_${randomUUID()}`
+            : `fake_fb_${randomUUID()}`,
       };
     },
   };

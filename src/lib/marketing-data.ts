@@ -18,6 +18,7 @@ import {
   presentMarketingSocialDestinations,
   sanitizeSocialPublishProviderError,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   socialPublishDisplay,
   STUDIO_APPROVAL_QUEUE_LIMIT,
   STUDIO_APPROVAL_QUEUE_STATUS,
@@ -326,18 +327,34 @@ export async function loadMarketingSource(
     },
     opportunities,
     contents: contents.map((content) => {
-      const attempt = latestSocialPublishAttempt(
+      const facebookAttempt = latestSocialPublishAttempt(
         socialPublishAttempts,
         content.id,
         SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
       );
+      const instagramAttempt = latestSocialPublishAttempt(
+        socialPublishAttempts,
+        content.id,
+        SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      );
       const display = socialPublishDisplay({
-        status: attempt?.status,
-        claimedAt: attempt?.claimedAt,
-        failureLabel: attempt?.failureLabel,
+        status: facebookAttempt?.status,
+        claimedAt: facebookAttempt?.claimedAt,
+        failureLabel: facebookAttempt?.failureLabel,
+        destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+        now,
+      });
+      const instagramDisplay = socialPublishDisplay({
+        status: instagramAttempt?.status,
+        claimedAt: instagramAttempt?.claimedAt,
+        failureLabel: instagramAttempt?.failureLabel,
+        destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
         now,
       });
       const label = display.label ? sanitizeSocialPublishProviderError(display.label) : display.label;
+      const instagramLabel = instagramDisplay.label
+        ? sanitizeSocialPublishProviderError(instagramDisplay.label)
+        : instagramDisplay.label;
       return {
         id: content.id,
         contentType: content.contentType,
@@ -363,20 +380,37 @@ export async function loadMarketingSource(
         })),
         socialPublish: {
           destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
-          attemptId: attempt?.id ?? null,
-          attemptStatus: attempt?.status ?? null,
+          attemptId: facebookAttempt?.id ?? null,
+          attemptStatus: facebookAttempt?.status ?? null,
           published: display.published,
           unconfirmed: display.unconfirmed,
           inFlight: display.inFlight,
           canResolve: canResolveSocialPublishAttempt({
             role: viewerRole ?? "",
-            status: attempt?.status,
-            claimedAt: attempt?.claimedAt,
-            failureLabel: attempt?.failureLabel,
+            status: facebookAttempt?.status,
+            claimedAt: facebookAttempt?.claimedAt,
+            failureLabel: facebookAttempt?.failureLabel,
             now,
           }),
           label,
-          providerPostId: display.published ? attempt?.providerPostId ?? null : null,
+          providerPostId: display.published ? facebookAttempt?.providerPostId ?? null : null,
+        },
+        instagramPublish: {
+          destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+          attemptId: instagramAttempt?.id ?? null,
+          attemptStatus: instagramAttempt?.status ?? null,
+          published: instagramDisplay.published,
+          unconfirmed: instagramDisplay.unconfirmed,
+          inFlight: instagramDisplay.inFlight,
+          canResolve: canResolveSocialPublishAttempt({
+            role: viewerRole ?? "",
+            status: instagramAttempt?.status,
+            claimedAt: instagramAttempt?.claimedAt,
+            failureLabel: instagramAttempt?.failureLabel,
+            now,
+          }),
+          label: instagramLabel,
+          providerPostId: instagramDisplay.published ? instagramAttempt?.providerPostId ?? null : null,
         },
       };
     }),

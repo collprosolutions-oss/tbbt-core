@@ -3334,9 +3334,9 @@ model MarketingContent {
   @@index([campaignId])
 }
 
-/// One social destination per business. FACEBOOK publish is the only
-/// implemented post path. Instagram and Google can be connected by the
-/// OWNER; their publish paths stay unavailable. accessToken is the legacy
+/// One social destination per business. FACEBOOK and INSTAGRAM publish
+/// are implemented OWNER post paths. Google can be connected by the
+/// OWNER; its publish path stays unavailable. accessToken is the legacy
 /// plaintext column. New writes leave it empty and store ciphertext.
 /// Page loads must not select either token column.
 model MarketingSocialDestination {

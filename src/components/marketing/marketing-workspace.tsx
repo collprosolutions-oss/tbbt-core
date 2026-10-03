@@ -37,6 +37,11 @@ import {
   MARKETING_CONTENT_TYPE_LABELS,
   MARKETING_READINESS_LABELS,
   isImplementedMarketingArea,
+  SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+  SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+  socialPublishCopy,
+  studioPhotosHavePublicMarketingAsset,
   type MarketingArea,
   type MarketingChannel,
   type MarketingContentType,
@@ -622,23 +627,52 @@ function ContentBody({
                 })}
               />
               {row.status === "APPROVED" ? (
-                <PublishSocialButton
-                  contentId={row.id}
-                  expectedUpdatedAt={row.updatedAt.toISOString()}
-                  canPublish={canPublishMarketingToSocial({
-                    role: viewerRole,
-                    status: row.status,
-                    destination: "FACEBOOK",
-                    destinationConnected: source.channels.destinations.FACEBOOK.connected,
-                    photos: row.photos,
-                  })}
-                  destinationConnected={source.channels.destinations.FACEBOOK.connected}
-                  attemptId={row.socialPublish.attemptId}
-                  attemptStatus={row.socialPublish.attemptStatus}
-                  attemptLabel={row.socialPublish.label}
-                  unconfirmed={row.socialPublish.unconfirmed}
-                  canResolve={row.socialPublish.canResolve}
-                />
+                <>
+                  <PublishSocialButton
+                    contentId={row.id}
+                    expectedUpdatedAt={row.updatedAt.toISOString()}
+                    destination={SOCIAL_PUBLISH_DESTINATION_FACEBOOK}
+                    canPublish={canPublishMarketingToSocial({
+                      role: viewerRole,
+                      status: row.status,
+                      destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+                      destinationConnected: source.channels.destinations.FACEBOOK.connected,
+                      photos: row.photos,
+                    })}
+                    destinationConnected={source.channels.destinations.FACEBOOK.connected}
+                    attemptId={row.socialPublish.attemptId}
+                    attemptStatus={row.socialPublish.attemptStatus}
+                    attemptLabel={row.socialPublish.label}
+                    unconfirmed={row.socialPublish.unconfirmed}
+                    canResolve={row.socialPublish.canResolve}
+                    blockedMessage={socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_FACEBOOK).owner}
+                  />
+                  <PublishSocialButton
+                    contentId={row.id}
+                    expectedUpdatedAt={row.updatedAt.toISOString()}
+                    destination={SOCIAL_PUBLISH_DESTINATION_INSTAGRAM}
+                    canPublish={canPublishMarketingToSocial({
+                      role: viewerRole,
+                      status: row.status,
+                      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+                      destinationConnected: source.channels.destinations.INSTAGRAM.connected,
+                      photos: row.photos,
+                    })}
+                    destinationConnected={source.channels.destinations.INSTAGRAM.connected}
+                    attemptId={row.instagramPublish.attemptId}
+                    attemptStatus={row.instagramPublish.attemptStatus}
+                    attemptLabel={row.instagramPublish.label}
+                    unconfirmed={row.instagramPublish.unconfirmed}
+                    canResolve={row.instagramPublish.canResolve}
+                    blockedMessage={
+                      viewerRole === "OWNER" &&
+                      source.channels.destinations.INSTAGRAM.connected &&
+                      !studioPhotosHavePublicMarketingAsset(row.photos)
+                        ? SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE
+                        : socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_INSTAGRAM).owner
+                    }
+                  />
+                </>
               ) : null}
             </CardContent>
           </Card>

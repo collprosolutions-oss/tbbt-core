@@ -58,6 +58,11 @@ const {
 } = await import("@/lib/marketing-connections/service");
 const { getSocialPublishingProviderForDestination } = await import("@/lib/social-publishing/provider");
 const {
+  createInstagramSocialPublishingProvider,
+  instagramMediaContainerUrl,
+  instagramMediaPublishUrl,
+} = await import("@/lib/social-publishing/instagram");
+const {
   advanceMarketingContentStatus,
   createMarketingContent,
   grantJobPhotoMarketingPermission,
@@ -269,16 +274,59 @@ check(
     googleUrl.includes("prompt=consent") &&
     googleUrl.includes(encodeURIComponent(GOOGLE_BUSINESS_MANAGE_SCOPE)),
 );
-const igProvider = getSocialPublishingProviderForDestination("INSTAGRAM");
+const igCalls = [];
+const igProvider = createInstagramSocialPublishingProvider(async (url, init) => {
+  igCalls.push({ url: String(url), body: String(init.body) });
+  if (String(url).includes("/media_publish")) {
+    return { ok: true, status: 200, async json() { return { id: "ig_media_fake_1" }; } };
+  }
+  return { ok: true, status: 200, async json() { return { id: "ig_container_fake_1" }; } };
+});
 const igResult = await igProvider.publish({
+  destination: "INSTAGRAM",
+  pageId: "178414000",
+  accessToken: PAGE_TOKEN,
+  message: "public caption",
+  imageUrl: "https://example.test/public.jpg",
+});
+const igPrivate = await igProvider.publish({
+  destination: "INSTAGRAM",
+  pageId: "178414000",
+  accessToken: PAGE_TOKEN,
+  message: "private",
+  imageUrl: "https://example.test/api/storage/private/secret",
+});
+check(
+  "Official Instagram client uses fake Meta responses and a public image",
+  igResult.ok === true &&
+    igResult.status === "PUBLISHED" &&
+    igResult.providerPostId === "ig_media_fake_1" &&
+    igCalls.length === 2 &&
+    igCalls[0].url === instagramMediaContainerUrl("178414000") &&
+    igCalls[1].url === instagramMediaPublishUrl("178414000") &&
+    igCalls[0].body.includes("image_url=https%3A%2F%2Fexample.test%2Fpublic.jpg") &&
+    !igCalls[0].body.includes("private") &&
+    !igResult.error,
+);
+check(
+  "Instagram client refuses a private storage URL without fetching",
+  igPrivate.ok === false &&
+    igPrivate.status === "FAILED" &&
+    igCalls.length === 2 &&
+    !igPrivate.error.includes(PAGE_TOKEN),
+);
+const googleProvider = getSocialPublishingProviderForDestination("GOOGLE");
+const googleResult = await googleProvider.publish({
   destination: "FACEBOOK",
   pageId: "1",
   accessToken: PAGE_TOKEN,
   message: "nope",
 });
 check(
-  "Instagram publish stays not yet available",
-  igResult.ok === false && igResult.error === "Instagram publishing is not yet available." && !igResult.error.includes(PAGE_TOKEN),
+  "Google publish stays not yet available",
+  googleResult.ok === false &&
+    googleResult.error === "Google Business Profile publishing is not yet available." &&
+    !googleResult.error.includes(PAGE_TOKEN),
 );
 
 console.log("\nFIXTURE — live clients parse fake HTTP and do not use the network");
@@ -495,7 +543,7 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
     loaded.find((card) => card.destination === "FACEBOOK")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "INSTAGRAM")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "GOOGLE")?.status === "CONNECTED" &&
-      loaded.find((card) => card.destination === "INSTAGRAM")?.publishAvailable === false &&
+      loaded.find((card) => card.destination === "INSTAGRAM")?.publishAvailable === true &&
       loaded.find((card) => card.destination === "GOOGLE")?.publishAvailable === false &&
       !JSON.stringify(loaded).includes(PAGE_TOKEN),
   );
