@@ -1,3 +1,4 @@
+import { PRODUCTION_SIGNED_IN_ORIGINS } from "@/lib/tbbt-marketing-host";
 import {
   firstHeaderHost,
   isTrustedVercelAppHost,
@@ -36,7 +37,11 @@ export function navigationOrigin(input: NavigationOriginInput): string {
   const fallback = new URL(input.requestUrl).origin;
   const env = (input.vercelEnv ?? "").trim();
   if (env !== "preview" && env !== "development") {
-    return fallback;
+    const host = firstHeaderHost(input.hostHeader);
+    const signedIn = host
+      ? PRODUCTION_SIGNED_IN_ORIGINS.find((origin) => origin === `https://${host}`)
+      : undefined;
+    return signedIn || fallback;
   }
 
   return (

@@ -98,6 +98,15 @@ check(
   }) === "https://www.collproreno.com",
 );
 check(
+  "production tbbtool.com Host wins over collproreno.com x-forwarded-host",
+  navigationOrigin({
+    requestUrl: "https://www.collproreno.com/settings/banking?oauth_state_id=abc",
+    hostHeader: "www.tbbtool.com",
+    forwardedHostHeader: "www.collproreno.com",
+    vercelEnv: "production",
+  }) === "https://www.tbbtool.com",
+);
+check(
   "local / missing VERCEL_ENV keeps request.url origin",
   navigationOrigin({
     requestUrl: "http://127.0.0.1:43217/field",

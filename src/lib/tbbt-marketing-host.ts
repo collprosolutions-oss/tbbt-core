@@ -39,6 +39,29 @@ export const COLLPRO_PUBLIC_HOSTS = [
   "www.collproreno.com",
 ] as const;
 
+/**
+ * Canonical www origins where a signed-in owner can use the app.
+ * Session cookies are host-only, so OAuth returns must stay on the
+ * host that minted the cookie. Apex hosts 308 to these www origins.
+ */
+export const PRODUCTION_SIGNED_IN_ORIGINS = [
+  "https://www.collproreno.com",
+  "https://www.tbbtool.com",
+] as const;
+
+export function productionSignedInOrigin(
+  host: string | null | undefined,
+): (typeof PRODUCTION_SIGNED_IN_ORIGINS)[number] | null {
+  const normalized = firstHeaderHost(host);
+  if (normalized === "collproreno.com" || normalized === "www.collproreno.com") {
+    return "https://www.collproreno.com";
+  }
+  if (normalized === "tbbtool.com" || normalized === "www.tbbtool.com") {
+    return "https://www.tbbtool.com";
+  }
+  return null;
+}
+
 /** Inner TBBT marketing routes. `/` is host-switched and is not in this list. */
 export const TBBT_MARKETING_PUBLIC_PATHS = [
   "/home",

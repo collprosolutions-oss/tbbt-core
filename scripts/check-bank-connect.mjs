@@ -58,6 +58,8 @@ const featureFiles = [
   "src/lib/plaid-webhook.ts",
   "src/app/actions/bank-connect.ts",
   "src/app/api/plaid/webhook/route.ts",
+  "src/components/settings/connect-bank-panel.tsx",
+  "src/app/(app)/settings/[section]/page.tsx",
 ];
 const featureSource = featureFiles.map(readRepo).join("\n");
 const opsSrc = readRepo("src/lib/bank-connect.ts");
@@ -96,6 +98,8 @@ const {
   resetFakePlaidProvider,
   resolvePlaidProvider,
   resolvePlaidRedirectUri,
+  allowedPlaidOAuthOrigin,
+  plaidOAuthReturnUri,
 } = await import("@/lib/plaid-provider");
 const {
   MAX_PLAID_WEBHOOK_BYTES,
@@ -155,7 +159,37 @@ check(
     opsSrc.includes("resolvePlaidRedirectUri") &&
     Boolean(resolvePlaidRedirectUri({ NEXT_PUBLIC_APP_URL: "https://app.example.com" })) &&
     resolvePlaidRedirectUri({ NEXT_PUBLIC_APP_URL: "https://app.example.com" }) ===
-      "https://app.example.com/settings?section=banking",
+      "https://app.example.com/settings/banking",
+);
+check(
+  "OAuth redirect_uri has no query and stays on the signed-in host",
+  resolvePlaidRedirectUri(
+    { NEXT_PUBLIC_APP_URL: "https://www.collproreno.com" },
+    "https://www.tbbtool.com",
+  ) === "https://www.tbbtool.com/settings/banking" &&
+    resolvePlaidRedirectUri(
+      { NEXT_PUBLIC_APP_URL: "https://www.collproreno.com" },
+      "https://www.collproreno.com",
+    ) === "https://www.collproreno.com/settings/banking" &&
+    resolvePlaidRedirectUri(
+      { NEXT_PUBLIC_APP_URL: "https://www.collproreno.com" },
+      "https://evil.example.com",
+    ) === "https://www.collproreno.com/settings/banking" &&
+    !plaidOAuthReturnUri("https://www.tbbtool.com").includes("?") &&
+    allowedPlaidOAuthOrigin("https://tbbtool.com") === "https://www.tbbtool.com",
+);
+check(
+  "session cookie is host-only SameSite=lax so same-host OAuth GET keeps the owner signed in",
+  readRepo("src/lib/auth.ts").includes('sameSite: "lax"') &&
+    !/cookieStore\.set\(\s*SESSION_COOKIE[\s\S]*domain:/.test(readRepo("src/lib/auth.ts")) &&
+    readRepo("src/components/settings/connect-bank-panel.tsx").includes("receivedRedirectUri") &&
+    readRepo("src/components/settings/connect-bank-panel.tsx").includes("sessionStorage") &&
+    readRepo("src/app/(app)/settings/[section]/page.tsx").includes("oauth_state_id") &&
+    !readRepo("src/app/(app)/settings/[section]/page.tsx").includes(
+      'redirect(`/settings?section=${encodeURIComponent(section)}&oauth',
+    ) &&
+    actionSrc.includes("readRequestOrigin") &&
+    proxySrc.includes("continueWithRequestHost"),
 );
 check(
   "ES256 webhooks verify JOSE ieee-p1363, not DER",
@@ -220,6 +254,14 @@ check(
   !featureSource.includes("username") &&
     !featureSource.includes("password") &&
     readRepo(".env.example").includes("Never a bank username"),
+);
+check(
+  "live adapter requests Transactions only and never maps a balance field",
+  readRepo("src/lib/plaid-provider.ts").includes('products: updateMode ? undefined : ["transactions"]') &&
+    !readRepo("src/lib/plaid-provider.ts").includes("balances") &&
+    !readRepo("src/lib/plaid-provider.ts").includes("auth") &&
+    !readRepo("src/lib/plaid-provider.ts").includes("transfer") &&
+    readRepo("src/lib/bank-connect-copy.ts").includes("not a cash-balance claim"),
 );
 
 console.log("\nUNIT — token encryption, production guards, and ES256 webhook verification");

@@ -169,6 +169,18 @@ try {
     new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
     "utf8",
   );
+  const settingsSectionAliasSource = readFileSync(
+    new URL("../src/app/(app)/settings/[section]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  check(
+    "Plaid OAuth return stays on /settings/banking so the host session is kept",
+    settingsSectionAliasSource.includes("oauth_state_id") &&
+      settingsSectionAliasSource.includes('section === "banking"') &&
+      settingsSectionAliasSource.includes("SettingsPage") &&
+      workspaceSource.includes("Last Verified Bank Balance") &&
+      workspaceSource.includes(">Unavailable</dd>"),
+  );
   const goLiveUiSource = readFileSync(
     new URL("../src/components/settings/go-live-health-center.tsx", import.meta.url),
     "utf8",
