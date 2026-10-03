@@ -613,7 +613,7 @@ try {
     agreementId: replayNda.id,
     requestId: replayRequestId,
   });
-  const afterReplay = await prisma.businessAgreement.findUniqueOrThrow({
+  const afterReconcileReplay = await prisma.businessAgreement.findUniqueOrThrow({
     where: { id: replayNda.id },
     include: { versions: true },
   });
@@ -626,10 +626,10 @@ try {
       replayFirst.bound === true &&
       replayFirst.reused === false &&
       replayFirst.requestId === replayRequestId &&
-      afterReplay.signingMode === "PROVIDER_READY" &&
-      afterReplay.esignSignatureRequestId === replayRequestId &&
-      afterReplay.businessId === businessA.id &&
-      afterReplay.versions.some(
+      afterReconcileReplay.signingMode === "PROVIDER_READY" &&
+      afterReconcileReplay.esignSignatureRequestId === replayRequestId &&
+      afterReconcileReplay.businessId === businessA.id &&
+      afterReconcileReplay.versions.some(
         (row) => row.id === replayFirst.version.id && row.esignSignatureRequestId === replayRequestId,
       ),
   );
