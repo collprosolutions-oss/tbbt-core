@@ -259,12 +259,23 @@ const schemaSrc = readFileSync(new URL("../prisma/schema.prisma", import.meta.ur
 const envExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 const proxySrc = readFileSync(new URL("../src/proxy.ts", import.meta.url), "utf8");
 const { proxy } = await import("@/proxy");
-const { NextRequest } = await import("next/server");
 
 function unauthenticatedProxyRequest(pathname) {
-  return new NextRequest(new URL(pathname, "http://saas-billing.test"), {
-    method: "POST",
-  });
+  const url = new URL(pathname, "http://saas-billing.test");
+  return {
+    nextUrl: { pathname: url.pathname, search: url.search },
+    url: url.toString(),
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === "host" ? url.host : null;
+      },
+    },
+    cookies: {
+      get() {
+        return undefined;
+      },
+    },
+  };
 }
 
 function proxyRedirectsToSignIn(response) {
