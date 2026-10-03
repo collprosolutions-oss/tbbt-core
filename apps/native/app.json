@@ -14,7 +14,6 @@
       "package": "com.tbbt.field",
       "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize",
-      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"

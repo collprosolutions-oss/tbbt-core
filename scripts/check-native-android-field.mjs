@@ -110,41 +110,55 @@ console.log(`  debug APK  : ${hasDebugApk ? `${debugApkPath} (${apkBytes} bytes)
 
 console.log("\nSTATIC — Android debug pipeline exists and is not Play distribution");
 check(
-  "app.json has package, versionCode, cleartext, and keyboard resize",
+  "app.json has package, versionCode, and keyboard resize without a cleartext claim",
   appJson.expo.version === NATIVE_APP_VERSION &&
     appJson.expo.android.package === NATIVE_ANDROID_PACKAGE &&
     appJson.expo.android.versionCode === NATIVE_ANDROID_VERSION_CODE &&
-    appJson.expo.android.usesCleartextTraffic === true &&
     appJson.expo.android.softwareKeyboardLayoutMode === "resize" &&
+    !Object.prototype.hasOwnProperty.call(appJson.expo.android, "usesCleartextTraffic") &&
     Array.isArray(appJson.expo.android.permissions) &&
     appJson.expo.android.permissions.includes("android.permission.INTERNET"),
 );
 check(
-  "eas.json preview profile builds an internal APK, not a store upload",
+  "eas.json preview is an internal release APK that requires an https operator URL",
   easJson.build.preview.android.buildType === "apk" &&
     easJson.build.preview.distribution === "internal" &&
-    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL.includes("10.0.2.2"),
+    String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).startsWith("https://") &&
+    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL.includes("REPLACE-WITH-REACHABLE-TBBT-ORIGIN") &&
+    !String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).includes("10.0.2.2") &&
+    easJson.build.production == null &&
+    easJson.build.submit == null,
 );
 check(
-  "Native package.json exposes prebuild / assemble-debug / debug-apk",
-  nativePackage.scripts["android:prebuild"]?.includes("expo prebuild") &&
+  "Native package.json routes prebuild/debug-apk through the restore wrapper",
+  nativePackage.scripts["android:prebuild"]?.includes("android-debug-apk.sh --prebuild-only") &&
     nativePackage.scripts["android:assemble-debug"]?.includes("gradlew assembleDebug") &&
-    nativePackage.scripts["android:debug-apk"]?.includes("assembleDebug"),
+    nativePackage.scripts["android:debug-apk"]?.includes("android-debug-apk.sh") &&
+    !nativePackage.scripts["android:debug-apk"]?.includes("expo prebuild --platform android &&"),
 );
 check(
-  "Debug APK script refuses to assemble when ANDROID_HOME is missing",
+  "Debug APK script refuses to assemble when ANDROID_HOME is missing and restores package.json",
   apkScriptSrc.includes("ANDROID_HOME") &&
     apkScriptSrc.includes("assemble") &&
-    apkScriptSrc.includes("exit 2"),
+    apkScriptSrc.includes("exit 2") &&
+    apkScriptSrc.includes("package.json") &&
+    apkScriptSrc.includes("restore_pkg") &&
+    apkScriptSrc.includes("expo prebuild") &&
+    apkScriptSrc.includes("UNVERIFIED"),
 );
 check(
-  "Docs register the Android proof and keep Play distribution out of scope",
+  "Docs register the Android proof, UNVERIFIED recipe, and no cleartext grant",
   docsSrc.includes("test:native-android-field") &&
     docsSrc.includes("local debug APK") &&
+    docsSrc.includes("UNVERIFIED") &&
+    docsSrc.includes("Cleartext HTTP is not enabled") &&
     packageSrc.includes("test:native-android-field") &&
     nativeReadme.includes("android:debug-apk") &&
+    nativeReadme.includes("UNVERIFIED") &&
+    nativeReadme.includes("restores it after prebuild") &&
     selfSrc.includes("openDisposableTestDatabase") &&
-    selfSrc.includes('namePrefix: "tbbt_native_android_field"'),
+    selfSrc.includes('namePrefix: "tbbt_native_android_field"') &&
+    selfSrc.includes("DELETE: deletePushDevices"),
 );
 
 console.log("\nSTATIC — Android-specific client defects");
@@ -244,16 +258,54 @@ const { resolveNativeFieldAccess, signInNativeField } = await import("@/lib/nati
 const {
   hashNativePushDeviceToken,
   registerNativePushDevice,
-  revokeNativePushDevice,
+  NATIVE_PUSH_DEVICE_NOT_OWNED,
+  NATIVE_PUSH_DEVICE_TOKEN_HEADER,
+  NATIVE_PUSH_JSON_MAX_BYTES,
+  NATIVE_PUSH_TOKEN_REQUIRED,
 } = await import("@/lib/native-push/devices");
+const { NATIVE_SESSION_TOO_LARGE } = await import("@/lib/native-session-limits");
 const { serializeChecklist } = await import("@/lib/cleaning-visit-workflow");
 
 const session = await openDisposableTestDatabase({
   databaseUrl: baseUrl,
   namePrefix: "tbbt_native_android_field",
   pushSchema: true,
+  setProcessEnv: true,
 });
 const prisma = session.prisma;
+const { prisma: routePrisma } = await import("@/lib/prisma");
+session.trackClient(routePrisma);
+const { DELETE: deletePushDevices } = await import(
+  new URL("../src/app/api/native/v1/push-devices/route.ts", import.meta.url)
+);
+
+async function callDeletePushDevices(sessionToken, { headerToken, body } = {}) {
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${sessionToken}`,
+  };
+  if (headerToken != null) {
+    headers[NATIVE_PUSH_DEVICE_TOKEN_HEADER] = headerToken;
+  }
+  if (body != null) {
+    headers["Content-Type"] = "application/json";
+  }
+  const response = await deletePushDevices(
+    new Request("http://native.test/api/native/v1/push-devices", {
+      method: "DELETE",
+      headers,
+      body,
+    }),
+  );
+  const text = await response.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { error: text };
+  }
+  return { status: response.status, body: json };
+}
 
 try {
   const password = "android-field-pass-9";
@@ -279,6 +331,21 @@ try {
   });
   const memberMem = await prisma.membership.create({
     data: { userId: memberUser.id, businessId: business.id, role: "MEMBER" },
+  });
+  const otherBusiness = await prisma.business.create({
+    data: {
+      name: "Other Android Field Co",
+      slug: "other-android-native-field",
+      tradeCode: "HANDYMAN",
+      timezone: NY,
+      ...onboarding,
+    },
+  });
+  const otherUser = await prisma.user.create({
+    data: { name: "Omar Other", email: "omar@other-android-field.example", passwordHash },
+  });
+  const otherMem = await prisma.membership.create({
+    data: { userId: otherUser.id, businessId: otherBusiness.id, role: "MEMBER" },
   });
   const customer = await prisma.customer.create({
     data: { businessId: business.id, name: "Test Resident", phone: "555-0199" },
@@ -518,34 +585,108 @@ try {
   if (!signOutResolved.ok) {
     throw new Error("Expected post-expiry MEMBER access.");
   }
-  const signOutToken = `android-signout-${randomUUID()}`;
-  const signOutRegister = await registerNativePushDevice(prisma, signOutResolved.access, {
-    token: signOutToken,
+  console.log("\nROUTE — real DELETE /api/native/v1/push-devices handler");
+  const ownHeaderToken = `android-header-only-${randomUUID()}`;
+  const ownHeaderRegister = await registerNativePushDevice(prisma, signOutResolved.access, {
+    token: ownHeaderToken,
     platform: "android",
     optedIn: true,
   });
-  const headerOnly = readNativePushDeviceTokenFromParts({
-    headerToken: signOutToken,
-    bodyToken: "",
+  const headerOnlyDelete = await callDeletePushDevices(signOut.token, {
+    headerToken: ownHeaderToken,
   });
-  const revoked = await revokeNativePushDevice(prisma, signOutResolved.access, {
-    token: headerOnly,
-  });
-  const revokedRow = await prisma.nativePushDevice.findFirst({
-    where: { tokenHash: hashNativePushDeviceToken(signOutToken), membershipId: memberMem.id },
+  const headerOnlyRow = await prisma.nativePushDevice.findFirst({
+    where: { tokenHash: hashNativePushDeviceToken(ownHeaderToken), membershipId: memberMem.id },
   });
   check(
-    "Android sign-out revoke works when only the device-token header survives",
-    signOutRegister.ok === true &&
-      headerOnly === signOutToken &&
-      revoked.ok === true &&
-      revoked.preference.thisDeviceOptedIn === false &&
-      revokedRow?.revokedAt != null,
+    "DELETE with x-tbbt-device-token header only revokes the caller's own device",
+    ownHeaderRegister.ok === true &&
+      headerOnlyDelete.status === 200 &&
+      headerOnlyDelete.body.thisDeviceOptedIn === false &&
+      headerOnlyRow?.revokedAt != null &&
+      headerOnlyRow.optedIn === false,
+  );
+
+  const unparseableToken = `android-unparseable-${randomUUID()}`;
+  const unparseableRegister = await registerNativePushDevice(prisma, signOutResolved.access, {
+    token: unparseableToken,
+    platform: "android",
+    optedIn: true,
+  });
+  const unparseableDelete = await callDeletePushDevices(signOut.token, {
+    headerToken: unparseableToken,
+    body: "{not-json",
+  });
+  const unparseableRow = await prisma.nativePushDevice.findFirst({
+    where: {
+      tokenHash: hashNativePushDeviceToken(unparseableToken),
+      membershipId: memberMem.id,
+    },
+  });
+  check(
+    "DELETE with header plus unparseable body still revokes the caller's device",
+    unparseableRegister.ok === true &&
+      unparseableDelete.status === 200 &&
+      unparseableDelete.body.thisDeviceOptedIn === false &&
+      unparseableRow?.revokedAt != null,
+  );
+
+  const otherSignIn = await signInNativeField(prisma, {
+    email: otherUser.email,
+    password,
+    userAgent: "Android/debug 0.1.0",
+  });
+  const otherResolved = otherSignIn.ok
+    ? await resolveNativeFieldAccess(prisma, { token: otherSignIn.token })
+    : { ok: false };
+  check("Foreign-tenant MEMBER can sign in on the disposable workspace", otherResolved.ok === true);
+  if (!otherResolved.ok) {
+    throw new Error("Expected foreign MEMBER access.");
+  }
+  const foreignToken = `android-foreign-${randomUUID()}`;
+  const foreignRegister = await registerNativePushDevice(prisma, otherResolved.access, {
+    token: foreignToken,
+    platform: "android",
+    optedIn: true,
+  });
+  const foreignDelete = await callDeletePushDevices(signOut.token, {
+    headerToken: foreignToken,
+  });
+  const foreignRow = await prisma.nativePushDevice.findFirst({
+    where: {
+      tokenHash: hashNativePushDeviceToken(foreignToken),
+      membershipId: otherMem.id,
+    },
+  });
+  check(
+    "DELETE header token from another tenant returns 403 NOT_OWNED and revokes nothing",
+    foreignRegister.ok === true &&
+      foreignDelete.status === 403 &&
+      foreignDelete.body.error === NATIVE_PUSH_DEVICE_NOT_OWNED &&
+      foreignRow?.revokedAt == null &&
+      foreignRow?.optedIn === true,
+  );
+
+  const missingDelete = await callDeletePushDevices(signOut.token, {});
+  check(
+    "DELETE with neither header nor body token returns 400",
+    missingDelete.status === 400 && missingDelete.body.error === NATIVE_PUSH_TOKEN_REQUIRED,
+  );
+
+  const oversizedDelete = await callDeletePushDevices(signOut.token, {
+    headerToken: `android-oversized-${randomUUID()}`,
+    body: "x".repeat(NATIVE_PUSH_JSON_MAX_BYTES + 1),
+  });
+  check(
+    "DELETE oversized body returns 413 before revoke",
+    oversizedDelete.status === 413 && oversizedDelete.body.error === NATIVE_SESSION_TOO_LARGE,
   );
 
   check(
     "Walkthrough never completed a job or invoked customer messaging",
-    (await prisma.job.count({ where: { businessId: business.id, status: "COMPLETED" } })) === 0,
+    (await prisma.job.count({ where: { businessId: business.id, status: "COMPLETED" } })) === 0 &&
+      (await prisma.job.count({ where: { businessId: otherBusiness.id, status: "COMPLETED" } })) ===
+        0,
   );
 } finally {
   await session.cleanup();
@@ -554,7 +695,7 @@ try {
 if (!androidHome) {
   console.log("\nAPK ASSEMBLE");
   console.log("  skipped — ANDROID_HOME unset; no emulator or device on this VM.");
-  console.log("  pipeline validated: eas preview APK + apps/native android:debug-apk.");
+  console.log("  recipe is UNVERIFIED. assembleDebug still needs Metro; preview needs https.");
   const script = fileURLToPath(new URL("./android-debug-apk.sh", import.meta.url));
   const refused = spawnSync("bash", [script], { encoding: "utf8" });
   check(

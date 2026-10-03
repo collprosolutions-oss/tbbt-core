@@ -10,7 +10,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_TBBT_API_URL": "http://10.0.2.2:43217"
+        "EXPO_PUBLIC_TBBT_API_URL": "https://REPLACE-WITH-REACHABLE-TBBT-ORIGIN.example"
       }
     },
     "development": {

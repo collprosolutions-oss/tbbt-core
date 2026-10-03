@@ -17,18 +17,16 @@ Sign in with a real TBBT account. The server issues a session token; this app st
 
 A MEMBER sees only jobs assigned to them. An OWNER/ADMIN using this app also sees only their own assigned jobs — never owner Today or invoices.
 
-## Android test build
+## Android test build (UNVERIFIED without an Android SDK/device)
 
-Local debug APK only. Not Play submission.
+This environment has not assembled an APK and has not run the app on a device. Not Play submission. No production/submit EAS profile and no store credentials.
 
-```bash
-# Requires Android SDK (ANDROID_HOME) and JDK.
-npm run android:debug-apk
-# or from the repo root:
-bash scripts/android-debug-apk.sh
-```
+What the recipes actually produce:
 
-`eas.json` `preview` is the same internal APK profile (`buildType: apk`). Point `EXPO_PUBLIC_TBBT_API_URL` at the TBBT origin the phone can reach. Android emulators should use `http://10.0.2.2:43217` instead of `localhost`. The app rewrites loopback hosts on Android.
+- `bash scripts/android-debug-apk.sh` / `npm run android:debug-apk`: Expo prebuild + Gradle `assembleDebug`. That is a **debug native shell**. It still needs Metro for JS unless you separately export and embed a bundle. `expo prebuild` rewrites the `android` / `ios` scripts in `apps/native/package.json`; the wrapper copies that tracked file aside and restores it after prebuild so the tree stays clean.
+- `eas.json` `preview`: an **internal release-type APK** (`buildType: apk`). Expo SDK 54 release manifests do not honor `usesCleartextTraffic`, so `EXPO_PUBLIC_TBBT_API_URL` must be **https**. The committed value is a placeholder (`https://REPLACE-WITH-REACHABLE-TBBT-ORIGIN.example`). Replace it with a TBBT origin you operate before building. Do not commit a real host or secret.
+
+`app.json` does not enable cleartext HTTP. The emulator loopback rewrite (`localhost` → `10.0.2.2`) is only for Android debug/dev against a host machine; it does not make a release APK accept HTTP.
 
 Sign-out revokes the device token with both a JSON body and `x-tbbt-device-token` so a dropped DELETE body still signs the Android device out.
 
