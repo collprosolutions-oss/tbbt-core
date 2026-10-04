@@ -1,3 +1,4 @@
+import { SAAS_CHECKOUT_PAYMENT_METHOD_TYPES } from "@/lib/saas-billing/config";
 import type {
   ChangeSaasSubscriptionPriceInput,
   CreateSaasCheckoutInput,
@@ -31,6 +32,7 @@ export type FakeSaasCheckout = SaasCheckoutSessionResult & {
   priceId: string;
   planCode: string;
   mode: "subscription";
+  paymentMethodTypes: readonly string[];
 };
 
 export type FakeSaasBillingProvider = SaasBillingProvider & {
@@ -86,6 +88,7 @@ export function createFakeSaasBillingProvider(): FakeSaasBillingProvider {
         priceId: input.priceId,
         planCode: input.planCode,
         mode: "subscription",
+        paymentMethodTypes: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES],
       };
       checkouts.push(result);
       return { id: result.id, url: result.url };

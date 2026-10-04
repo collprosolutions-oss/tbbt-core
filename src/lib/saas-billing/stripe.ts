@@ -1,6 +1,10 @@
 import Stripe from "stripe";
 import { getStripeSecretKey } from "@/lib/payments/config";
-import { SAAS_CHECKOUT_PURPOSE, TBBT_SAAS_PLAN_CODE } from "@/lib/saas-billing/config";
+import {
+  SAAS_CHECKOUT_PAYMENT_METHOD_TYPES,
+  SAAS_CHECKOUT_PURPOSE,
+  TBBT_SAAS_PLAN_CODE,
+} from "@/lib/saas-billing/config";
 import type {
   ChangeSaasSubscriptionPriceInput,
   CreateSaasCheckoutInput,
@@ -44,6 +48,7 @@ export function createStripeSaasBillingProvider(): SaasBillingProvider {
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
         customer: input.customerId,
+        payment_method_types: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES],
         line_items: [{ price: input.priceId, quantity: 1 }],
         success_url: input.successUrl,
         cancel_url: input.cancelUrl,

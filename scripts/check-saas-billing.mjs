@@ -71,6 +71,7 @@ const {
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
   saasBillingWebhookSecrets,
+  SAAS_CHECKOUT_PAYMENT_METHOD_TYPES,
   SAAS_CHECKOUT_PURPOSE,
   setSaasBillingProvider,
   startSaasBillingPortal,
@@ -429,6 +430,16 @@ check(
   saasEvents.includes('eventType === "checkout.session.completed" && object.payment_status !== "paid"') &&
     saasEvents.includes('object.payment_status === "paid" ? "active" : "incomplete"') &&
     !saasEvents.includes('object.payment_status === "paid" || object.status === "complete"'),
+);
+check(
+  "Founder subscription Checkout requests card only",
+  SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card" &&
+    saasDir.includes("payment_method_types: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES]") &&
+    saasFakeSrc.includes("paymentMethodTypes: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES]") &&
+    !SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.includes("us_bank_account") &&
+    !SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.includes("ach_debit") &&
+    !saasDir.includes("us_bank_account") &&
+    !saasDir.includes("customer_balance"),
 );
 
 console.log("\nUNIT — fake SaaS adapter never operates in Vercel production");
@@ -813,6 +824,11 @@ try {
   const first = await startSaasSubscriptionCheckout(prisma, accessA);
   check("Checkout URL is returned", first.url.startsWith("https://checkout.stripe.test/subscribe/"));
   check("Fake Checkout uses mode subscription", provider.checkouts[0]?.mode === "subscription");
+  check(
+    "Founder Checkout request is card-only",
+    Array.isArray(provider.checkouts[0]?.paymentMethodTypes) &&
+      provider.checkouts[0].paymentMethodTypes.join(",") === "card",
+  );
   check("Checkout customer is created for Business A", Boolean(first.customerId));
   const rowAfterFirst = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: businessA.business.id },
@@ -1203,6 +1219,63 @@ try {
       asyncPaidRow?.status === "active" &&
       asyncPaidRow?.stripeSubscriptionId === "sub_async_pay" &&
       Boolean(asyncPaidRow?.founderConvertedAt),
+  );
+
+  console.log("\nTEST — Card-only Checkout request and unpaid-to-active sequence");
+  const cardOnly = await seedBusiness("Card Only Founder Checkout");
+  const cardOnlyAccess = makeAccess(
+    cardOnly.business.id,
+    "OWNER",
+    cardOnly.membership.id,
+    cardOnly.ownerUser.email,
+  );
+  const cardCheckout = await startSaasSubscriptionCheckout(prisma, cardOnlyAccess);
+  const cardRequest = provider.checkouts.at(-1);
+  check(
+    "Checkout session create asks Stripe for card only",
+    cardCheckout.url.startsWith("https://checkout.stripe.test/subscribe/") &&
+      cardRequest?.mode === "subscription" &&
+      cardRequest?.businessId === cardOnly.business.id &&
+      cardRequest?.paymentMethodTypes.join(",") === "card" &&
+      !cardRequest?.paymentMethodTypes.includes("us_bank_account"),
+  );
+  const unpaidThenActive = saasCheckoutEvent({
+    id: "evt_card_unpaid_then_active",
+    businessId: cardOnly.business.id,
+    customerId: cardCheckout.customerId,
+    subscriptionId: "sub_card_only",
+    paymentStatus: "unpaid",
+  });
+  const unpaidThenActiveDispatch = await dispatchStripeWebhookEvent(prisma, unpaidThenActive);
+  const afterUnpaidSequence = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: cardOnly.business.id },
+  });
+  check(
+    "Unpaid complete in the card-only sequence still refuses activation",
+    unpaidThenActiveDispatch.applied === false &&
+      unpaidThenActiveDispatch.system === null &&
+      afterUnpaidSequence?.status === "none" &&
+      afterUnpaidSequence?.stripeSubscriptionId == null &&
+      afterUnpaidSequence?.founderConvertedAt == null,
+  );
+  const paidAfterUnpaid = await verifyAndDispatch(saasCheckoutEvent({
+    id: "evt_card_paid_after_unpaid",
+    businessId: cardOnly.business.id,
+    customerId: cardCheckout.customerId,
+    subscriptionId: "sub_card_only",
+    paymentStatus: "paid",
+  }));
+  const afterPaidSequence = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: cardOnly.business.id },
+  });
+  check(
+    "Later paid Checkout is the only activation in the unpaid-to-active sequence",
+    paidAfterUnpaid.applied === true &&
+      paidAfterUnpaid.system === "saas" &&
+      afterPaidSequence?.status === "active" &&
+      afterPaidSequence?.stripeSubscriptionId === "sub_card_only" &&
+      afterPaidSequence?.stripeCustomerId === cardCheckout.customerId &&
+      Boolean(afterPaidSequence?.founderConvertedAt),
   );
   check(
     "parseSaasBillingEvent ignores Connect-account events",
