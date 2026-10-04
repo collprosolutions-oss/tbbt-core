@@ -73,6 +73,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 export type StudioWeeklyReminderDispatchReason =
   | "created"
   | "already_recorded"
+  | "outside_send_window"
   | "not_opted_in"
   | "nothing_awaiting"
   | "schema_unavailable";
@@ -234,7 +235,7 @@ export function summarizeStudioWeeklyReminderCronRun(
 ): StudioWeeklyReminderCronSummary {
   return {
     considered: results.length,
-    claimed: results.filter((row) => row.reminder?.smsSendClaimedAt).length,
+    claimed: results.filter((row) => row.smsClaimedThisRun === true).length,
     skipped: results.filter((row) => row.skipped).length,
   };
 }
@@ -996,7 +997,7 @@ export async function runScheduledStudioWeeklyReminderForBusiness(
     return {
       businessId,
       created: false,
-      reason: "already_recorded",
+      reason: "outside_send_window",
       reminder: null,
       delivery,
       skipped: "outside_send_window",
