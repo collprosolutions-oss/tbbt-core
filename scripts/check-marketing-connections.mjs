@@ -191,12 +191,16 @@ check(
     setupDoc.includes("Connecting a destination never publishes") &&
     setupDoc.includes("Instagram publishing") &&
     setupDoc.includes("Google local posts") &&
+    setupDoc.includes("STANDARD local-post") &&
     setupDoc.includes("GBP API access approval (0 QPM)") &&
     setupDoc.includes("Missing `META_APP_ID`") &&
     setupDoc.includes("Missing `GOOGLE_OAUTH_CLIENT_ID`") &&
     !setupDoc.includes("Instagram publishing is not yet available") &&
     !setupDoc.includes("no Instagram publish path") &&
-    !setupDoc.includes("has no Instagram publish implementation"),
+    !setupDoc.includes("has no Instagram publish implementation") &&
+    !setupDoc.includes("Google Business Profile publishing is not yet available") &&
+    !setupDoc.includes("Google publishing is not yet available") &&
+    !setupDoc.includes("their publish paths are not yet available"),
 );
 check(
   "Setup doc and env example refuse fake adapters and automatic posting",

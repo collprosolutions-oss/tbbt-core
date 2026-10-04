@@ -4,10 +4,11 @@ This is the operator runbook for merged marketing destination consent
 (#347). It does not add a second connect path, and it does not turn on
 automatic posting.
 
-Connecting a destination never publishes. Facebook Page and Instagram
-publish, when used, stay an explicit OWNER click after an approved
-package. Instagram publishing and Google local posts each need their
-own App Review or API approval before real use.
+Connecting a destination never publishes. Facebook Page, Instagram, and
+Google Business Profile STANDARD local-post publish stay an explicit
+OWNER click after an approved package. Instagram publishing needs Meta
+App Review Advanced Access. Google local posts need Business Profile
+API approval before real use.
 
 Settings → Reviews / Marketing Connections is read-only status. The OWNER
 starts consent from Marketing → Social posts
@@ -106,13 +107,15 @@ Web-server flow (`access_type=offline`, `prompt=consent`) requests only:
 - `https://www.googleapis.com/auth/business.manage`
 
 After token exchange TBBT lists accounts and locations. Connecting
-does not create a local post. Real Google local-post use needs its
-own Business Profile API approval.
+does not create a local post. A later OWNER STANDARD local-post
+publish still needs Business Profile API approval and never claims
+ranking improvements.
 
 | API TBBT calls | Host |
 | --- | --- |
 | Account Management `accounts.list` | `https://mybusinessaccountmanagement.googleapis.com/v1/accounts` |
 | Business Information locations (`readMask=name,title`) | `https://mybusinessbusinessinformation.googleapis.com/v1/{account}/locations` |
+| Google My Business `localPosts.create` (STANDARD) | `https://mybusiness.googleapis.com/v4/{location}/localPosts` |
 
 ## Meta application setup
 
@@ -189,6 +192,7 @@ enable automatic posting.
 4. After approval, enable only the APIs TBBT calls:
    - My Business Account Management API
    - My Business Business Information API
+   - Google My Business API (v4 `localPosts.create` for STANDARD posts)
 5. OAuth consent screen:
    - User type: External
    - App name / support email
@@ -212,7 +216,7 @@ Credentials alone do not grant Business Profile API access.
 | OAuth client + exact redirect URI | **Yes** | Code exchange uses `GOOGLE_OAUTH_REDIRECT_URI` |
 | Consent-screen Testing vs Production | **Yes for non-test users** | `business.manage` is not a basic scope. Unpublished / Testing apps only allow listed test users |
 | Google OAuth verification (if Google requires it to publish the consent screen) | **Yes for non-test users** | Same as any External production OAuth app using this scope |
-| Local posts / publishing approval | No | Connecting a location does not create a post. Real local-post use needs its own API approval. |
+| Local posts / publishing approval | No | Connecting a location does not create a post. Live STANDARD local-post publish uses the same GBP API approval and an explicit OWNER click. |
 
 ## What currently blocks a real Production connection
 
@@ -223,7 +227,7 @@ merged #347 behavior.
 | --- | --- | --- |
 | Facebook Page | Missing `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`; then Meta Advanced Access for `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`; Business Verification; Live mode; matching redirect URI; App Review materials (privacy / data-deletion gap) | Automatic posting (off). Encryption key (already set) |
 | Instagram | Same missing Meta Vercel names; then Advanced Access for `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` | Connecting never publishes. Instagram publish App Review is separate and required before real Instagram publish use |
-| Google Business Profile | Missing `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`; then GBP API access approval (0 QPM); then consent-screen / OAuth verification for non-test users | Connecting never creates a local post. Google local-post API approval is separate and required before real local-post use |
+| Google Business Profile | Missing `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`; then GBP API access approval (0 QPM); then consent-screen / OAuth verification for non-test users | Connecting never creates a local post. Live STANDARD local-post publish needs that same GBP API approval and an explicit OWNER click |
 
 Tester-only Development-mode Facebook/Instagram connects become possible
 after the three Meta Vercel names are set and the OWNER is an app role.
@@ -242,8 +246,9 @@ These are already implemented. This runbook must not change them.
   B’s state or ciphertext.
 - Confirm writes `CONNECTED` and the message
   `{destination} connected. Nothing was published.`
-- A later OWNER publish click, if present, is a separate action and
-  still requires the destination’s own App Review or API approval.
+- A later OWNER Facebook, Instagram, or Google STANDARD local-post
+  publish click is a separate action and still requires that
+  destination’s own App Review or API approval.
 
 ## Operator sequence
 
@@ -253,7 +258,7 @@ These are already implemented. This runbook must not change them.
    and Instagram connect scopes. Instagram publish App Review is
    separate and required before real Instagram publish use.
 4. Create the Google Cloud project, submit GBP Basic API Access, wait
-   for 300 QPM, enable the two APIs, create the Web OAuth client,
+   for 300 QPM, enable the three APIs, create the Web OAuth client,
    register the Google callback.
 5. Set the six Vercel Production names. Redeploy.
 6. As OWNER on `www.collproreno.com`, open Marketing → Social posts.
