@@ -1951,6 +1951,9 @@ try {
   );
 
   console.log("\nTEST — Cron claimed counts only this run");
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, false, weekInstant, {
+    smsPlatformConfigured: false,
+  });
   await resetOwnerSmsSendWeek(businessB.id, ownerDest);
   await prisma.business.update({
     where: { id: businessB.id },
@@ -1960,7 +1963,7 @@ try {
     smsPlatformConfigured: false,
   });
   await prisma.marketingStudioWeeklyReminder.deleteMany({
-    where: { businessId: { in: [businessA.id, businessB.id] }, weekKey: "2026-09-27" },
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
   });
   const thisRunSms = createFakeCustomerMessagingProvider();
   const cronFirst = await runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
@@ -1968,27 +1971,28 @@ try {
     messagingProvider: thisRunSms,
   });
   const cronFirstB = cronFirst.filter((row) => row.businessId === businessB.id);
-  const cronFirstSummary = summarizeStudioWeeklyReminderCronRun(cronFirstB);
+  const cronFirstSummary = summarizeStudioWeeklyReminderCronRun(cronFirst);
   check(
     "First Monday cron claims once and calls the fake provider once",
     cronFirstB.length === 1 &&
       cronFirstB[0]?.smsClaimedThisRun === true &&
       cronFirstSummary.claimed === 1 &&
-      thisRunSms.sent.filter((row) => row.to === ownerDest).length === 1,
+      thisRunSms.sent.length === 1 &&
+      thisRunSms.sent[0]?.to === ownerDest,
   );
   const cronSecond = await runScheduledStudioWeeklyReminders(prisma, pacificMonday10, {
     smsPlatformConfigured: true,
     messagingProvider: thisRunSms,
   });
   const cronSecondB = cronSecond.filter((row) => row.businessId === businessB.id);
-  const cronSecondSummary = summarizeStudioWeeklyReminderCronRun(cronSecondB);
+  const cronSecondSummary = summarizeStudioWeeklyReminderCronRun(cronSecond);
   check(
     "Second Monday cron reports claimed 0 and does not send again",
     cronSecondB.length === 1 &&
       cronSecondB[0]?.smsClaimedThisRun !== true &&
       cronSecondB[0]?.reminder?.smsSendClaimedAt != null &&
       cronSecondSummary.claimed === 0 &&
-      thisRunSms.sent.filter((row) => row.to === ownerDest).length === 1,
+      thisRunSms.sent.length === 1,
   );
 
   await resetOwnerSmsSendWeek(businessB.id, ownerDest);
@@ -1996,7 +2000,7 @@ try {
     smsPlatformConfigured: false,
   });
   await prisma.marketingStudioWeeklyReminder.deleteMany({
-    where: { businessId: { in: [businessA.id, businessB.id] }, weekKey: "2026-09-27" },
+    where: { businessId: businessB.id, weekKey: "2026-09-27" },
   });
   const retryThenCronSms = createFakeCustomerMessagingProvider();
   const ownerRetryFirst = await retryStudioWeeklyReminderSchedule(prisma, ownerB, pacificMonday10, {
@@ -2011,10 +2015,14 @@ try {
   check(
     "Cron after OWNER Monday retry reports claimed 0",
     ownerRetryFirst.claimed === 1 &&
-      retryThenCronSms.sent.filter((row) => row.to === ownerDest).length === 1 &&
+      retryThenCronSms.sent.length === 1 &&
+      retryThenCronSms.sent[0]?.to === ownerDest &&
       cronAfterRetryB[0]?.smsClaimedThisRun !== true &&
-      summarizeStudioWeeklyReminderCronRun(cronAfterRetryB).claimed === 0,
+      summarizeStudioWeeklyReminderCronRun(cronAfterRetry).claimed === 0,
   );
+  await setStudioWeeklyReviewReminderOptIn(prisma, ownerA, true, weekInstant, {
+    smsPlatformConfigured: false,
+  });
 
   console.log("\nTEST — Scheduling / timezone send window");
   await writeOwnerSmsDestination(businessA.id, "+15551234001", true);
