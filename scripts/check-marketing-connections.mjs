@@ -690,6 +690,51 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
     );
   }
 
+  await prisma.marketingSocialDestination.deleteMany({
+    where: { businessId: businessA.id, destination: "GOOGLE" },
+  });
+  const googlePublishRow = (await connectExplicit(ownerA, "GOOGLE", "ext-google-publish-refresh")).row;
+  await prisma.marketingSocialDestination.update({
+    where: { id: googlePublishRow.id },
+    data: { tokenExpiresAt: new Date(Date.now() - 60_000) },
+  });
+  const resolvedRefreshToken = "resolved-google-access-MUST-NOT-LEAK";
+  const resolvedFresh = await resolveConnectedPublishToken(prisma, businessA.id, "GOOGLE", {
+    adapter: scriptFor("GOOGLE", {
+      refresh: {
+        ok: true,
+        accessToken: resolvedRefreshToken,
+        refreshToken: REFRESH_TOKEN,
+        expiresAt: new Date(Date.now() + 3600_000),
+        grantedScopes: [GOOGLE_BUSINESS_MANAGE_SCOPE],
+      },
+    }),
+  });
+  check(
+    "resolveConnectedPublishToken refreshes an expired Google token",
+    resolvedFresh?.accessToken === resolvedRefreshToken &&
+      resolvedFresh.pageId === googlePublishRow.pageId &&
+      !JSON.stringify(resolvedFresh).includes(REFRESH_TOKEN),
+  );
+  await prisma.marketingSocialDestination.update({
+    where: { id: googlePublishRow.id },
+    data: {
+      tokenExpiresAt: new Date(Date.now() - 60_000),
+      refreshTokenCiphertext: null,
+    },
+  });
+  check(
+    "resolveConnectedPublishToken refuses an expired Google token without a refresh token",
+    (await resolveConnectedPublishToken(prisma, businessA.id, "GOOGLE")) == null,
+  );
+  const expiredNoRefresh = await prisma.marketingSocialDestination.findFirst({
+    where: { id: googlePublishRow.id },
+  });
+  check(
+    "Expired Google token without a refresh token is marked EXPIRED",
+    expiredNoRefresh.connectionStatus === "EXPIRED",
+  );
+
   const reconnectAdapter = scriptFor("GOOGLE", {
     candidates: [candidate("GOOGLE", "ext-reconnected", "Reconnected Shop")],
   });

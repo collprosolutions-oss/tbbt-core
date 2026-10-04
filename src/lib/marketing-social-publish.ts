@@ -9,7 +9,10 @@
  * reaches the provider. Instagram uses only an approved public marketing
  * image and never sends a private job or customer photo. Google posts a
  * STANDARD local post only and never claims ranking improvements.
- * Expired Google tokens are marked NEEDS_RECONNECT and are not retried.
+ * Expired Google tokens refresh through the #347 connection refresh token
+ * when one exists. Otherwise they are refused as reconnect needed before
+ * any Google call. A 401, including a non-JSON body, marks NEEDS_RECONNECT
+ * and is not retried.
  *
  * Preview shares Production and skips migrate. Missing destination or
  * attempt tables fail closed. This file never runs request-time DDL.
@@ -55,6 +58,7 @@ import { getAppUrl } from "@/lib/mail";
 import {
   markMarketingConnectionNeedsReconnect,
   resolveConnectedPublishToken,
+  type MarketingConnectionDeps,
 } from "@/lib/marketing-connections/service";
 import {
   GOOGLE_LOCAL_POST_SUMMARY_MAX,
@@ -75,6 +79,8 @@ const OTHER_DB_ERROR_CODES = new Set(["P2002", "P2003", "P2014", "P2025"]);
 export type MarketingSocialPublishDeps = {
   /** Test hook. Fake or disconnected adapter only. Never a live post. */
   provider?: SocialPublishingProvider;
+  /** Test hook for #347 token refresh during claim. Never a live post. */
+  connection?: MarketingConnectionDeps;
   /** Test hook. Runs after the attempt is claimed and before the provider. */
   beforeProvider?: () => Promise<void>;
   /** Test hook. Runs after the in-flight pre-check and before the claim create. */
@@ -644,8 +650,28 @@ async function claimSocialPublishAttempt(
     throw new MarketingError(GOOGLE_LOCAL_POST_TOO_LONG_MESSAGE);
   }
 
-  const destinationRow = await resolveConnectedPublishToken(db, access.businessId, input.destination);
+  const destinationRow = await resolveConnectedPublishToken(
+    db,
+    access.businessId,
+    input.destination,
+    deps?.connection,
+  );
   if (!destinationRow?.pageId?.trim() || !destinationRow.accessToken) {
+    if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {
+      const statusRow = await db.marketingSocialDestination.findFirst({
+        where: { businessId: access.businessId, destination: input.destination },
+        select: { connectionStatus: true, tokenExpiresAt: true },
+      });
+      const now = deps?.connection?.now?.() ?? new Date();
+      const expired =
+        statusRow?.connectionStatus === "EXPIRED" ||
+        (statusRow?.connectionStatus === "NEEDS_RECONNECT" &&
+          statusRow.tokenExpiresAt != null &&
+          statusRow.tokenExpiresAt.getTime() <= now.getTime());
+      if (expired) {
+        throw new MarketingError(GOOGLE_RECONNECT_NEEDED_MESSAGE);
+      }
+    }
     throw new MarketingError(copy.disconnected);
   }
   if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {

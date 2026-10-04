@@ -93,6 +93,7 @@ export function PublishSocialButton({
           <div className="flex flex-wrap gap-2">
             <form action={resolveAction}>
               <input type="hidden" name="attemptId" value={attemptId} />
+              <input type="hidden" name="destination" value={destination} />
               <input type="hidden" name="resolution" value={SOCIAL_PUBLISH_RESOLVE_NOT_POSTED} />
               <Button type="submit" size="sm" variant="outline" disabled={resolvePending}>
                 Not posted, allow retry
@@ -100,6 +101,7 @@ export function PublishSocialButton({
             </form>
             <form action={resolveAction}>
               <input type="hidden" name="attemptId" value={attemptId} />
+              <input type="hidden" name="destination" value={destination} />
               <input type="hidden" name="resolution" value={SOCIAL_PUBLISH_RESOLVE_POSTED} />
               <Button type="submit" size="sm" disabled={resolvePending}>
                 It posted

@@ -199,6 +199,14 @@ export function createGoogleSocialPublishingProvider(
         try {
           payload = await response.json();
         } catch {
+          if (isGoogleReconnectNeededStatus(response, null)) {
+            return {
+              ok: false,
+              status: "FAILED",
+              outcome: "rejected",
+              error: GOOGLE_RECONNECT_NEEDED_MESSAGE,
+            };
+          }
           return unknownPublishResult(
             "Google Business Profile returned an unreadable response.",
             input.accessToken,

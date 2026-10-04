@@ -262,7 +262,7 @@ export const ALL_SOCIAL_DESTINATIONS_CONNECTED_MESSAGE =
   "Facebook Page, Instagram, and Google Business Profile are connected for explicit OWNER publish.";
 
 export const GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE =
-  "This publishes a STANDARD Google Business Profile local post. It does not change Google rankings.";
+  "This publishes a STANDARD Google Business Profile local post. TBBT makes no ranking promise.";
 
 export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
   "Only OWNER-approved creator packages can be published. A DRAFT or planned day is not a publish.";

@@ -106,6 +106,7 @@ const {
   instagramMediaPublishUrl,
 } = await import("@/lib/social-publishing/instagram");
 const { createGoogleSocialPublishingProvider } = await import("@/lib/social-publishing/google");
+const { createFakeMarketingOAuthAdapter } = await import("@/lib/marketing-connections/providers");
 const { encryptConnectionToken } = await import("@/lib/connection-token-crypto");
 const { marketingTokenPurpose } = await import("@/lib/marketing-connections/config");
 const {
@@ -133,6 +134,7 @@ const previousFake = process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
 delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
 
 const opsSrc = readSrc("src/lib/marketing-social-publish.ts");
+const connectionServiceSrc = readSrc("src/lib/marketing-connections/service.ts");
 const facebookSrc = readSrc("src/lib/social-publishing/facebook.ts");
 const instagramSrc = readSrc("src/lib/social-publishing/instagram.ts");
 const googleSrc = readSrc("src/lib/social-publishing/google.ts");
@@ -291,6 +293,9 @@ try {
     !existsSync(join(root, "prisma/migrations/20261003234500_google_local_post_account_binding/migration.sql")) &&
       opsSrc.includes("resolveConnectedPublishToken") &&
       opsSrc.includes("externalAccountId") &&
+      connectionServiceSrc.includes("tokenExpiresAt") &&
+      connectionServiceSrc.includes("refreshTokenCiphertext") &&
+      connectionServiceSrc.includes("refreshExpiredDestinationToken") &&
       !opsSrc.includes("accountId: true") &&
       typesSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
       typesSrc.includes("SOCIAL_PUBLISH_DESTINATION_GOOGLE") &&
@@ -488,7 +493,9 @@ try {
       actionSrc.includes("publishMarketingContentToSocial") &&
       buttonSrc.includes("Not posted, allow retry") &&
       buttonSrc.includes("It posted") &&
-      actionSrc.includes("resolveMarketingSocialPublishAttempt"),
+      actionSrc.includes("resolveMarketingSocialPublishAttempt") &&
+      actionSrc.includes("socialPublishCopy(destination).owner") &&
+      !actionSrc.includes("OWNER_SOCIAL_PUBLISH_MESSAGE"),
   );
   check(
     "Page loader never selects an access token",
@@ -731,6 +738,27 @@ try {
       googleExpired.outcome === "rejected" &&
       googleExpired.error === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
       !googleExpired.error.includes(googleToken),
+  );
+  const googleExpiredEmptyBody = await createGoogleSocialPublishingProvider(async () => ({
+    ok: false,
+    status: 401,
+    async json() {
+      throw new Error("Unexpected end of JSON input");
+    },
+  })).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+    pageId: "accounts/acct-1/locations/loc-9",
+    accountId: "accounts/acct-1",
+    accessToken: googleToken,
+    message: "hello",
+    localPost: composeGoogleLocalPostPayload({ summary: "hello" }),
+  });
+  check(
+    "Google 401 with a non-JSON body is reconnect needed, not UNKNOWN",
+    googleExpiredEmptyBody.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      googleExpiredEmptyBody.outcome === "rejected" &&
+      googleExpiredEmptyBody.error === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      !googleExpiredEmptyBody.error.includes(googleToken),
   );
 
   const businessA = await prisma.business.create({
@@ -2292,7 +2320,7 @@ try {
       googlePublishedRow.googleSocialPublish.label === GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
       googlePublishedRow.status === "APPROVED" &&
       GOOGLE_CONNECTED_OTHERS_DISCONNECTED_MESSAGE.includes("explicit OWNER") &&
-      GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE.includes("does not change Google rankings"),
+      GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE.includes("TBBT makes no ranking promise"),
   );
 
   console.log("\nTEST — #347 ciphertext Google destination, blocked statuses, and expired token");
@@ -2474,6 +2502,184 @@ try {
       expiredResult.message.includes(GOOGLE_RECONNECT_NEEDED_MESSAGE) &&
       expiredCalls.callCount === 1 &&
       expiredRow?.connectionStatus === "NEEDS_RECONNECT",
+  );
+
+  console.log("\nTEST — Google tokenExpiresAt refresh before publish");
+  const expiryApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Google token expiry before provider",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: cipherBusiness.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      },
+    },
+    data: {
+      connectionStatus: "CONNECTED",
+      disconnectedAt: null,
+      accessToken: "",
+      accessTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        googleCipherToken,
+      ),
+      refreshTokenCiphertext: null,
+      tokenExpiresAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const staleExpiryCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Expired Google tokenExpiresAt without a refresh token is refused before the provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        cipherAccess,
+        {
+          contentId: expiryApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: expiryApproved.updatedAt,
+        },
+        { provider: staleExpiryCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      staleExpiryCalls.callCount === 0,
+  );
+  const staleExpiryRow = await prisma.marketingSocialDestination.findFirst({
+    where: { businessId: cipherBusiness.id, destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE },
+  });
+  check(
+    "Expired Google token without a refresh token is marked EXPIRED",
+    staleExpiryRow?.connectionStatus === "EXPIRED" && staleExpiryCalls.callCount === 0,
+  );
+
+  const refreshedGoogleToken = "ya29.refreshed-google-token-MUST-NOT-LEAK";
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: cipherBusiness.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      },
+    },
+    data: {
+      connectionStatus: "CONNECTED",
+      disconnectedAt: null,
+      accessToken: "",
+      accessTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        googleCipherToken,
+      ),
+      refreshTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        "google-refresh-token-MUST-NOT-LEAK",
+      ),
+      tokenExpiresAt: new Date(Date.now() - 60_000),
+      scopesGranted: GOOGLE_BUSINESS_MANAGE_SCOPE,
+    },
+  });
+  const refreshApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Google refresh before local post",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  const refreshedCalls = createFakeSocialPublishingProvider();
+  const refreshedPublish = await publishMarketingContentToSocial(
+    prisma,
+    cipherAccess,
+    {
+      contentId: refreshApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      expectedUpdatedAt: refreshApproved.updatedAt,
+    },
+    {
+      provider: refreshedCalls,
+      connection: {
+        adapter: createFakeMarketingOAuthAdapter("GOOGLE", {
+          refresh: {
+            ok: true,
+            accessToken: refreshedGoogleToken,
+            refreshToken: "google-refresh-token-MUST-NOT-LEAK",
+            expiresAt: new Date(Date.now() + 3600_000),
+            grantedScopes: [GOOGLE_BUSINESS_MANAGE_SCOPE],
+          },
+        }),
+      },
+    },
+  );
+  check(
+    "Expired Google token refreshes through #347 before any local-post call",
+    refreshedPublish.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      refreshedPublish.published === true &&
+      refreshedCalls.callCount === 1 &&
+      refreshedCalls.published[0].accessToken === refreshedGoogleToken &&
+      refreshedCalls.published[0].pageId === google347PageId,
+  );
+
+  const failedRefreshApproved = await approvePackage(prisma, cipherAccess, cipherAccess, {
+    ...packageInput,
+    title: "Google refresh failure before local post",
+    channelIntent: "GOOGLE",
+    jobId: cipherJob.id,
+    photoIds: [cipherPhoto.id],
+  });
+  await prisma.marketingSocialDestination.update({
+    where: {
+      businessId_destination: {
+        businessId: cipherBusiness.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+      },
+    },
+    data: {
+      connectionStatus: "CONNECTED",
+      disconnectedAt: null,
+      accessTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        googleCipherToken,
+      ),
+      refreshTokenCiphertext: encryptConnectionToken(
+        marketingTokenPurpose(SOCIAL_PUBLISH_DESTINATION_GOOGLE),
+        cipherBusiness.id,
+        "google-refresh-token-MUST-NOT-LEAK",
+      ),
+      tokenExpiresAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const failedRefreshCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Failed Google refresh is reconnect needed with zero provider calls",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        cipherAccess,
+        {
+          contentId: failedRefreshApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+          expectedUpdatedAt: failedRefreshApproved.updatedAt,
+        },
+        {
+          provider: failedRefreshCalls,
+          connection: {
+            adapter: createFakeMarketingOAuthAdapter("GOOGLE", {
+              refresh: { ok: false, error: "invalid_grant" },
+            }),
+          },
+        },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      failedRefreshCalls.callCount === 0,
   );
 
   console.log("\nTEST — Two-connection liveKey race");

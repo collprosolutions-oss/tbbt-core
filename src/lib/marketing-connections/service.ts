@@ -640,6 +640,123 @@ export async function loadMarketingConnectionCards(
   });
 }
 
+type DestinationTokenFields = {
+  id: string;
+  businessId: string;
+  destination: string;
+  pageId: string | null;
+  accessToken: string;
+  accessTokenCiphertext: string | null;
+  refreshTokenCiphertext: string | null;
+  tokenExpiresAt: Date | null;
+  scopesGranted: string;
+};
+
+async function refreshExpiredDestinationToken(
+  db: Db,
+  row: DestinationTokenFields,
+  deps?: MarketingConnectionDeps,
+): Promise<
+  | {
+      ok: true;
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: Date | null;
+      grantedScopes: string[];
+    }
+  | { ok: false; status: "EXPIRED" | "NEEDS_RECONNECT"; message: string }
+> {
+  const now = nowFrom(deps)();
+  const accessToken = decryptFor(row.destination, row.businessId, row.accessTokenCiphertext);
+  const refreshToken = decryptFor(row.destination, row.businessId, row.refreshTokenCiphertext);
+  const granted = row.scopesGranted.split(/\s+/).filter(Boolean);
+  if (!row.tokenExpiresAt || row.tokenExpiresAt.getTime() > now.getTime()) {
+    return {
+      ok: true,
+      accessToken: accessToken || row.accessToken,
+      refreshToken,
+      expiresAt: row.tokenExpiresAt,
+      grantedScopes: granted,
+    };
+  }
+  if (!refreshToken || !isMarketingConnectionDestination(row.destination)) {
+    await db.marketingSocialDestination.updateMany({
+      where: { id: row.id, businessId: row.businessId },
+      data: {
+        connectionStatus: "EXPIRED",
+        lastError: "Token expired. Reconnect to replace it.",
+        lastCheckedAt: now,
+      },
+    });
+    return { ok: false, status: "EXPIRED", message: "Token expired. Reconnect to replace it." };
+  }
+  try {
+    const adapter = adapterFor(row.destination, deps);
+    const refreshed = await adapter.refreshAccessToken({
+      refreshToken,
+      accessToken,
+      externalId: row.pageId ?? "",
+    });
+    if (!refreshed.ok) {
+      await db.marketingSocialDestination.updateMany({
+        where: { id: row.id, businessId: row.businessId },
+        data: {
+          connectionStatus: "NEEDS_RECONNECT",
+          lastError: sanitizeConnectionError(refreshed.error, [accessToken, refreshToken]),
+          lastCheckedAt: now,
+        },
+      });
+      return {
+        ok: false,
+        status: "NEEDS_RECONNECT",
+        message: "Needs reconnect. The token could not be refreshed.",
+      };
+    }
+    const nextAccess = refreshed.accessToken;
+    const nextRefresh = refreshed.refreshToken ?? refreshToken;
+    const nextExpiry = refreshed.expiresAt;
+    const nextGranted = refreshed.grantedScopes.length > 0 ? refreshed.grantedScopes : granted;
+    await db.marketingSocialDestination.updateMany({
+      where: { id: row.id, businessId: row.businessId },
+      data: {
+        accessToken: "",
+        accessTokenCiphertext: encryptFor(row.destination, row.businessId, nextAccess),
+        refreshTokenCiphertext: encryptFor(row.destination, row.businessId, nextRefresh),
+        tokenExpiresAt: nextExpiry,
+        scopesGranted: nextGranted.join(" "),
+        connectionStatus: "CONNECTED",
+        lastError: "",
+        lastCheckedAt: now,
+      },
+    });
+    return {
+      ok: true,
+      accessToken: nextAccess,
+      refreshToken: nextRefresh,
+      expiresAt: nextExpiry,
+      grantedScopes: nextGranted,
+    };
+  } catch (error) {
+    const raw =
+      error instanceof MarketingConnectionError
+        ? error.message
+        : "Needs reconnect. The token could not be refreshed.";
+    await db.marketingSocialDestination.updateMany({
+      where: { id: row.id, businessId: row.businessId },
+      data: {
+        connectionStatus: "NEEDS_RECONNECT",
+        lastError: sanitizeConnectionError(raw, [accessToken, refreshToken]),
+        lastCheckedAt: now,
+      },
+    });
+    return {
+      ok: false,
+      status: "NEEDS_RECONNECT",
+      message: "Needs reconnect. The token could not be refreshed.",
+    };
+  }
+}
+
 export async function checkMarketingConnectionStatus(
   db: Db,
   access: BusinessAccess,
@@ -666,62 +783,13 @@ export async function checkMarketingConnectionStatus(
     return { destination, status: "DISCONNECTED" as const, message: "Disconnected." };
   }
   const adapter = adapterFor(destination, deps);
-  const accessToken = decryptFor(destination, access.businessId, row.accessTokenCiphertext);
-  const refreshToken = decryptFor(destination, access.businessId, row.refreshTokenCiphertext);
-  let nextAccess = accessToken;
-  let nextRefresh = refreshToken;
-  let nextExpiry = row.tokenExpiresAt;
-  let granted = row.scopesGranted.split(/\s+/).filter(Boolean);
-  if (nextExpiry && nextExpiry.getTime() <= now.getTime()) {
-    if (!refreshToken) {
-      await db.marketingSocialDestination.updateMany({
-        where: { id: row.id, businessId: access.businessId },
-        data: {
-          connectionStatus: "EXPIRED",
-          lastError: "Token expired. Reconnect to replace it.",
-          lastCheckedAt: now,
-        },
-      });
-      return { destination, status: "EXPIRED" as const, message: "Token expired. Reconnect to replace it." };
-    }
-    const refreshed = await adapter.refreshAccessToken({
-      refreshToken,
-      accessToken,
-      externalId: row.pageId,
-    });
-    if (!refreshed.ok) {
-      await db.marketingSocialDestination.updateMany({
-        where: { id: row.id, businessId: access.businessId },
-        data: {
-          connectionStatus: "NEEDS_RECONNECT",
-          lastError: sanitizeConnectionError(refreshed.error, [accessToken, refreshToken]),
-          lastCheckedAt: now,
-        },
-      });
-      return {
-        destination,
-        status: "NEEDS_RECONNECT" as const,
-        message: "Needs reconnect. The token could not be refreshed.",
-      };
-    }
-    nextAccess = refreshed.accessToken;
-    nextRefresh = refreshed.refreshToken ?? refreshToken;
-    nextExpiry = refreshed.expiresAt;
-    granted = refreshed.grantedScopes.length > 0 ? refreshed.grantedScopes : granted;
-    await db.marketingSocialDestination.updateMany({
-      where: { id: row.id, businessId: access.businessId },
-      data: {
-        accessToken: "",
-        accessTokenCiphertext: encryptFor(destination, access.businessId, nextAccess),
-        refreshTokenCiphertext: encryptFor(destination, access.businessId, nextRefresh),
-        tokenExpiresAt: nextExpiry,
-        scopesGranted: granted.join(" "),
-        connectionStatus: "CONNECTED",
-        lastError: "",
-        lastCheckedAt: now,
-      },
-    });
+  const fresh = await refreshExpiredDestinationToken(db, row, deps);
+  if (!fresh.ok) {
+    return { destination, status: fresh.status, message: fresh.message };
   }
+  const nextAccess = fresh.accessToken;
+  const nextRefresh = fresh.refreshToken;
+  const granted = fresh.grantedScopes;
   const inspected = await adapter.inspectAccessToken({ accessToken: nextAccess });
   if (!inspected.ok) {
     await db.marketingSocialDestination.updateMany({
@@ -825,13 +893,19 @@ export async function resolveConnectedPublishToken(
   db: Db,
   businessId: string,
   destination: string,
+  deps?: MarketingConnectionDeps,
 ): Promise<{ pageId: string; accessToken: string; externalAccountId: string } | null> {
   const row = await db.marketingSocialDestination.findFirst({
     where: { businessId, destination },
     select: {
+      id: true,
+      businessId: true,
+      destination: true,
       pageId: true,
       accessToken: true,
       accessTokenCiphertext: true,
+      refreshTokenCiphertext: true,
+      tokenExpiresAt: true,
       connectionStatus: true,
       disconnectedAt: true,
       scopesGranted: true,
@@ -842,10 +916,19 @@ export async function resolveConnectedPublishToken(
   if (row.disconnectedAt || BLOCKED_PUBLISH_STATUSES.has(row.connectionStatus)) return null;
   const externalAccountId = (row.externalAccountId ?? "").trim();
   if (row.connectionStatus === "CONNECTED") {
-    const token = decryptFor(destination, businessId, row.accessTokenCiphertext);
-    if (!token) return null;
     const granted = row.scopesGranted.split(/\s+/).filter(Boolean);
     if (isMarketingConnectionDestination(destination) && granted.length > 0 && missingScopes(destination, granted).length > 0) {
+      return null;
+    }
+    const fresh = await refreshExpiredDestinationToken(db, row, deps);
+    if (!fresh.ok) return null;
+    const token = fresh.accessToken.trim();
+    if (!token) return null;
+    if (
+      isMarketingConnectionDestination(destination) &&
+      fresh.grantedScopes.length > 0 &&
+      missingScopes(destination, fresh.grantedScopes).length > 0
+    ) {
       return null;
     }
     return { pageId: row.pageId.trim(), accessToken: token, externalAccountId };
