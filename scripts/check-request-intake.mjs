@@ -947,6 +947,9 @@ check(
     requestFlowSrc.indexOf("async function onSubmit"),
     requestFlowSrc.indexOf("if (ok) {"),
   );
+  const contactSubmitSrc = contactFormSrc.slice(
+    contactFormSrc.indexOf("async function onSubmit"),
+  );
   const serverGuard = publicIntakeSrc.includes(
     "if (!boundCustomerId && !hasPublicIntakeContact(email, phone))",
   );
@@ -954,18 +957,9 @@ check(
     /if \(!boundCustomerId && !hasPublicIntakeContact\(email, phone\)\) \{\s*return \{ ok: false, error: PUBLIC_INTAKE_CONTACT_REQUIRED \};\s*\}/,
     "",
   );
-  const mutatedGoReview = goReviewSrc.replace(
-    /if \(!projectToken && !hasPublicIntakeContact\(nextEmail, nextPhone\)\) \{\s*setError\(PUBLIC_INTAKE_CONTACT_REQUIRED\);\s*return;\s*\}/,
-    "",
-  );
-  const mutatedHydrate = hydrateSrc.replace(
-    /if \(\s*restoredStep === "review" &&\s*!projectToken &&\s*!hasPublicIntakeContact\(restoredEmail, restoredPhone\)\s*\) \{\s*restoredStep = "info";\s*\}/,
-    "",
-  );
-  const mutatedSubmit = onSubmitSrc.replace(
-    /if \(!projectToken && !hasPublicIntakeContact\(email, phone\)\) \{\s*setError\(PUBLIC_INTAKE_CONTACT_REQUIRED\);\s*return;\s*\}/,
-    "",
-  );
+  const mutatedGoReview = goReviewSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
+  const mutatedHydrate = hydrateSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
+  const mutatedSubmit = onSubmitSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
   check(
     "Ordinary request cannot advance to Review with both contact fields blank",
     goReviewSrc.includes("hasPublicIntakeContact(nextEmail, nextPhone)") &&
@@ -1000,10 +994,10 @@ check(
   );
   check(
     "Public contact form requires email or phone before submitServiceRequest",
-    contactFormSrc.includes("hasPublicIntakeContact(nextEmail, nextPhone)") &&
-      contactFormSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
-      contactFormSrc.indexOf("hasPublicIntakeContact") <
-        contactFormSrc.indexOf("submitServiceRequest"),
+    contactSubmitSrc.includes("hasPublicIntakeContact(nextEmail, nextPhone)") &&
+      contactSubmitSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+      contactSubmitSrc.indexOf("hasPublicIntakeContact") <
+        contactSubmitSrc.indexOf("submitServiceRequest(slug"),
   );
   check(
     "Public submit action never accepts existingCustomer from the browser",
@@ -1021,8 +1015,9 @@ check(
     "Mutation: removing the client Review/restore/submit guards is detected",
     mutatedGoReview.includes('setStep("review")') &&
       !mutatedGoReview.includes("hasPublicIntakeContact") &&
-      mutatedHydrate.includes('draft.step === "review"') &&
-      !mutatedHydrate.includes('restoredStep = "info"') &&
+      mutatedHydrate.includes('restoredStep === "review"') &&
+      mutatedHydrate.includes('restoredStep = "info"') &&
+      !mutatedHydrate.includes("hasPublicIntakeContact") &&
       mutatedSubmit.includes("authorizePublicRequestPhotoUpload") &&
       !mutatedSubmit.includes("hasPublicIntakeContact"),
   );
