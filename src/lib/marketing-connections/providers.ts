@@ -84,6 +84,27 @@ export type FakeMarketingOAuthScript = {
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
+let fakeScriptOverride: FakeMarketingOAuthScript | null = null;
+const fakeExchangeRedirectUris: string[] = [];
+
+/** Test-only script for the process-wide fake adapter. Ignored unless the fake adapter is enabled. */
+export function setFakeMarketingOAuthScript(script: FakeMarketingOAuthScript | null) {
+  fakeScriptOverride = script;
+}
+
+export function clearFakeMarketingOAuthExchangeRedirectUris() {
+  fakeExchangeRedirectUris.length = 0;
+}
+
+export function resetFakeMarketingOAuthProbe() {
+  fakeScriptOverride = null;
+  fakeExchangeRedirectUris.length = 0;
+}
+
+export function fakeMarketingOAuthExchangeRedirectUris() {
+  return [...fakeExchangeRedirectUris];
+}
+
 function expiresFromSeconds(seconds: number | null | undefined, now: Date) {
   if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
   return new Date(now.getTime() + seconds * 1000);
@@ -112,7 +133,8 @@ export function createFakeMarketingOAuthAdapter(
       url.searchParams.set("redirect_uri", redirectUri);
       return url.toString();
     },
-    async exchangeCode() {
+    async exchangeCode({ redirectUri }) {
+      fakeExchangeRedirectUris.push(redirectUri);
       if (script.exchangeError) {
         throw new MarketingConnectionError(sanitizeConnectionError(script.exchangeError));
       }
@@ -627,7 +649,7 @@ export function resolveMarketingOAuthAdapter(
   const availability = marketingDestinationAvailability(destination);
   if (!availability.available) return null;
   if (isFakeSocialOAuthAdapterEnabled()) {
-    return createFakeMarketingOAuthAdapter(destination);
+    return createFakeMarketingOAuthAdapter(destination, fakeScriptOverride ?? {});
   }
   if (destination === "GOOGLE") {
     const google = googleOAuthEnv();
