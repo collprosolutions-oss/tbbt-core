@@ -3,6 +3,10 @@
 import { useRef, useState, type ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import { submitServiceRequest } from "@/app/actions/intake";
+import {
+  hasPublicIntakeContact,
+  PUBLIC_INTAKE_CONTACT_REQUIRED,
+} from "@/lib/customer-identity";
 import { OTHER_TASK_LABEL } from "@/lib/service-request-work";
 
 export function PublicContactForm({ slug }: { slug: string }) {
@@ -28,6 +32,12 @@ export function PublicContactForm({ slug }: { slug: string }) {
 
   async function onSubmit(formData: FormData) {
     if (pending) return;
+    const nextEmail = String(formData.get("email") ?? "");
+    const nextPhone = String(formData.get("phone") ?? "");
+    if (!hasPublicIntakeContact(nextEmail, nextPhone)) {
+      setError(PUBLIC_INTAKE_CONTACT_REQUIRED);
+      return;
+    }
     setPending(true);
     setError(null);
     const message = String(formData.get("message") ?? "").trim();

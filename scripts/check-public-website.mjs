@@ -244,7 +244,11 @@ check(
   "Public contact page submits through the canonical request action with a submissionId",
   readRepo("src/components/public/public-contact-form.tsx").includes("submitServiceRequest") &&
     readRepo("src/components/public/public-contact-form.tsx").includes('formData.set("submissionId"') &&
-    readRepo("src/app/hire/[slug]/contact/page.tsx").includes("PublicContactForm"),
+    readRepo("src/app/hire/[slug]/contact/page.tsx").includes("PublicContactForm") &&
+    readRepo("src/components/public/public-contact-form.tsx").includes("hasPublicIntakeContact") &&
+    readRepo("src/components/public/public-contact-form.tsx").includes(
+      "PUBLIC_INTAKE_CONTACT_REQUIRED",
+    ),
 );
 check(
   "Reusable address fields do not hardcode CollPro cities or Florida",

@@ -11,9 +11,12 @@ import { randomUUID } from "node:crypto";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
-const { createPublicServiceRequest } = await import("@/lib/public-intake");
+const { createPublicServiceRequest, PUBLIC_INTAKE_CONTACT_REQUIRED } = await import(
+  "@/lib/public-intake"
+);
 const {
   decideCustomerMatch,
+  hasPublicIntakeContact,
   normalizeEmail,
   normalizePhone,
   parseIntakeIdentityReview,
@@ -73,6 +76,21 @@ check(
     /customer\.update\(/.test(publicIntake) &&
     publicIntake.includes("smsConsentFromPublicOptIn") &&
     publicIntake.includes("Explicit public SMS opt-in may grant consent without rewriting"),
+);
+check(
+  "Unbound public intake requires a normalized email or phone",
+  publicIntake.includes("hasPublicIntakeContact(email, phone)") &&
+    publicIntake.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+    publicIntake.includes("!boundCustomerId && !hasPublicIntakeContact") &&
+    hasPublicIntakeContact("", "") === false &&
+    hasPublicIntakeContact("pat@example.com", "") === true &&
+    hasPublicIntakeContact("", "555-0100") === true &&
+    PUBLIC_INTAKE_CONTACT_REQUIRED.includes("email address or phone number"),
+);
+check(
+  "Public intake never treats a browser existingCustomer field as authorization",
+  publicIntake.includes("Server-resolved existing customer. Never accepted from the browser.") &&
+    !readRepo("src/app/actions/intake.ts").includes("existingCustomer"),
 );
 
 console.log("\nUNIT — normalize and match decisions");
@@ -222,6 +240,32 @@ try {
   check("New customer intake creates a customer", newCustomer.ok === true && Boolean(firstRequest?.customerId));
   const firstCustomerCount = await prisma.customer.count({ where: { businessId: business.id } });
   check("First intake created exactly one customer", firstCustomerCount === 1);
+
+  const customersBeforeBlank = firstCustomerCount;
+  const requestsBeforeBlank = await prisma.serviceRequest.count({ where: { businessId: business.id } });
+  const blankIdentity = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "No Contact Identity",
+    email: "",
+    phone: "",
+    address: "",
+    streetAddress: "11 Pine St",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Blank identifiers.",
+    catalogItemIds: [fan.id],
+    includeOther: false,
+    otherDescription: "",
+  });
+  check(
+    "Blank email and phone cannot create or match a customer",
+    blankIdentity.ok === false &&
+      blankIdentity.error === PUBLIC_INTAKE_CONTACT_REQUIRED &&
+      (await prisma.customer.count({ where: { businessId: business.id } })) === customersBeforeBlank &&
+      (await prisma.serviceRequest.count({ where: { businessId: business.id } })) ===
+        requestsBeforeBlank,
+  );
 
   const repeatEmail = await createPublicServiceRequest(prisma, {
     slug: "collpro-reno",

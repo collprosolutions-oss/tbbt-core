@@ -30,8 +30,10 @@ import {
 import {
   appendIntakeIdentityReview,
   decideCustomerMatch,
+  hasPublicIntakeContact,
   normalizeEmail,
   normalizePhone,
+  PUBLIC_INTAKE_CONTACT_REQUIRED,
   type CustomerIdentityRecord,
   type IntakeIdentityReview,
 } from "@/lib/customer-identity";
@@ -88,6 +90,7 @@ import {
 } from "@/lib/request-preferred-windows";
 
 export const PUBLIC_INTAKE_GENERIC_ERROR = "This request could not be submitted.";
+export { hasPublicIntakeContact, PUBLIC_INTAKE_CONTACT_REQUIRED } from "@/lib/customer-identity";
 export const PUBLIC_REQUEST_PHOTO_UNAVAILABLE =
   "A selected photo is no longer available. Please re-add it and submit again.";
 
@@ -693,6 +696,13 @@ async function createPublicServiceRequestInner(
   const repeatVisitSourceJobId = input.existingCustomer?.repeatVisitSourceJobId?.trim() || "";
   if (!name && !boundCustomerId) {
     return { ok: false, error: "Name is required." };
+  }
+  // New/unbound public customers need a normalized email or phone.
+  // existingCustomer is server-resolved after token verification and is
+  // never read from the browser. An unverified claim still fails below
+  // without creating a customer or request.
+  if (!boundCustomerId && !hasPublicIntakeContact(email, phone)) {
+    return { ok: false, error: PUBLIC_INTAKE_CONTACT_REQUIRED };
   }
   if (notes.length > MAX_NOTES_LENGTH) {
     return { ok: false, error: "Please shorten the project notes." };

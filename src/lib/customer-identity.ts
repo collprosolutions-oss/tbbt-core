@@ -46,6 +46,9 @@ const IDENTITY_REVIEW_LABELS: Record<IdentityReviewReason, string> = {
     "More than one existing customer has this phone number. This request was filed for owner review and was not merged.",
 };
 
+export const PUBLIC_INTAKE_CONTACT_REQUIRED =
+  "Enter an email address or phone number so we can contact you.";
+
 export function normalizeEmail(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -60,6 +63,13 @@ export function normalizePhone(value: string | null | undefined): string {
     return digits.slice(1);
   }
   return digits;
+}
+
+export function hasPublicIntakeContact(
+  email: string | null | undefined,
+  phone: string | null | undefined,
+): boolean {
+  return Boolean(normalizeEmail(email) || normalizePhone(phone));
 }
 
 export function isUsableNormalizedEmail(value: string): boolean {
