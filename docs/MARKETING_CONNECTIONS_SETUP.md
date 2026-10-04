@@ -18,10 +18,17 @@ starts consent from Marketing → Social posts
 
 | Item | Value |
 | --- | --- |
-| App host | `https://www.collproreno.com` |
-| Do not use | `https://www.tbbtool.com` (corporate marketing site) |
+| Signed-in app hosts | `https://www.collproreno.com` and `https://www.tbbtool.com` |
+| Not a signed-in host | Apex `collproreno.com` and `tbbtool.com`. Session cookies are host-only, so consent must start and finish on the www host that signed the OWNER in. |
 | Vercel project | `collpro-reno` (`prj_7xmTwilZyg0plUHRzHgvboCusHLp`) |
 | Deployment Protection | SSO on `all_except_custom_domains`. Production custom domains are reachable. Preview `*.vercel.app` URLs return 401 to the provider. Do not register preview callbacks. |
+
+An OWNER on `www.tbbtool.com` starts Meta or Google consent and returns
+to destination selection on `www.tbbtool.com`. An OWNER on
+`www.collproreno.com` stays on `www.collproreno.com`. The callback
+trusts only that exact Host. It does not trust `x-forwarded-host`,
+`x-vercel-deployment-url`, `request.url`, a preview URL, a userinfo
+host, an explicit port, or a lookalike.
 
 The Next.js auth proxy already allows these two paths without a session
 cookie. Do not enable Vercel Authentication on Production.
@@ -43,7 +50,10 @@ URLs below. Values never belong in git.
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth 2.0 Web client secret |
 | `GOOGLE_OAUTH_REDIRECT_URI` | `https://www.collproreno.com/api/marketing/connections/google/callback` |
 
-Exact match is required. No trailing slash, no query string, `https` only.
+Those two env values stay exact: no trailing slash, no query string,
+`https` only. They mark the credentials present. The authorize and
+token-exchange `redirect_uri` is the signed-in host's callback, so the
+provider consoles must also contain the `www.tbbtool.com` URLs below.
 
 Do not set `TBBT_SOCIAL_OAUTH_ADAPTER` or
 `TBBT_SOCIAL_PUBLISHING_ADAPTER` on Production. `VERCEL_ENV=production`
@@ -56,16 +66,20 @@ Connect.
 
 ## Registered callback URLs
 
-Register only these production callbacks.
+Register all four production callbacks. Do not register apex hosts,
+preview URLs, or any other origin.
 
 | Provider console field | Exact URL |
 | --- | --- |
 | Meta → Facebook Login → Valid OAuth Redirect URIs | `https://www.collproreno.com/api/marketing/connections/meta/callback` |
+| Meta → Facebook Login → Valid OAuth Redirect URIs | `https://www.tbbtool.com/api/marketing/connections/meta/callback` |
 | Google Cloud → OAuth client (Web application) → Authorized redirect URIs | `https://www.collproreno.com/api/marketing/connections/google/callback` |
+| Google Cloud → OAuth client (Web application) → Authorized redirect URIs | `https://www.tbbtool.com/api/marketing/connections/google/callback` |
 
-The same Meta callback is used for Facebook Page and Instagram. Google
-uses its own callback. Both routes consume a hashed single-use OWNER
-state and never publish.
+The same Meta callback path is used for Facebook Page and Instagram.
+Google uses its own callback path. Each path is registered on both
+signed-in hosts. Both routes consume a hashed single-use OWNER state
+and never publish.
 
 ## Approved permissions TBBT actually requests
 
@@ -128,8 +142,8 @@ ranking improvements.
    - Client OAuth login: on
    - Web OAuth login: on
    - Strict Mode: on
-   - Valid OAuth Redirect URIs: the Meta callback above
-   - Allowed domains / site URL: `https://www.collproreno.com`
+   - Valid OAuth Redirect URIs: both Meta callbacks above
+   - Allowed domains / site URL: `https://www.collproreno.com` and `https://www.tbbtool.com`
 4. App Dashboard → Settings → Basic:
    - App ID → `META_APP_ID`
    - App Secret → `META_APP_SECRET`
@@ -142,7 +156,9 @@ ranking improvements.
 5. Add App Roles (Admin / Developer / Tester) for any Development-mode
    login. Standard Access only works for people with an app role.
 6. Copy `META_OAUTH_REDIRECT_URI` from the table. It must equal the
-   Valid OAuth Redirect URI.
+   `www.collproreno.com` Meta callback. Also register the
+   `www.tbbtool.com` Meta callback. The running app sends the callback
+   for the host the OWNER is signed in on.
 
 Graph API version used by TBBT: **v26.0**.
 
@@ -201,10 +217,11 @@ enable automatic posting.
    - Keep Testing and listed test users until Google verification, if
      required for this scope, is finished
 6. Credentials → OAuth client ID → **Web application**:
-   - Authorized redirect URI: the Google callback above
+   - Authorized redirect URIs: both Google callbacks above
    - Client ID → `GOOGLE_OAUTH_CLIENT_ID`
    - Client secret → `GOOGLE_OAUTH_CLIENT_SECRET`
-7. Set `GOOGLE_OAUTH_REDIRECT_URI` to that same URI.
+7. Set `GOOGLE_OAUTH_REDIRECT_URI` to the `www.collproreno.com` Google
+   callback. Also register the `www.tbbtool.com` Google callback.
 
 Credentials alone do not grant Business Profile API access.
 
@@ -213,7 +230,7 @@ Credentials alone do not grant Business Profile API access.
 | Approval | Blocks connect? | Why |
 | --- | --- | --- |
 | GBP Basic API Access (quota 300 QPM) | **Yes, everyone** | Token exchange can succeed; `accounts.list` / locations then fail with `PERMISSION_DENIED` / “Google Business Profile API access is not approved for this app.” |
-| OAuth client + exact redirect URI | **Yes** | Code exchange uses `GOOGLE_OAUTH_REDIRECT_URI` |
+| OAuth client + both exact redirect URIs | **Yes** | Code exchange uses the signed-in host callback (`www.collproreno.com` or `www.tbbtool.com`), which must match the authorize `redirect_uri` |
 | Consent-screen Testing vs Production | **Yes for non-test users** | `business.manage` is not a basic scope. Unpublished / Testing apps only allow listed test users |
 | Google OAuth verification (if Google requires it to publish the consent screen) | **Yes for non-test users** | Same as any External production OAuth app using this scope |
 | Local posts / publishing approval | No | Connecting a location does not create a post. Live STANDARD local-post publish uses the same GBP API approval and an explicit OWNER click. |
@@ -261,6 +278,7 @@ These are already implemented. This runbook must not change them.
    for 300 QPM, enable the three APIs, create the Web OAuth client,
    register the Google callback.
 5. Set the six Vercel Production names. Redeploy.
-6. As OWNER on `www.collproreno.com`, open Marketing → Social posts.
-   Connect still does not publish.
+6. As OWNER on `www.collproreno.com` or `www.tbbtool.com`, open Marketing
+   → Social posts. Connect still does not publish. Finish destination
+   selection on that same host.
 7. Do not enable automatic posting.
