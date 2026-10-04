@@ -481,6 +481,15 @@ function grantWhere(input: {
   };
 }
 
+function redactedInboundConsentFailure(error: unknown) {
+  const errorName = error instanceof Error ? error.name : "Error";
+  return {
+    eventKind: "inbound",
+    hasProviderEventId: true,
+    errorName,
+  };
+}
+
 async function abandonRecordedInboundWebhook(
   db: Db,
   input: {
@@ -492,13 +501,7 @@ async function abandonRecordedInboundWebhook(
     error: unknown;
   },
 ) {
-  console.error("Inbound consent write failed", {
-    businessId: input.businessId,
-    providerEventId: input.providerEventId,
-    customerId: input.customerId,
-    status: input.status,
-    error: input.error,
-  });
+  console.error("Inbound consent write failed", redactedInboundConsentFailure(input.error));
   try {
     if (inboundConsentTestHooks.beforeCleanup) {
       await inboundConsentTestHooks.beforeCleanup();
@@ -507,7 +510,10 @@ async function abandonRecordedInboundWebhook(
     // identity. Deleting would mint a new claim time and let a stale START
     // win over a newer STOP.
   } catch (cleanupError) {
-    console.error("Failed to delete inbound webhook after consent write error", cleanupError);
+    console.error(
+      "Failed to delete inbound webhook after consent write error",
+      redactedInboundConsentFailure(cleanupError),
+    );
   }
 }
 

@@ -400,6 +400,13 @@ try {
       webhookHandlerSrc.includes("GENERIC_UNAVAILABLE"),
   );
   check(
+    "Inbound consent failure uses a redacted logger",
+    inboundSrc.includes("redactedInboundConsentFailure") &&
+      inboundSrc.includes('eventKind: "inbound"') &&
+      inboundSrc.includes("hasProviderEventId: true") &&
+      inboundSrc.includes("errorName"),
+  );
+  check(
     "SMS dispatch claims the idempotency row before the provider send",
     opsSrc.includes("decideSmsDispatch") &&
       opsSrc.includes("SMS_DISPATCH_CLAIM_STATUS") &&
@@ -1251,6 +1258,11 @@ try {
   inboundConsentTestHooks.beforeCleanup = async () => {
     throw new Error("forced leftover cleanup failure");
   };
+  const leftoverErrorLogs = [];
+  const previousConsoleError = console.error;
+  console.error = (...args) => {
+    leftoverErrorLogs.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "));
+  };
   const leftoverFirst = await Promise.allSettled([
     handleCustomerMessagingWebhookRequest(prisma, {
       url: webhookUrl,
@@ -1260,8 +1272,23 @@ try {
       contentType: "application/x-www-form-urlencoded",
     }),
   ]);
+  console.error = previousConsoleError;
   inboundConsentTestHooks.beforeConsentWrite = undefined;
   inboundConsentTestHooks.beforeCleanup = undefined;
+  const leftoverLog = leftoverErrorLogs.join("\n");
+  check(
+    "Inbound consent failure log stays redacted",
+    leftoverLog.includes("Inbound consent write failed") &&
+      leftoverLog.includes('"eventKind":"inbound"') &&
+      leftoverLog.includes('"hasProviderEventId":true') &&
+      leftoverLog.includes('"errorName":"Error"') &&
+      !leftoverLog.includes(leftoverPhone) &&
+      !leftoverLog.includes(leftoverCustomer.id) &&
+      !leftoverLog.includes(alpha.business.id) &&
+      !leftoverLog.includes(leftoverParams.MessageSid) &&
+      !leftoverLog.includes("forced leftover consent write failure") &&
+      !leftoverLog.includes("forced leftover cleanup failure"),
+  );
   check(
     "Signed leftover STOP returns non-2xx after consent and cleanup failure",
     leftoverFirst[0].status === "fulfilled" &&

@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import {
+  retryStudioWeeklyReminderScheduleAction,
   setStudioWeeklyReminderOwnerSmsAction,
   setStudioWeeklyReviewReminderOptInAction,
   type MarketingActionState,
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE,
   STUDIO_WEEKLY_REMINDER_IN_APP_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OPT_IN_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
@@ -33,6 +35,10 @@ export function StudioWeeklyReminderControls({
 }) {
   const [state, action, pending] = useActionState(
     setStudioWeeklyReviewReminderOptInAction,
+    initial,
+  );
+  const [retryState, retryAction, retryPending] = useActionState(
+    retryStudioWeeklyReminderScheduleAction,
     initial,
   );
   const [smsState, smsAction, smsPending] = useActionState(
@@ -90,6 +96,19 @@ export function StudioWeeklyReminderControls({
       )}
       {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
       {state.message ? <p className="text-xs text-muted-foreground">{state.message}</p> : null}
+
+      {canManage ? (
+        <form action={retryAction} className="space-y-1">
+          <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE}</p>
+          <Button type="submit" size="sm" variant="outline" disabled={retryPending}>
+            {retryPending ? "Retrying…" : "Retry scheduled reminder"}
+          </Button>
+        </form>
+      ) : null}
+      {retryState.error ? <p className="text-xs text-destructive">{retryState.error}</p> : null}
+      {retryState.message ? (
+        <p className="text-xs text-muted-foreground">{retryState.message}</p>
+      ) : null}
 
       <p className="text-xs text-muted-foreground">{STUDIO_WEEKLY_REMINDER_OWNER_SMS_OPT_IN_MESSAGE}</p>
       {reminder.ownerSmsStopped ? (

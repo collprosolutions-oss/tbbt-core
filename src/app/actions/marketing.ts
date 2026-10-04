@@ -47,8 +47,10 @@ import {
   STUDIO_RETURNED_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_ONLY_MESSAGE,
   STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE,
+  STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE,
 } from "@/lib/marketing";
 import {
+  retryStudioWeeklyReminderSchedule,
   setStudioWeeklyReminderOwnerSms,
   setStudioWeeklyReviewReminderOptIn,
 } from "@/lib/marketing-studio-reminder";
@@ -292,6 +294,23 @@ export async function setStudioWeeklyReviewReminderOptInAction(
     return { message: result.message };
   } catch (error) {
     return { error: marketingErrorMessage(error, "That weekly reminder preference could not be saved.") };
+  }
+}
+
+export async function retryStudioWeeklyReminderScheduleAction(
+  _prev: MarketingActionState,
+  _formData: FormData,
+): Promise<MarketingActionState> {
+  try {
+    const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    if (access.workspace.role !== "OWNER") {
+      return { error: STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE };
+    }
+    const result = await retryStudioWeeklyReminderSchedule(prisma, access);
+    revalidateMarketing();
+    return { message: result.message };
+  } catch (error) {
+    return { error: marketingErrorMessage(error, "The scheduled reminder could not be retried.") };
   }
 }
 

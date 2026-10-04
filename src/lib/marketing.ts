@@ -749,6 +749,18 @@ export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_INVALID_MESSAGE =
 export const STUDIO_WEEKLY_REMINDER_OWNER_SMS_OWNER_ONLY_MESSAGE =
   "Setting the OWNER SMS destination requires the OWNER role.";
 
+export const STUDIO_WEEKLY_REMINDER_CRON_SECRET_MISSING_MESSAGE =
+  "The platform scheduled runner is not authenticated. Ask the operator to set CRON_SECRET in the host environment. This page does not show the secret.";
+
+export const STUDIO_WEEKLY_REMINDER_CRON_RETRY_MESSAGE =
+  "Retry the scheduled Monday reminder for this business now. It stays Monday-gated. A Monday retry can send the OWNER SMS for this workspace.";
+
+export const STUDIO_WEEKLY_REMINDER_CRON_RETRIED_MESSAGE =
+  "Scheduled reminder retry finished for this business.";
+
+export const STUDIO_WEEKLY_REMINDER_CRON_RETRY_OWNER_ONLY_MESSAGE =
+  "Retrying the scheduled reminder requires the OWNER role.";
+
 export const PHOTO_PERMISSION_REVOKED_MESSAGE =
   "A selected job photo no longer has marketing permission. Approval and export are blocked until only approved photos remain.";
 

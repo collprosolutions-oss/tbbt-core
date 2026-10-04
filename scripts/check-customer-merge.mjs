@@ -426,7 +426,8 @@ try {
       inboundSrc.includes("prepareInboundConsentClaim") &&
       inboundSrc.includes("smsConsentUpdatedAt: { lt:") &&
       inboundSrc.includes("console.error") &&
-      inboundSrc.includes("error: input.error") &&
+      inboundSrc.includes("redactedInboundConsentFailure(input.error)") &&
+      !inboundSrc.includes("error: input.error") &&
       inboundSrc.includes("applyRecordedInboundConsent") &&
       inboundSrc.includes("findUnambiguousSurvivorForAbsorbedPhone") &&
       inboundSrc.includes("absorbedSnapshot") &&

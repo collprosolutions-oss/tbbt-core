@@ -185,7 +185,6 @@ const libSrc = read("src/lib/founder-production-preflight.ts");
 const dbSrc = read("scripts/founder-production-preflight-db.mjs");
 const cliSrc = read("scripts/founder-production-preflight.mjs");
 const proxySrc = read("src/proxy.ts");
-const cronSrc = read("src/lib/marketing-studio-reminder.ts");
 const packageJson = JSON.parse(read("package.json"));
 const migrationSql = read(`prisma/migrations/${CONVERSION_MIGRATION_NAME}/migration.sql`);
 
@@ -220,7 +219,33 @@ check(
     proxySrc.includes("isPublicWebsitePath") &&
     proxySrc.includes("isScheduleCalendarFeedPath"),
 );
-check("cron authorization still fails closed without a secret", cronSrc.includes("if (!secret) return false"));
+{
+  const previousCronSecret = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "";
+  try {
+    const { authorizeStudioWeeklyReminderCron, classifyStudioWeeklyReminderCronAuth } = await import(
+      "@/lib/marketing-studio-reminder"
+    );
+    const denied = classifyStudioWeeklyReminderCronAuth(
+      new Headers({ authorization: "Bearer not-a-real-secret" }),
+    );
+    const deniedHeader = classifyStudioWeeklyReminderCronAuth(
+      new Headers({ "x-cron-secret": "not-a-real-secret" }),
+    );
+    check(
+      "cron authorization still fails closed without a secret",
+      denied.ok === false &&
+        denied.reason === "secret_missing" &&
+        deniedHeader.ok === false &&
+        deniedHeader.reason === "secret_missing" &&
+        authorizeStudioWeeklyReminderCron(new Headers({ authorization: "Bearer not-a-real-secret" })) ===
+          false,
+    );
+  } finally {
+    if (previousCronSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousCronSecret;
+  }
+}
 check("npm preflight script is present", packageJson.scripts["preflight:founder"]?.includes("scripts/founder-production-preflight.mjs") === true);
 check("npm test script is present", packageJson.scripts["test:founder-production-preflight"]?.includes("scripts/check-founder-production-preflight.mjs") === true);
 check("build does not run the preflight", !packageJson.scripts.build.includes("preflight"));
@@ -453,6 +478,12 @@ const child = spawnSync(
       STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
       RESEND_API_KEY: RESEND_SECRET,
       DATABASE_URL: decoyUrl,
+      TBBT_PAYMENTS_ADAPTER: "",
+      TBBT_SAAS_BILLING_ADAPTER: "",
+      TBBT_PAYMENTS_FAKE_READY: "",
+      TBBT_CUSTOMER_MESSAGING_ADAPTER: "",
+      TBBT_EMAIL_ADAPTER: "",
+      NEXT_PUBLIC_APP_URL: "",
     },
   },
 );
