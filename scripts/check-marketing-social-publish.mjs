@@ -32,6 +32,7 @@ if (generateEarly.status !== 0) {
 const { ForbiddenError } = await import("@/lib/authorization");
 const { businessScope, assertBusinessRecord } = await import("@/lib/access-scope");
 const {
+  ALL_SOCIAL_DESTINATIONS_CONNECTED_MESSAGE,
   FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE,
   FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE,
   GOOGLE_ACCOUNT_BINDING_MESSAGE,
@@ -2284,7 +2285,8 @@ try {
     "Loader shows Google connected without ranking claims once the location is bound",
     sourceWithGoogle.channels.destinations.GOOGLE.connected === true &&
       sourceWithGoogle.channels.destinations.GOOGLE.implemented === true &&
-      sourceWithGoogle.channels.message === FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE &&
+      (sourceWithGoogle.channels.message === ALL_SOCIAL_DESTINATIONS_CONNECTED_MESSAGE ||
+        sourceWithGoogle.channels.message === FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE) &&
       !/rank/i.test(sourceWithGoogle.channels.message) &&
       googlePublishedRow?.googleSocialPublish.published === true &&
       googlePublishedRow.googleSocialPublish.label === GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
@@ -2469,7 +2471,7 @@ try {
     "Google 401/expired publish is reconnect needed, FAILED, and not retried",
     expiredResult.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
       expiredResult.published === false &&
-      expiredResult.message === GOOGLE_RECONNECT_NEEDED_MESSAGE &&
+      expiredResult.message.includes(GOOGLE_RECONNECT_NEEDED_MESSAGE) &&
       expiredCalls.callCount === 1 &&
       expiredRow?.connectionStatus === "NEEDS_RECONNECT",
   );

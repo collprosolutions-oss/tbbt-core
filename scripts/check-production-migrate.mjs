@@ -2100,7 +2100,7 @@ check(
     payrollConnectOps.includes("ensurePayrollConnectSchema") &&
     payrollConnectOps.includes("FOR UPDATE"),
 );
-const marketingConnectionsSchema = readFileSync(
+const marketingDestinationPrismaSchema = readFileSync(
   new URL("../prisma/schema.prisma", import.meta.url),
   "utf8",
 );
@@ -2113,9 +2113,9 @@ check(
     ),
   ) &&
     !localNames.includes("20261003234500_google_local_post_account_binding") &&
-    marketingConnectionsSchema.includes("externalAccountId") &&
+    marketingDestinationPrismaSchema.includes("externalAccountId") &&
     !/model MarketingSocialDestination[\s\S]*?accountId\s+String[\s\S]*?@@unique\(\[destination, pageId\]\)/.test(
-      marketingConnectionsSchema,
+      marketingDestinationPrismaSchema,
     ),
 );
 
