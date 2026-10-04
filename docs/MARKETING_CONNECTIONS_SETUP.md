@@ -4,9 +4,10 @@ This is the operator runbook for merged marketing destination consent
 (#347). It does not add a second connect path, and it does not turn on
 automatic posting.
 
-Connecting a destination never publishes. Facebook Page publish stays an
-explicit OWNER click after an approved package. Instagram and Google
-Business Profile publishing are not yet available.
+Connecting a destination never publishes. Facebook Page and Instagram
+publish, when used, stay an explicit OWNER click after an approved
+package. Instagram publishing and Google local posts each need their
+own App Review or API approval before real use.
 
 Settings → Reviews / Marketing Connections is read-only status. The OWNER
 starts consent from Marketing → Social posts
@@ -94,8 +95,9 @@ Same Meta app and same redirect URI. Different Connect button. Scopes:
 Use these exact Graph permission strings (Instagram API with Facebook
 Login). Do not substitute `instagram_business_*` names.
 
-`instagram_content_publish` is required to **connect**. TBBT still has
-no Instagram publish path.
+`instagram_content_publish` is required to **connect**. Connecting
+still does not publish. Real Instagram publish use still needs Meta
+App Review for this permission.
 
 ### Google Business Profile (`GOOGLE`)
 
@@ -103,8 +105,9 @@ Web-server flow (`access_type=offline`, `prompt=consent`) requests only:
 
 - `https://www.googleapis.com/auth/business.manage`
 
-After token exchange TBBT lists accounts and locations. It does not
-create a local post.
+After token exchange TBBT lists accounts and locations. Connecting
+does not create a local post. Real Google local-post use needs its
+own Business Profile API approval.
 
 | API TBBT calls | Host |
 | --- | --- |
@@ -153,7 +156,7 @@ until each one has **Advanced Access**.
 | `pages_read_engagement` | Page fields and linked Instagram account | Required for Facebook and Instagram connect |
 | `pages_manage_posts` | Later explicit OWNER Facebook Page publish | Required at Facebook **connect**. Reviewers expect a recording of an OWNER publish click, not a post-on-connect |
 | `instagram_basic` | Instagram id / username on the linked Page | Required for Instagram connect |
-| `instagram_content_publish` | Required by TBBT before Instagram is stored as CONNECTED | Reviewers expect a recording of publishing to Instagram. TBBT cannot show that: Instagram publishing is not yet available |
+| `instagram_content_publish` | Required by TBBT before Instagram is stored as CONNECTED | Required at Instagram **connect**. Reviewers expect a recording of an OWNER Instagram publish click, not a post-on-connect. That review is separate from connect credentials |
 
 Also required for Advanced Access:
 
@@ -167,9 +170,9 @@ Also required for Advanced Access:
 Until Advanced Access is granted, a real (non-role) Facebook or
 Instagram connection is blocked even if Vercel credentials are present.
 
-Instagram App Review for `instagram_content_publish` is blocked today
-because TBBT has no Instagram publish implementation. Do not invent one
-here and do not enable automatic posting.
+Instagram App Review for `instagram_content_publish` and any later
+OWNER Instagram publish are separate from connect credentials. Do not
+enable automatic posting.
 
 ## Google application setup
 
@@ -209,7 +212,7 @@ Credentials alone do not grant Business Profile API access.
 | OAuth client + exact redirect URI | **Yes** | Code exchange uses `GOOGLE_OAUTH_REDIRECT_URI` |
 | Consent-screen Testing vs Production | **Yes for non-test users** | `business.manage` is not a basic scope. Unpublished / Testing apps only allow listed test users |
 | Google OAuth verification (if Google requires it to publish the consent screen) | **Yes for non-test users** | Same as any External production OAuth app using this scope |
-| Local posts / publishing approval | No | TBBT does not create Google posts |
+| Local posts / publishing approval | No | Connecting a location does not create a post. Real local-post use needs its own API approval. |
 
 ## What currently blocks a real Production connection
 
@@ -219,8 +222,8 @@ merged #347 behavior.
 | Destination | Blocks a real connection today | Does not block connect |
 | --- | --- | --- |
 | Facebook Page | Missing `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`; then Meta Advanced Access for `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`; Business Verification; Live mode; matching redirect URI; App Review materials (privacy / data-deletion gap) | Automatic posting (off). Encryption key (already set) |
-| Instagram | Same missing Meta Vercel names; then Advanced Access for `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`; App Review for `instagram_content_publish` cannot be completed while Instagram publishing is not yet available | Connecting still would not publish if those approvals later land |
-| Google Business Profile | Missing `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`; then GBP API access approval (0 QPM); then consent-screen / OAuth verification for non-test users | Google local-post publishing (not implemented, not required to connect) |
+| Instagram | Same missing Meta Vercel names; then Advanced Access for `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` | Connecting never publishes. Instagram publish App Review is separate and required before real Instagram publish use |
+| Google Business Profile | Missing `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`; then GBP API access approval (0 QPM); then consent-screen / OAuth verification for non-test users | Connecting never creates a local post. Google local-post API approval is separate and required before real local-post use |
 
 Tester-only Development-mode Facebook/Instagram connects become possible
 after the three Meta Vercel names are set and the OWNER is an app role.
@@ -239,15 +242,16 @@ These are already implemented. This runbook must not change them.
   B’s state or ciphertext.
 - Confirm writes `CONNECTED` and the message
   `{destination} connected. Nothing was published.`
-- Instagram and Google `publishAvailable` stay false.
+- A later OWNER publish click, if present, is a separate action and
+  still requires the destination’s own App Review or API approval.
 
 ## Operator sequence
 
 1. Leave `CONNECTION_TOKEN_ENCRYPTION_KEY` as it is.
 2. Create the Meta app and register the Meta callback.
 3. Request Meta App Review / Business Verification for the Facebook
-   scopes. Treat Instagram Advanced Access as blocked until an explicit
-   OWNER Instagram publish exists.
+   and Instagram connect scopes. Instagram publish App Review is
+   separate and required before real Instagram publish use.
 4. Create the Google Cloud project, submit GBP Basic API Access, wait
    for 300 QPM, enable the two APIs, create the Web OAuth client,
    register the Google callback.

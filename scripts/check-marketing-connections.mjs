@@ -188,10 +188,15 @@ check(
   "Setup doc reports the approvals that block a real connection",
   setupDoc.includes("Meta Advanced Access") &&
     setupDoc.includes("instagram_content_publish") &&
-    setupDoc.includes("Instagram publishing is not yet available") &&
+    setupDoc.includes("Connecting a destination never publishes") &&
+    setupDoc.includes("Instagram publishing") &&
+    setupDoc.includes("Google local posts") &&
     setupDoc.includes("GBP API access approval (0 QPM)") &&
     setupDoc.includes("Missing `META_APP_ID`") &&
-    setupDoc.includes("Missing `GOOGLE_OAUTH_CLIENT_ID`"),
+    setupDoc.includes("Missing `GOOGLE_OAUTH_CLIENT_ID`") &&
+    !setupDoc.includes("Instagram publishing is not yet available") &&
+    !setupDoc.includes("no Instagram publish path") &&
+    !setupDoc.includes("has no Instagram publish implementation"),
 );
 check(
   "Setup doc and env example refuse fake adapters and automatic posting",
