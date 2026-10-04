@@ -294,7 +294,7 @@ try {
 
   console.log("\nHONEST BLOCKERS — this harness does not invent a green full-system E2E");
   blocker("No browser walkthrough of signup → invoice → review was executed here.");
-  blocker("Instagram and Google Business Profile publishing are not yet available. Facebook Page publish is OWNER-only when that destination is connected; connecting does not publish. DRAFT or a planned day never publishes, and failures are not labeled PUBLISHED.");
+  blocker("Google Business Profile publishing is not yet available. Facebook Page and Instagram publish are OWNER-only when that destination is connected; Instagram uses only an approved public marketing image. Connecting does not publish. DRAFT or a planned day never publishes, and failures are not labeled PUBLISHED.");
   blocker("Banking and accounting providers are Not Connected; cash-flow projected balance stays null.");
   blocker("External marketing AI stays unused here; OWNER drafts show Unavailable without a key, and template drafts remain available.");
   blocker("Resend / Twilio / R2 / live Stripe Connect+SaaS require production secrets that this local harness does not set.");

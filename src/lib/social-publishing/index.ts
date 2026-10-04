@@ -2,6 +2,7 @@ export {
   DISCONNECTED_SOCIAL_PUBLISHING_PROVIDER,
   FACEBOOK_SOCIAL_PUBLISHING_PROVIDER,
   FAKE_SOCIAL_PUBLISHING_PROVIDER,
+  INSTAGRAM_SOCIAL_PUBLISHING_PROVIDER,
   isFakeSocialPublishingAdapterEnabled,
 } from "@/lib/social-publishing/config";
 export {
@@ -11,11 +12,19 @@ export {
   createFacebookSocialPublishingProvider,
   facebookPageFeedUrl,
 } from "@/lib/social-publishing/facebook";
+export {
+  INSTAGRAM_PUBLIC_IMAGE_REQUIRED_MESSAGE,
+  INSTAGRAM_PUBLISH_TIMEOUT_MS,
+  createInstagramSocialPublishingProvider,
+  instagramMediaContainerUrl,
+  instagramMediaPublishUrl,
+} from "@/lib/social-publishing/instagram";
 export { createFakeSocialPublishingProvider } from "@/lib/social-publishing/fake";
 export { createDisconnectedSocialPublishingProvider } from "@/lib/social-publishing/disconnected";
 export {
   createUnavailableSocialPublishingProvider,
   disconnectedSocialPublishingProvider,
+  getInstagramSocialPublishingProvider,
   getSocialPublishingProvider,
   getSocialPublishingProviderForDestination,
   resetSocialPublishingProvider,

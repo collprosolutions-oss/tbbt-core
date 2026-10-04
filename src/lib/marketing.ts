@@ -232,10 +232,19 @@ export const SOCIAL_PUBLISH_ATTEMPT_PUBLISHED = "PUBLISHED" as const;
 export const SOCIAL_PUBLISH_ATTEMPT_FAILED = "FAILED" as const;
 
 export const OWNER_SOCIAL_PUBLISH_MESSAGE =
-  "Publishing to Facebook requires the OWNER role. A DRAFT or planned day is not a publish. Instagram and Google stay disconnected.";
+  "Publishing to Facebook requires the OWNER role. A DRAFT or planned day is not a publish.";
+
+export const OWNER_INSTAGRAM_SOCIAL_PUBLISH_MESSAGE =
+  "Publishing to Instagram requires the OWNER role. A DRAFT or planned day is not a publish. Private job or customer photos are not sent.";
 
 export const FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
   "Facebook Page is connected for explicit OWNER publish. Instagram and Google Business Profile are not connected.";
+
+export const INSTAGRAM_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
+  "Instagram is connected for explicit OWNER publish. Google Business Profile publishing is not connected.";
+
+export const FACEBOOK_AND_INSTAGRAM_CONNECTED_MESSAGE =
+  "Facebook Page and Instagram are connected for explicit OWNER publish. Google Business Profile is not connected.";
 
 export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
   "Only OWNER-approved creator packages can be published. A DRAFT or planned day is not a publish.";
@@ -243,19 +252,36 @@ export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
 export const SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
   "Facebook is not connected for this business. TBBT will not post.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
+  "Instagram is not connected for this business. TBBT will not post.";
+
 export const SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE =
-  "Instagram and Google publishing are not connected yet.";
+  "Google publishing is not connected yet.";
 
 export const SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
   "This package was already published to Facebook.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
+  "This package was already published to Instagram.";
+
 export const SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
   "A Facebook publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
+
+export const INSTAGRAM_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
+  "An Instagram publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
 
 export const SOCIAL_PUBLISH_FAILED_MESSAGE =
   "Facebook publish failed. It was not marked PUBLISHED.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_FAILED_MESSAGE =
+  "Instagram publish failed. It was not marked PUBLISHED.";
+
 export const SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Facebook.";
+
+export const INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Instagram.";
+
+export const SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE =
+  "Instagram publish needs an approved public marketing image. Private job or customer photos are not sent.";
 
 export const SOCIAL_PUBLISH_UNCONFIRMED_MS = 5 * 60 * 1000;
 export const SOCIAL_PUBLISH_ERROR_MAX_CHARS = 200;
@@ -264,8 +290,14 @@ export const SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN = /EAA[A-Za-z0-9]+/g;
 export const SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
   "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
+  "This Instagram publish is unconfirmed. Check Instagram, then confirm.";
+
 export const SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
   "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm before retrying.";
+
+export const INSTAGRAM_SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
+  "This Instagram publish is unconfirmed. Check Instagram, then confirm before retrying.";
 
 export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED = "NOT_POSTED" as const;
 export const SOCIAL_PUBLISH_RESOLVE_POSTED = "POSTED" as const;
@@ -275,11 +307,16 @@ export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE =
 
 export const SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Facebook.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Instagram.";
+
 export const SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE =
   "This publish is still in progress. Confirm only after it is unconfirmed.";
 
 export const SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE =
   "That Facebook publish attempt is not in this business.";
+
+export const INSTAGRAM_SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE =
+  "That Instagram publish attempt is not in this business.";
 
 export function sanitizeSocialPublishProviderError(
   raw: string | null | undefined,
@@ -309,7 +346,12 @@ export function isSocialPublishUnconfirmed(input: {
   unconfirmedAfterMs?: number;
 }): boolean {
   if (input.status !== SOCIAL_PUBLISH_ATTEMPT_CLAIMED) return false;
-  if (input.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE) return true;
+  if (
+    input.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE ||
+    input.failureLabel === INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE
+  ) {
+    return true;
+  }
   if (!input.claimedAt) return false;
   const now = input.now ?? new Date();
   const windowMs = input.unconfirmedAfterMs ?? SOCIAL_PUBLISH_UNCONFIRMED_MS;
@@ -335,8 +377,14 @@ export const SOCIAL_PUBLISH_SNAPSHOT_REQUIRED_MESSAGE =
 export const SOCIAL_PUBLISH_EMPTY_MESSAGE =
   "Approved text is required before publishing to Facebook.";
 
+export const INSTAGRAM_SOCIAL_PUBLISH_EMPTY_MESSAGE =
+  "Approved text is required before publishing to Instagram.";
+
 export const SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
   "Facebook publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
+
+export const INSTAGRAM_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
+  "Instagram publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
 
 export const SOCIAL_PUBLISH_PACKAGE_NOT_FOUND_MESSAGE =
   "That creator package is not in this business.";
@@ -351,20 +399,152 @@ export function isDisconnectedSocialPublishDestination(value: string) {
   return (DISCONNECTED_SOCIAL_PUBLISH_DESTINATIONS as readonly string[]).includes(value);
 }
 
+const PRIVATE_MARKETING_ASSET_CATEGORIES = new Set([
+  "CUSTOMER_PHOTO",
+  "DOCUMENT",
+  "INVOICE_ASSET",
+  "ATTACHMENT",
+]);
+
+export function isPublicMarketingAssetUrl(url: string | null | undefined): boolean {
+  const value = (url ?? "").trim();
+  if (!value) return false;
+  if (value.includes("/api/storage/private/")) return false;
+  if (/[?&]X-Amz-Signature=/i.test(value)) return false;
+  if (/[?&]X-Amz-Credential=/i.test(value)) return false;
+  if (/[?&]X-Amz-Security-Token=/i.test(value)) return false;
+  if (value.startsWith("/")) {
+    return /^\/api\/storage\/public\/[a-zA-Z0-9_-]+$/.test(value);
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (parsed.pathname.includes("/api/storage/private/")) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function absolutePublicMarketingAssetUrl(
+  url: string | null | undefined,
+  appOrigin?: string | null,
+): string | null {
+  const value = (url ?? "").trim();
+  if (!isPublicMarketingAssetUrl(value)) return null;
+  if (value.startsWith("/")) {
+    const origin = (appOrigin ?? "").replace(/\/+$/, "");
+    if (!origin) return null;
+    return `${origin}${value}`;
+  }
+  try {
+    return new URL(value).toString();
+  } catch {
+    return null;
+  }
+}
+
+export type PublicMarketingAssetPhoto = {
+  marketingPermissionStatus?: string;
+  approved?: boolean;
+  url?: string | null;
+  visibility?: string | null;
+  category?: string | null;
+  status?: string | null;
+  deletedAt?: Date | string | null;
+  publicPath?: string | null;
+};
+
+export function isPrivateStoredMarketingPhoto(photo: PublicMarketingAssetPhoto): boolean {
+  if (photo.deletedAt) return true;
+  if (photo.status && photo.status !== "READY") return true;
+  if (photo.category && PRIVATE_MARKETING_ASSET_CATEGORIES.has(photo.category)) return true;
+  if (photo.visibility && photo.visibility !== "PUBLIC") return true;
+  return false;
+}
+
+export function selectPublicMarketingAssetUrl(
+  photos: readonly PublicMarketingAssetPhoto[],
+  appOrigin?: string | null,
+): string | null {
+  for (const photo of photos) {
+    if (!photo.approved && !isMarketingApprovedPhoto(photo.marketingPermissionStatus)) continue;
+    if (isPrivateStoredMarketingPhoto(photo)) continue;
+    const candidate = photo.publicPath || photo.url;
+    const absolute = absolutePublicMarketingAssetUrl(candidate, appOrigin);
+    if (absolute) return absolute;
+  }
+  return null;
+}
+
+export function studioPhotosHavePublicMarketingAsset(
+  photos: readonly PublicMarketingAssetPhoto[],
+  appOrigin?: string | null,
+): boolean {
+  return selectPublicMarketingAssetUrl(photos, appOrigin) != null ||
+    photos.some(
+      (photo) =>
+        (photo.approved === true || isMarketingApprovedPhoto(photo.marketingPermissionStatus)) &&
+        !isPrivateStoredMarketingPhoto(photo) &&
+        isPublicMarketingAssetUrl(photo.publicPath || photo.url),
+    );
+}
+
+export function socialPublishCopy(destination: string) {
+  if (destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM) {
+    return {
+      owner: OWNER_INSTAGRAM_SOCIAL_PUBLISH_MESSAGE,
+      disconnected: INSTAGRAM_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+      already: INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
+      inFlight: INSTAGRAM_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+      failed: INSTAGRAM_SOCIAL_PUBLISH_FAILED_MESSAGE,
+      published: INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+      unconfirmed: INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+      confirmFirst: INSTAGRAM_SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
+      resolvePosted: INSTAGRAM_SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
+      resolveNotFound: INSTAGRAM_SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+      empty: INSTAGRAM_SOCIAL_PUBLISH_EMPTY_MESSAGE,
+      schema: INSTAGRAM_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
+      publicAsset: SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+    };
+  }
+  return {
+    owner: OWNER_SOCIAL_PUBLISH_MESSAGE,
+    disconnected: SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+    already: SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
+    inFlight: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+    failed: SOCIAL_PUBLISH_FAILED_MESSAGE,
+    published: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+    unconfirmed: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+    confirmFirst: SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
+    resolvePosted: SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
+    resolveNotFound: SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+    empty: SOCIAL_PUBLISH_EMPTY_MESSAGE,
+    schema: SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
+    publicAsset: SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+  };
+}
+
 export function canPublishMarketingToSocial(input: {
   role: string;
   status: string;
   destination: string;
   destinationConnected: boolean;
-  photos: Array<{ marketingPermissionStatus?: string; approved?: boolean }>;
+  photos: Array<PublicMarketingAssetPhoto>;
 }): boolean {
-  return (
-    input.role === "OWNER" &&
-    input.status === "APPROVED" &&
-    isImplementedSocialPublishDestination(input.destination) &&
-    input.destinationConnected === true &&
-    studioPhotosEligible(input.photos)
-  );
+  if (
+    input.role !== "OWNER" ||
+    input.status !== "APPROVED" ||
+    !isImplementedSocialPublishDestination(input.destination) ||
+    input.destinationConnected !== true ||
+    !studioPhotosEligible(input.photos)
+  ) {
+    return false;
+  }
+  if (input.destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM) {
+    return studioPhotosHavePublicMarketingAsset(input.photos);
+  }
+  return true;
 }
 
 export function socialPublishAttemptLiveKey(contentId: string, destination: string) {
@@ -387,6 +567,7 @@ export function socialPublishDisplay(
         status?: string | null;
         claimedAt?: Date | null;
         failureLabel?: string | null;
+        destination?: string | null;
         now?: Date;
       },
 ): {
@@ -399,16 +580,17 @@ export function socialPublishDisplay(
     statusOrInput && typeof statusOrInput === "object"
       ? statusOrInput
       : { status: statusOrInput };
+  const copy = socialPublishCopy(input.destination ?? SOCIAL_PUBLISH_DESTINATION_FACEBOOK);
   if (input.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
     return {
       published: true,
       unconfirmed: false,
       inFlight: false,
-      label: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+      label: copy.published,
     };
   }
   if (input.status === SOCIAL_PUBLISH_ATTEMPT_FAILED) {
-    const label = input.failureLabel?.trim() || SOCIAL_PUBLISH_FAILED_MESSAGE;
+    const label = input.failureLabel?.trim() || copy.failed;
     return { published: false, unconfirmed: false, inFlight: false, label };
   }
   if (input.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
@@ -417,14 +599,14 @@ export function socialPublishDisplay(
         published: false,
         unconfirmed: true,
         inFlight: false,
-        label: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+        label: copy.unconfirmed,
       };
     }
     return {
       published: false,
       unconfirmed: false,
       inFlight: true,
-      label: SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+      label: copy.inFlight,
     };
   }
   return { published: false, unconfirmed: false, inFlight: false, label: null };
@@ -443,14 +625,19 @@ export function presentMarketingSocialDestinations(connectedDestinations: readon
   destinations: Record<"FACEBOOK" | "INSTAGRAM" | "GOOGLE", MarketingSocialDestinationState>;
 } {
   const facebookConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_FACEBOOK);
+  const instagramConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_INSTAGRAM);
+  const connected = facebookConnected || instagramConnected;
+  const message = facebookConnected && instagramConnected
+    ? FACEBOOK_AND_INSTAGRAM_CONNECTED_MESSAGE
+    : facebookConnected
+      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+      : instagramConnected
+        ? INSTAGRAM_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+        : CHANNELS_DISCONNECTED_MESSAGE;
   return {
-    connected: facebookConnected,
-    message: facebookConnected
-      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
-      : CHANNELS_DISCONNECTED_MESSAGE,
-    manualCopy: facebookConnected
-      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
-      : SOCIAL_MANUAL_COPY_MESSAGE,
+    connected,
+    message,
+    manualCopy: connected ? message : SOCIAL_MANUAL_COPY_MESSAGE,
     destinations: {
       FACEBOOK: {
         destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
@@ -459,8 +646,8 @@ export function presentMarketingSocialDestinations(connectedDestinations: readon
       },
       INSTAGRAM: {
         destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
-        implemented: false,
-        connected: false,
+        implemented: true,
+        connected: instagramConnected,
       },
       GOOGLE: {
         destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,

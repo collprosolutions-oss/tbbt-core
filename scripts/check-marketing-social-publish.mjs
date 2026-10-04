@@ -1,11 +1,13 @@
 /**
- * OWNER Facebook Page publish for one connected social destination.
+ * OWNER Facebook Page and Instagram publish for one connected social
+ * destination.
  *
- * Uses the official Graph API v26.0 client in production and a fake
+ * Uses the official Graph API v26.0 clients in production and a fake
  * provider in these tests. Proves OWNER authorization, tenant isolation,
  * claim-before-provider, DRAFT/planned-day refusal, retry after FAILED,
- * and that failures are never labeled PUBLISHED. Instagram and Google
- * stay disconnected. No live Graph API post.
+ * and that failures are never labeled PUBLISHED. Instagram uses only an
+ * approved public marketing image. Google stays disconnected. No live
+ * Graph API post.
  *
  * Run with:
  *   npm run test:marketing-social-publish
@@ -45,7 +47,13 @@ const {
   SOCIAL_PUBLISH_EMPTY_MESSAGE,
   SOCIAL_PUBLISH_FAILED_MESSAGE,
   SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+  INSTAGRAM_SOCIAL_PUBLISH_FAILED_MESSAGE,
+  INSTAGRAM_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+  INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+  INSTAGRAM_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+  INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
   SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
+  SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
   SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
   SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
   SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
@@ -59,7 +67,9 @@ const {
   canPublishMarketingToSocial,
   canResolveSocialPublishAttempt,
   composeSocialPublishMessage,
+  isPublicMarketingAssetUrl,
   sanitizeSocialPublishProviderError,
+  selectPublicMarketingAssetUrl,
   socialPublishAttemptLiveKey,
   socialPublishDisplay,
 } = await import("@/lib/marketing");
@@ -79,6 +89,11 @@ const { loadMarketingSource } = await import("@/lib/marketing-data");
 const { createFakeSocialPublishingProvider } = await import("@/lib/social-publishing/fake");
 const { createFacebookSocialPublishingProvider } = await import("@/lib/social-publishing/facebook");
 const {
+  createInstagramSocialPublishingProvider,
+  instagramMediaContainerUrl,
+  instagramMediaPublishUrl,
+} = await import("@/lib/social-publishing/instagram");
+const {
   FACEBOOK_GRAPH_API_HOST,
   FACEBOOK_GRAPH_API_VERSION,
   facebookPageFeedUrl,
@@ -95,6 +110,7 @@ delete process.env.TBBT_SOCIAL_PUBLISHING_ADAPTER;
 
 const opsSrc = readSrc("src/lib/marketing-social-publish.ts");
 const facebookSrc = readSrc("src/lib/social-publishing/facebook.ts");
+const instagramSrc = readSrc("src/lib/social-publishing/instagram.ts");
 const fakeSrc = readSrc("src/lib/social-publishing/fake.ts");
 const actionSrc = readSrc("src/app/actions/marketing.ts");
 const buttonSrc = readSrc("src/components/marketing/publish-social-button.tsx");
@@ -219,6 +235,30 @@ try {
       facebookSrc.includes("/{page-id}/feed"),
   );
   check(
+    "Official Instagram provider uses current Graph API v26.0 media publish",
+    instagramMediaContainerUrl("178414") === "https://graph.facebook.com/v26.0/178414/media" &&
+      instagramMediaPublishUrl("178414") === "https://graph.facebook.com/v26.0/178414/media_publish" &&
+      instagramSrc.includes("image_url") &&
+      instagramSrc.includes("media_publish") &&
+      instagramSrc.includes("instagram-api/guides/content-publishing") &&
+      !instagramSrc.includes("graph.instagram.com"),
+  );
+  check(
+    "Public marketing asset helper refuses private job and signed URLs",
+    isPublicMarketingAssetUrl("https://example.test/after.jpg") === true &&
+      isPublicMarketingAssetUrl("/api/storage/public/asset1") === true &&
+      isPublicMarketingAssetUrl("/api/storage/private/secret") === false &&
+      isPublicMarketingAssetUrl("https://bucket.test/photo.jpg?X-Amz-Signature=abc") === false &&
+      isPublicMarketingAssetUrl("https://example.test/api/storage/private/secret") === false &&
+      selectPublicMarketingAssetUrl([
+        { approved: true, url: "https://example.test/api/storage/private/secret", visibility: "PRIVATE", category: "JOB_PHOTO" },
+        { approved: true, url: "https://example.test/public.jpg" },
+      ]) === "https://example.test/public.jpg" &&
+      selectPublicMarketingAssetUrl([
+        { approved: true, url: "https://example.test/customer.jpg", category: "CUSTOMER_PHOTO", visibility: "PRIVATE" },
+      ]) === null,
+  );
+  check(
     "Fake adapter cannot enable in Vercel production",
     isFakeSocialPublishingAdapterEnabled() === false,
   );
@@ -262,6 +302,20 @@ try {
         destination: SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
         destinationConnected: true,
         photos: [{ approved: true }],
+      }) === false &&
+      canPublishMarketingToSocial({
+        role: "OWNER",
+        status: "APPROVED",
+        destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+        destinationConnected: true,
+        photos: [{ approved: true, url: "https://example.test/after.jpg" }],
+      }) === true &&
+      canPublishMarketingToSocial({
+        role: "OWNER",
+        status: "APPROVED",
+        destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+        destinationConnected: true,
+        photos: [{ approved: true, url: "/api/storage/private/secret", visibility: "PRIVATE" }],
       }) === false,
   );
   check(
@@ -360,18 +414,20 @@ try {
       }),
   );
   check(
-    "Workspace exposes an explicit OWNER Publish to Facebook action",
+    "Workspace exposes explicit OWNER Publish to Facebook and Instagram actions",
     workspaceSrc.includes("PublishSocialButton") &&
       workspaceSrc.includes("canPublishMarketingToSocial") &&
+      workspaceSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
+      workspaceSrc.includes("studioPhotosHavePublicMarketingAsset") &&
       buttonSrc.includes("Publish to Facebook") &&
       buttonSrc.includes("Retry Facebook publish") &&
+      buttonSrc.includes("Publish to Instagram") &&
+      buttonSrc.includes("Retry Instagram publish") &&
       buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_FACEBOOK") &&
+      buttonSrc.includes("SOCIAL_PUBLISH_DESTINATION_INSTAGRAM") &&
       actionSrc.includes("publishMarketingContentToSocial") &&
-      buttonSrc.includes("SOCIAL_PUBLISH_PUBLISHED_MESSAGE") &&
-      buttonSrc.includes("SOCIAL_PUBLISH_FAILED_MESSAGE") &&
       buttonSrc.includes("Not posted, allow retry") &&
       buttonSrc.includes("It posted") &&
-      buttonSrc.includes("SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE") &&
       actionSrc.includes("resolveMarketingSocialPublishAttempt"),
   );
   check(
@@ -385,6 +441,9 @@ try {
     fakeSrc.includes("createFakeSocialPublishingProvider") &&
       !fakeSrc.includes("graph.facebook.com") &&
       facebookSrc.includes("FACEBOOK_SOCIAL_PUBLISHING_PROVIDER") &&
+      facebookSrc.includes("graph.facebook.com") &&
+      instagramSrc.includes("INSTAGRAM_SOCIAL_PUBLISHING_PROVIDER") &&
+      instagramSrc.includes("FACEBOOK_GRAPH_API_HOST") &&
       facebookSrc.includes("graph.facebook.com"),
   );
   check(
@@ -440,6 +499,76 @@ try {
       graphNetwork.outcome === "unknown" &&
       !graphTimeout.error.includes(graphToken) &&
       !graphNetwork.error.includes(graphToken),
+  );
+
+  const igGraphCalls = [];
+  const igGraphPublished = await createInstagramSocialPublishingProvider(async (url, init) => {
+    igGraphCalls.push({ url: String(url), body: String(init.body) });
+    if (String(url).includes("/media_publish")) {
+      return { ok: true, status: 200, async json() { return { id: "ig_media_ok" }; } };
+    }
+    return { ok: true, status: 200, async json() { return { id: "ig_container_ok" }; } };
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+    pageId: "178414000",
+    accessToken: graphToken,
+    message: "Public work completed.",
+    imageUrl: "https://example.test/public.jpg",
+  });
+  const igGraphRejected = await createInstagramSocialPublishingProvider(async () => ({
+    ok: false,
+    status: 400,
+    async json() {
+      return { error: { message: `Invalid OAuth access token ${graphToken}` } };
+    },
+  })).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+    pageId: "178414000",
+    accessToken: graphToken,
+    message: "hello",
+    imageUrl: "https://example.test/public.jpg",
+  });
+  const igGraphTimeout = await createInstagramSocialPublishingProvider(async () => {
+    throw abortError;
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+    pageId: "178414000",
+    accessToken: graphToken,
+    message: "hello",
+    imageUrl: "https://example.test/public.jpg",
+  });
+  const igGraphPrivate = await createInstagramSocialPublishingProvider(async () => {
+    throw new Error("live Graph must not be called");
+  }).publish({
+    destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+    pageId: "178414000",
+    accessToken: graphToken,
+    message: "hello",
+    imageUrl: "https://example.test/api/storage/private/secret",
+  });
+  check(
+    "Instagram Graph success uses fake Meta container then publish",
+    igGraphPublished.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      igGraphPublished.providerPostId === "ig_media_ok" &&
+      igGraphCalls.length === 2 &&
+      igGraphCalls[0].url === instagramMediaContainerUrl("178414000") &&
+      igGraphCalls[1].url === instagramMediaPublishUrl("178414000") &&
+      igGraphCalls[0].body.includes("image_url=https%3A%2F%2Fexample.test%2Fpublic.jpg") &&
+      igGraphCalls[0].body.includes("access_token"),
+  );
+  check(
+    "Instagram Graph HTTP rejection is FAILED and redacts the token",
+    igGraphRejected.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      igGraphRejected.outcome === "rejected" &&
+      !igGraphRejected.error.includes(graphToken) &&
+      igGraphRejected.error.includes("[redacted]"),
+  );
+  check(
+    "Instagram timeout is UNKNOWN and a private URL never reaches Graph",
+    igGraphTimeout.status === "UNKNOWN" &&
+      !igGraphTimeout.error.includes(graphToken) &&
+      igGraphPrivate.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      igGraphPrivate.outcome === "rejected",
   );
 
   const businessA = await prisma.business.create({
@@ -631,7 +760,7 @@ try {
   );
   const instagramCalls = createFakeSocialPublishingProvider();
   await expectError(
-    "Instagram stays disconnected and never calls the provider",
+    "Instagram without a connected destination never calls the provider",
     () =>
       publishMarketingContentToSocial(
         prisma,
@@ -645,7 +774,7 @@ try {
       ),
     (error) =>
       error instanceof MarketingError &&
-      error.message === SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE &&
+      error.message === INSTAGRAM_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE &&
       instagramCalls.published.length === 0,
   );
   await expectError(
@@ -958,7 +1087,7 @@ try {
       sourceA.channels.destinations.FACEBOOK.connected === true &&
       sourceA.channels.destinations.INSTAGRAM.connected === false &&
       sourceA.channels.destinations.GOOGLE.connected === false &&
-      sourceA.channels.destinations.INSTAGRAM.implemented === false &&
+      sourceA.channels.destinations.INSTAGRAM.implemented === true &&
       sourceA.channels.destinations.GOOGLE.implemented === false,
   );
   check(
@@ -1546,6 +1675,242 @@ try {
       }),
     (error) =>
       error instanceof MarketingError && error.message === SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+  );
+
+  console.log("\nTEST — OWNER Instagram publish uses a public marketing asset");
+  await prisma.marketingSocialDestination.create({
+    data: {
+      businessId: businessA.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      pageId: "17841400000000",
+      accessToken: "fake-ig-token",
+    },
+  });
+  const igApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Instagram public asset post",
+    channelIntent: "INSTAGRAM",
+  });
+  const igProvider = createFakeSocialPublishingProvider();
+  const igPublished = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: igApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      expectedUpdatedAt: igApproved.updatedAt,
+    },
+    { provider: igProvider },
+  );
+  const igPublishedRow = await prisma.marketingSocialPublishAttempt.findFirst({
+    where: { id: igPublished.attemptId, businessId: businessA.id },
+  });
+  const igContent = await prisma.marketingContent.findFirst({
+    where: { id: igApproved.id, businessId: businessA.id },
+  });
+  check(
+    "Instagram publish uses the public approved image and fake Meta id",
+    igPublished.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      igPublished.published === true &&
+      igPublished.message === INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      igPublished.providerPostId.startsWith("fake_ig_") &&
+      igProvider.published.length === 1 &&
+      igProvider.published[0].destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM &&
+      igProvider.published[0].imageUrl === "https://example.test/after.jpg" &&
+      igProvider.published[0].message.includes("Faucet repair completed in Reno.") &&
+      !igProvider.published[0].message.includes("555-0100") &&
+      !igProvider.published[0].imageUrl.includes("private") &&
+      igPublishedRow?.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      igContent?.status === "APPROVED",
+  );
+  await expectError(
+    "Duplicate Instagram click after PUBLISHED does not post again",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: igApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+          expectedUpdatedAt: igApproved.updatedAt,
+        },
+        { provider: igProvider },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE &&
+      igProvider.published.length === 1,
+  );
+
+  const igFailApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Instagram fail then retry",
+  });
+  const igFailing = createFakeSocialPublishingProvider();
+  igFailing.setFailNext(true);
+  const igFailed = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: igFailApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      expectedUpdatedAt: igFailApproved.updatedAt,
+    },
+    { provider: igFailing },
+  );
+  check(
+    "Instagram provider rejection is FAILED and not PUBLISHED",
+    igFailed.status === SOCIAL_PUBLISH_ATTEMPT_FAILED &&
+      igFailed.published === false &&
+      igFailed.message.includes(INSTAGRAM_SOCIAL_PUBLISH_FAILED_MESSAGE) &&
+      igFailing.published.length === 0,
+  );
+  const igRetried = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: igFailApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      expectedUpdatedAt: igFailApproved.updatedAt,
+    },
+    { provider: igFailing },
+  );
+  check(
+    "Instagram retry after FAILED can publish once",
+    igRetried.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      igRetried.published === true &&
+      igFailing.published.length === 1,
+  );
+
+  const igDupApproved = await approvePackage(prisma, ownerA, adminA, {
+    ...packageInput,
+    title: "Instagram duplicate click",
+  });
+  const igDupProvider = createFakeSocialPublishingProvider();
+  let releaseIgSecond;
+  const holdIg = new Promise((resolve) => {
+    releaseIgSecond = resolve;
+  });
+  const igFirstClaim = publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: igDupApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      expectedUpdatedAt: igDupApproved.updatedAt,
+    },
+    { provider: igDupProvider, beforeProvider: () => holdIg },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  let igDuplicateError = null;
+  try {
+    await publishMarketingContentToSocial(
+      prisma,
+      ownerA,
+      {
+        contentId: igDupApproved.id,
+        destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+        expectedUpdatedAt: igDupApproved.updatedAt,
+      },
+      { provider: igDupProvider },
+    );
+  } catch (error) {
+    igDuplicateError = error;
+  }
+  releaseIgSecond();
+  const igFirstResult = await igFirstClaim;
+  check(
+    "Instagram second click is refused as in-flight or already published",
+    igDuplicateError instanceof MarketingError &&
+      (igDuplicateError.message === INSTAGRAM_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE ||
+        igDuplicateError.message === INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE),
+  );
+  check(
+    "Instagram provider is called once for the claimed attempt",
+    igFirstResult.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED &&
+      igFirstResult.published === true &&
+      igDupProvider.published.length === 1,
+  );
+
+  const privatePhoto = await prisma.jobPhoto.create({
+    data: {
+      businessId: businessA.id,
+      jobId: job.id,
+      stage: "BEFORE",
+      url: "https://example.test/api/storage/private/customer-secret",
+      caption: "Ada cell 555-0100",
+      marketingPermissionStatus: "APPROVED",
+    },
+  });
+  const privateApproved = await approvePackage(prisma, ownerA, adminA, {
+    contentType: "COMPLETED_JOB",
+    title: "Private job photo blocked",
+    body: "Should not post private photo.",
+    channelIntent: "INSTAGRAM",
+    jobId: job.id,
+    photoIds: [privatePhoto.id],
+    hashtags: "Reno",
+  });
+  const privateCalls = createFakeSocialPublishingProvider();
+  await expectError(
+    "Private job photo is refused before Instagram provider",
+    () =>
+      publishMarketingContentToSocial(
+        prisma,
+        ownerA,
+        {
+          contentId: privateApproved.id,
+          destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+          expectedUpdatedAt: privateApproved.updatedAt,
+        },
+        { provider: privateCalls },
+      ),
+    (error) =>
+      error instanceof MarketingError &&
+      error.message === SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE &&
+      privateCalls.published.length === 0 &&
+      privateCalls.callCount === 0,
+  );
+
+  const mixedApproved = await approvePackage(prisma, ownerA, adminA, {
+    contentType: "COMPLETED_JOB",
+    title: "Mixed private and public",
+    body: "Only the public image is sent.",
+    channelIntent: "INSTAGRAM",
+    jobId: job.id,
+    photoIds: [privatePhoto.id, photo.id],
+    hashtags: "Reno",
+  });
+  const mixedCalls = createFakeSocialPublishingProvider();
+  const mixedPublished = await publishMarketingContentToSocial(
+    prisma,
+    ownerA,
+    {
+      contentId: mixedApproved.id,
+      destination: SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
+      expectedUpdatedAt: mixedApproved.updatedAt,
+    },
+    { provider: mixedCalls },
+  );
+  check(
+    "Mixed package sends only the public marketing image",
+    mixedPublished.published === true &&
+      mixedCalls.published.length === 1 &&
+      mixedCalls.published[0].imageUrl === "https://example.test/after.jpg" &&
+      !JSON.stringify(mixedCalls.published[0]).includes("customer-secret") &&
+      !JSON.stringify(mixedCalls.published[0]).includes("555-0100"),
+  );
+
+  const igSource = await loadMarketingSource(prisma, businessA.id, new Date(), "OWNER");
+  const igRow = igSource.contents.find((row) => row.id === igApproved.id);
+  check(
+    "Loader presents Instagram as connected and published without rewriting content status",
+    igSource.channels.destinations.INSTAGRAM.connected === true &&
+      igSource.channels.destinations.INSTAGRAM.implemented === true &&
+      igRow?.instagramPublish.published === true &&
+      igRow.instagramPublish.label === INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE &&
+      igRow.status === "APPROVED" &&
+      igRow.socialPublish.published === false,
   );
 
   console.log("\nTEST — Two-connection liveKey race");

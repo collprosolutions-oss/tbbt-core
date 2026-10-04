@@ -1,11 +1,14 @@
 /**
- * OWNER Facebook Page publish for one connected social destination.
+ * OWNER Facebook Page and Instagram publish for one connected social
+ * destination.
  *
  * Claims a MarketingSocialPublishAttempt before the provider is called.
  * MarketingContent.status stays APPROVED — this never writes PUBLISHED
  * onto the content row. FAILED attempts keep that label and are shown
  * without calling them PUBLISHED. A DRAFT or merely planned day never
- * reaches the provider. Instagram and Google stay disconnected.
+ * reaches the provider. Instagram uses only an approved public marketing
+ * image and never sends a private job or customer photo. Google stays
+ * disconnected.
  *
  * Preview shares Production and skips migrate. Missing destination or
  * attempt tables fail closed. This file never runs request-time DDL.
@@ -14,42 +17,37 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import {
-  OWNER_SOCIAL_PUBLISH_MESSAGE,
   PHOTO_PERMISSION_REVOKED_MESSAGE,
-  SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
-  SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
-  SOCIAL_PUBLISH_EMPTY_MESSAGE,
-  SOCIAL_PUBLISH_FAILED_MESSAGE,
-  SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
   SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
   SOCIAL_PUBLISH_PACKAGE_NOT_FOUND_MESSAGE,
-  SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
-  SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+  SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
   SOCIAL_PUBLISH_RESOLVE_NOT_POSTED,
   SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE,
   SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE,
   SOCIAL_PUBLISH_RESOLVE_POSTED,
-  SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
-  SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
   SOCIAL_PUBLISH_SNAPSHOT_REQUIRED_MESSAGE,
   SOCIAL_PUBLISH_STALE_MESSAGE,
-  SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
   canResolveSocialPublishAttempt,
   composeSocialPublishMessage,
   isDisconnectedSocialPublishDestination,
   isImplementedSocialPublishDestination,
   isSocialPublishUnconfirmed,
   sanitizeSocialPublishProviderError,
+  selectPublicMarketingAssetUrl,
   socialPublishAttemptLiveKey,
+  socialPublishCopy,
   studioPhotosEligible,
+  type ImplementedSocialPublishDestination,
 } from "@/lib/marketing";
 import { MarketingError } from "@/lib/marketing-ops";
+import { getAppUrl } from "@/lib/mail";
 import { resolveConnectedPublishToken } from "@/lib/marketing-connections/service";
 import { getSocialPublishingProviderForDestination } from "@/lib/social-publishing/provider";
 import type { SocialPublishingProvider } from "@/lib/social-publishing/types";
@@ -148,10 +146,10 @@ function parseExpectedUpdatedAt(raw: string | Date | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function requireOwnerSocialPublish(access: BusinessAccess) {
+function requireOwnerSocialPublish(access: BusinessAccess, destination?: string) {
   requireBusinessCapability(access, CAPABILITIES.MANAGE_MARKETING);
   if (access.workspace.role !== "OWNER") {
-    throw new MarketingError(OWNER_SOCIAL_PUBLISH_MESSAGE);
+    throw new MarketingError(socialPublishCopy(destination ?? SOCIAL_PUBLISH_DESTINATION_FACEBOOK).owner);
   }
   requireBusinessRole(access, "OWNER");
 }
@@ -160,10 +158,11 @@ function safeProviderError(detail?: string | null, accessToken?: string | null) 
   return sanitizeSocialPublishProviderError(detail, accessToken) || null;
 }
 
-function safeFailureLabel(detail?: string | null, accessToken?: string | null) {
+function safeFailureLabel(detail?: string | null, accessToken?: string | null, destination?: string) {
+  const failed = socialPublishCopy(destination ?? SOCIAL_PUBLISH_DESTINATION_FACEBOOK).failed;
   const sanitized = sanitizeSocialPublishProviderError(detail, accessToken);
-  const composed = sanitized ? `${SOCIAL_PUBLISH_FAILED_MESSAGE} ${sanitized}` : SOCIAL_PUBLISH_FAILED_MESSAGE;
-  return sanitizeSocialPublishProviderError(composed, accessToken) || SOCIAL_PUBLISH_FAILED_MESSAGE;
+  const composed = sanitized ? `${failed} ${sanitized}` : failed;
+  return sanitizeSocialPublishProviderError(composed, accessToken) || failed;
 }
 
 function isUnknownProviderResult(result: {
@@ -216,7 +215,7 @@ export function latestSocialPublishAttempt<
 
 async function recordAttemptResult(
   db: Db,
-  attempt: { id: string; businessId: string; claimedAt: Date },
+  attempt: { id: string; businessId: string; claimedAt: Date; destination?: string },
   result: {
     status: "PUBLISHED" | "FAILED";
     providerPostId?: string | null;
@@ -240,9 +239,9 @@ async function recordAttemptResult(
       failureLabel: published
         ? ""
         : sanitizeSocialPublishProviderError(
-            result.failureLabel ?? safeFailureLabel(result.providerError, result.accessToken),
+            result.failureLabel ?? safeFailureLabel(result.providerError, result.accessToken, attempt.destination),
             result.accessToken,
-          ) || SOCIAL_PUBLISH_FAILED_MESSAGE,
+          ) || socialPublishCopy(attempt.destination ?? SOCIAL_PUBLISH_DESTINATION_FACEBOOK).failed,
       publishedAt: published ? new Date() : null,
       liveKey: published ? undefined : null,
     },
@@ -252,7 +251,7 @@ async function recordAttemptResult(
 
 async function recordUnknownOutcome(
   db: Db,
-  attempt: { id: string; businessId: string; claimedAt: Date },
+  attempt: { id: string; businessId: string; claimedAt: Date; destination?: string },
   result: { providerError?: string | null; accessToken?: string | null },
 ) {
   const updated = await db.marketingSocialPublishAttempt.updateMany({
@@ -264,7 +263,7 @@ async function recordUnknownOutcome(
     },
     data: {
       providerError: safeProviderError(result.providerError, result.accessToken),
-      failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+      failureLabel: socialPublishCopy(attempt.destination ?? SOCIAL_PUBLISH_DESTINATION_FACEBOOK).unconfirmed,
     },
   });
   return updated.count === 1;
@@ -275,6 +274,7 @@ function unknownPublishResult(claimed: {
   destination: string;
   id: string;
 }): MarketingSocialPublishResult {
+  const unconfirmed = socialPublishCopy(claimed.destination).unconfirmed;
   return {
     contentId: claimed.contentId,
     destination: claimed.destination,
@@ -283,9 +283,9 @@ function unknownPublishResult(claimed: {
     published: false,
     posted: false,
     unconfirmed: true,
-    failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+    failureLabel: unconfirmed,
     providerPostId: null,
-    message: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+    message: unconfirmed,
   };
 }
 
@@ -301,9 +301,9 @@ export async function publishMarketingContentToSocial(
   input: PublishMarketingContentToSocialInput,
   deps?: MarketingSocialPublishDeps,
 ): Promise<MarketingSocialPublishResult> {
-  requireOwnerSocialPublish(access);
-
   const destination = input.destination.trim();
+  requireOwnerSocialPublish(access, destination);
+  const copy = socialPublishCopy(destination);
   if (isDisconnectedSocialPublishDestination(destination) || !isImplementedSocialPublishDestination(destination)) {
     throw new MarketingError(
       isDisconnectedSocialPublishDestination(destination)
@@ -327,6 +327,7 @@ export async function publishMarketingContentToSocial(
     destinationPageId: string;
     accessToken: string;
     message: string;
+    imageUrl?: string;
   };
 
   try {
@@ -335,14 +336,14 @@ export async function publishMarketingContentToSocial(
       access,
       {
         contentId: input.contentId,
-        destination,
+        destination: destination as ImplementedSocialPublishDestination,
         expectedUpdatedAt,
       },
       deps,
     );
   } catch (error) {
     if (missingMarketingSocialPublishSchema(error)) {
-      throw new MarketingError(SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE);
+      throw new MarketingError(copy.schema);
     }
     throw error;
   }
@@ -359,10 +360,11 @@ export async function publishMarketingContentToSocial(
   };
   try {
     providerResult = await provider.publish({
-      destination,
+      destination: destination as ImplementedSocialPublishDestination,
       pageId: claimed.destinationPageId,
       accessToken: claimed.accessToken,
       message: claimed.message,
+      imageUrl: claimed.imageUrl,
     });
   } catch (error) {
     await recordUnknownOutcome(db, claimed, {
@@ -381,7 +383,7 @@ export async function publishMarketingContentToSocial(
   }
 
   if (!providerResult.ok || providerResult.status !== SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
-    const failureLabel = safeFailureLabel(providerResult.error, claimed.accessToken);
+    const failureLabel = safeFailureLabel(providerResult.error, claimed.accessToken, claimed.destination);
     await recordAttemptResult(db, claimed, {
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
       providerError: providerResult.error ?? "provider rejected",
@@ -408,18 +410,7 @@ export async function publishMarketingContentToSocial(
     accessToken: claimed.accessToken,
   });
   if (!recorded) {
-    return {
-      contentId: claimed.contentId,
-      destination: claimed.destination,
-      attemptId: claimed.id,
-      status: SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
-      published: false,
-      posted: false,
-      unconfirmed: true,
-      failureLabel: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
-      providerPostId: null,
-      message: SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
-    };
+    return unknownPublishResult(claimed);
   }
 
   return {
@@ -432,7 +423,7 @@ export async function publishMarketingContentToSocial(
     unconfirmed: false,
     failureLabel: null,
     providerPostId: providerResult.providerPostId ?? null,
-    message: SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+    message: copy.published,
   };
 }
 
@@ -452,6 +443,7 @@ export async function resolveMarketingSocialPublishAttempt(
   let attempt: {
     id: string;
     businessId: string;
+    destination: string;
     status: string;
     claimedAt: Date;
     failureLabel: string;
@@ -462,6 +454,7 @@ export async function resolveMarketingSocialPublishAttempt(
       select: {
         id: true,
         businessId: true,
+        destination: true,
         status: true,
         claimedAt: true,
         failureLabel: true,
@@ -469,13 +462,14 @@ export async function resolveMarketingSocialPublishAttempt(
     });
   } catch (error) {
     if (missingMarketingSocialPublishSchema(error)) {
-      throw new MarketingError(SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE);
+      throw new MarketingError(socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_FACEBOOK).schema);
     }
     throw error;
   }
   if (!attempt) {
-    throw new MarketingError(SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE);
+    throw new MarketingError(socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_FACEBOOK).resolveNotFound);
   }
+  const resolveCopy = socialPublishCopy(attempt.destination);
   access.assertOwned(attempt);
   if (
     !canResolveSocialPublishAttempt({
@@ -511,7 +505,7 @@ export async function resolveMarketingSocialPublishAttempt(
       attemptId: attempt.id,
       status: SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
       published: true,
-      message: SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
+      message: resolveCopy.resolvePosted,
     };
   }
 
@@ -521,7 +515,7 @@ export async function resolveMarketingSocialPublishAttempt(
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
       liveKey: null,
       publishedAt: null,
-      failureLabel: SOCIAL_PUBLISH_FAILED_MESSAGE,
+      failureLabel: resolveCopy.failed,
       providerError: null,
     },
   });
@@ -541,11 +535,12 @@ async function claimSocialPublishAttempt(
   access: BusinessAccess,
   input: {
     contentId: string;
-    destination: typeof SOCIAL_PUBLISH_DESTINATION_FACEBOOK;
+    destination: ImplementedSocialPublishDestination;
     expectedUpdatedAt: Date;
   },
   deps?: MarketingSocialPublishDeps,
 ) {
+  const copy = socialPublishCopy(input.destination);
   const content = access.assertOwned(
     await db.marketingContent.findFirst({
       where: { id: input.contentId, ...access.scope },
@@ -553,7 +548,19 @@ async function claimSocialPublishAttempt(
         photos: {
           include: {
             jobPhoto: {
-              select: { marketingPermissionStatus: true },
+              select: {
+                marketingPermissionStatus: true,
+                url: true,
+                storedAsset: {
+                  select: {
+                    visibility: true,
+                    status: true,
+                    deletedAt: true,
+                    category: true,
+                    publicPath: true,
+                  },
+                },
+              },
             },
           },
         },
@@ -569,7 +576,15 @@ async function claimSocialPublishAttempt(
   if (input.expectedUpdatedAt.getTime() !== content.updatedAt.getTime()) {
     throw new MarketingError(SOCIAL_PUBLISH_STALE_MESSAGE);
   }
-  const photos = content.photos.map((row) => row.jobPhoto);
+  const photos = content.photos.map((row) => ({
+    marketingPermissionStatus: row.jobPhoto.marketingPermissionStatus,
+    url: row.jobPhoto.url,
+    visibility: row.jobPhoto.storedAsset?.visibility,
+    status: row.jobPhoto.storedAsset?.status,
+    deletedAt: row.jobPhoto.storedAsset?.deletedAt,
+    category: row.jobPhoto.storedAsset?.category,
+    publicPath: row.jobPhoto.storedAsset?.publicPath,
+  }));
   if (photos.length === 0 || !studioPhotosEligible(photos)) {
     throw new MarketingError(PHOTO_PERMISSION_REVOKED_MESSAGE);
   }
@@ -578,12 +593,20 @@ async function claimSocialPublishAttempt(
     hashtags: content.hashtags,
   });
   if (!message) {
-    throw new MarketingError(SOCIAL_PUBLISH_EMPTY_MESSAGE);
+    throw new MarketingError(copy.empty);
+  }
+
+  let imageUrl: string | undefined;
+  if (input.destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM) {
+    imageUrl = selectPublicMarketingAssetUrl(photos, getAppUrl()) ?? undefined;
+    if (!imageUrl) {
+      throw new MarketingError(SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE);
+    }
   }
 
   const destinationRow = await resolveConnectedPublishToken(db, access.businessId, input.destination);
   if (!destinationRow?.pageId?.trim() || !destinationRow.accessToken) {
-    throw new MarketingError(SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE);
+    throw new MarketingError(copy.disconnected);
   }
 
   const existing = await db.marketingSocialPublishAttempt.findFirst({
@@ -596,14 +619,10 @@ async function claimSocialPublishAttempt(
     orderBy: { createdAt: "desc" },
   });
   if (existing?.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
-    throw new MarketingError(SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE);
+    throw new MarketingError(copy.already);
   }
   if (existing?.status === SOCIAL_PUBLISH_ATTEMPT_CLAIMED) {
-    throw new MarketingError(
-      isSocialPublishUnconfirmed(existing)
-        ? SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE
-        : SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
-    );
+    throw new MarketingError(isSocialPublishUnconfirmed(existing) ? copy.confirmFirst : copy.inFlight);
   }
 
   if (deps?.beforeClaimCreate) await deps.beforeClaimCreate();
@@ -633,6 +652,7 @@ async function claimSocialPublishAttempt(
       destinationPageId: destinationRow.pageId.trim(),
       accessToken: destinationRow.accessToken,
       message,
+      imageUrl,
     };
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
@@ -645,12 +665,8 @@ async function claimSocialPublishAttempt(
       },
     });
     if (blocker?.status === SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
-      throw new MarketingError(SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE);
+      throw new MarketingError(copy.already);
     }
-    throw new MarketingError(
-      blocker && isSocialPublishUnconfirmed(blocker)
-        ? SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE
-        : SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
-    );
+    throw new MarketingError(blocker && isSocialPublishUnconfirmed(blocker) ? copy.confirmFirst : copy.inFlight);
   }
 }
