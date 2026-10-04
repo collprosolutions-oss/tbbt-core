@@ -6,7 +6,10 @@
  * Neither adapter moves money or fetches a verified cash balance.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { PLAID_OAUTH_RETURN_PATH } from "@/lib/bank-connect-copy";
 import { PLAID_WEBHOOK_PATH } from "@/lib/plaid-webhook-path";
+import { productionSignedInOrigin } from "@/lib/tbbt-marketing-host";
+import { firstHeaderHost, isTrustedVercelAppHost } from "@/lib/vercel-app-host";
 
 export type PlaidEnvironment = "sandbox" | "development" | "production";
 
@@ -433,12 +436,76 @@ export function resolvePlaidWebhookUrl(env: NodeJS.ProcessEnv = process.env): st
   return `${app}${PLAID_WEBHOOK_PATH}`;
 }
 
-export function resolvePlaidRedirectUri(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function originFromAbsoluteUrl(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.hash || raw.includes("@")) return undefined;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSandboxOAuthOrigin(origin: string, env: NodeJS.ProcessEnv): boolean {
+  if (isProductionPlaidEnv(env)) return false;
+  try {
+    const url = new URL(origin);
+    const host = firstHeaderHost(url.host);
+    if (!host) return false;
+    if (url.protocol === "http:" && (host === "localhost" || host === "127.0.0.1")) {
+      return true;
+    }
+    return url.protocol === "https:" && isTrustedVercelAppHost(host);
+  } catch {
+    return false;
+  }
+}
+
+export function allowedPlaidOAuthOrigin(
+  requestOrigin: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const parsed = originFromAbsoluteUrl(requestOrigin);
+  if (!parsed) return undefined;
+  const production = productionSignedInOrigin(new URL(parsed).host);
+  if (production) return production;
+  if (isSandboxOAuthOrigin(parsed, env)) return parsed;
+  return undefined;
+}
+
+export function plaidOAuthReturnUri(origin: string): string {
+  return `${origin.replace(/\/$/, "")}${PLAID_OAUTH_RETURN_PATH}`;
+}
+
+/**
+ * OAuth return URL passed to /link/token/create.
+ * Plaid rejects query parameters here. Prefer the signed-in request host so
+ * www.tbbtool.com and www.collproreno.com each return to themselves and keep
+ * the host-only session cookie. Untrusted hosts fall back to env.
+ */
+export function resolvePlaidRedirectUri(
+  env: NodeJS.ProcessEnv = process.env,
+  requestOrigin?: string,
+): string | undefined {
+  const fromRequest = allowedPlaidOAuthOrigin(requestOrigin, env);
+  if (fromRequest) return plaidOAuthReturnUri(fromRequest);
   const explicit = env.PLAID_REDIRECT_URI?.trim();
-  if (explicit) return explicit;
+  if (explicit) {
+    try {
+      const url = new URL(explicit);
+      url.search = "";
+      url.hash = "";
+      return `${url.origin}${url.pathname === "/" ? PLAID_OAUTH_RETURN_PATH : url.pathname}`;
+    } catch {
+      return explicit;
+    }
+  }
   const app = env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
   if (!app) return undefined;
-  return `${app}/settings?section=banking`;
+  return `${app}${PLAID_OAUTH_RETURN_PATH}`;
 }
 
 export function isProductionPlaidEnv(env: NodeJS.ProcessEnv = process.env): boolean {

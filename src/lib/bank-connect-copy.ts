@@ -5,6 +5,11 @@
 
 export const PLAID_WEBHOOK_PATH = "/api/plaid/webhook";
 
+/** Plaid forbids query parameters on redirect_uri. Keep this path query-free. */
+export const PLAID_OAUTH_RETURN_PATH = "/settings/banking";
+
+export const PLAID_LINK_TOKEN_STORAGE_KEY = "tbbt.plaid.link";
+
 export const BANK_PLAID_ITEM_STATUSES = ["ACTIVE", "NEEDS_REAUTH", "DISCONNECTED"] as const;
 export type BankPlaidItemStatus = (typeof BANK_PLAID_ITEM_STATUSES)[number];
 

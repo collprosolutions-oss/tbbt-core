@@ -29,6 +29,18 @@ function isAuthPath(pathname: string) {
   );
 }
 
+function continueWithRequestHost(request: NextRequest) {
+  const csrfHost = firstHeaderHostWithPort(request.headers.get("host"));
+  if (!csrfHost) {
+    return NextResponse.next();
+  }
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-forwarded-host", csrfHost);
+  return NextResponse.next({
+    request: { headers: requestHeaders },
+  });
+}
+
 function redirectOnCurrentDeployment(path: string, request: NextRequest) {
   // Do not use `new URL(path, request.url)`: on Vercel Preview, request.url
   // can be the production origin (collproreno.com) via x-forwarded-host.
@@ -96,17 +108,8 @@ export function proxy(request: NextRequest) {
     // Vercel may set x-forwarded-host to the primary production domain
     // (www.collproreno.com) while the browser Origin is the custom host
     // (www.tbbtool.com). Next.js Server Action CSRF then aborts with
-    // "Invalid Server Actions request." (E80) before intake.ts runs, and
-    // the client maps that throw to PUBLIC_INTAKE_SUBMIT_ERROR.
-    const csrfHost = firstHeaderHostWithPort(request.headers.get("host"));
-    if (!csrfHost) {
-      return NextResponse.next();
-    }
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set("x-forwarded-host", csrfHost);
-    return NextResponse.next({
-      request: { headers: requestHeaders },
-    });
+    // "Invalid Server Actions request." (E80).
+    return continueWithRequestHost(request);
   }
 
   if (!hasSession && !isAuthPath(pathname)) {
@@ -117,7 +120,7 @@ export function proxy(request: NextRequest) {
     return redirectOnCurrentDeployment("/dashboard", request);
   }
 
-  return NextResponse.next();
+  return continueWithRequestHost(request);
 }
 
 export const config = {

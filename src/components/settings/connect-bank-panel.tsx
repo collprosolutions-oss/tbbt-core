@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import {
   createBankLinkTokenAction,
   disconnectBankConnectionAction,
@@ -15,6 +15,7 @@ import {
   BANK_CONNECT_NOT_CONFIGURED_MESSAGE,
   BANK_CONNECT_REVIEW_ONLY_MESSAGE,
   BANK_FEED_NOT_A_BALANCE_MESSAGE,
+  PLAID_LINK_TOKEN_STORAGE_KEY,
   bankPlaidStatusLabel,
 } from "@/lib/bank-connect-copy";
 
@@ -33,11 +34,52 @@ declare global {
     Plaid?: {
       create: (config: {
         token: string;
+        receivedRedirectUri?: string;
         onSuccess: (publicToken: string) => void;
         onExit?: (error: unknown) => void;
       }) => { open: () => void };
     };
   }
+}
+
+type StoredPlaidLink = { token: string; updateMode: boolean };
+
+function readStoredPlaidLink(): StoredPlaidLink | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(PLAID_LINK_TOKEN_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredPlaidLink>;
+    if (!parsed.token || typeof parsed.token !== "string") return null;
+    return { token: parsed.token, updateMode: parsed.updateMode === true };
+  } catch {
+    return null;
+  }
+}
+
+function storePlaidLink(token: string, updateMode: boolean) {
+  window.sessionStorage.setItem(
+    PLAID_LINK_TOKEN_STORAGE_KEY,
+    JSON.stringify({ token, updateMode }),
+  );
+}
+
+function clearStoredPlaidLink() {
+  window.sessionStorage.removeItem(PLAID_LINK_TOKEN_STORAGE_KEY);
+}
+
+function plaidOAuthReturnHref(): string | null {
+  if (typeof window === "undefined") return null;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.get("oauth_state_id")) return null;
+  return window.location.href;
+}
+
+function stripPlaidOAuthParams() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("oauth_state_id")) return;
+  url.searchParams.delete("oauth_state_id");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 async function loadPlaidLink(): Promise<void> {
@@ -78,11 +120,59 @@ export function ConnectBankPanel({
   );
   const [pending, startTransition] = useTransition();
   const [clientError, setClientError] = useState<string | null>(null);
+  const oauthResumeStarted = useRef(false);
 
   const error = clientError || syncState.error || disconnectState.error;
   const warning = disconnectState.warning;
   const connected = status === "ACTIVE" || status === "NEEDS_REAUTH";
   const busy = syncing || disconnecting || pending;
+
+  function exchangePublicToken(publicToken: string, updateMode: boolean) {
+    startTransition(async () => {
+      const exchange = new FormData();
+      exchange.set("publicToken", publicToken);
+      if (updateMode) exchange.set("updateMode", "1");
+      const result = await exchangeBankPublicTokenAction({}, exchange);
+      if (result.error) setClientError(result.error);
+    });
+  }
+
+  async function openPlaid(token: string, updateMode: boolean, receivedRedirectUri?: string) {
+    await loadPlaidLink();
+    if (!window.Plaid) {
+      setClientError("Plaid Link is unavailable.");
+      return;
+    }
+    window.Plaid.create({
+      token,
+      ...(receivedRedirectUri ? { receivedRedirectUri } : {}),
+      onSuccess: (publicToken) => {
+        clearStoredPlaidLink();
+        stripPlaidOAuthParams();
+        exchangePublicToken(publicToken, updateMode);
+      },
+      onExit: (exitError) => {
+        clearStoredPlaidLink();
+        stripPlaidOAuthParams();
+        if (exitError) setClientError("Bank connection was cancelled.");
+      },
+    }).open();
+  }
+
+  useEffect(() => {
+    if (adapter !== "plaid" || oauthResumeStarted.current) return;
+    const receivedRedirectUri = plaidOAuthReturnHref();
+    const stored = readStoredPlaidLink();
+    if (!receivedRedirectUri || !stored) return;
+    oauthResumeStarted.current = true;
+    startTransition(async () => {
+      try {
+        await openPlaid(stored.token, stored.updateMode, receivedRedirectUri);
+      } catch (loadError) {
+        setClientError(loadError instanceof Error ? loadError.message : "Plaid Link failed to load.");
+      }
+    });
+  }, [adapter]);
 
   function runLink(updateMode: boolean) {
     setClientError(null);
@@ -95,35 +185,14 @@ export function ConnectBankPanel({
         return;
       }
       if (adapter === "fake") {
-        const exchange = new FormData();
-        exchange.set("publicToken", `public-sandbox-tbbt-${Date.now()}`);
-        if (updateMode) exchange.set("updateMode", "1");
-        const result = await exchangeBankPublicTokenAction({}, exchange);
-        if (result.error) setClientError(result.error);
+        exchangePublicToken(`public-sandbox-tbbt-${Date.now()}`, updateMode);
         return;
       }
       try {
-        await loadPlaidLink();
-        if (!window.Plaid) {
-          setClientError("Plaid Link is unavailable.");
-          return;
-        }
-        window.Plaid.create({
-          token: created.linkToken,
-          onSuccess: (publicToken) => {
-            startTransition(async () => {
-              const exchange = new FormData();
-              exchange.set("publicToken", publicToken);
-              if (updateMode) exchange.set("updateMode", "1");
-              const result = await exchangeBankPublicTokenAction({}, exchange);
-              if (result.error) setClientError(result.error);
-            });
-          },
-          onExit: (exitError) => {
-            if (exitError) setClientError("Bank connection was cancelled.");
-          },
-        }).open();
+        storePlaidLink(created.linkToken, updateMode);
+        await openPlaid(created.linkToken, updateMode);
       } catch (loadError) {
+        clearStoredPlaidLink();
         setClientError(loadError instanceof Error ? loadError.message : "Plaid Link failed to load.");
       }
     });

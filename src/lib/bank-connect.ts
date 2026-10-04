@@ -207,7 +207,7 @@ export async function loadOwnedBankPlaidStatus(
 export async function createOwnedBankLinkToken(
   db: Db,
   access: BankConnectAccess,
-  input: { updateMode?: boolean } = {},
+  input: { updateMode?: boolean; requestOrigin?: string } = {},
 ): Promise<{ linkToken: string; updateMode: boolean }> {
   requireOwnerConnect(access);
   const provider = providerOrThrow();
@@ -242,7 +242,7 @@ export async function createOwnedBankLinkToken(
     clientUserId: `${access.businessId}:${membershipId(access)}`,
     accessToken,
     webhookUrl: resolvePlaidWebhookUrl(),
-    redirectUri: resolvePlaidRedirectUri(),
+    redirectUri: resolvePlaidRedirectUri(process.env, input.requestOrigin),
   });
 }
 

@@ -23,6 +23,7 @@ import {
 } from "@/lib/bank-connect";
 import { BANK_RECONCILIATION_ROUTE } from "@/lib/bank-reconciliation-copy";
 import { prisma } from "@/lib/prisma";
+import { readRequestOrigin } from "@/lib/request-host";
 
 export type BankConnectActionState = {
   error?: string;
@@ -68,7 +69,10 @@ export async function createBankLinkTokenAction(
   if (!operating.ok) return { error: operating.error };
   const updateMode = String(formData.get("updateMode") ?? "") === "1";
   try {
-    const result = await createOwnedBankLinkToken(prisma, operating.access, { updateMode });
+    const result = await createOwnedBankLinkToken(prisma, operating.access, {
+      updateMode,
+      requestOrigin: await readRequestOrigin(),
+    });
     return { linkToken: result.linkToken, updateMode: result.updateMode };
   } catch (error) {
     return mapError(error);

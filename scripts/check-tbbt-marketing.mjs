@@ -19,6 +19,7 @@ const {
   isTbbtMarketingHost,
   isTbbtMarketingIndexableHost,
   isTbbtMarketingPublicPath,
+  productionSignedInOrigin,
   shouldServeTbbtMarketingHome,
   tbbtApexWwwRedirectLocation,
   tbbtCanonicalUrl,
@@ -129,6 +130,14 @@ check(
     !isTbbtMarketingHost("www.collproreno.com"),
 );
 check(
+  "signed-in production origins canonicalize apex to www for both app hosts",
+  productionSignedInOrigin("www.tbbtool.com") === "https://www.tbbtool.com" &&
+    productionSignedInOrigin("tbbtool.com") === "https://www.tbbtool.com" &&
+    productionSignedInOrigin("www.collproreno.com") === "https://www.collproreno.com" &&
+    productionSignedInOrigin("collproreno.com") === "https://www.collproreno.com" &&
+    productionSignedInOrigin("evil.example.com") === null,
+);
+check(
   "Same-project coexistence: TBBT and CollPro hosts never share a homepage",
   shouldServeTbbtMarketingHome("www.tbbtool.com") &&
     shouldServeTbbtMarketingHome("tbbtool.com") &&
@@ -213,7 +222,10 @@ check(
 );
 check(
   "Auth proxy still treats public website paths as unauthenticated-safe",
-  proxySrc.includes("isPublicWebsitePath(pathname) || isStripeWebhookPath(pathname)"),
+  proxySrc.includes("isPublicWebsitePath(pathname)") &&
+    proxySrc.includes("isStripeWebhookPath(pathname)") &&
+    proxySrc.includes("isPlaidWebhookPath(pathname)") &&
+    proxySrc.includes("continueWithRequestHost"),
 );
 check(
   "Auth proxy 308s tbbtool.com apex to www before serving any homepage",
