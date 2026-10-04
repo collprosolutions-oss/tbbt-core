@@ -36,7 +36,6 @@ import {
 } from "@/lib/marketing-social-publish";
 import {
   MARKETING_OWNER_DRAFT_UNAVAILABLE_MESSAGE,
-  OWNER_SOCIAL_PUBLISH_MESSAGE,
   OWNER_STUDIO_CALENDAR_MESSAGE,
   socialPublishCopy,
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
@@ -384,8 +383,9 @@ export async function resolveMarketingSocialPublishAttemptAction(
 ): Promise<MarketingSocialPublishState> {
   try {
     const access = await requireOperatingProductAccess(PRODUCT_CAPABILITIES.MARKETING_TOOLS);
+    const destination = readString(formData, "destination");
     if (access.workspace.role !== "OWNER") {
-      return { error: OWNER_SOCIAL_PUBLISH_MESSAGE, published: false };
+      return { error: socialPublishCopy(destination).owner, published: false };
     }
     const result = await resolveMarketingSocialPublishAttempt(prisma, access, {
       attemptId: readString(formData, "attemptId"),

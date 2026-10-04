@@ -38,6 +38,7 @@ import {
   MARKETING_READINESS_LABELS,
   isImplementedMarketingArea,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
   socialPublishCopy,
@@ -671,6 +672,25 @@ function ContentBody({
                         ? SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE
                         : socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_INSTAGRAM).owner
                     }
+                  />
+                  <PublishSocialButton
+                    contentId={row.id}
+                    expectedUpdatedAt={row.updatedAt.toISOString()}
+                    destination={SOCIAL_PUBLISH_DESTINATION_GOOGLE}
+                    canPublish={canPublishMarketingToSocial({
+                      role: viewerRole,
+                      status: row.status,
+                      destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
+                      destinationConnected: source.channels.destinations.GOOGLE.connected,
+                      photos: row.photos,
+                    })}
+                    destinationConnected={source.channels.destinations.GOOGLE.connected}
+                    attemptId={row.googleSocialPublish.attemptId}
+                    attemptStatus={row.googleSocialPublish.attemptStatus}
+                    attemptLabel={row.googleSocialPublish.label}
+                    unconfirmed={row.googleSocialPublish.unconfirmed}
+                    canResolve={row.googleSocialPublish.canResolve}
+                    blockedMessage={socialPublishCopy(SOCIAL_PUBLISH_DESTINATION_GOOGLE).owner}
                   />
                 </>
               ) : null}

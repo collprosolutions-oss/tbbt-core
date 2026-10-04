@@ -3,9 +3,9 @@
  * destination's record. An unconnected Instagram or Google card cannot
  * change the Facebook card, and the reverse is also true.
  *
- * Google publish stays unavailable: connecting does not post. Instagram
- * publish still requires an approved package, a public marketing image,
- * and an explicit OWNER click.
+ * Connecting does not post. Publish remains an explicit OWNER action
+ * for Facebook, Instagram, and Google. Instagram still requires an
+ * approved public marketing image.
  */
 import {
   MARKETING_CONNECTION_DESTINATIONS,
@@ -40,9 +40,6 @@ export type MarketingConnectionCard = {
   showStatusCheck: boolean;
 };
 
-const PUBLISH_NOT_AVAILABLE =
-  "Publishing is not yet available. Connecting does not post, and an approved package is still required before any later publish.";
-
 function needsMorePermission(lastError: string) {
   return lastError.trim().toLowerCase().startsWith("needs more permission");
 }
@@ -58,7 +55,7 @@ function cardForDestination(
     destination,
     label,
     displayName: summary?.displayName?.trim() ?? "",
-    publishAvailable: (destination === "FACEBOOK" || destination === "INSTAGRAM") && summary?.publishable === true,
+    publishAvailable: summary?.publishable === true,
   };
 
   const platformReady = availability.available;
@@ -90,7 +87,7 @@ function cardForDestination(
           ? "No Facebook Page is connected. Connect does not publish."
           : destination === "INSTAGRAM"
             ? "No Instagram professional account is connected. Connect does not publish."
-          : `${label} is not connected. ${PUBLISH_NOT_AVAILABLE}`
+          : `${label} is not connected. Connecting does not post, and an approved package is still required before any later publish.`
         : availability.message,
       showConnect: owner && platformReady,
       showReconnect: false,
@@ -162,7 +159,7 @@ function cardForDestination(
         ? "Connected. Publishing still requires an OWNER-approved package and an explicit OWNER publish click. Connect did not post."
         : destination === "INSTAGRAM"
           ? `Connected${name ? ` to ${name}` : ""}. Publishing still requires an OWNER-approved package, an approved public marketing image, and an explicit OWNER publish click. Connect did not post. Private job or customer photos are not sent.`
-        : `Connected${name ? ` to ${name}` : ""}. ${PUBLISH_NOT_AVAILABLE}`;
+          : `Connected${name ? ` to ${name}` : ""}. Publishing still requires an OWNER-approved package and an explicit OWNER publish click. Connect did not post. Local posts do not change Google rankings.`;
     const approval =
       destination === "GOOGLE"
         ? " Google must approve Business Profile API access before live calls succeed. This screen does not claim that approval."

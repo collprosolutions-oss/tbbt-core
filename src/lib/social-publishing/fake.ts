@@ -5,8 +5,10 @@ import type {
   SocialPublishResult,
   SocialPublishingProvider,
 } from "@/lib/social-publishing/types";
+import { GOOGLE_RECONNECT_NEEDED_MESSAGE } from "@/lib/social-publishing/google";
 import {
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
 } from "@/lib/social-publishing/types";
 
@@ -18,10 +20,12 @@ export type FakeSocialPublishingProvider = SocialPublishingProvider & {
   throwNext: boolean;
   unknownNext: boolean;
   leakNext: boolean;
+  expiredNext: boolean;
   setFailNext(value: boolean): void;
   setThrowNext(value: boolean): void;
   setUnknownNext(value: boolean): void;
   setLeakNext(value: boolean): void;
+  setExpiredNext(value: boolean): void;
   setDelayMs(value: number): void;
 };
 
@@ -39,6 +43,7 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
     throwNext: false,
     unknownNext: false,
     leakNext: false,
+    expiredNext: false,
     setFailNext(value) {
       provider.failNext = value;
     },
@@ -50,6 +55,9 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
     },
     setLeakNext(value) {
       provider.leakNext = value;
+    },
+    setExpiredNext(value) {
+      provider.expiredNext = value;
     },
     setDelayMs(value) {
       provider.delayMs = value;
@@ -74,11 +82,27 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
       }
       if (provider.leakNext) {
         provider.leakNext = false;
+        const leaked =
+          input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+            ? `Google said invalid token ${input.accessToken} ya29.OtherLeakedTokenABC123`
+            : `Graph said invalid token ${input.accessToken} EAAOtherLeakedTokenABC123`;
         return {
           ok: false,
           status: "FAILED",
           outcome: "rejected",
-          error: `Graph said invalid token ${input.accessToken} EAAOtherLeakedTokenABC123`,
+          error: leaked,
+        };
+      }
+      if (provider.expiredNext) {
+        provider.expiredNext = false;
+        return {
+          ok: false,
+          status: "FAILED",
+          outcome: "rejected",
+          error:
+            input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+              ? GOOGLE_RECONNECT_NEEDED_MESSAGE
+              : "Fake social provider rejected an expired token.",
         };
       }
       if (provider.failNext) {
@@ -87,7 +111,10 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
           ok: false,
           status: "FAILED",
           outcome: "rejected",
-          error: "Fake social provider rejected the post.",
+          error:
+            input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+              ? "Fake Google local-post provider rejected the post."
+              : "Fake social provider rejected the post.",
         };
       }
       published.push(input);
@@ -95,9 +122,11 @@ export function createFakeSocialPublishingProvider(): FakeSocialPublishingProvid
         ok: true,
         status: "PUBLISHED",
         providerPostId:
-          input.destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
-            ? `fake_ig_${randomUUID()}`
-            : `fake_fb_${randomUUID()}`,
+          input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+            ? `fake_gbp_${randomUUID()}`
+            : input.destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
+              ? `fake_ig_${randomUUID()}`
+              : `fake_fb_${randomUUID()}`,
       };
     },
   };

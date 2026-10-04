@@ -237,14 +237,32 @@ export const OWNER_SOCIAL_PUBLISH_MESSAGE =
 export const OWNER_INSTAGRAM_SOCIAL_PUBLISH_MESSAGE =
   "Publishing to Instagram requires the OWNER role. A DRAFT or planned day is not a publish. Private job or customer photos are not sent.";
 
+export const OWNER_GOOGLE_SOCIAL_PUBLISH_MESSAGE =
+  "Publishing to Google Business Profile requires the OWNER role. A DRAFT or planned day is not a publish. Local posts do not change Google rankings.";
+
 export const FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
   "Facebook Page is connected for explicit OWNER publish. Instagram and Google Business Profile are not connected.";
 
 export const INSTAGRAM_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
-  "Instagram is connected for explicit OWNER publish. Google Business Profile publishing is not connected.";
+  "Instagram is connected for explicit OWNER publish. Facebook Page and Google Business Profile are not connected.";
+
+export const GOOGLE_CONNECTED_OTHERS_DISCONNECTED_MESSAGE =
+  "Google Business Profile is connected for explicit OWNER local-post publish. Facebook Page and Instagram are not connected.";
 
 export const FACEBOOK_AND_INSTAGRAM_CONNECTED_MESSAGE =
   "Facebook Page and Instagram are connected for explicit OWNER publish. Google Business Profile is not connected.";
+
+export const FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE =
+  "Facebook Page and Google Business Profile are connected for explicit OWNER publish. Instagram is not connected.";
+
+export const INSTAGRAM_AND_GOOGLE_CONNECTED_MESSAGE =
+  "Instagram and Google Business Profile are connected for explicit OWNER publish. Facebook Page is not connected.";
+
+export const ALL_SOCIAL_DESTINATIONS_CONNECTED_MESSAGE =
+  "Facebook Page, Instagram, and Google Business Profile are connected for explicit OWNER publish.";
+
+export const GOOGLE_LOCAL_POST_NO_RANKING_MESSAGE =
+  "This publishes a STANDARD Google Business Profile local post. TBBT makes no ranking promise.";
 
 export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
   "Only OWNER-approved creator packages can be published. A DRAFT or planned day is not a publish.";
@@ -252,11 +270,14 @@ export const SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE =
 export const SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
   "Facebook is not connected for this business. TBBT will not post.";
 
+export const GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
+  "Google Business Profile is not connected for this business. TBBT will not post.";
+
 export const INSTAGRAM_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE =
   "Instagram is not connected for this business. TBBT will not post.";
 
 export const SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE =
-  "Google publishing is not connected yet.";
+  "That destination is not connected yet.";
 
 export const SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
   "This package was already published to Facebook.";
@@ -264,11 +285,17 @@ export const SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
 export const INSTAGRAM_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
   "This package was already published to Instagram.";
 
+export const GOOGLE_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE =
+  "This package was already published to Google Business Profile.";
+
 export const SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
   "A Facebook publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
 
 export const INSTAGRAM_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
   "An Instagram publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
+
+export const GOOGLE_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE =
+  "A Google Business Profile publish is already in progress. It is not marked PUBLISHED. TBBT will not send another post.";
 
 export const SOCIAL_PUBLISH_FAILED_MESSAGE =
   "Facebook publish failed. It was not marked PUBLISHED.";
@@ -276,9 +303,14 @@ export const SOCIAL_PUBLISH_FAILED_MESSAGE =
 export const INSTAGRAM_SOCIAL_PUBLISH_FAILED_MESSAGE =
   "Instagram publish failed. It was not marked PUBLISHED.";
 
+export const GOOGLE_SOCIAL_PUBLISH_FAILED_MESSAGE =
+  "Google Business Profile publish failed. It was not marked PUBLISHED.";
+
 export const SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Facebook.";
 
 export const INSTAGRAM_SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Instagram.";
+
+export const GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE = "Published to Google Business Profile.";
 
 export const SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE =
   "Instagram publish needs an approved public marketing image. Private job or customer photos are not sent.";
@@ -286,6 +318,7 @@ export const SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE =
 export const SOCIAL_PUBLISH_UNCONFIRMED_MS = 5 * 60 * 1000;
 export const SOCIAL_PUBLISH_ERROR_MAX_CHARS = 200;
 export const SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN = /EAA[A-Za-z0-9]+/g;
+export const SOCIAL_PUBLISH_GOOGLE_TOKEN_PATTERN = /ya29\.[A-Za-z0-9._-]+/g;
 
 export const SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
   "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm.";
@@ -293,11 +326,26 @@ export const SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
 export const INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
   "This Instagram publish is unconfirmed. Check Instagram, then confirm.";
 
+export const GOOGLE_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE =
+  "This Google Business Profile publish is unconfirmed. Check your Business Profile, then confirm.";
+
+export const GOOGLE_RECONNECT_NEEDED_MESSAGE =
+  "Google Business Profile access expired. Reconnect needed. TBBT will not post.";
+
+export const GOOGLE_ACCOUNT_BINDING_MESSAGE =
+  "This Google Business Profile location is not bound to this business account. TBBT will not post.";
+
+export const GOOGLE_LOCAL_POST_TOO_LONG_MESSAGE =
+  "Approved text is too long for a Google Business Profile local post.";
+
 export const SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
   "This Facebook publish is unconfirmed. Check your Facebook Page, then confirm before retrying.";
 
 export const INSTAGRAM_SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
   "This Instagram publish is unconfirmed. Check Instagram, then confirm before retrying.";
+
+export const GOOGLE_SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE =
+  "This Google Business Profile publish is unconfirmed. Check your Business Profile, then confirm before retrying.";
 
 export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED = "NOT_POSTED" as const;
 export const SOCIAL_PUBLISH_RESOLVE_POSTED = "POSTED" as const;
@@ -308,6 +356,12 @@ export const SOCIAL_PUBLISH_RESOLVE_NOT_POSTED_MESSAGE =
 export const SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Facebook.";
 
 export const INSTAGRAM_SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE = "Marked as published on Instagram.";
+
+export const GOOGLE_SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE =
+  "Marked as published on Google Business Profile.";
+
+export const GOOGLE_SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE =
+  "That Google Business Profile publish attempt is not in this business.";
 
 export const SOCIAL_PUBLISH_RESOLVE_NOT_READY_MESSAGE =
   "This publish is still in progress. Confirm only after it is unconfirmed.";
@@ -332,6 +386,9 @@ export function sanitizeSocialPublishProviderError(
   text = text.replace(/access_token=[^&\s]+/gi, "access_token=[redacted]");
   SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN.lastIndex = 0;
   text = text.replace(SOCIAL_PUBLISH_PAGE_TOKEN_PATTERN, "[redacted]");
+  SOCIAL_PUBLISH_GOOGLE_TOKEN_PATTERN.lastIndex = 0;
+  text = text.replace(SOCIAL_PUBLISH_GOOGLE_TOKEN_PATTERN, "[redacted]");
+  text = text.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]");
   if (text.length > SOCIAL_PUBLISH_ERROR_MAX_CHARS) {
     text = text.slice(0, SOCIAL_PUBLISH_ERROR_MAX_CHARS);
   }
@@ -348,7 +405,8 @@ export function isSocialPublishUnconfirmed(input: {
   if (input.status !== SOCIAL_PUBLISH_ATTEMPT_CLAIMED) return false;
   if (
     input.failureLabel === SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE ||
-    input.failureLabel === INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE
+    input.failureLabel === INSTAGRAM_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE ||
+    input.failureLabel === GOOGLE_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE
   ) {
     return true;
   }
@@ -380,11 +438,17 @@ export const SOCIAL_PUBLISH_EMPTY_MESSAGE =
 export const INSTAGRAM_SOCIAL_PUBLISH_EMPTY_MESSAGE =
   "Approved text is required before publishing to Instagram.";
 
+export const GOOGLE_SOCIAL_PUBLISH_EMPTY_MESSAGE =
+  "Approved text is required before publishing to Google Business Profile.";
+
 export const SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
   "Facebook publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
 
 export const INSTAGRAM_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
   "Instagram publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
+
+export const GOOGLE_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE =
+  "Google Business Profile publish is unavailable until this workspace's schema is migrated. TBBT will not post.";
 
 export const SOCIAL_PUBLISH_PACKAGE_NOT_FOUND_MESSAGE =
   "That creator package is not in this business.";
@@ -506,6 +570,25 @@ export function socialPublishCopy(destination: string) {
       empty: INSTAGRAM_SOCIAL_PUBLISH_EMPTY_MESSAGE,
       schema: INSTAGRAM_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
       publicAsset: SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+      reconnect: GOOGLE_RECONNECT_NEEDED_MESSAGE,
+    };
+  }
+  if (destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {
+    return {
+      owner: OWNER_GOOGLE_SOCIAL_PUBLISH_MESSAGE,
+      disconnected: GOOGLE_SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
+      already: GOOGLE_SOCIAL_PUBLISH_ALREADY_PUBLISHED_MESSAGE,
+      inFlight: GOOGLE_SOCIAL_PUBLISH_IN_FLIGHT_MESSAGE,
+      failed: GOOGLE_SOCIAL_PUBLISH_FAILED_MESSAGE,
+      published: GOOGLE_SOCIAL_PUBLISH_PUBLISHED_MESSAGE,
+      unconfirmed: GOOGLE_SOCIAL_PUBLISH_UNCONFIRMED_MESSAGE,
+      confirmFirst: GOOGLE_SOCIAL_PUBLISH_CONFIRM_FIRST_MESSAGE,
+      resolvePosted: GOOGLE_SOCIAL_PUBLISH_RESOLVE_POSTED_MESSAGE,
+      resolveNotFound: GOOGLE_SOCIAL_PUBLISH_RESOLVE_NOT_FOUND_MESSAGE,
+      empty: GOOGLE_SOCIAL_PUBLISH_EMPTY_MESSAGE,
+      schema: GOOGLE_SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
+      publicAsset: SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+      reconnect: GOOGLE_RECONNECT_NEEDED_MESSAGE,
     };
   }
   return {
@@ -522,6 +605,7 @@ export function socialPublishCopy(destination: string) {
     empty: SOCIAL_PUBLISH_EMPTY_MESSAGE,
     schema: SOCIAL_PUBLISH_SCHEMA_UNAVAILABLE_MESSAGE,
     publicAsset: SOCIAL_PUBLISH_PUBLIC_ASSET_REQUIRED_MESSAGE,
+    reconnect: GOOGLE_RECONNECT_NEEDED_MESSAGE,
   };
 }
 
@@ -626,14 +710,23 @@ export function presentMarketingSocialDestinations(connectedDestinations: readon
 } {
   const facebookConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_FACEBOOK);
   const instagramConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_INSTAGRAM);
-  const connected = facebookConnected || instagramConnected;
-  const message = facebookConnected && instagramConnected
-    ? FACEBOOK_AND_INSTAGRAM_CONNECTED_MESSAGE
-    : facebookConnected
-      ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
-      : instagramConnected
-        ? INSTAGRAM_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
-        : CHANNELS_DISCONNECTED_MESSAGE;
+  const googleConnected = connectedDestinations.includes(SOCIAL_PUBLISH_DESTINATION_GOOGLE);
+  const connected = facebookConnected || instagramConnected || googleConnected;
+  const message = facebookConnected && instagramConnected && googleConnected
+    ? ALL_SOCIAL_DESTINATIONS_CONNECTED_MESSAGE
+    : facebookConnected && instagramConnected
+      ? FACEBOOK_AND_INSTAGRAM_CONNECTED_MESSAGE
+      : facebookConnected && googleConnected
+        ? FACEBOOK_AND_GOOGLE_CONNECTED_MESSAGE
+        : instagramConnected && googleConnected
+          ? INSTAGRAM_AND_GOOGLE_CONNECTED_MESSAGE
+          : facebookConnected
+            ? FACEBOOK_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+            : instagramConnected
+              ? INSTAGRAM_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+              : googleConnected
+                ? GOOGLE_CONNECTED_OTHERS_DISCONNECTED_MESSAGE
+                : CHANNELS_DISCONNECTED_MESSAGE;
   return {
     connected,
     message,
@@ -651,8 +744,8 @@ export function presentMarketingSocialDestinations(connectedDestinations: readon
       },
       GOOGLE: {
         destination: SOCIAL_PUBLISH_DESTINATION_GOOGLE,
-        implemented: false,
-        connected: false,
+        implemented: true,
+        connected: googleConnected,
       },
     },
   };

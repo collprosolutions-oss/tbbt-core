@@ -317,15 +317,17 @@ check(
 );
 const googleProvider = getSocialPublishingProviderForDestination("GOOGLE");
 const googleResult = await googleProvider.publish({
-  destination: "FACEBOOK",
+  destination: "GOOGLE",
   pageId: "1",
   accessToken: PAGE_TOKEN,
   message: "nope",
 });
 check(
-  "Google publish stays not yet available",
-  googleResult.ok === false &&
-    googleResult.error === "Google Business Profile publishing is not yet available." &&
+  "Google local-post provider is implemented and refuses an unbound location",
+  googleProvider.connected === true &&
+    googleResult.ok === false &&
+    googleResult.status === "FAILED" &&
+    /bound|STANDARD Google local post|different destination/i.test(googleResult.error ?? "") &&
     !googleResult.error.includes(PAGE_TOKEN),
 );
 
@@ -544,7 +546,7 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
       loaded.find((card) => card.destination === "INSTAGRAM")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "GOOGLE")?.status === "CONNECTED" &&
       loaded.find((card) => card.destination === "INSTAGRAM")?.publishAvailable === true &&
-      loaded.find((card) => card.destination === "GOOGLE")?.publishAvailable === false &&
+      loaded.find((card) => card.destination === "GOOGLE")?.publishAvailable === true &&
       !JSON.stringify(loaded).includes(PAGE_TOKEN),
   );
 
@@ -687,6 +689,51 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
       (await resolveConnectedPublishToken(prisma, businessA.id, destination)) == null,
     );
   }
+
+  await prisma.marketingSocialDestination.deleteMany({
+    where: { businessId: businessA.id, destination: "GOOGLE" },
+  });
+  const googlePublishRow = (await connectExplicit(ownerA, "GOOGLE", "ext-google-publish-refresh")).row;
+  await prisma.marketingSocialDestination.update({
+    where: { id: googlePublishRow.id },
+    data: { tokenExpiresAt: new Date(Date.now() - 60_000) },
+  });
+  const resolvedRefreshToken = "resolved-google-access-MUST-NOT-LEAK";
+  const resolvedFresh = await resolveConnectedPublishToken(prisma, businessA.id, "GOOGLE", {
+    adapter: scriptFor("GOOGLE", {
+      refresh: {
+        ok: true,
+        accessToken: resolvedRefreshToken,
+        refreshToken: REFRESH_TOKEN,
+        expiresAt: new Date(Date.now() + 3600_000),
+        grantedScopes: [GOOGLE_BUSINESS_MANAGE_SCOPE],
+      },
+    }),
+  });
+  check(
+    "resolveConnectedPublishToken refreshes an expired Google token",
+    resolvedFresh?.accessToken === resolvedRefreshToken &&
+      resolvedFresh.pageId === googlePublishRow.pageId &&
+      !JSON.stringify(resolvedFresh).includes(REFRESH_TOKEN),
+  );
+  await prisma.marketingSocialDestination.update({
+    where: { id: googlePublishRow.id },
+    data: {
+      tokenExpiresAt: new Date(Date.now() - 60_000),
+      refreshTokenCiphertext: null,
+    },
+  });
+  check(
+    "resolveConnectedPublishToken refuses an expired Google token without a refresh token",
+    (await resolveConnectedPublishToken(prisma, businessA.id, "GOOGLE")) == null,
+  );
+  const expiredNoRefresh = await prisma.marketingSocialDestination.findFirst({
+    where: { id: googlePublishRow.id },
+  });
+  check(
+    "Expired Google token without a refresh token is marked EXPIRED",
+    expiredNoRefresh.connectionStatus === "EXPIRED",
+  );
 
   const reconnectAdapter = scriptFor("GOOGLE", {
     candidates: [candidate("GOOGLE", "ext-reconnected", "Reconnected Shop")],

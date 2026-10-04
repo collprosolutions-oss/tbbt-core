@@ -804,8 +804,8 @@ function socialCard(): GoLiveCard {
     status: classifySocialPublishing(),
     requirement: "OPTIONAL",
     currentState: "Marketing destination consent is an OWNER action on Marketing. This card does not start it.",
-    whatWorks: "Internal marketing drafts, OWNER review, and creator-package export still exist. Facebook Page and Instagram publish are explicit OWNER actions only when that destination is connected. Instagram uses only an approved public marketing image. Connecting a destination does not publish.",
-    whatDoesNot: "Google Business Profile publishing is not yet available. TBBT does not publish on connect or autonomously. A DRAFT or planned day is not a publish. Failed provider results are not labeled PUBLISHED. Private job or customer photos are never sent to Instagram.",
+    whatWorks: "Internal marketing drafts, OWNER review, and creator-package export still exist. Facebook Page, Instagram, and Google Business Profile STANDARD local-post publish are explicit OWNER actions only when that destination is connected. Instagram uses only an approved public marketing image. Connecting a destination does not publish. Local posts do not change Google rankings.",
+    whatDoesNot: "TBBT does not publish on connect or autonomously. A DRAFT or planned day is not a publish. Failed provider results are not labeled PUBLISHED. Private job or customer photos are never sent to Instagram. Live Google posts need Business Profile API access approval.",
     ownerNextAction: "The OWNER connects a Facebook Page, Instagram professional account, or Google Business Profile location from Marketing. Live use needs Meta app credentials and app review, or Google OAuth credentials plus Business Profile API access approval.",
     settingsHref: "/settings?section=marketing",
   };

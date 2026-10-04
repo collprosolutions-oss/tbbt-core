@@ -2,6 +2,7 @@ import { isFakeSocialPublishingAdapterEnabled } from "@/lib/social-publishing/co
 import { createDisconnectedSocialPublishingProvider } from "@/lib/social-publishing/disconnected";
 import { createFacebookSocialPublishingProvider } from "@/lib/social-publishing/facebook";
 import { createFakeSocialPublishingProvider } from "@/lib/social-publishing/fake";
+import { createGoogleSocialPublishingProvider } from "@/lib/social-publishing/google";
 import { createInstagramSocialPublishingProvider } from "@/lib/social-publishing/instagram";
 import type { SocialPublishDestination, SocialPublishingProvider } from "@/lib/social-publishing/types";
 import {
@@ -12,6 +13,7 @@ import {
 
 let cachedFacebook: SocialPublishingProvider | null = null;
 let cachedInstagram: SocialPublishingProvider | null = null;
+let cachedGoogle: SocialPublishingProvider | null = null;
 
 export function getSocialPublishingProvider(): SocialPublishingProvider {
   if (!cachedFacebook) {
@@ -35,14 +37,27 @@ export function getInstagramSocialPublishingProvider(): SocialPublishingProvider
   return cachedInstagram;
 }
 
+export function getGoogleSocialPublishingProvider(): SocialPublishingProvider {
+  if (!cachedGoogle) {
+    if (isFakeSocialPublishingAdapterEnabled()) {
+      cachedGoogle = createFakeSocialPublishingProvider();
+    } else {
+      cachedGoogle = createGoogleSocialPublishingProvider();
+    }
+  }
+  return cachedGoogle;
+}
+
 export function resetSocialPublishingProvider() {
   cachedFacebook = null;
   cachedInstagram = null;
+  cachedGoogle = null;
 }
 
 export function setSocialPublishingProvider(provider: SocialPublishingProvider | null) {
   cachedFacebook = provider;
   cachedInstagram = provider;
+  cachedGoogle = provider;
 }
 
 export function disconnectedSocialPublishingProvider() {
@@ -58,18 +73,17 @@ export function createUnavailableSocialPublishingProvider(
       : destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
         ? SOCIAL_PUBLISH_DESTINATION_GOOGLE
         : SOCIAL_PUBLISH_DESTINATION_FACEBOOK;
-  const error =
-    resolved === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM
-      ? "Instagram publishing is not yet available."
-      : resolved === SOCIAL_PUBLISH_DESTINATION_GOOGLE
-        ? "Google Business Profile publishing is not yet available."
-        : "Social publishing is not connected.";
   return {
     id: "unavailable",
     destination: resolved,
     connected: false,
     async publish() {
-      return { ok: false, status: "FAILED", outcome: "rejected", error };
+      return {
+        ok: false,
+        status: "FAILED",
+        outcome: "rejected",
+        error: "Social publishing is not connected.",
+      };
     },
   };
 }
@@ -80,6 +94,9 @@ export function getSocialPublishingProviderForDestination(destination: string): 
   }
   if (destination === SOCIAL_PUBLISH_DESTINATION_INSTAGRAM) {
     return getInstagramSocialPublishingProvider();
+  }
+  if (destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {
+    return getGoogleSocialPublishingProvider();
   }
   return createUnavailableSocialPublishingProvider(destination);
 }

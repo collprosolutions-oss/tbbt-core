@@ -1,14 +1,18 @@
 /**
- * OWNER Facebook Page and Instagram publish for one connected social
- * destination.
+ * OWNER Facebook Page, Instagram, or Google Business Profile local-post
+ * publish for one connected social destination.
  *
  * Claims a MarketingSocialPublishAttempt before the provider is called.
  * MarketingContent.status stays APPROVED — this never writes PUBLISHED
  * onto the content row. FAILED attempts keep that label and are shown
  * without calling them PUBLISHED. A DRAFT or merely planned day never
  * reaches the provider. Instagram uses only an approved public marketing
- * image and never sends a private job or customer photo. Google stays
- * disconnected.
+ * image and never sends a private job or customer photo. Google posts a
+ * STANDARD local post only and never claims ranking improvements.
+ * Expired Google tokens refresh through the #347 connection refresh token
+ * when one exists. Otherwise they are refused as reconnect needed before
+ * any Google call. A 401, including a non-JSON body, marks NEEDS_RECONNECT
+ * and is not retried.
  *
  * Preview shares Production and skips migrate. Missing destination or
  * attempt tables fail closed. This file never runs request-time DDL.
@@ -18,11 +22,14 @@ import type { BusinessAccess } from "@/lib/access";
 import { CAPABILITIES, requireBusinessCapability, requireBusinessRole } from "@/lib/authorization";
 import {
   PHOTO_PERMISSION_REVOKED_MESSAGE,
+  GOOGLE_ACCOUNT_BINDING_MESSAGE,
+  GOOGLE_LOCAL_POST_TOO_LONG_MESSAGE,
   SOCIAL_PUBLISH_ATTEMPT_CLAIMED,
   SOCIAL_PUBLISH_ATTEMPT_FAILED,
   SOCIAL_PUBLISH_ATTEMPT_PUBLISHED,
   SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE,
   SOCIAL_PUBLISH_DESTINATION_FACEBOOK,
+  SOCIAL_PUBLISH_DESTINATION_GOOGLE,
   SOCIAL_PUBLISH_DESTINATION_INSTAGRAM,
   SOCIAL_PUBLISH_DESTINATION_NOT_IMPLEMENTED_MESSAGE,
   SOCIAL_PUBLISH_NOT_APPROVED_MESSAGE,
@@ -48,9 +55,20 @@ import {
 } from "@/lib/marketing";
 import { MarketingError } from "@/lib/marketing-ops";
 import { getAppUrl } from "@/lib/mail";
-import { resolveConnectedPublishToken } from "@/lib/marketing-connections/service";
+import {
+  markMarketingConnectionNeedsReconnect,
+  resolveConnectedPublishToken,
+  type MarketingConnectionDeps,
+} from "@/lib/marketing-connections/service";
+import {
+  GOOGLE_LOCAL_POST_SUMMARY_MAX,
+  GOOGLE_RECONNECT_NEEDED_MESSAGE,
+  composeGoogleLocalPostPayload,
+  isGoogleAccountBoundToLocation,
+  parseGoogleLocationResource,
+} from "@/lib/social-publishing/google";
 import { getSocialPublishingProviderForDestination } from "@/lib/social-publishing/provider";
-import type { SocialPublishingProvider } from "@/lib/social-publishing/types";
+import type { GoogleLocalPostPayload, SocialPublishingProvider } from "@/lib/social-publishing/types";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -61,6 +79,8 @@ const OTHER_DB_ERROR_CODES = new Set(["P2002", "P2003", "P2014", "P2025"]);
 export type MarketingSocialPublishDeps = {
   /** Test hook. Fake or disconnected adapter only. Never a live post. */
   provider?: SocialPublishingProvider;
+  /** Test hook for #347 token refresh during claim. Never a live post. */
+  connection?: MarketingConnectionDeps;
   /** Test hook. Runs after the attempt is claimed and before the provider. */
   beforeProvider?: () => Promise<void>;
   /** Test hook. Runs after the in-flight pre-check and before the claim create. */
@@ -325,9 +345,11 @@ export async function publishMarketingContentToSocial(
     status: string;
     claimedAt: Date;
     destinationPageId: string;
+    accountId: string;
     accessToken: string;
     message: string;
     imageUrl?: string;
+    localPost: GoogleLocalPostPayload | null;
   };
 
   try {
@@ -362,9 +384,11 @@ export async function publishMarketingContentToSocial(
     providerResult = await provider.publish({
       destination: destination as ImplementedSocialPublishDestination,
       pageId: claimed.destinationPageId,
+      accountId: claimed.accountId || undefined,
       accessToken: claimed.accessToken,
       message: claimed.message,
       imageUrl: claimed.imageUrl,
+      localPost: claimed.localPost ?? undefined,
     });
   } catch (error) {
     await recordUnknownOutcome(db, claimed, {
@@ -383,6 +407,17 @@ export async function publishMarketingContentToSocial(
   }
 
   if (!providerResult.ok || providerResult.status !== SOCIAL_PUBLISH_ATTEMPT_PUBLISHED) {
+    const reconnectNeeded =
+      destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE &&
+      providerResult.error === GOOGLE_RECONNECT_NEEDED_MESSAGE;
+    if (reconnectNeeded) {
+      await markMarketingConnectionNeedsReconnect(
+        db,
+        access.businessId,
+        destination,
+        providerResult.error ?? GOOGLE_RECONNECT_NEEDED_MESSAGE,
+      );
+    }
     const failureLabel = safeFailureLabel(providerResult.error, claimed.accessToken, claimed.destination);
     await recordAttemptResult(db, claimed, {
       status: SOCIAL_PUBLISH_ATTEMPT_FAILED,
@@ -604,9 +639,49 @@ async function claimSocialPublishAttempt(
     }
   }
 
-  const destinationRow = await resolveConnectedPublishToken(db, access.businessId, input.destination);
+  const localPost =
+    input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE
+      ? composeGoogleLocalPostPayload({ summary: message })
+      : null;
+  if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE && !localPost) {
+    throw new MarketingError(copy.empty);
+  }
+  if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE && message.length > GOOGLE_LOCAL_POST_SUMMARY_MAX) {
+    throw new MarketingError(GOOGLE_LOCAL_POST_TOO_LONG_MESSAGE);
+  }
+
+  const destinationRow = await resolveConnectedPublishToken(
+    db,
+    access.businessId,
+    input.destination,
+    deps?.connection,
+  );
   if (!destinationRow?.pageId?.trim() || !destinationRow.accessToken) {
+    if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {
+      const statusRow = await db.marketingSocialDestination.findFirst({
+        where: { businessId: access.businessId, destination: input.destination },
+        select: { connectionStatus: true, tokenExpiresAt: true },
+      });
+      const now = deps?.connection?.now?.() ?? new Date();
+      const expired =
+        statusRow?.connectionStatus === "EXPIRED" ||
+        (statusRow?.connectionStatus === "NEEDS_RECONNECT" &&
+          statusRow.tokenExpiresAt != null &&
+          statusRow.tokenExpiresAt.getTime() <= now.getTime());
+      if (expired) {
+        throw new MarketingError(GOOGLE_RECONNECT_NEEDED_MESSAGE);
+      }
+    }
     throw new MarketingError(copy.disconnected);
+  }
+  if (input.destination === SOCIAL_PUBLISH_DESTINATION_GOOGLE) {
+    const location = parseGoogleLocationResource(destinationRow.pageId);
+    if (
+      !location ||
+      !isGoogleAccountBoundToLocation(destinationRow.externalAccountId, destinationRow.pageId)
+    ) {
+      throw new MarketingError(GOOGLE_ACCOUNT_BINDING_MESSAGE);
+    }
   }
 
   const existing = await db.marketingSocialPublishAttempt.findFirst({
@@ -650,9 +725,11 @@ async function claimSocialPublishAttempt(
       status: attempt.status,
       claimedAt: attempt.claimedAt,
       destinationPageId: destinationRow.pageId.trim(),
+      accountId: destinationRow.externalAccountId,
       accessToken: destinationRow.accessToken,
       message,
       imageUrl,
+      localPost,
     };
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
