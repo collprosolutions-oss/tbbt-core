@@ -13,6 +13,16 @@ export const TBBT_SAAS_PLAN_NAME = "Founder Plan";
 export const SAAS_CHECKOUT_PURPOSE = "tbbt_saas_subscription";
 export const SAAS_BILLING_SETTINGS_HREF = "/settings?section=tbbt-billing";
 
+/**
+ * Founder Checkout is card-only. Delayed methods (ACH/SEPA and similar)
+ * can create a Stripe subscription already `active`, so
+ * customer.subscription.created would activate the tenant after unpaid
+ * Checkout. This list is the Checkout session request only. Stripe
+ * Dashboard payment-method settings are owner-controlled and are not
+ * changed here. Unpaid checkout.session.completed is still refused.
+ */
+export const SAAS_CHECKOUT_PAYMENT_METHOD_TYPES = ["card"] as const;
+
 export function getSaasPriceId(): string | null {
   const value = process.env.STRIPE_SAAS_PRICE_ID?.trim();
   return value || null;

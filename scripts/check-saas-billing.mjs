@@ -71,6 +71,7 @@ const {
   resetSaasBillingProvider,
   resetSaasBillingSchemaEnsure,
   saasBillingWebhookSecrets,
+  SAAS_CHECKOUT_PAYMENT_METHOD_TYPES,
   SAAS_CHECKOUT_PURPOSE,
   setSaasBillingProvider,
   startSaasBillingPortal,
@@ -144,14 +145,14 @@ async function seedBusiness(name, extra = {}) {
 function saasCheckoutEvent(input) {
   return {
     id: input.id ?? "evt_checkout_1",
-    type: "checkout.session.completed",
+    type: input.type ?? "checkout.session.completed",
     data: {
       object: {
         object: "checkout.session",
         id: input.sessionId ?? "cs_saas_1",
         mode: "subscription",
-        status: "complete",
-        payment_status: "paid",
+        status: input.status ?? "complete",
+        payment_status: input.paymentStatus ?? "paid",
         customer: input.customerId,
         subscription: input.subscriptionId,
         metadata: {
@@ -423,6 +424,22 @@ check(
 check(
   "SaaS events ignore Connect-account payloads",
   saasEvents.includes("Connect-account events belong to customer invoice/deposit"),
+);
+check(
+  "SaaS Checkout activation requires payment_status paid, not session complete",
+  saasEvents.includes('eventType === "checkout.session.completed" && object.payment_status !== "paid"') &&
+    saasEvents.includes('object.payment_status === "paid" ? "active" : "incomplete"') &&
+    !saasEvents.includes('object.payment_status === "paid" || object.status === "complete"'),
+);
+check(
+  "Founder subscription Checkout requests card only",
+  SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.join(",") === "card" &&
+    saasDir.includes("payment_method_types: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES]") &&
+    saasFakeSrc.includes("paymentMethodTypes: [...SAAS_CHECKOUT_PAYMENT_METHOD_TYPES]") &&
+    !SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.includes("us_bank_account") &&
+    !SAAS_CHECKOUT_PAYMENT_METHOD_TYPES.includes("ach_debit") &&
+    !saasDir.includes("us_bank_account") &&
+    !saasDir.includes("customer_balance"),
 );
 
 console.log("\nUNIT — fake SaaS adapter never operates in Vercel production");
@@ -807,6 +824,11 @@ try {
   const first = await startSaasSubscriptionCheckout(prisma, accessA);
   check("Checkout URL is returned", first.url.startsWith("https://checkout.stripe.test/subscribe/"));
   check("Fake Checkout uses mode subscription", provider.checkouts[0]?.mode === "subscription");
+  check(
+    "Founder Checkout request is card-only",
+    Array.isArray(provider.checkouts[0]?.paymentMethodTypes) &&
+      provider.checkouts[0].paymentMethodTypes.join(",") === "card",
+  );
   check("Checkout customer is created for Business A", Boolean(first.customerId));
   const rowAfterFirst = await prisma.businessSaasSubscription.findUnique({
     where: { businessId: businessA.business.id },
@@ -1123,6 +1145,137 @@ try {
       customerId: first.customerId,
       subscriptionId: "sub_from_checkout",
     }))?.snapshot.status === "active",
+  );
+  const unpaidCompleteCheckout = saasCheckoutEvent({
+    id: "evt_unpaid_complete",
+    businessId: businessA.business.id,
+    customerId: first.customerId,
+    subscriptionId: "sub_unpaid_complete",
+    paymentStatus: "unpaid",
+  });
+  check(
+    "parseSaasBillingEvent ignores unpaid complete Founder Checkout",
+    parseSaasBillingEvent(unpaidCompleteCheckout) === null,
+  );
+  check(
+    "Connect parser also ignores unpaid complete SaaS Checkout",
+    parseCheckoutPaymentEvent(unpaidCompleteCheckout) === null,
+  );
+  check(
+    "parseSaasBillingEvent activates only after async payment succeeds",
+    parseSaasBillingEvent(saasCheckoutEvent({
+      id: "evt_async_paid",
+      type: "checkout.session.async_payment_succeeded",
+      businessId: businessA.business.id,
+      customerId: first.customerId,
+      subscriptionId: "sub_async_paid",
+      paymentStatus: "paid",
+    }))?.snapshot.status === "active",
+  );
+
+  const asyncPay = await seedBusiness("Async Founder Checkout");
+  const unpaidDispatch = await dispatchStripeWebhookEvent(prisma, unpaidCompleteCheckout);
+  check(
+    "Unpaid complete Checkout is not applied as SaaS or Connect",
+    unpaidDispatch.applied === false && unpaidDispatch.system === null,
+  );
+  const unpaidOwnDispatch = await dispatchStripeWebhookEvent(
+    prisma,
+    saasCheckoutEvent({
+      id: "evt_async_unpaid_own",
+      businessId: asyncPay.business.id,
+      customerId: "cus_async_pay",
+      subscriptionId: "sub_async_pay",
+      paymentStatus: "unpaid",
+    }),
+  );
+  const unpaidOwnRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: asyncPay.business.id },
+  });
+  const unpaidOwnEntitlement = await loadSaasEntitlement(prisma, asyncPay.business);
+  check(
+    "Unpaid complete Founder Checkout does not subscribe or convert the tenant",
+    unpaidOwnDispatch.applied === false &&
+      unpaidOwnDispatch.system === null &&
+      (unpaidOwnRow == null || unpaidOwnRow.status === "none") &&
+      unpaidOwnRow?.founderConvertedAt == null &&
+      unpaidOwnEntitlement.state !== "subscribed_active",
+  );
+  const asyncPaidDispatch = await verifyAndDispatch(saasCheckoutEvent({
+    id: "evt_async_pay_succeeded",
+    type: "checkout.session.async_payment_succeeded",
+    businessId: asyncPay.business.id,
+    customerId: "cus_async_pay",
+    subscriptionId: "sub_async_pay",
+    paymentStatus: "paid",
+  }));
+  const asyncPaidRow = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: asyncPay.business.id },
+  });
+  check(
+    "async_payment_succeeded marks only that tenant active after money clears",
+    asyncPaidDispatch.applied === true &&
+      asyncPaidDispatch.system === "saas" &&
+      asyncPaidRow?.status === "active" &&
+      asyncPaidRow?.stripeSubscriptionId === "sub_async_pay" &&
+      Boolean(asyncPaidRow?.founderConvertedAt),
+  );
+
+  console.log("\nTEST — Card-only Checkout request and unpaid-to-active sequence");
+  const cardOnly = await seedBusiness("Card Only Founder Checkout");
+  const cardOnlyAccess = makeAccess(
+    cardOnly.business.id,
+    "OWNER",
+    cardOnly.membership.id,
+    cardOnly.ownerUser.email,
+  );
+  const cardCheckout = await startSaasSubscriptionCheckout(prisma, cardOnlyAccess);
+  const cardRequest = provider.checkouts.at(-1);
+  check(
+    "Checkout session create asks Stripe for card only",
+    cardCheckout.url.startsWith("https://checkout.stripe.test/subscribe/") &&
+      cardRequest?.mode === "subscription" &&
+      cardRequest?.businessId === cardOnly.business.id &&
+      cardRequest?.paymentMethodTypes.join(",") === "card" &&
+      !cardRequest?.paymentMethodTypes.includes("us_bank_account"),
+  );
+  const unpaidThenActive = saasCheckoutEvent({
+    id: "evt_card_unpaid_then_active",
+    businessId: cardOnly.business.id,
+    customerId: cardCheckout.customerId,
+    subscriptionId: "sub_card_only",
+    paymentStatus: "unpaid",
+  });
+  const unpaidThenActiveDispatch = await dispatchStripeWebhookEvent(prisma, unpaidThenActive);
+  const afterUnpaidSequence = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: cardOnly.business.id },
+  });
+  check(
+    "Unpaid complete in the card-only sequence still refuses activation",
+    unpaidThenActiveDispatch.applied === false &&
+      unpaidThenActiveDispatch.system === null &&
+      afterUnpaidSequence?.status === "none" &&
+      afterUnpaidSequence?.stripeSubscriptionId == null &&
+      afterUnpaidSequence?.founderConvertedAt == null,
+  );
+  const paidAfterUnpaid = await verifyAndDispatch(saasCheckoutEvent({
+    id: "evt_card_paid_after_unpaid",
+    businessId: cardOnly.business.id,
+    customerId: cardCheckout.customerId,
+    subscriptionId: "sub_card_only",
+    paymentStatus: "paid",
+  }));
+  const afterPaidSequence = await prisma.businessSaasSubscription.findUnique({
+    where: { businessId: cardOnly.business.id },
+  });
+  check(
+    "Later paid Checkout is the only activation in the unpaid-to-active sequence",
+    paidAfterUnpaid.applied === true &&
+      paidAfterUnpaid.system === "saas" &&
+      afterPaidSequence?.status === "active" &&
+      afterPaidSequence?.stripeSubscriptionId === "sub_card_only" &&
+      afterPaidSequence?.stripeCustomerId === cardCheckout.customerId &&
+      Boolean(afterPaidSequence?.founderConvertedAt),
   );
   check(
     "parseSaasBillingEvent ignores Connect-account events",
