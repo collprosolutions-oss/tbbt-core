@@ -8,7 +8,8 @@
     "scheme": "tbbt-field",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tbbt.field"
+      "bundleIdentifier": "com.tbbt.field",
+      "buildNumber": "1"
     },
     "android": {
       "package": "com.tbbt.field",

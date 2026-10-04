@@ -124,7 +124,7 @@ check(
   easJson.build.preview.android.buildType === "apk" &&
     easJson.build.preview.distribution === "internal" &&
     String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).startsWith("https://") &&
-    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL.includes("REPLACE-WITH-REACHABLE-TBBT-ORIGIN") &&
+    easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL === "https://www.collproreno.com" &&
     !String(easJson.build.preview.env.EXPO_PUBLIC_TBBT_API_URL).includes("10.0.2.2") &&
     easJson.build.production == null &&
     easJson.build.submit == null,
@@ -247,6 +247,16 @@ check(
     readNativePushDeviceTokenFromParts({ headerToken: "", bodyToken: "" }) === "",
 );
 
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_native_android_field",
+  pushSchema: true,
+  setProcessEnv: true,
+});
+const prisma = session.prisma;
+// native-field's import graph now reaches @/lib/prisma. Load it only after
+// DATABASE_URL points at the disposable database so the DELETE route and the
+// walkthrough share the same client.
 const { hashPassword } = await import("@/lib/auth-crypto");
 const { loadNativeAssignedJob, loadNativeToday } = await import("@/lib/native-field");
 const { startNativeAssignedJob, stopNativeAssignedJobRunningTime } = await import(
@@ -265,14 +275,6 @@ const {
 } = await import("@/lib/native-push/devices");
 const { NATIVE_SESSION_TOO_LARGE } = await import("@/lib/native-session-limits");
 const { serializeChecklist } = await import("@/lib/cleaning-visit-workflow");
-
-const session = await openDisposableTestDatabase({
-  databaseUrl: baseUrl,
-  namePrefix: "tbbt_native_android_field",
-  pushSchema: true,
-  setProcessEnv: true,
-});
-const prisma = session.prisma;
 const { prisma: routePrisma } = await import("@/lib/prisma");
 session.trackClient(routePrisma);
 const { DELETE: deletePushDevices } = await import(

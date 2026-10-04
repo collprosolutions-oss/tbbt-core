@@ -24,11 +24,24 @@ This environment has not assembled an APK and has not run the app on a device. N
 What the recipes actually produce:
 
 - `bash scripts/android-debug-apk.sh` / `npm run android:debug-apk`: Expo prebuild + Gradle `assembleDebug`. That is a **debug native shell**. It still needs Metro for JS unless you separately export and embed a bundle. `expo prebuild` rewrites the `android` / `ios` scripts in `apps/native/package.json`; the wrapper copies that tracked file aside and restores it after prebuild so the tree stays clean.
-- `eas.json` `preview`: an **internal release-type APK** (`buildType: apk`). Expo SDK 54 release manifests do not honor `usesCleartextTraffic`, so `EXPO_PUBLIC_TBBT_API_URL` must be **https**. The committed value is a placeholder (`https://REPLACE-WITH-REACHABLE-TBBT-ORIGIN.example`). Replace it with a TBBT origin you operate before building. Do not commit a real host or secret.
+- `eas.json` `preview`: an **internal release-type APK** (`buildType: apk`). Expo SDK 54 release manifests do not honor `usesCleartextTraffic`, so `EXPO_PUBLIC_TBBT_API_URL` must be **https**. The committed value is the reachable TBBT origin `https://www.collproreno.com`. Do not commit Apple or Play credentials.
 
 `app.json` does not enable cleartext HTTP. The emulator loopback rewrite (`localhost` → `10.0.2.2`) is only for Android debug/dev against a host machine; it does not make a release APK accept HTTP.
 
 Sign-out revokes the device token with both a JSON body and `x-tbbt-device-token` so a dropped DELETE body still signs the Android device out.
+
+## iOS test build (UNVERIFIED without Xcode / a device)
+
+This environment cannot sign or install an iOS build (`xcodebuild` is absent). Not App Store submission. No Apple credentials, provisioning profiles, or `submit` EAS profile.
+
+What the recipes actually produce:
+
+- `bash scripts/ios-simulator-build.sh --prebuild-only` / `npm run ios:prebuild`: Expo prebuild for `com.tbbt.field` with `ios.buildNumber` **1**. `--no-install` skips CocoaPods so Linux can inspect the generated project. The wrapper restores tracked `apps/native/package.json`.
+- `bash scripts/ios-simulator-build.sh` / `npm run ios:simulator`: requires `xcodebuild` and `pod` **before** the slow prebuild (exit 2 UNVERIFIED if either is missing). Then Expo prebuild, `pod install` in `ios/`, and `xcodebuild -workspace` for the iOS **simulator** with `CODE_SIGNING_ALLOWED=NO`. A bare `.xcodeproj` build is not used: the generated project has a CocoaPods `[CP] Check Pods Manifest.lock` phase. On Linux this exits 2 and does not install anything.
+- `eas.json` `preview` iOS: `distribution: internal` + `simulator: true`, same https `EXPO_PUBLIC_TBBT_API_URL`. No store submission.
+- Generated `Info.plist` keeps Expo's default `NSAllowsLocalNetworking` **true** (local Metro) and `NSAllowsArbitraryLoads` **false**. The iOS `buildNumber` must increase monotonically for each uploaded build.
+
+Do not claim a device or simulator walkthrough succeeded unless that signed/simulator build was installed. This recipe is UNVERIFIED here.
 
 ## Limits
 
