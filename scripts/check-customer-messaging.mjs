@@ -312,6 +312,14 @@ const settingsWorkspaceSrc = readFileSync(
   new URL("../src/components/settings/settings-workspace.tsx", import.meta.url),
   "utf8",
 );
+const legalSrc = readFileSync(
+  new URL("../src/components/tbbt-marketing/legal.tsx", import.meta.url),
+  "utf8",
+);
+const complianceSrc = readFileSync(
+  new URL("../src/lib/customer-messaging/compliance.ts", import.meta.url),
+  "utf8",
+);
 
 try {
   console.log("\nSTATIC — Provider architecture and isolation");
@@ -461,6 +469,17 @@ try {
     requestFlowSrc.includes("const [smsOptIn, setSmsOptIn] = useState(false)") &&
       requestFlowSrc.includes("SMS_OPT_IN_LABEL") &&
       !requestFlowSrc.includes("useState(true)"),
+  );
+  check(
+    "A2P campaign privacy/terms pages include CTIA SMS disclosures",
+    complianceSrc.includes("https://www.tbbtool.com/privacy") &&
+      complianceSrc.includes("https://www.tbbtool.com/terms") &&
+      legalSrc.includes("not shared with third parties for their marketing") &&
+      legalSrc.includes("<strong>STOP</strong>") &&
+      legalSrc.includes("<strong>HELP</strong>") &&
+      legalSrc.includes("Message and data rates may apply") &&
+      legalSrc.includes("Carriers are not liable") &&
+      legalSrc.includes('href="/privacy"'),
   );
   check(
     "Owner customer edit cannot grant SMS consent",
