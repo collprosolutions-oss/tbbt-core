@@ -53,3 +53,4 @@ Do not invent passing browser results. The isolated harness is
 - Supplier commerce adapters are **DISCONNECTED**. No Home Depot / Lowe’s scrape or live order API. Production provider integrations need API/licensing review.
 - Marketing AI uses the canonical provider only after an OWNER requests a content draft and a key is configured. Unconfigured providers show Unavailable. Template creator-package drafts stay available. Generated items remain DRAFT. An env string does not mean a provider is called. This harness does not make a live AI call.
 - This checklist does not replace a human production walkthrough on www.collproreno.com.
+- Exact Meta and Google console fields, production callback URLs, and which provider approvals currently block a real connection are in `docs/MARKETING_CONNECTIONS_SETUP.md`. Connecting never publishes. Instagram publishing and Google local posts each need their own App Review or API approval before real use.

@@ -175,6 +175,11 @@ try {
     "Production certification does not say new job photos use Vercel Blob",
     /private R2/.test(certDoc) && !/Job photos may still use Vercel Blob/.test(certDoc),
   );
+  check(
+    "Production certification points at the marketing connections setup runbook",
+    exists("docs/MARKETING_CONNECTIONS_SETUP.md") &&
+      certDoc.includes("docs/MARKETING_CONNECTIONS_SETUP.md"),
+  );
   const goLiveSrc = read("src/lib/go-live.ts");
   check(
     "Go-live health center refuses a single ready score",
