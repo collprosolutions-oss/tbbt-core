@@ -64,6 +64,10 @@ const {
 } = await import("@/lib/go-live");
 const { loadGoLiveCenter, requireGoLiveAccess } = await import("@/lib/go-live-data");
 const {
+  isReadonlyCookieMutationError,
+  requireWorkspace,
+} = await import("@/lib/workspace-request");
+const {
   WEBSITE_DOMAIN_DNS_CNAME_TARGET,
   resetWebsiteDomainDnsLookup,
   setWebsiteDomainDnsLookup,
@@ -200,6 +204,23 @@ try {
     "Settings founder regions match the implemented boxes",
     FOUNDER_REGIONS.settings.map((region) => region.id).join(",") ===
       "overview,nav,main,rail,readiness,page",
+  );
+  const rscCookieError = new Error(
+    "Cookies can only be modified in a Server Action or Route Handler. Read more: https://nextjs.org/docs/app/api-reference/functions/cookies#options",
+  );
+  check(
+    "RSC cookie-write errors are recognized so Settings does not 500",
+    isReadonlyCookieMutationError(rscCookieError) &&
+      !isReadonlyCookieMutationError(new Error("Record is not in the authorized business workspace.")),
+  );
+  check(
+    "requireWorkspace swallows RSC cookie writes after selecting the authorized membership",
+    readFileSync(new URL("../src/lib/workspace-request.ts", import.meta.url), "utf8").includes(
+      "isReadonlyCookieMutationError",
+    ) &&
+      readFileSync(new URL("../src/lib/workspace-request.ts", import.meta.url), "utf8").includes(
+        "if (!isReadonlyCookieMutationError(error)) throw error;",
+      ),
   );
   check("OWNER can access the management console", canAccessManagementConsole("OWNER"));
   check("ADMIN can access the management console", canAccessManagementConsole("ADMIN"));
@@ -674,6 +695,38 @@ try {
   const adminA = makeAccess(businessA.id, "ADMIN", adminMem.id);
   const memberA = makeAccess(businessA.id, "MEMBER", memberMem.id);
   const ownerB = makeAccess(businessB.id, "OWNER", betaMem.id);
+
+  let persistedWorkspaceId = null;
+  const mismatched = await requireWorkspace({
+    db: prisma,
+    getSessionUser: async () => ({
+      id: betaOwner.id,
+      email: betaOwner.email,
+      name: betaOwner.name,
+    }),
+    getWorkspaceCookie: async () => businessA.id,
+    setWorkspaceCookie: async (businessId) => {
+      persistedWorkspaceId = businessId;
+      throw new Error(
+        "Cookies can only be modified in a Server Action or Route Handler. Read more: https://nextjs.org/docs/app/api-reference/functions/cookies#options",
+      );
+    },
+    redirect: (path) => {
+      throw new Error(`redirect:${path}`);
+    },
+  });
+  check(
+    "Stale/foreign workspace cookie still resolves to the signed-in tenant",
+    mismatched.business.id === businessB.id &&
+      mismatched.role === "OWNER" &&
+      mismatched.user.id === betaOwner.id,
+  );
+  check(
+    "RSC cookie-write failure does not leak the foreign tenant or 500 the workspace load",
+    persistedWorkspaceId === businessB.id &&
+      mismatched.business.id !== businessA.id &&
+      mismatched.business.name === "Beta Settings",
+  );
 
   const customer = await prisma.customer.create({
     data: { businessId: businessA.id, name: "Ada Customer" },

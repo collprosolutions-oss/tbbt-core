@@ -23,6 +23,20 @@ export type WorkspaceRequestDeps = {
 };
 
 /**
+ * Next.js forbids cookie writes during Server Component render.
+ * Isolation already selected the authorized membership; a stale or
+ * foreign workspace cookie must not 500 Settings or any other page.
+ */
+export function isReadonlyCookieMutationError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes(
+      "Cookies can only be modified in a Server Action or Route Handler",
+    )
+  );
+}
+
+/**
  * Preview-mode and production request path for authenticated workspace
  * load. Schema/data migration belongs exclusively to the migration
  * system. Missing required Business contact columns fail closed via
@@ -55,7 +69,11 @@ export async function requireWorkspace(
     memberships[0];
 
   if (current.businessId !== requestedId) {
-    await deps.setWorkspaceCookie(current.businessId);
+    try {
+      await deps.setWorkspaceCookie(current.businessId);
+    } catch (error) {
+      if (!isReadonlyCookieMutationError(error)) throw error;
+    }
   }
 
   return {
