@@ -47,12 +47,24 @@ const {
 const { MarketingConnectionError } = await import("@/lib/marketing-connections/errors");
 const { presentMarketingConnectionCards } = await import("@/lib/marketing-connections/presenter");
 const {
+  clearFakeMarketingOAuthExchangeRedirectUris,
   createFakeMarketingOAuthAdapter,
   createGoogleMarketingOAuthAdapter,
   createMetaMarketingOAuthAdapter,
+  fakeMarketingOAuthExchangeRedirectUris,
   googleAuthorizeUrl,
   metaAuthorizeUrl,
+  resetFakeMarketingOAuthProbe,
+  setFakeMarketingOAuthScript,
 } = await import("@/lib/marketing-connections/providers");
+const {
+  MARKETING_CONNECTION_HOST_REJECTED_MESSAGE,
+  MARKETING_CONNECTION_PRODUCTION_ORIGINS,
+  isExactMarketingConnectionCallbackUrl,
+  marketingConnectionCallbackUrl,
+  marketingConnectionProductionOrigin,
+} = await import("@/lib/marketing-connections/return-origin");
+const { NextRequest } = await import("next/server");
 const {
   checkMarketingConnectionStatus,
   completeMarketingConnectionCallback,
@@ -148,6 +160,10 @@ const setupDoc = readFileSync(join(repoRoot, "docs/MARKETING_CONNECTIONS_SETUP.m
 const envExample = readFileSync(join(repoRoot, ".env.example"), "utf8");
 const productionMetaRedirect = `https://www.collproreno.com${META_MARKETING_CONNECTION_CALLBACK_PATH}`;
 const productionGoogleRedirect = `https://www.collproreno.com${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`;
+const tbbtOrigin = "https://www.tbbtool.com";
+const collproOrigin = "https://www.collproreno.com";
+const tbbtMetaRedirect = `${tbbtOrigin}${META_MARKETING_CONNECTION_CALLBACK_PATH}`;
+const tbbtGoogleRedirect = `${tbbtOrigin}${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`;
 
 console.log("\nSETUP — operator runbook matches #347 and does not enable auto-post");
 check(
@@ -209,6 +225,97 @@ check(
     setupDoc.includes("Do not enable automatic posting") &&
     !setupDoc.includes("TBBT_SOCIAL_PUBLISHING_ADAPTER=fake") &&
     envExample.includes("Never set either fake adapter when VERCEL_ENV=production"),
+);
+check(
+  "Both signed-in hosts are documented as Meta and Google callbacks",
+  setupDoc.includes(tbbtMetaRedirect) &&
+    setupDoc.includes(tbbtGoogleRedirect) &&
+    setupDoc.includes(productionMetaRedirect) &&
+    setupDoc.includes(productionGoogleRedirect) &&
+    envExample.includes(tbbtMetaRedirect) &&
+    envExample.includes(tbbtGoogleRedirect) &&
+    setupDoc.includes("www.tbbtool.com") &&
+    setupDoc.includes("Do not register preview callbacks") &&
+    !setupDoc.includes("Do not use | `https://www.tbbtool.com`"),
+);
+
+console.log("\nHOST — exact allowlist");
+check(
+  "Allowlist is only the two production www origins",
+  MARKETING_CONNECTION_PRODUCTION_ORIGINS.length === 2 &&
+    MARKETING_CONNECTION_PRODUCTION_ORIGINS.includes(collproOrigin) &&
+    MARKETING_CONNECTION_PRODUCTION_ORIGINS.includes(tbbtOrigin),
+);
+for (const origin of [collproOrigin, tbbtOrigin]) {
+  const host = new URL(origin).host;
+  check(
+    `${host} is accepted as a host and as an origin`,
+    marketingConnectionProductionOrigin(host) === origin &&
+      marketingConnectionProductionOrigin(origin) === origin &&
+      marketingConnectionProductionOrigin(host.toUpperCase()) === origin &&
+      marketingConnectionCallbackUrl("META", host) === `${origin}${META_MARKETING_CONNECTION_CALLBACK_PATH}` &&
+      marketingConnectionCallbackUrl("GOOGLE", origin) === `${origin}${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}` &&
+      isExactMarketingConnectionCallbackUrl("META", `${origin}${META_MARKETING_CONNECTION_CALLBACK_PATH}`) &&
+      isExactMarketingConnectionCallbackUrl("GOOGLE", `${origin}${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`),
+  );
+}
+for (const rejected of [
+  "tbbtool.com",
+  "collproreno.com",
+  "www.tbbtool.com:444",
+  "www.tbbtool.com:443",
+  "www.collproreno.com:443",
+  "www.tbbtool.com.",
+  "www.tbbtool.com.evil.example",
+  "www.collproreno.com.evil.example",
+  "www-tbbtool.com",
+  "not-www.tbbtool.com",
+  "preview.vercel.app",
+  "collpro-reno.vercel.app",
+  "www.tbbtool.com@evil.example",
+  "evil.example",
+  "https://evil.example@www.tbbtool.com",
+  "https://www.tbbtool.com@evil.example",
+  "http://www.tbbtool.com",
+  "https://user:pass@www.tbbtool.com",
+  "https://www.tbbtool.com:443",
+  "https://www.tbbtool.com:444/api/marketing/connections/meta/callback",
+  "https://www.tbbtool.com/extra",
+  "https://www.tbbtool.com.evil.example",
+  " www.tbbtool.com",
+  "www.tbbtool.com ",
+  "www.tbbtool.com, evil.com",
+  "https://www.tbbtool.com/api/marketing/connections/meta/callback",
+]) {
+  check(
+    `Rejected host ${rejected}`,
+    marketingConnectionProductionOrigin(rejected) == null &&
+      marketingConnectionCallbackUrl("META", rejected) == null &&
+      marketingConnectionCallbackUrl("GOOGLE", rejected) == null,
+  );
+}
+check(
+  "A full callback URL is exact only as the registered string",
+  isExactMarketingConnectionCallbackUrl("META", tbbtMetaRedirect) &&
+    isExactMarketingConnectionCallbackUrl("GOOGLE", tbbtGoogleRedirect) &&
+    !isExactMarketingConnectionCallbackUrl("META", `${tbbtMetaRedirect}/`) &&
+    !isExactMarketingConnectionCallbackUrl("META", `http://www.tbbtool.com${META_MARKETING_CONNECTION_CALLBACK_PATH}`) &&
+    !isExactMarketingConnectionCallbackUrl("GOOGLE", `${collproOrigin}${META_MARKETING_CONNECTION_CALLBACK_PATH}`),
+);
+const metaRouteSrc = readFileSync(join(repoRoot, "src/app/api/marketing/connections/meta/callback/route.ts"), "utf8");
+const googleRouteSrc = readFileSync(join(repoRoot, "src/app/api/marketing/connections/google/callback/route.ts"), "utf8");
+const callbackHandlerSrc = readFileSync(join(repoRoot, "src/lib/marketing-connections/callback-handler.ts"), "utf8");
+const proxySrc = readFileSync(join(repoRoot, "src/proxy.ts"), "utf8");
+check(
+  "Callbacks ignore forwarded and preview hosts and keep exact proxy paths",
+  !metaRouteSrc.includes("x-forwarded-host") &&
+    !googleRouteSrc.includes("x-forwarded-host") &&
+    !callbackHandlerSrc.includes("x-forwarded-host") &&
+    !callbackHandlerSrc.includes("x-vercel-deployment-url") &&
+    !callbackHandlerSrc.includes("navigationRedirectUrl") &&
+    proxySrc.includes("api/plaid/webhook") &&
+    proxySrc.includes("api/marketing/connections/meta/callback") &&
+    proxySrc.includes("api/marketing/connections/google/callback"),
 );
 
 console.log("\nCRYPTO — connection token envelopes");
@@ -975,6 +1082,327 @@ await withDisposableTestDatabase({ databaseUrl: baseUrl, namePrefix: "tbbt_mkt_c
       { provider: blocked },
     ),
   (error) => error instanceof MarketingError && error.message === SOCIAL_PUBLISH_DESTINATION_DISCONNECTED_MESSAGE && blocked.callCount === 0);
+
+  console.log("\nHOST — signed-in origin through the callback routes");
+  const previousVercelEnv = process.env.VERCEL_ENV;
+  const previousFake = process.env.TBBT_SOCIAL_OAUTH_ADAPTER;
+  const previousMetaRedirect = process.env.META_OAUTH_REDIRECT_URI;
+  const previousGoogleRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI;
+  delete process.env.VERCEL_ENV;
+  process.env.TBBT_SOCIAL_OAUTH_ADAPTER = "fake";
+  process.env.META_OAUTH_REDIRECT_URI = productionMetaRedirect;
+  process.env.GOOGLE_OAUTH_REDIRECT_URI = productionGoogleRedirect;
+  const { useMarketingConnectionCallbackDbForTests } = await import(
+    "@/lib/marketing-connections/callback-handler"
+  );
+  useMarketingConnectionCallbackDbForTests(prisma);
+  const { GET: metaCallback } = await import("@/app/api/marketing/connections/meta/callback/route");
+  const { GET: googleCallback } = await import("@/app/api/marketing/connections/google/callback/route");
+
+  function callbackRequest(origin, path, params, extraHeaders = {}) {
+    const url = new URL(path, origin);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return new NextRequest(url, { headers: { host: new URL(origin).host, ...extraHeaders } });
+  }
+
+  function forgedRequest(host, path, params, extraHeaders = {}) {
+    const url = new URL(`https://invalid.test${path}`);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return new NextRequest(url, { headers: { host, ...extraHeaders } });
+  }
+
+  function installRouteScript(destination) {
+    const scopes =
+      destination === "GOOGLE"
+        ? [GOOGLE_BUSINESS_MANAGE_SCOPE]
+        : destination === "INSTAGRAM"
+          ? [...INSTAGRAM_REQUIRED_SCOPES]
+          : [...FACEBOOK_REQUIRED_SCOPES];
+    setFakeMarketingOAuthScript({
+      grantedScopes: scopes,
+      userAccessToken: USER_TOKEN,
+      candidates: [candidate(destination, `ext-route-${destination}`, `Route ${destination}`)],
+    });
+    clearFakeMarketingOAuthExchangeRedirectUris();
+  }
+
+  async function stateRow(token) {
+    return prisma.marketingConnectionOAuthState.findFirst({ where: { tokenHash: hashToken(token) } });
+  }
+
+  async function startOnHost(origin, destination) {
+    await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination } });
+    installRouteScript(destination);
+    const beforeStates = await prisma.marketingConnectionOAuthState.count({ where: { businessId: businessA.id, destination } });
+    const started = await startMarketingConnection(prisma, ownerA, destination, {
+      requestOrigin: origin,
+      adapter: scriptFor(destination),
+    });
+    const redirectUri = new URL(started.authorizeUrl).searchParams.get("redirect_uri");
+    const expected =
+      destination === "GOOGLE"
+        ? `${origin}${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`
+        : `${origin}${META_MARKETING_CONNECTION_CALLBACK_PATH}`;
+    const afterStates = await prisma.marketingConnectionOAuthState.count({ where: { businessId: businessA.id, destination } });
+    check(
+      `${destination} on ${origin} authorizes that host even when env redirect is collproreno`,
+      started.authorizeUrl.startsWith("https://oauth.fake.test/") &&
+        redirectUri === expected &&
+        afterStates === beforeStates + 1,
+    );
+    return { started, expected };
+  }
+
+  try {
+    const attemptsBeforeHost = await attemptCount(businessA.id);
+    for (const [origin, destination] of [
+      [tbbtOrigin, "FACEBOOK"],
+      [tbbtOrigin, "GOOGLE"],
+      [collproOrigin, "INSTAGRAM"],
+      [collproOrigin, "GOOGLE"],
+    ]) {
+      const { started, expected } = await startOnHost(origin, destination);
+      const path = destination === "GOOGLE" ? GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH : META_MARKETING_CONNECTION_CALLBACK_PATH;
+      const handler = destination === "GOOGLE" ? googleCallback : metaCallback;
+      installRouteScript(destination);
+      const response = await handler(
+        callbackRequest(origin, path, { code: `code-${destination}`, state: started.stateToken }, {
+          "x-forwarded-host": "evil.example",
+          "x-vercel-deployment-url": "preview.vercel.app",
+        }),
+      );
+      const location = response.headers.get("location");
+      const parsed = location ? new URL(location) : null;
+      const selection = parsed?.searchParams.get("connectionSelection") ?? "";
+      const exchanged = fakeMarketingOAuthExchangeRedirectUris();
+      const row = await stateRow(started.stateToken);
+      check(
+        `${destination} callback on ${origin} finishes selection on that host`,
+        response.status === 307 &&
+          parsed?.origin === origin &&
+          parsed?.pathname === "/marketing" &&
+          parsed?.searchParams.get("area") === "social-posts" &&
+          selection.length > 0 &&
+          !location.includes("evil.example") &&
+          !location.includes("vercel.app") &&
+          exchanged.length === 1 &&
+          exchanged[0] === expected &&
+          row?.usedAt != null,
+      );
+      const replay = await handler(callbackRequest(origin, path, { code: "replay", state: started.stateToken }));
+      const replayLocation = replay.headers.get("location");
+      check(
+        `${destination} callback on ${origin} rejects replay`,
+        replay.status === 307 &&
+          replayLocation?.startsWith(`${origin}/marketing?`) &&
+          new URL(replayLocation).searchParams.get("connectionError") === "rejected" &&
+          fakeMarketingOAuthExchangeRedirectUris().length === 1,
+      );
+      const betaBefore = await prisma.marketingSocialDestination.count({ where: { businessId: businessB.id } });
+      const betaStatesBefore = await prisma.marketingConnectionOAuthState.count({ where: { businessId: businessB.id } });
+      await expectError(`${destination} selection from ${origin} cannot be confirmed by business B`, () =>
+        confirmMarketingConnectionSelection(prisma, ownerB, { selectionToken: selection, externalId: `ext-route-${destination}` }),
+      (error) => error instanceof MarketingConnectionError);
+      check(
+        `${destination} callback did not open a destination for business B`,
+        (await prisma.marketingSocialDestination.count({ where: { businessId: businessB.id } })) === betaBefore &&
+          (await prisma.marketingConnectionOAuthState.count({ where: { businessId: businessB.id } })) === betaStatesBefore,
+      );
+      if (origin === tbbtOrigin && destination === "FACEBOOK") {
+        const confirmed = await confirmMarketingConnectionSelection(prisma, ownerA, {
+          selectionToken: selection,
+          externalId: `ext-route-${destination}`,
+        });
+        check(
+          "OWNER finishes Facebook destination selection on www.tbbtool.com",
+          confirmed.status === "CONNECTED" && confirmed.message.includes("Nothing was published."),
+        );
+      }
+    }
+
+    for (const [origin, destination, handler, path] of [
+      [tbbtOrigin, "FACEBOOK", metaCallback, META_MARKETING_CONNECTION_CALLBACK_PATH],
+      [collproOrigin, "GOOGLE", googleCallback, GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH],
+    ]) {
+      await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination } });
+      const providerStart = await startMarketingConnection(prisma, ownerA, destination, {
+        requestOrigin: origin,
+        adapter: scriptFor(destination),
+      });
+      clearFakeMarketingOAuthExchangeRedirectUris();
+      const denied = await handler(
+        callbackRequest(origin, path, { error: "access_denied", state: providerStart.stateToken }),
+      );
+      const deniedLocation = denied.headers.get("location");
+      const deniedRow = await stateRow(providerStart.stateToken);
+      check(
+        `${destination} provider error on ${origin} stays on that host and does not consume state`,
+        denied.status === 307 &&
+          new URL(deniedLocation).origin === origin &&
+          new URL(deniedLocation).searchParams.get("connectionError") === "rejected" &&
+          !deniedLocation.includes("access_denied") &&
+          deniedRow?.usedAt == null &&
+          fakeMarketingOAuthExchangeRedirectUris().length === 0,
+      );
+
+      const expiredStart = await startMarketingConnection(prisma, ownerA, destination, {
+        requestOrigin: origin,
+        adapter: scriptFor(destination),
+      });
+      await prisma.marketingConnectionOAuthState.updateMany({
+        where: { tokenHash: hashToken(expiredStart.stateToken) },
+        data: { expiresAt: new Date(Date.now() - 60_000) },
+      });
+      clearFakeMarketingOAuthExchangeRedirectUris();
+      const expired = await handler(callbackRequest(origin, path, { code: "late", state: expiredStart.stateToken }));
+      const expiredRow = await stateRow(expiredStart.stateToken);
+      check(
+        `${destination} expired state on ${origin} is rejected without exchange`,
+        expired.status === 307 &&
+          new URL(expired.headers.get("location")).origin === origin &&
+          new URL(expired.headers.get("location")).searchParams.get("connectionError") === "rejected" &&
+          expiredRow?.usedAt == null &&
+          fakeMarketingOAuthExchangeRedirectUris().length === 0,
+      );
+    }
+
+    await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination: "FACEBOOK" } });
+    const forgedStart = await startMarketingConnection(prisma, ownerA, "FACEBOOK", {
+      requestOrigin: tbbtOrigin,
+      adapter: scriptFor("FACEBOOK"),
+    });
+    const forgedHosts = [
+      "www.tbbtool.com.evil.example",
+      "www.collproreno.com.evil.example",
+      "www-tbbtool.com",
+      "tbbtool.com",
+      "collproreno.com",
+      "www.tbbtool.com:444",
+      "www.tbbtool.com:443",
+      "preview.vercel.app",
+      "collpro-reno.vercel.app",
+      "www.tbbtool.com@evil.example",
+      "evil.example",
+    ];
+    for (const host of forgedHosts) {
+      for (const vercelEnv of [undefined, "preview", "production"]) {
+        if (vercelEnv) process.env.VERCEL_ENV = vercelEnv;
+        else delete process.env.VERCEL_ENV;
+        const forged = await metaCallback(
+          forgedRequest(host, META_MARKETING_CONNECTION_CALLBACK_PATH, {
+            code: "forged",
+            state: forgedStart.stateToken,
+          }, {
+            "x-forwarded-host": "www.tbbtool.com",
+            "x-vercel-deployment-url": "www.tbbtool.com",
+          }),
+        );
+        const body = await forged.text();
+        check(
+          `Forged host ${host} (${vercelEnv ?? "unset"}) is rejected before state use`,
+          forged.status === 400 &&
+            forged.headers.get("location") == null &&
+            body === MARKETING_CONNECTION_HOST_REJECTED_MESSAGE &&
+            !body.includes(forgedStart.stateToken),
+        );
+      }
+    }
+    delete process.env.VERCEL_ENV;
+    const forgedRow = await stateRow(forgedStart.stateToken);
+    check("Forged hosts did not consume the OAuth state", forgedRow?.usedAt == null);
+    installRouteScript("FACEBOOK");
+    const recovered = await metaCallback(
+      callbackRequest(tbbtOrigin, META_MARKETING_CONNECTION_CALLBACK_PATH, {
+        code: "recovered",
+        state: forgedStart.stateToken,
+      }),
+    );
+    check(
+      "The same state still finishes on www.tbbtool.com after forged hosts",
+      recovered.status === 307 &&
+        new URL(recovered.headers.get("location")).origin === tbbtOrigin &&
+        new URL(recovered.headers.get("location")).searchParams.get("connectionSelection"),
+    );
+
+    const stateBeforeBad = await prisma.marketingConnectionOAuthState.count();
+    await expectError("Start refuses a lookalike origin before creating state", () =>
+      startMarketingConnection(prisma, ownerA, "INSTAGRAM", {
+        requestOrigin: "https://www.tbbtool.com.evil.example",
+        adapter: scriptFor("INSTAGRAM"),
+      }),
+    (error) => error instanceof MarketingConnectionError && error.message === MARKETING_CONNECTION_HOST_REJECTED_MESSAGE);
+    await expectError("Start refuses a userinfo origin before creating state", () =>
+      startMarketingConnection(prisma, ownerA, "INSTAGRAM", {
+        requestOrigin: "https://www.tbbtool.com@evil.example",
+        adapter: scriptFor("INSTAGRAM"),
+      }),
+    (error) => error instanceof MarketingConnectionError && error.message === MARKETING_CONNECTION_HOST_REJECTED_MESSAGE);
+    check("Rejected start origins created no OAuth state", (await prisma.marketingConnectionOAuthState.count()) === stateBeforeBad);
+
+    await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination: "GOOGLE" } });
+    await prisma.marketingSocialDestination.create({
+      data: {
+        businessId: businessA.id,
+        destination: "GOOGLE",
+        pageId: "",
+        accessToken: "",
+        connectionStatus: "NEEDS_RECONNECT",
+      },
+    });
+    const reconnected = await reconnectMarketingConnection(prisma, ownerA, "GOOGLE", {
+      requestOrigin: collproOrigin,
+      adapter: scriptFor("GOOGLE"),
+    });
+    check(
+      "Reconnect on www.collproreno.com uses that Google callback",
+      new URL(reconnected.authorizeUrl).searchParams.get("redirect_uri") === `${collproOrigin}${GOOGLE_MARKETING_CONNECTION_CALLBACK_PATH}`,
+    );
+
+    delete process.env.TBBT_SOCIAL_OAUTH_ADAPTER;
+    process.env.VERCEL_ENV = "production";
+    process.env.META_APP_ID = "meta-app-id";
+    process.env.META_APP_SECRET = "meta-app-secret";
+    process.env.META_OAUTH_REDIRECT_URI = productionMetaRedirect;
+    await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination: "FACEBOOK" } });
+    const productionStart = await startMarketingConnection(prisma, ownerA, "FACEBOOK", {
+      requestOrigin: tbbtOrigin,
+    });
+    check(
+      "Production authorize uses the signed-in host instead of the env redirect",
+      new URL(productionStart.authorizeUrl).searchParams.get("redirect_uri") === tbbtMetaRedirect &&
+        !productionStart.authorizeUrl.includes("oauth.fake.test"),
+    );
+    const productionStates = await prisma.marketingConnectionOAuthState.count();
+    await prisma.marketingSocialDestination.deleteMany({ where: { businessId: businessA.id, destination: "INSTAGRAM" } });
+    await expectError("Production start without a host does not fall back to the env redirect", () =>
+      startMarketingConnection(prisma, ownerA, "INSTAGRAM"),
+    (error) => error instanceof MarketingConnectionError && error.message === MARKETING_CONNECTION_HOST_REJECTED_MESSAGE);
+    check("Production host refusal created no state", (await prisma.marketingConnectionOAuthState.count()) === productionStates);
+    delete process.env.META_APP_ID;
+    delete process.env.META_APP_SECRET;
+    check(
+      "Host flows published nothing",
+      (await attemptCount(businessA.id)) === attemptsBeforeHost,
+    );
+  } finally {
+    if (previousVercelEnv == null) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousVercelEnv;
+    const { useMarketingConnectionCallbackDbForTests: clearCallbackDb } = await import(
+      "@/lib/marketing-connections/callback-handler"
+    );
+    if (process.env.VERCEL_ENV !== "production" && process.env.NODE_ENV !== "production") {
+      clearCallbackDb(null);
+    }
+    resetFakeMarketingOAuthProbe();
+    if (previousVercelEnv == null) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousVercelEnv;
+    if (previousFake == null) delete process.env.TBBT_SOCIAL_OAUTH_ADAPTER;
+    else process.env.TBBT_SOCIAL_OAUTH_ADAPTER = previousFake;
+    if (previousMetaRedirect == null) delete process.env.META_OAUTH_REDIRECT_URI;
+    else process.env.META_OAUTH_REDIRECT_URI = previousMetaRedirect;
+    if (previousGoogleRedirect == null) delete process.env.GOOGLE_OAUTH_REDIRECT_URI;
+    else process.env.GOOGLE_OAUTH_REDIRECT_URI = previousGoogleRedirect;
+  }
 
   const adminRaw = createSecureToken();
   await prisma.marketingConnectionOAuthState.create({

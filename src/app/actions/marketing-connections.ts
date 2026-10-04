@@ -17,6 +17,7 @@ import {
   startMarketingConnection,
 } from "@/lib/marketing-connections/service";
 import { connectionErrorMessage } from "@/lib/marketing-connections/errors";
+import { readRequestOrigin } from "@/lib/request-host";
 
 export type MarketingConnectionActionState = {
   error?: string;
@@ -53,7 +54,9 @@ export async function startMarketingConnectionAction(
 ): Promise<MarketingConnectionActionState> {
   try {
     const access = await ownerAccess();
-    const result = await startMarketingConnection(prisma, access, readString(formData, "destination"));
+    const result = await startMarketingConnection(prisma, access, readString(formData, "destination"), {
+      requestOrigin: await readRequestOrigin(),
+    });
     revalidateConnections();
     redirect(result.authorizeUrl);
   } catch (error) {
@@ -68,7 +71,9 @@ export async function reconnectMarketingConnectionAction(
 ): Promise<MarketingConnectionActionState> {
   try {
     const access = await ownerAccess();
-    const result = await reconnectMarketingConnection(prisma, access, readString(formData, "destination"));
+    const result = await reconnectMarketingConnection(prisma, access, readString(formData, "destination"), {
+      requestOrigin: await readRequestOrigin(),
+    });
     revalidateConnections();
     redirect(result.authorizeUrl);
   } catch (error) {

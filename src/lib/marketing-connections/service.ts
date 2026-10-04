@@ -38,6 +38,11 @@ import {
   type OAuthCandidate,
 } from "@/lib/marketing-connections/providers";
 import {
+  MARKETING_CONNECTION_HOST_REJECTED_MESSAGE,
+  isExactMarketingConnectionCallbackUrl,
+  marketingConnectionCallbackUrl,
+} from "@/lib/marketing-connections/return-origin";
+import {
   MARKETING_CONNECTION_SCHEMA_UNAVAILABLE_MESSAGE,
   assertMarketingConnectionSchema,
   isMarketingConnectionSchemaError,
@@ -48,6 +53,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
 export type MarketingConnectionDeps = {
   adapter?: MarketingOAuthAdapter;
   now?: () => Date;
+  /** Origin built from the request Host. Omitted only by local tests. */
+  requestOrigin?: string | null;
 };
 
 type SelectionPayload = {
@@ -100,7 +107,24 @@ function adapterFor(destination: MarketingConnectionDestination, deps?: Marketin
   return adapter;
 }
 
-function redirectUriFor(destination: MarketingConnectionDestination) {
+function callbackGroup(destination: MarketingConnectionDestination): "META" | "GOOGLE" {
+  return destination === "GOOGLE" ? "GOOGLE" : "META";
+}
+
+/**
+ * Authorize and token exchange must use the same redirect_uri.
+ * An allowlisted signed-in host wins. Production never falls back to the
+ * env URI, a forwarded header, or the other host. Local tests that omit
+ * a host keep the env or fake callback.
+ */
+function redirectUriFor(destination: MarketingConnectionDestination, requestOrigin?: string | null) {
+  const group = callbackGroup(destination);
+  const supplied = typeof requestOrigin === "string" && requestOrigin.length > 0;
+  if (supplied || process.env.VERCEL_ENV === "production") {
+    const callback = marketingConnectionCallbackUrl(group, supplied ? requestOrigin : null);
+    if (!callback) throw new MarketingConnectionError(MARKETING_CONNECTION_HOST_REJECTED_MESSAGE);
+    return callback;
+  }
   if (destination === "GOOGLE") return googleOAuthEnv().redirectUri || "https://oauth.fake.test/google/callback";
   return metaOAuthEnv().redirectUri || "https://oauth.fake.test/meta/callback";
 }
@@ -140,6 +164,7 @@ async function issueConsent(
 ) {
   await assertReady(db);
   const adapter = adapterFor(destination, deps);
+  const redirectUri = redirectUriFor(destination, deps?.requestOrigin);
   const now = nowFrom(deps)();
   const stateToken = createSecureToken();
   await db.marketingConnectionOAuthState.create({
@@ -156,7 +181,7 @@ async function issueConsent(
   return {
     authorizeUrl: adapter.authorizeUrl({
       state: stateToken,
-      redirectUri: redirectUriFor(destination),
+      redirectUri,
     }),
     stateToken,
     destination,
@@ -274,11 +299,21 @@ export type MarketingConnectionCallbackResult =
 
 export async function completeMarketingConnectionCallback(
   db: Db,
-  input: { destinationGroup: "META" | "GOOGLE"; code: string; state: string; providerError?: string },
+  input: {
+    destinationGroup: "META" | "GOOGLE";
+    code: string;
+    state: string;
+    providerError?: string;
+    redirectUri?: string;
+  },
   deps?: MarketingConnectionDeps,
 ): Promise<MarketingConnectionCallbackResult> {
   await assertReady(db);
   const now = nowFrom(deps)();
+  const suppliedRedirect = typeof input.redirectUri === "string" && input.redirectUri.length > 0;
+  if (suppliedRedirect && !isExactMarketingConnectionCallbackUrl(input.destinationGroup, input.redirectUri)) {
+    throw new MarketingConnectionError(MARKETING_CONNECTION_HOST_REJECTED_MESSAGE);
+  }
   if (input.providerError?.trim()) {
     throw new MarketingConnectionError("The provider did not grant consent.");
   }
@@ -297,6 +332,7 @@ export async function completeMarketingConnectionCallback(
   if (input.destinationGroup === "META" && destination === "GOOGLE") {
     throw new MarketingConnectionError("That connection attempt does not match this provider.");
   }
+  const exchangeRedirect = suppliedRedirect ? input.redirectUri! : redirectUriFor(destination);
   const state = await consumeState(db, {
     token: input.state,
     purpose: MARKETING_OAUTH_STATE_CONSENT,
@@ -308,7 +344,7 @@ export async function completeMarketingConnectionCallback(
   try {
     exchanged = await adapter.exchangeCode({
       code: input.code.trim(),
-      redirectUri: redirectUriFor(destination),
+      redirectUri: exchangeRedirect,
     });
   } catch (error) {
     if (error instanceof MarketingConnectionError) throw error;
