@@ -4,13 +4,21 @@
  * Covers recorded-truth invoices, Payment rows, and non-voided expenses
  * on the existing tenant ZIP + dedicated accounting ZIP surface.
  *
+ * Successful OWNER/ADMIN downloads through runAccountingExportDownload
+ * write one SettingsAuditLog row (filename only). Denied requests,
+ * preview/build, and failed generation write none and return no ZIP.
+ *
+ * When `.next` exists, this also boots `next start` against the
+ * disposable localhost database and hits GET /settings/export/accounting.
+ *
  * Run with:
  *   node --experimental-strip-types scripts/check-accounting-export.mjs
  */
-import { createRequire, register } from "node:module";
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { register } from "node:module";
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { assertLocalDatabaseUrl, openDisposableTestDatabase } from "./disposable-test-database.mjs";
 
 register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
@@ -59,26 +67,16 @@ if (!baseUrl) {
   console.error("DATABASE_URL must be set to run this check.");
   process.exit(1);
 }
+assertLocalDatabaseUrl(baseUrl, "CREATE DATABASE / prisma db push / DROP DATABASE");
 
-const testDbName = "tbbt_accounting_export_test";
-const parsed = new URL(baseUrl);
-parsed.pathname = `/${testDbName}`;
-const testUrl = parsed.toString();
-process.env.DATABASE_URL = testUrl;
-
-const push = spawnSync(
-  "npx",
-  ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
-  { stdio: "inherit", env: { ...process.env, DATABASE_URL: testUrl } },
-);
-if (push.status !== 0) {
-  console.error("Failed to push schema for accounting export test database.");
-  process.exit(push.status ?? 1);
-}
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient({ datasourceUrl: testUrl });
+const session = await openDisposableTestDatabase({
+  databaseUrl: baseUrl,
+  namePrefix: "tbbt_accounting_export",
+  pushSchema: true,
+  setProcessEnv: true,
+});
+const prisma = session.prisma;
+const testUrl = session.testUrl;
 
 let failures = 0;
 function check(label, condition) {
@@ -214,6 +212,19 @@ check(
     !accountingRouteSrc.includes("recordAccountingExportAudit") &&
     !accountingRouteSrc.includes("writeSettingsAuditLog") &&
     !accountingRouteSrc.includes("buildAccountingExportZip"),
+);
+const checkSrc = readFileSync(new URL("./check-accounting-export.mjs", import.meta.url), "utf8");
+check(
+  "Accounting export proofs use a unique disposable localhost DB and can hit the real GET route",
+  checkSrc.includes("openDisposableTestDatabase") &&
+    checkSrc.includes("assertLocalDatabaseUrl") &&
+    checkSrc.includes("session.cleanup()") &&
+    checkSrc.includes("namePrefix: \"tbbt_accounting_export\"") &&
+    checkSrc.includes("/settings/export/accounting") &&
+    checkSrc.includes("next") &&
+    checkSrc.includes("start") &&
+    accountingRouteSrc.includes("export async function GET") &&
+    accountingRouteSrc.includes("requireBusinessAccess"),
 );
 check(
   "Settings Data / Export offers the accounting ZIP on the existing surface",
@@ -1220,14 +1231,199 @@ try {
       afterSecond.length === 3 &&
       afterSecond.filter((row) => row.changedByMembershipId === ownerMemA.id).length === 2,
   );
-} finally {
-  await prisma.$disconnect();
-  const cleanup = new PrismaClient({ datasourceUrl: baseUrl });
-  try {
-    await cleanup.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${testDbName}"`);
-  } finally {
-    await cleanup.$disconnect();
+
+  const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+  if (!existsSync(`${repoRoot}/.next`)) {
+    console.log("\nHTTP skipped — no .next build output yet");
+  } else {
+    console.log("\nHTTP — real GET /settings/export/accounting on disposable localhost DB");
+    const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    async function makeSession(userId) {
+      const token = randomUUID();
+      await prisma.session.create({
+        data: {
+          userId,
+          tokenHash: createHash("sha256").update(token).digest("hex"),
+          expiresAt: farFuture,
+        },
+      });
+      return token;
+    }
+    const ownerToken = await makeSession(ownerUserA.id);
+    const adminToken = await makeSession(adminUserA.id);
+    const memberToken = await makeSession(memberUserA.id);
+    const PORT = 43841;
+    const APP_URL = `http://127.0.0.1:${PORT}`;
+    async function waitForServer(timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        try {
+          const res = await fetch(`${APP_URL}/sign-in`, { redirect: "manual" });
+          if (res.status < 500) return true;
+        } catch {
+          // not up yet
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return false;
+    }
+    async function fetchAccountingRoute(token, businessId) {
+      const headers = token
+        ? { cookie: `tbbt_session=${token}; tbbt_workspace=${businessId}` }
+        : {};
+      const res = await fetch(`${APP_URL}/settings/export/accounting`, {
+        redirect: "manual",
+        headers,
+      });
+      const bytes = Buffer.from(await res.arrayBuffer());
+      return {
+        status: res.status,
+        contentType: res.headers.get("content-type") ?? "",
+        contentDisposition: res.headers.get("content-disposition") ?? "",
+        cacheControl: res.headers.get("cache-control") ?? "",
+        location: res.headers.get("location") ?? "",
+        bytes,
+      };
+    }
+    function zipFilenameFromDisposition(header) {
+      const match = /filename="([^"]+)"/.exec(header);
+      return match?.[1] ?? "";
+    }
+    const beforeHttp = await prisma.settingsAuditLog.count({
+      where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+    });
+    const beforeHttpA = await prisma.settingsAuditLog.count({
+      where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+    });
+    const serverProcess = spawn(
+      "node_modules/.bin/next",
+      ["start", "--hostname", "127.0.0.1", "--port", String(PORT)],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, DATABASE_URL: testUrl, NODE_ENV: "production" },
+        stdio: "pipe",
+      },
+    );
+    let serverOutput = "";
+    serverProcess.stdout.on("data", (chunk) => {
+      serverOutput += chunk.toString();
+    });
+    serverProcess.stderr.on("data", (chunk) => {
+      serverOutput += chunk.toString();
+    });
+    try {
+      const up = await waitForServer(30_000);
+      if (!up) {
+        console.error("Server did not start in time. Output so far:\n" + serverOutput);
+        check("next start is reachable for the accounting export route", false);
+      } else {
+        const preview = await fetch(`${APP_URL}/settings`, {
+          redirect: "manual",
+          headers: { cookie: `tbbt_session=${ownerToken}; tbbt_workspace=${businessA.id}` },
+        });
+        await preview.arrayBuffer();
+        const afterPreview = await prisma.settingsAuditLog.count({
+          where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+        });
+        check(
+          "HTTP settings preview/page is not a ZIP download and writes no accountingExport audit",
+          preview.status !== 200 || !(preview.headers.get("content-type") ?? "").includes("application/zip"),
+        );
+        check("HTTP settings preview writes no accountingExport audit row", afterPreview === beforeHttp);
+
+        const anonymous = await fetchAccountingRoute(null, businessA.id);
+        const afterAnonymous = await prisma.settingsAuditLog.count({
+          where: { settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+        });
+        check(
+          "Unauthenticated GET /settings/export/accounting redirects and returns no ZIP",
+          anonymous.status >= 300 &&
+            anonymous.status < 400 &&
+            anonymous.location.includes("/sign-in") &&
+            !anonymous.bytes.subarray(0, 4).equals(Buffer.from("PK\u0003\u0004")),
+        );
+        check("Unauthenticated accounting download writes no audit", afterAnonymous === beforeHttp);
+
+        const memberHttp = await fetchAccountingRoute(memberToken, businessA.id);
+        const afterMemberHttp = await prisma.settingsAuditLog.count({
+          where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+        });
+        let memberJson = null;
+        try {
+          memberJson = JSON.parse(memberHttp.bytes.toString("utf8"));
+        } catch {
+          memberJson = null;
+        }
+        check(
+          "MEMBER GET /settings/export/accounting is 403 JSON, returns no ZIP, and writes no audit",
+          memberHttp.status === 403 &&
+            memberJson?.error === "Forbidden" &&
+            memberHttp.contentType.includes("application/json") &&
+            !memberHttp.bytes.subarray(0, 4).equals(Buffer.from("PK\u0003\u0004")) &&
+            afterMemberHttp === beforeHttpA,
+        );
+
+        const ownerHttp = await fetchAccountingRoute(ownerToken, businessA.id);
+        const adminHttp = await fetchAccountingRoute(adminToken, businessA.id);
+        const httpAuditsA = await prisma.settingsAuditLog.findMany({
+          where: { businessId: businessA.id, settingKey: ACCOUNTING_EXPORT_AUDIT_KEY },
+          orderBy: { changedAt: "asc" },
+        });
+        const ownerHttpFilename = zipFilenameFromDisposition(ownerHttp.contentDisposition);
+        const adminHttpFilename = zipFilenameFromDisposition(adminHttp.contentDisposition);
+        const ownerHttpRows = httpAuditsA.filter((row) => row.changedByMembershipId === ownerMemA.id);
+        const adminHttpRows = httpAuditsA.filter((row) => row.changedByMembershipId === adminMemA.id);
+        const latestOwner = ownerHttpRows.at(-1);
+        const latestAdmin = adminHttpRows.at(-1);
+        const latestOwnerPayload = latestOwner ? JSON.parse(latestOwner.newValue) : null;
+        const latestAdminPayload = latestAdmin ? JSON.parse(latestAdmin.newValue) : null;
+        check(
+          "OWNER GET /settings/export/accounting returns the ZIP with no-store headers",
+          ownerHttp.status === 200 &&
+            ownerHttp.contentType.includes("application/zip") &&
+            ownerHttp.cacheControl.includes("no-store") &&
+            ownerHttp.bytes.subarray(0, 4).equals(Buffer.from("PK\u0003\u0004")) &&
+            ownerHttpFilename.startsWith("tbbt-accounting-") &&
+            ownerHttp.contentDisposition.includes(ownerHttpFilename),
+        );
+        check(
+          "ADMIN GET /settings/export/accounting returns the ZIP",
+          adminHttp.status === 200 &&
+            adminHttp.contentType.includes("application/zip") &&
+            adminHttp.bytes.subarray(0, 4).equals(Buffer.from("PK\u0003\u0004")) &&
+            adminHttpFilename.startsWith("tbbt-accounting-"),
+        );
+        check(
+          "Each successful HTTP download writes exactly one additional metadata-only audit row",
+          httpAuditsA.length === beforeHttpA + 2 &&
+            ownerHttpRows.length === 3 &&
+            adminHttpRows.length === 2 &&
+            latestOwnerPayload?.filename === ownerHttpFilename &&
+            latestAdminPayload?.filename === adminHttpFilename &&
+            Object.keys(latestOwnerPayload ?? {}).join(",") === "filename" &&
+            Object.keys(latestAdminPayload ?? {}).join(",") === "filename" &&
+            latestOwner.settingArea === ACCOUNTING_EXPORT_AUDIT_AREA &&
+            latestAdmin.settingArea === ACCOUNTING_EXPORT_AUDIT_AREA &&
+            httpAuditsA.every((row) => forbiddenAuditText.every((value) => !row.newValue.includes(value))),
+        );
+      }
+    } finally {
+      serverProcess.kill("SIGTERM");
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        serverProcess.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
   }
+} catch (error) {
+  failures += 1;
+  console.error("FAIL - unexpected accounting export test error");
+  console.error(error);
+} finally {
+  await session.cleanup();
 }
 
 console.log(
