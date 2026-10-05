@@ -14,6 +14,8 @@ register(new URL("./ts-alias-loader.mjs", import.meta.url), import.meta.url);
 
 const {
   createPublicServiceRequest,
+  hasPublicIntakeContact,
+  PUBLIC_INTAKE_CONTACT_REQUIRED,
   PUBLIC_REQUEST_PHOTO_UNAVAILABLE,
   publicIntakeSubmissionLockKey,
   publicIntakeTestHooks,
@@ -932,6 +934,94 @@ check(
     !contactFormSrc.includes("createLead") &&
     !contactFormSrc.includes("Lead.create"),
 );
+{
+  const goReviewSrc = requestFlowSrc.slice(
+    requestFlowSrc.indexOf("function goReview"),
+    requestFlowSrc.indexOf("async function onSubmit"),
+  );
+  const hydrateSrc = requestFlowSrc.slice(
+    requestFlowSrc.indexOf("sessionStorage.getItem(requestDraftKey"),
+    requestFlowSrc.indexOf("setHydrated(true)"),
+  );
+  const onSubmitSrc = requestFlowSrc.slice(
+    requestFlowSrc.indexOf("async function onSubmit"),
+    requestFlowSrc.indexOf("if (ok) {"),
+  );
+  const contactSubmitSrc = contactFormSrc.slice(
+    contactFormSrc.indexOf("async function onSubmit"),
+  );
+  const serverGuard = publicIntakeSrc.includes(
+    "if (!boundCustomerId && !hasPublicIntakeContact(email, phone))",
+  );
+  const mutatedServerGuard = publicIntakeSrc.replace(
+    /if \(!boundCustomerId && !hasPublicIntakeContact\(email, phone\)\) \{\s*return \{ ok: false, error: PUBLIC_INTAKE_CONTACT_REQUIRED \};\s*\}/,
+    "",
+  );
+  const mutatedGoReview = goReviewSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
+  const mutatedHydrate = hydrateSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
+  const mutatedSubmit = onSubmitSrc.replaceAll("hasPublicIntakeContact", "REMOVED_CONTACT_GUARD");
+  check(
+    "Ordinary request cannot advance to Review with both contact fields blank",
+    goReviewSrc.includes("hasPublicIntakeContact(nextEmail, nextPhone)") &&
+      goReviewSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+      goReviewSrc.includes('setStep("review")') &&
+      goReviewSrc.indexOf("hasPublicIntakeContact") < goReviewSrc.indexOf('setStep("review")') &&
+      goReviewSrc.includes("projectToken") &&
+      hasPublicIntakeContact("", "") === false &&
+      hasPublicIntakeContact("  ", "abc") === false &&
+      hasPublicIntakeContact("pat@example.com", "") === true &&
+      hasPublicIntakeContact("", "555-0400") === true &&
+      PUBLIC_INTAKE_CONTACT_REQUIRED ===
+        "Enter an email address or phone number so we can contact you.",
+  );
+  check(
+    "A stale stored review step cannot bypass the ordinary contact rule",
+    hydrateSrc.includes('restoredStep === "review"') &&
+      hydrateSrc.includes("!projectToken") &&
+      hydrateSrc.includes("hasPublicIntakeContact(restoredEmail, restoredPhone)") &&
+      hydrateSrc.includes('restoredStep = "info"') &&
+      hydrateSrc.indexOf("hasPublicIntakeContact") < hydrateSrc.indexOf("setStep(restoredStep)"),
+  );
+  check(
+    "Final submit rechecks contact before photo uploads or the server action",
+    onSubmitSrc.includes("hasPublicIntakeContact(email, phone)") &&
+      onSubmitSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+      onSubmitSrc.indexOf("hasPublicIntakeContact") <
+        onSubmitSrc.indexOf("authorizePublicRequestPhotoUpload") &&
+      onSubmitSrc.indexOf("hasPublicIntakeContact") <
+        onSubmitSrc.indexOf("submitPublicIntakeForm") &&
+      onSubmitSrc.indexOf("hasPublicIntakeContact") < onSubmitSrc.indexOf("setPending(true)"),
+  );
+  check(
+    "Public contact form requires email or phone before submitServiceRequest",
+    contactSubmitSrc.includes("hasPublicIntakeContact(nextEmail, nextPhone)") &&
+      contactSubmitSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+      contactSubmitSrc.indexOf("hasPublicIntakeContact") <
+        contactSubmitSrc.indexOf("submitServiceRequest(slug"),
+  );
+  check(
+    "Public submit action never accepts existingCustomer from the browser",
+    !intakeActionSrc.includes("existingCustomer") &&
+      !intakeActionSrc.includes('readString(formData, "customerId")') &&
+      !intakeActionSrc.includes('readString(formData, "existingCustomer")'),
+  );
+  check(
+    "Mutation: removing the server contact guard is detected",
+    serverGuard &&
+      publicIntakeSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+      !mutatedServerGuard.includes("hasPublicIntakeContact(email, phone)"),
+  );
+  check(
+    "Mutation: removing the client Review/restore/submit guards is detected",
+    mutatedGoReview.includes('setStep("review")') &&
+      !mutatedGoReview.includes("hasPublicIntakeContact") &&
+      mutatedHydrate.includes('restoredStep === "review"') &&
+      mutatedHydrate.includes('restoredStep = "info"') &&
+      !mutatedHydrate.includes("hasPublicIntakeContact") &&
+      mutatedSubmit.includes("authorizePublicRequestPhotoUpload") &&
+      !mutatedSubmit.includes("hasPublicIntakeContact"),
+  );
+}
 check(
   "Combined remaining slots are MAX_INTAKE_PHOTOS minus recorded attachments",
   remainingIntakePhotoSlots(0) === MAX_INTAKE_PHOTOS &&
@@ -1247,6 +1337,122 @@ try {
     : null;
   check("Public request with no photos still succeeds", noPhotos.ok === true);
   check("No-photo request stores no photo rows", noPhotoRequest?.photos.length === 0);
+
+  const customersBeforeBlank = await prisma.customer.count({ where: { businessId: business.id } });
+  const requestsBeforeBlank = await prisma.serviceRequest.count({ where: { businessId: business.id } });
+  const blankContact = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "No Contact",
+    email: "",
+    phone: "",
+    address: "",
+    streetAddress: "14 Oak St",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Blank contact.",
+    catalogItemIds: [fan.id],
+    includeOther: false,
+    otherDescription: "",
+    smsOptIn: true,
+    submissionId: "blankcontact1",
+  });
+  const customersAfterBlank = await prisma.customer.count({ where: { businessId: business.id } });
+  const requestsAfterBlank = await prisma.serviceRequest.count({ where: { businessId: business.id } });
+  check(
+    "New public request with blank email and phone is rejected",
+    blankContact.ok === false && blankContact.error === PUBLIC_INTAKE_CONTACT_REQUIRED,
+  );
+  check(
+    "Blank-contact rejection creates no Customer or ServiceRequest",
+    customersAfterBlank === customersBeforeBlank && requestsAfterBlank === requestsBeforeBlank,
+  );
+  const spoofedExisting = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Spoofed Existing",
+    email: "",
+    phone: "",
+    address: "",
+    streetAddress: "15 Oak St",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Browser cannot claim an existing customer.",
+    catalogItemIds: [fan.id],
+    includeOther: false,
+    otherDescription: "",
+    existingCustomer: { customerId: "cust_not_real" },
+    submissionId: "spoofedexist1",
+  });
+  const customersAfterSpoof = await prisma.customer.count({ where: { businessId: business.id } });
+  const requestsAfterSpoof = await prisma.serviceRequest.count({ where: { businessId: business.id } });
+  check(
+    "Unverified existingCustomer claim with blank contact creates nothing",
+    spoofedExisting.ok === false &&
+      customersAfterSpoof === customersBeforeBlank &&
+      requestsAfterSpoof === requestsBeforeBlank,
+  );
+
+  const emailOnly = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Email Only",
+    email: "email.only@example.com",
+    phone: "",
+    address: "",
+    streetAddress: "16 Oak St",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Email only.",
+    catalogItemIds: [fan.id],
+    includeOther: false,
+    otherDescription: "",
+    smsOptIn: true,
+    submissionId: "emailonly01",
+  });
+  const emailOnlyRequest = emailOnly.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: emailOnly.requestId },
+        include: { customer: true },
+      })
+    : null;
+  check(
+    "Email-only new request succeeds and leaves SMS consent optional/un-granted",
+    emailOnly.ok === true &&
+      emailOnlyRequest?.customer?.email === "email.only@example.com" &&
+      !emailOnlyRequest?.customer?.phone &&
+      emailOnlyRequest?.customer?.smsConsentStatus === "UNKNOWN",
+  );
+
+  const phoneOnly = await createPublicServiceRequest(prisma, {
+    slug: "collpro-reno",
+    name: "Phone Only",
+    email: "",
+    phone: "555-0402",
+    address: "",
+    streetAddress: "17 Oak St",
+    city: "Fort Myers",
+    region: "FL",
+    postalCode: "33901",
+    notes: "Phone only.",
+    catalogItemIds: [fan.id],
+    includeOther: false,
+    otherDescription: "",
+    submissionId: "phoneonly01",
+  });
+  const phoneOnlyRequest = phoneOnly.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: phoneOnly.requestId },
+        include: { customer: true },
+      })
+    : null;
+  check(
+    "Phone-only new request succeeds without requiring SMS consent",
+    phoneOnly.ok === true &&
+      !phoneOnlyRequest?.customer?.email &&
+      phoneOnlyRequest?.customer?.phone === "555-0402" &&
+      phoneOnlyRequest?.customer?.smsConsentStatus === "UNKNOWN",
+  );
   check("Service without measurements stores none", noPhotoRequest?.measurements.length === 0);
   check("Structured address still stores on a no-photo request", noPhotoRequest?.property?.city === "Fort Myers");
 

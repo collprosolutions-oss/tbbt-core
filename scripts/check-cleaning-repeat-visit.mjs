@@ -273,6 +273,16 @@ check(
     intakeSrc.includes("phone: stored.phone") &&
     !intakeSrc.includes("data: { phone"),
 );
+check(
+  "Token-bound repeat visit may restore Review and submit without submitted email/phone",
+  formSrc.includes("projectToken") &&
+    formSrc.includes("hasPublicIntakeContact") &&
+    formSrc.includes("PUBLIC_INTAKE_CONTACT_REQUIRED") &&
+    /!projectToken && !hasPublicIntakeContact/.test(formSrc) &&
+    formSrc.includes('restoredStep === "review"') &&
+    pageSrc.includes("projectToken={token}") &&
+    pageSrc.includes("initialContact={view.contact}"),
+);
 
 try {
   console.log("\nDB — tenant isolation, replay/duplicate, old-form snapshot");
@@ -438,6 +448,7 @@ try {
   const alphaMissingSnap = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaSms = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaSmsRace = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
+  const alphaBlankContact = await createCleaningJob(cleanA.id, { catalogItemId: catalogA.id });
   const alphaNoCustomer = await createCleaningJob(cleanA.id, { includeCustomer: false });
   const beta = await createCleaningJob(cleanB.id, { catalogItemId: catalogB.id });
   const handy = await createCleaningJob(handyC.id, { tradeCode: "HANDYMAN" });
@@ -694,6 +705,85 @@ try {
         Boolean(missingSnap.error)),
   );
 
+  const blankStored = await prisma.customer.findFirst({
+    where: { id: alphaBlankContact.customer.id, businessId: cleanA.id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      smsConsentStatus: true,
+      smsConsentUpdatedAt: true,
+    },
+  });
+  const customersBeforeBlank = await prisma.customer.count({ where: { businessId: cleanA.id } });
+  const blankRepeat = await createCleaningCustomerRepeatVisitRequest(prisma, {
+    token: alphaBlankContact.job.projectToken,
+    slug: cleanA.slug,
+    name: alphaBlankContact.customer.name,
+    email: "",
+    phone: "",
+    address: "100 Pine St",
+    streetAddress: "100 Pine St",
+    city: "Reno",
+    region: "NV",
+    postalCode: "89501",
+    notes: "Repeat visit with blank submitted contact",
+    catalogItemIds: [catalogA.id],
+    includeOther: false,
+    otherDescription: "",
+    tenantIntakeSnapshotId: snapV1.id,
+    intakeAnswers: cleaningAnswers(),
+    submissionId: `rv-blank-${suffix}`,
+    smsOptIn: true,
+  });
+  const blankRepeatRequest = blankRepeat.ok
+    ? await prisma.serviceRequest.findUnique({
+        where: { id: blankRepeat.requestId },
+        select: { id: true, customerId: true, status: true, repeatVisitSourceJobId: true },
+      })
+    : null;
+  const blankAfter = await prisma.customer.findFirst({
+    where: { id: alphaBlankContact.customer.id, businessId: cleanA.id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      smsConsentStatus: true,
+      smsConsentUpdatedAt: true,
+    },
+  });
+  const customersAfterBlank = await prisma.customer.count({ where: { businessId: cleanA.id } });
+  check(
+    "Existing-customer repeat visit with blank submitted email and phone still succeeds",
+    blankRepeat.ok === true &&
+      blankRepeatRequest?.status === "OPEN" &&
+      blankRepeatRequest?.repeatVisitSourceJobId === alphaBlankContact.job.id,
+  );
+  check(
+    "Blank-contact repeat visit stays attached to the existing customer",
+    blankRepeatRequest?.customerId === alphaBlankContact.customer.id,
+  );
+  check(
+    "Blank-contact repeat visit does not create a duplicate customer",
+    customersAfterBlank === customersBeforeBlank,
+  );
+  check(
+    "Blank submitted repeat-visit contact does not erase or rewrite stored email/phone",
+    blankAfter?.name === blankStored?.name &&
+      blankAfter?.email === blankStored?.email &&
+      blankAfter?.phone === blankStored?.phone &&
+      Boolean(blankAfter?.email) &&
+      Boolean(blankAfter?.phone),
+  );
+  check(
+    "Blank repeat-visit contact with SMS opt-in checked does not grant consent",
+    blankAfter?.smsConsentStatus === "UNKNOWN" &&
+      blankAfter?.smsConsentUpdatedAt?.toISOString() ===
+        blankStored?.smsConsentUpdatedAt?.toISOString(),
+  );
+
   const consentFrozenAt = new Date("2026-01-15T12:00:00.000Z");
   const storedSmsPhone = "5551110000";
   const submittedSmsPhone = "5559998888";
@@ -862,6 +952,7 @@ try {
         alphaTwo.customer.id,
         alphaSms.customer.id,
         alphaSmsRace.customer.id,
+        alphaBlankContact.customer.id,
       ].includes(row.customerId),
     ),
   );

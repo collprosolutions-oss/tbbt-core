@@ -51,6 +51,10 @@ import { PREFERRED_WINDOWS_NOT_A_BOOKING } from "@/lib/request-preferred-windows
 import { publicServicesPath } from "@/lib/public-site";
 import { formatPublicPhoneDisplay } from "@/lib/format";
 import {
+  hasPublicIntakeContact,
+  PUBLIC_INTAKE_CONTACT_REQUIRED,
+} from "@/lib/customer-identity";
+import {
   SMS_CONSENT_PRIVACY_URL,
   SMS_CONSENT_TERMS_URL,
   SMS_OPT_IN_LABEL,
@@ -238,8 +242,18 @@ export function MultiServiceRequestFlow({
       const raw = sessionStorage.getItem(requestDraftKey(slug, draftNamespace));
       if (raw) {
         const draft = JSON.parse(raw) as PublicRequestDraft;
-        if (draft.step === "details" || draft.step === "info" || draft.step === "review") {
-          setStep(draft.step);
+        const restoredEmail = typeof draft.email === "string" ? draft.email : "";
+        const restoredPhone = typeof draft.phone === "string" ? draft.phone : "";
+        let restoredStep = draft.step;
+        if (
+          restoredStep === "review" &&
+          !projectToken &&
+          !hasPublicIntakeContact(restoredEmail, restoredPhone)
+        ) {
+          restoredStep = "info";
+        }
+        if (restoredStep === "details" || restoredStep === "info" || restoredStep === "review") {
+          setStep(restoredStep);
         }
         if (typeof draft.name === "string") setName(draft.name);
         if (typeof draft.email === "string") setEmail(draft.email);
@@ -271,7 +285,7 @@ export function MultiServiceRequestFlow({
       // Ignore a corrupted draft and keep the empty form.
     }
     setHydrated(true);
-  }, [draftNamespace, serviceArea.region, slug]);
+  }, [draftNamespace, projectToken, serviceArea.region, slug]);
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
@@ -447,6 +461,10 @@ export function MultiServiceRequestFlow({
       setError("Name is required.");
       return;
     }
+    if (!projectToken && !hasPublicIntakeContact(nextEmail, nextPhone)) {
+      setError(PUBLIC_INTAKE_CONTACT_REQUIRED);
+      return;
+    }
     setError(null);
     setStep("review");
   }
@@ -459,6 +477,10 @@ export function MultiServiceRequestFlow({
     }
     if (needsCustomTradeChoice && !customTradeCode) {
       setError(CUSTOM_WORK_TRADE_REQUIRED_MESSAGE);
+      return;
+    }
+    if (!projectToken && !hasPublicIntakeContact(email, phone)) {
+      setError(PUBLIC_INTAKE_CONTACT_REQUIRED);
       return;
     }
     setPending(true);
